@@ -7,7 +7,7 @@
 #[cfg(unix)]
 mod args;
 #[cfg(unix)]
-mod pdf;
+mod source;
 #[cfg(unix)]
 mod view;
 

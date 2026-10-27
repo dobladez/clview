@@ -1,8 +1,16 @@
 # clview — instructions for agents
 
-A terminal viewer: pages drawn through the kitty graphics protocol, a pager over them. PDFs are
-rendered by pdfcraft (a git dependency pinned in `Cargo.toml`). `src/view/` began as
-`pdfcraft-cli view` in storytold/pdfcraft; its README explains how it works.
+A terminal viewer: pages drawn through the kitty graphics protocol, a pager over them. `src/view/`
+began as `pdfcraft-cli view` in storytold/pdfcraft; its README explains how it works.
+
+## Layout
+- `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
+  (`Source`, `Render`, `Pool`, `Frame`), never a backend; `the_viewer_names_no_backend` checks it.
+- `src/source/<backend>.rs`: one backend each, behind a cargo feature, opened from
+  `source::open`. `pdfcraft.rs` (feature `pdfcraft`, default) renders PDFs through pdfcraft, a git
+  dependency pinned in `Cargo.toml`.
+- A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
+  work wanted, a result arrives only while its request is listed, `try_recv` never blocks.
 
 ## Rules
 - **Never panic.** Every file, every byte the terminal sends back and every argument is untrusted
@@ -16,10 +24,16 @@ rendered by pdfcraft (a git dependency pinned in `Cargo.toml`). `src/view/` bega
 - **Rust only.**
 - **The pdfcraft pin:** every `rev` in `Cargo.toml` moves together, the `[patch.crates-io]` ones
   included; `tests/it/pdfcraft_pin.rs` checks it.
+- **Clean room.** Behaviour comes from specifications (the kitty graphics protocol, the tmux
+  manual) and black-box observation. Never read the source of another terminal-graphics program
+  or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF…): most are GPL or AGPL, and this is MIT or
+  Apache-2.0.
 
 ## Quality gates before every commit
-`cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, under a
-`timeout`. The pdfcraft engine is a large build: keep `-j 2` unless the machine is free.
+`cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
+the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
+and `cargo test --no-default-features -j 2`. Run them under a `timeout`. The pdfcraft engine is a
+large build: keep `-j 2` unless the machine is free.
 
 ## Looking at it
 Output is images in a terminal, so look at the result in kitty, Ghostty or WezTerm. Without a

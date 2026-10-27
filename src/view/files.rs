@@ -29,7 +29,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::encode::unpremultiply;
-use pdfcraft_render::RenderedPage;
+use crate::source::Frame;
 
 use super::kitty::{self, Wrap};
 
@@ -72,7 +72,7 @@ pub(crate) struct Files {
 
 enum Job {
     Ready(Instant),
-    Write { id: u32, page: RenderedPage, now: Instant },
+    Write { id: u32, page: Frame, now: Instant },
     Check(Instant),
     Forget,
     Stop,
@@ -83,7 +83,7 @@ enum Answer {
     Started(Option<Vec<u8>>),
     Ready(bool),
     /// The page comes back, for the stream when its file failed.
-    Written(Result<PathBuf, String>, RenderedPage),
+    Written(Result<PathBuf, String>, Frame),
     Checked {
         lost: Vec<u32>,
         waiting: Vec<u32>,
@@ -95,7 +95,7 @@ enum Answer {
 pub(crate) enum Written {
     File(PathBuf),
     /// It couldn't be written, and why; the page comes back, to go in the stream.
-    Failed(String, RenderedPage),
+    Failed(String, Frame),
     /// The thread didn't answer in time (or is gone): the page went with it, and must be
     /// rendered again.
     Stalled,
@@ -129,7 +129,7 @@ impl Files {
     }
 
     /// Write `page` to a new file for image `id` ([`TempFiles::write`]).
-    pub(crate) fn write(&mut self, id: u32, page: RenderedPage, now: Instant) -> Written {
+    pub(crate) fn write(&mut self, id: u32, page: Frame, now: Instant) -> Written {
         self.waiting.push(id);
         match self.ask(Job::Write { id, page, now }) {
             Some(Answer::Written(Ok(path), _)) => Written::File(path),
@@ -466,7 +466,7 @@ mod tests {
 
     /// A temporary directory of the test's own, empty.
     fn scratch(test: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-cli-view-files-{test}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("clview-files-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -491,11 +491,10 @@ mod tests {
     }
 
     /// A rendered page of `width` × `height` opaque grey pixels.
-    fn page(width: u32, height: u32) -> RenderedPage {
-        let request =
-            pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false };
-        let rgba = pdfcraft_render::Pixels::from(vec![0xFF80_8080; (width * height) as usize]);
-        RenderedPage { request, width, height, rgba, error: None, text: None, warnings: Vec::new(), millis: 0 }
+    fn page(width: u32, height: u32) -> Frame {
+        let request = crate::source::Request { page: 0, scale: 1.0, tag: 0 };
+        let rgba = crate::source::Pixels::new([0x80, 0x80, 0x80, 0xFF].repeat((width * height) as usize));
+        Frame { request, width, height, rgba, error: None, warnings: Vec::new() }
     }
 
     /// Started in `parent` as run 7, the probe already taken.

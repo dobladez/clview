@@ -1,8 +1,8 @@
 # How clv works
 
-`view` draws PDF pages in the terminal through the
+`clv` draws the pages of a source (a PDF's, for now) in the terminal through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), directly or from
-inside tmux. Usage and behaviour are in [`docs/cli-view.md`](../../../../docs/cli-view.md); this
+inside tmux. Usage and behaviour are in [`docs/cli-view.md`](../../docs/cli-view.md); this
 page is for working on the code: how pages get to the terminal, what is kept there, what can go
 wrong on the way, and why each choice was made. The numbers were measured on the macOS laptop it
 was developed on (kitty 0.45, tmux 3.5a), by black-box observation. The same probes, run again
@@ -22,6 +22,7 @@ through tmux, the same answers, the 320 MB quota and the cell size.
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, and who shows the pane |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
+| `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
 
 `view` is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
 
@@ -31,7 +32,26 @@ one Windows Terminal speaks (as do xterm, foot, WezTerm and others), so it is th
 change to it: sixel keeps no images in the terminal by id, and has no temporary files and no
 Unicode placeholders, so every page turn sends the page's pixels again, and pictures go through a
 palette (commonly 256 colours). On Windows, `tty.rs` would also need the console's own API for raw
-mode and the window size, through a crate, since the workspace forbids `unsafe`.
+mode and the window size, through a crate, since the crate forbids `unsafe`.
+
+## Sources (`../source.rs`)
+
+The pager and the printer never see a PDF. They see a `Source`: how many pages it has, each
+page's size in the source's own unit (points, for a PDF), a renderer on this thread for printing,
+and a pool of render threads for the pager. A render is asked for as a page and a scale (output
+pixels per unit) and comes back as a `Frame`: premultiplied RGBA in the backend's own buffer, so
+the pixels reach the terminal without a copy, or the error, and the warnings for the reader.
+
+Each backend brings its own threads, because only it knows how to stop a page. pdfcraft's pool
+tells a page that takes too long to stop at its next drawing operator, retries a page that had
+only waited behind another page's decode, and bounds the threads it replaces; a pool in the
+viewer could only abandon the thread. What the pager relies on is that pool's contract:
+`set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
+request is still listed; `try_recv` never blocks.
+
+The one backend is `source/pdfcraft.rs`, behind the `pdfcraft` feature (on by default). Nothing in
+`src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
+`cargo clippy --no-default-features` builds the viewer with no backend at all.
 
 ## Getting pages to the terminal
 
@@ -243,7 +263,9 @@ only.
 
 - **Unit tests** in each module, among them property tests for the key decoder, the fit and the
   grid, and that the reader's page stays on screen.
-- **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`.
+- **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`. Its PDFs, and the
+  other files', are made in-process by pdfcraft (`tests/it/fixtures.rs`).
+- **`tests/it/pdfcraft_pin.rs`**: every crate pdfcraft patches comes from the pinned commit.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers.
@@ -262,5 +284,5 @@ and use a private `tmux -L <name>` server for tmux.
 
 Behaviour comes from the kitty graphics protocol specification, the tmux manual and black-box
 observation of terminals and of other programs' output. Never read the source of another
-terminal-graphics program or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF and so on); most are
-GPL or AGPL (`AGENTS.md` §2).
+terminal-graphics program or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF and so on): most are
+GPL or AGPL, and this code is MIT or Apache-2.0. It is also the rule in pdfcraft, where this began.

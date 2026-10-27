@@ -1,5 +1,5 @@
-//! PDF pages drawn straight into the terminal through the kitty graphics protocol (kitty,
-//! Ghostty, WezTerm and others), rendered by pdfcraft. Usage and behaviour: `docs/cli-view.md`.
+//! Pages drawn straight into the terminal through the kitty graphics protocol (kitty, Ghostty,
+//! WezTerm and others), from a [`Source`]. Usage and behaviour: `docs/cli-view.md`.
 
 mod detect;
 mod encode;
@@ -12,16 +12,14 @@ mod tmux;
 mod tty;
 
 use std::io::{IsTerminal, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use encode::PngEffort;
-use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
 
 use crate::CliError;
 use crate::args::{OptionSpec, flag, page_list, validate_options};
-use crate::pdf::{displayed, read};
+use crate::source::{Frame, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -215,14 +213,15 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let zoom = flag(args, "--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
     let protocol = Protocol::parse(flag(args, "--protocol").unwrap_or("auto"))?;
     let compression = Compression::parse(flag(args, "--compression").unwrap_or("auto"))?;
-    let doc = Doc::open(path, flag(args, "--password"))?;
+    let source = crate::source::open(path, flag(args, "--password"))?;
+    let count = source.pages();
     let pages = match flag(args, "--pages") {
         Some(list) => page_list(list).map_err(|e| format!("--pages: {e}"))?,
-        None => (0..doc.count).collect(),
+        None => (0..count).collect(),
     };
-    if let Some(page) = pages.iter().find(|p| **p >= doc.count) {
-        let plural = if doc.count == 1 { "" } else { "s" };
-        return Err(format!("no page {} ({path} has {} page{plural})", page.saturating_add(1), doc.count).into());
+    if let Some(page) = pages.iter().find(|p| **p >= count) {
+        let plural = if count == 1 { "" } else { "s" };
+        return Err(format!("no page {} ({path} has {count} page{plural})", page.saturating_add(1)).into());
     }
     let has = |name: &str| args.iter().any(|a| a == name);
     let paging = Paging::from_flags(has("--pager"), has("--no-pager"))?;
@@ -250,10 +249,10 @@ fn view(args: &[String]) -> Result<(), CliError> {
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
         let name = std::path::Path::new(path).file_name().map_or_else(|| path.into(), |n| n.to_string_lossy());
-        return pager::run(tty, &doc, &name, &terminal, pages, zoom, first_id).map_err(CliError::from);
+        return pager::run(tty, &*source, &name, &terminal, pages, zoom, first_id).map_err(CliError::from);
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
-    print_pages(&doc, &pages, zoom, size, &terminal, first_id)
+    print_pages(&*source, &pages, zoom, size, &terminal, first_id)
 }
 
 /// The one file argument: the token that is neither an option nor an option's value.
@@ -394,17 +393,14 @@ fn note(line: &str) {
 /// Draw `pages` at the cursor, one row of them under another, like `cat`: as many to a row as the
 /// pager shows at `zoom` from the first page, each row fitted the way the pager fits the reader's
 /// row. A page that fails is reported at the end; the others are still drawn.
-fn print_pages(doc: &Doc, pages: &[usize], zoom: Zoom, size: WindowSize, terminal: &Terminal, first_id: u64) -> Result<(), CliError> {
-    let mut renderer = doc.renderer();
-    if renderer.page_count() == 0 {
-        return Err("the renderer can't read this document".into());
-    }
+fn print_pages(source: &dyn Source, pages: &[usize], zoom: Zoom, size: WindowSize, terminal: &Terminal, first_id: u64) -> Result<(), CliError> {
+    let mut renderer = source.renderer()?;
     let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(terminal.cell).unwrap_or(fit::FALLBACK_CELL);
     // One row stays free for the shell prompt after the last page.
     let rows = size.rows.saturating_sub(1).max(1);
     let (cols, max_rows) = terminal.output.limits(size.cols);
     let area = Area { cols, rows, cell, max_rows };
-    let size_of = |i: usize| pages.get(i).and_then(|p| doc.sizes.get(*p)).copied();
+    let size_of = |i: usize| pages.get(i).and_then(|p| source.size(*p));
     // Every row has as many pages as the first: `auto` decides once.
     let first = fit::grid(zoom, pages.len(), 0, size_of, area);
     let zoom = if first.fit == Fit::Width { Zoom::Width } else { Zoom::PerRow(first.per_row) };
@@ -416,8 +412,7 @@ fn print_pages(doc: &Doc, pages: &[usize], zoom: Zoom, size: WindowSize, termina
         let grid = fit::grid(zoom, pages.len(), start, size_of, area);
         let mut printed = Vec::new();
         for (slot, &page) in (0u16..).zip(chunk) {
-            let drawn = doc
-                .layout(page, grid.fit, grid.cols, grid.page_rows, cell, max_rows)
+            let drawn = page_layout(source, page, grid.fit, grid.cols, grid.page_rows, cell, max_rows)
                 .and_then(|layout| encode(&renderer.render(request(page, &layout, 0)), terminal.effort).map(|image| (layout, image)));
             match drawn {
                 Ok((layout, image)) => {
@@ -528,15 +523,6 @@ fn fresh_index() -> u64 {
     now.as_secs().wrapping_mul(1_000_000_007) ^ u64::from(now.subsec_nanos()) ^ u64::from(std::process::id()).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-/// The open document: the display copy the renderers read, and each page's displayed size.
-struct Doc {
-    bytes: Arc<Vec<u8>>,
-    config: RenderConfig,
-    /// In points, after `/Rotate` and `/UserUnit`.
-    sizes: Vec<(f32, f32)>,
-    count: usize,
-}
-
 /// A page rendered for the terminal, as a PNG.
 struct Image {
     png: Vec<u8>,
@@ -544,75 +530,37 @@ struct Image {
     warning: Option<String>,
 }
 
-impl Doc {
-    fn open(path: &str, password: Option<&str>) -> Result<Self, CliError> {
-        // What `render` draws: the app's display copy, with the password the renderer takes.
-        let display = displayed(path, read(path)?, password)?;
-        let info = display.info.map_err(|e| format!("{path}: {e}"))?;
-        let count = info.pages.len();
-        if count == 0 {
-            return Err(format!("{path}: no pages to show").into());
-        }
-        Ok(Self {
-            bytes: display.bytes,
-            config: RenderConfig { password: display.password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
-            sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
-            count,
-        })
-    }
-
-    /// Where `page` goes in `cols` × `rows` cells, never more than `max_rows` tall. Errors name the
-    /// page.
-    fn layout(&self, page: usize, fit: Fit, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> Result<Layout, String> {
-        let number = page.saturating_add(1);
-        let (w, h) = self.sizes.get(page).copied().ok_or_else(|| format!("no page {number}"))?;
-        fit::layout(w, h, cols, rows, cell, fit, max_rows).map_err(|e| format!("page {number}: {e}"))
-    }
-
-    /// A renderer on this thread, for pages printed one after another.
-    fn renderer(&self) -> PageRenderer {
-        PageRenderer::new(self.bytes.clone(), self.config.clone())
-    }
-
-    /// Render threads with the renderer's watchdog, for the pager: keys still work while pages
-    /// render, and a page that takes too long is given up on.
-    fn pool(&self, threads: usize) -> RenderPool {
-        RenderPool::new(self.bytes.clone(), threads, self.config.clone())
-    }
+/// Where `source`'s `page` goes in `cols` × `rows` cells, never more than `max_rows` tall. Errors
+/// name the page.
+fn page_layout(source: &dyn Source, page: usize, fit: Fit, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> Result<Layout, String> {
+    let number = page.saturating_add(1);
+    let (w, h) = source.size(page).ok_or_else(|| format!("no page {number}"))?;
+    fit::layout(w, h, cols, rows, cell, fit, max_rows).map_err(|e| format!("page {number}: {e}"))
 }
 
 /// The render of `page` at `layout`'s scale, tagged so its result can be told from others.
-fn request(page: usize, layout: &Layout, tag: u64) -> RenderRequest {
-    RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: layout.scale, tag, preview: false }
+fn request(page: usize, layout: &Layout, tag: u64) -> Request {
+    Request { page, scale: layout.scale, tag }
 }
 
 /// A rendered page as a PNG, or why there is none. Errors name the page.
-fn encode(p: &RenderedPage, effort: PngEffort) -> Result<Image, String> {
+fn encode(p: &Frame, effort: PngEffort) -> Result<Image, String> {
     let warning = checked(p)?;
     Ok(Image { png: png(p, effort)?, warning })
 }
 
-/// Why a page failed to render, or what the reader should know about it, if anything: what
-/// `render` warns about, in its words. Both name the page.
-fn checked(p: &RenderedPage) -> Result<Option<String>, String> {
+/// Why a page failed to render, or what the reader should know about it, if anything, in the
+/// backend's words. Both name the page.
+fn checked(p: &Frame) -> Result<Option<String>, String> {
     let number = p.request.page.saturating_add(1);
     if let Some(e) = &p.error {
         return Err(format!("page {number}: {e}"));
     }
-    // Each at most once: the renderer reports a warning once a page.
-    let said: Vec<&str> = p
-        .warnings
-        .iter()
-        .map(|w| match w {
-            RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
-            RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
-        })
-        .collect();
-    Ok((!said.is_empty()).then(|| format!("page {number}: {}", said.join("; "))))
+    Ok((!p.warnings.is_empty()).then(|| format!("page {number}: {}", p.warnings.join("; "))))
 }
 
 /// A rendered page's pixels as a PNG. Errors name the page.
-fn png(p: &RenderedPage, effort: PngEffort) -> Result<Vec<u8>, String> {
+fn png(p: &Frame, effort: PngEffort) -> Result<Vec<u8>, String> {
     let number = p.request.page.saturating_add(1);
     encode::encode_png(p.width, p.height, &p.rgba, effort).map_err(|e| format!("page {number}: {e}"))
 }
@@ -714,22 +662,58 @@ mod tests {
     }
 
     /// Page 3 rendered with `warnings`, or failed with `error`.
-    fn rendered(warnings: Vec<RenderWarning>, error: Option<&str>) -> RenderedPage {
-        let request = RenderRequest { page: 2, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false };
-        let rgba = pdfcraft_render::Pixels::from(Vec::new());
-        RenderedPage { request, width: 0, height: 0, rgba, error: error.map(String::from), text: None, warnings, millis: 0 }
+    fn rendered(warnings: &[&str], error: Option<&str>) -> Frame {
+        let request = Request { page: 2, scale: 1.0, tag: 0 };
+        let rgba = crate::source::Pixels::new(Vec::new());
+        Frame { request, width: 0, height: 0, rgba, error: error.map(String::from), warnings: warnings.iter().map(|w| w.to_string()).collect() }
     }
 
     #[test]
-    fn a_page_says_everything_the_renderer_warned_about() {
-        assert_eq!(checked(&rendered(Vec::new(), None)), Ok(None));
-        let fallback = "a colour that could not be computed was painted in a fallback colour";
-        assert_eq!(checked(&rendered(vec![RenderWarning::ColourFallback], None)), Ok(Some(format!("page 3: {fallback}"))));
+    fn a_page_says_everything_the_backend_warned_about() {
+        assert_eq!(checked(&rendered(&[], None)), Ok(None));
+        assert_eq!(checked(&rendered(&["a colour was guessed"], None)), Ok(Some("page 3: a colour was guessed".into())));
         assert_eq!(
-            checked(&rendered(vec![RenderWarning::ContentTruncated, RenderWarning::ColourFallback], None)),
-            Ok(Some(format!("page 3: content past the page's safety budget was skipped; {fallback}")))
+            checked(&rendered(&["content was skipped", "a colour was guessed"], None)),
+            Ok(Some("page 3: content was skipped; a colour was guessed".into()))
         );
         // A page that failed says only that.
-        assert_eq!(checked(&rendered(vec![RenderWarning::ColourFallback], Some("no page box"))), Err("page 3: no page box".into()));
+        assert_eq!(checked(&rendered(&["a colour was guessed"], Some("no page box"))), Err("page 3: no page box".into()));
+    }
+
+    /// Where a page goes depends only on its size: a source past its last page has no layout.
+    #[test]
+    fn a_page_is_laid_out_from_its_sources_size() {
+        struct Sizes(Vec<(f32, f32)>);
+        impl Source for Sizes {
+            fn pages(&self) -> usize {
+                self.0.len()
+            }
+            fn size(&self, page: usize) -> Option<(f32, f32)> {
+                self.0.get(page).copied()
+            }
+            fn renderer(&self) -> Result<Box<dyn crate::source::Render + '_>, String> {
+                Err("not here".into())
+            }
+            fn pool(&self, _threads: usize) -> Box<dyn crate::source::Pool + '_> {
+                Box::new(Idle)
+            }
+        }
+        struct Idle;
+        impl crate::source::Pool for Idle {
+            fn set_queue(&self, _requests: Vec<Request>) {}
+            fn try_recv(&self) -> Option<Frame> {
+                None
+            }
+        }
+        let source = Sizes(vec![(612.0, 792.0), (792.0, 612.0)]);
+        let cell = Cell { w: 10.0, h: 20.0 };
+        let portrait = page_layout(&source, 0, Fit::Page, 80, 24, cell, 24).unwrap();
+        let landscape = page_layout(&source, 1, Fit::Page, 80, 24, cell, 24).unwrap();
+        // An 800 × 480 pixel window: both fill its height, the landscape page wider, each scaled to
+        // 480 pixels over its own height.
+        assert_eq!((portrait.rows, landscape.rows), (24, 24));
+        assert!(portrait.cols < landscape.cols, "{portrait:?} {landscape:?}");
+        assert!((portrait.scale - 480.0 / 792.0).abs() < 1e-4 && (landscape.scale - 480.0 / 612.0).abs() < 1e-4, "{portrait:?} {landscape:?}");
+        assert_eq!(page_layout(&source, 2, Fit::Page, 80, 24, cell, 24).map(|_| ()), Err("no page 3".into()));
     }
 }

@@ -83,14 +83,14 @@ pub(crate) const MAX_AREA: f64 = 16.0e6;
 /// Where a page goes and how big it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Layout {
-    /// Render scale, in pixels per point.
+    /// Render scale, in pixels per unit of the page's size (a point, for a PDF).
     pub(crate) scale: f32,
     /// The cells the image covers, rounded up.
     pub(crate) cols: u16,
     pub(crate) rows: u16,
 }
 
-/// Fit a `page_w` × `page_h` point page into `cols` × `rows` cells of `cell` pixels, never more
+/// Fit a `page_w` × `page_h` page (in its source's unit) into `cols` × `rows` cells of `cell` pixels, never more
 /// than `max_rows` cells tall or [`MAX_PIXELS`] on a side.
 pub(crate) fn layout(page_w: f32, page_h: f32, cols: u16, rows: u16, cell: Cell, fit: Fit, max_rows: u16) -> Result<Layout, String> {
     let positive = |v: f32| v.is_finite() && v > 0.0;

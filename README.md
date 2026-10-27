@@ -31,10 +31,15 @@ pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its 
 tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
 instead.
 
+pdfcraft is the `pdfcraft` feature, on by default. `cargo build --no-default-features` builds the
+viewer without it, and without a PDF backend.
+
 ## Plans
 
-- A source abstraction under the pager, so PDFs are one kind of thing it shows, with more than
-  one PDF backend to choose from.
+The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
+renders. pdfcraft is the one backend so far.
+
+- More than one PDF backend to choose from.
 - Images.
 - Directories, as a gallery: a tile for each file it can show, and Enter opens one.
 

@@ -27,14 +27,14 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::encode::PngEffort;
-use pdfcraft_render::{RenderPool, RenderedPage};
+use crate::source::{Frame, Pool, Source};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
-use super::{Doc, FALLBACK_SIZE, Output, QUIET, Terminal, checked, png, printable, request, tmux};
+use super::{FALLBACK_SIZE, Output, QUIET, Terminal, checked, page_layout, png, printable, request, tmux};
 
 /// How often the window size is checked while no key comes.
 const TICK: Duration = Duration::from_millis(200);
@@ -80,9 +80,17 @@ const ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// The reminder of the keys on the status line, shorter and shorter for a narrow window.
 const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
 
-/// Page through `pages` of `doc` until the user quits. Image ids are taken in turn from
+/// Page through `pages` of `source` until the user quits. Image ids are taken in turn from
 /// `first_id` on ([`super::kitty::IdColor::id`]).
-pub(super) fn run(tty: &Tty, doc: &Doc, name: &str, terminal: &Terminal, pages: Vec<usize>, zoom: Zoom, first_id: u64) -> Result<(), String> {
+pub(super) fn run(
+    tty: &Tty,
+    source: &dyn Source,
+    name: &str,
+    terminal: &Terminal,
+    pages: Vec<usize>,
+    zoom: Zoom,
+    first_id: u64,
+) -> Result<(), String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
     let mut showing = 1;
@@ -96,13 +104,13 @@ pub(super) fn run(tty: &Tty, doc: &Doc, name: &str, terminal: &Terminal, pages: 
     let mut pager = Pager {
         screen: Screen::enter(tty)?,
         tty,
-        doc,
-        pool: doc.pool(THREADS),
+        source,
+        pool: source.pool(THREADS),
         name,
         output: terminal.output,
         cell: terminal.cell,
         effort: terminal.effort,
-        nav: Nav::new(pages, doc.count, zoom),
+        nav: Nav::new(pages, source.pages(), zoom),
         sent: Vec::new(),
         kept: MAX_SENT,
         wanted: Vec::new(),
@@ -497,8 +505,8 @@ struct Pager<'a> {
     /// Dropped after the pager's own `drop` has deleted its images.
     screen: Screen<'a>,
     tty: &'a Tty,
-    doc: &'a Doc,
-    pool: RenderPool,
+    source: &'a dyn Source,
+    pool: Box<dyn Pool + 'a>,
     name: &'a str,
     output: Output,
     /// The cell size tmux or the terminal reports, for a tty that reports no pixel size.
@@ -603,14 +611,14 @@ impl Pager<'_> {
             }
             let next = match self.wanted.iter().position(|w| w.view == v) {
                 Some(at) => Ok(self.wanted.swap_remove(at)),
-                None => self.doc.layout(v.page, v.fit, v.cols, v.rows, cell, max_rows).map(|layout| {
+                None => page_layout(self.source, v.page, v.fit, v.cols, v.rows, cell, max_rows).map(|layout| {
                     self.tag = self.tag.wrapping_add(1);
                     Wanted { view: v, layout, tag: self.tag }
                 }),
             };
             match next {
                 Ok(w) => {
-                    let size = self.doc.sizes.get(v.page).copied().unwrap_or_default();
+                    let size = self.source.size(v.page).unwrap_or_default();
                     near = near.saturating_add(pixel_bytes(size, w.layout.scale));
                     if near > self.budget && !on_screen.contains(&Some(v)) {
                         break;
@@ -648,8 +656,8 @@ impl Pager<'_> {
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,
     /// as far as the window takes ([`fit::grid`]).
     fn grid(&mut self, area: Area) -> Grid {
-        let (nav, sizes) = (&self.nav, &self.doc.sizes);
-        let grid = fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| sizes.get(*p)).copied(), area);
+        let (nav, source) = (&self.nav, self.source);
+        let grid = fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| source.size(*p)), area);
         self.nav.grid(grid.per_row, grid.rows, grid.most);
         grid
     }
@@ -856,7 +864,7 @@ impl Pager<'_> {
     /// `page`'s pixels ready to send as image `id`: in a temporary file when the terminal takes
     /// them, otherwise as a PNG. A file that can't be written ends the files, and says why.
     /// `None` when the files' thread stopped answering with the page.
-    fn payload(&mut self, id: u32, page: RenderedPage) -> Result<Option<Payload>, String> {
+    fn payload(&mut self, id: u32, page: Frame) -> Result<Option<Payload>, String> {
         let now = Instant::now();
         let mut page = page;
         if let Some(files) = self.files.as_mut()

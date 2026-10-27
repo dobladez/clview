@@ -23,10 +23,16 @@ todo = "warn"
 # pin means moving every `rev` below together, the [patch.crates-io] ones included;
 # tests/it/pdfcraft_pin.rs fails when they disagree or pdfcraft patches a crate this file doesn't.
 [dependencies]
-pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
+pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
 base64 = "0.23"
 png = "0.18"
+
+[features]
+default = ["pdfcraft"]
+# PDFs, rendered by pdfcraft. Without it the viewer builds without pdfcraft at all, and has no
+# PDF backend.
+pdfcraft = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
 
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary

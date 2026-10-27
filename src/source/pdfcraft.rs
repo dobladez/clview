@@ -1,0 +1,158 @@
+//! PDFs rendered by pdfcraft, the way its app draws them: comments without an appearance of their
+//! own are drawn, a dynamic XFA form shows the pages its template lays out into, and either
+//! password opens a protected file.
+
+use std::sync::Arc;
+
+use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
+
+use super::{Frame, Pixels, Request, Source};
+
+/// An open PDF: the display copy the renderers read, and each page's size as shown.
+pub(super) struct Pdf {
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+    /// In points, after `/Rotate` and `/UserUnit`.
+    sizes: Vec<(f32, f32)>,
+}
+
+impl Pdf {
+    pub(super) fn open(path: &str, password: Option<&str>) -> Result<Self, String> {
+        let display = displayed(path, read(path)?, password)?;
+        let info = display.info.map_err(|e| format!("{path}: {e}"))?;
+        if info.pages.is_empty() {
+            return Err(format!("{path}: no pages to show"));
+        }
+        Ok(Self {
+            bytes: display.bytes,
+            config: RenderConfig { password: display.password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
+            sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
+        })
+    }
+}
+
+impl Source for Pdf {
+    fn pages(&self) -> usize {
+        self.sizes.len()
+    }
+
+    fn size(&self, page: usize) -> Option<(f32, f32)> {
+        self.sizes.get(page).copied()
+    }
+
+    fn renderer(&self) -> Result<Box<dyn super::Render + '_>, String> {
+        let renderer = PageRenderer::new(self.bytes.clone(), self.config.clone());
+        // `inspect` read the file, but the renderer's own parser may not.
+        if renderer.page_count() == 0 {
+            return Err("the renderer can't read this document".into());
+        }
+        Ok(Box::new(Renderer(renderer)))
+    }
+
+    fn pool(&self, threads: usize) -> Box<dyn super::Pool + '_> {
+        Box::new(Pool(RenderPool::new(self.bytes.clone(), threads, self.config.clone())))
+    }
+}
+
+struct Renderer(PageRenderer);
+
+impl super::Render for Renderer {
+    fn render(&mut self, request: Request) -> Frame {
+        frame(self.0.render(pdfcraft_request(request)))
+    }
+}
+
+/// pdfcraft's render threads and their watchdog: a page that takes too long is told to stop at
+/// its next drawing operator, and comes back failed.
+struct Pool(RenderPool);
+
+impl super::Pool for Pool {
+    fn set_queue(&self, requests: Vec<Request>) {
+        self.0.set_queue(requests.into_iter().map(pdfcraft_request).collect());
+    }
+
+    fn try_recv(&self) -> Option<Frame> {
+        self.0.try_recv().map(frame)
+    }
+}
+
+fn pdfcraft_request(r: Request) -> RenderRequest {
+    RenderRequest { page: r.page, kind: RequestKind::Pixels, tile: None, scale: r.scale, tag: r.tag, preview: false }
+}
+
+/// A page pdfcraft rendered, its warnings in the words `pdfcraft-cli render` uses.
+fn frame(p: RenderedPage) -> Frame {
+    let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag };
+    let warnings = p
+        .warnings
+        .iter()
+        .map(|w| match w {
+            RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
+            RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+        })
+        .map(String::from)
+        .collect();
+    Frame { request, width: p.width, height: p.height, rgba: Pixels::new(p.rgba), error: p.error, warnings }
+}
+
+fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
+    std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
+}
+
+/// What is drawn for a file, as the pdfcraft app draws it.
+struct Displayed {
+    /// The display copy the renderer reads: comments missing their /AP streams are drawn, and a
+    /// dynamic XFA form is laid out. The file itself is left intact.
+    bytes: Arc<Vec<u8>>,
+    /// The password for the renderer, which takes only the user password of R2–R4 files: for one
+    /// opened with its owner password, the user password that recovers.
+    password: Option<String>,
+    /// The displayed document's pages and the rest (a laid-out form's, not its placeholder's),
+    /// or why the renderer can't open the file.
+    info: Result<pdfcraft_render::DocInfo, String>,
+}
+
+/// [`Displayed`] for the file `bytes` read from `path`, opened with `password` (either one).
+fn displayed(path: &str, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Displayed, String> {
+    // `Session::open` and the display copy take either password; the renderer doesn't.
+    let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    let info = pdfcraft_render::inspect(bytes.clone(), render_password.as_deref()).map_err(|e| e.to_string());
+    if info.as_ref().is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
+        let mut session = pdfcraft_engine::Session::new();
+        let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
+        let doc = session.get(id).ok_or("the document could not be opened")?;
+        return Ok(Displayed { bytes: doc.display.clone(), password: render_password, info: Ok(doc.info.clone()) });
+    }
+    Ok(Displayed { bytes: pdfcraft_engine::display_bytes_for(bytes, password), password: render_password, info })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Page 3 rendered with `warnings`, or failed with `error`.
+    fn rendered(warnings: Vec<RenderWarning>, error: Option<&str>) -> RenderedPage {
+        let request = RenderRequest { page: 2, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 9, preview: false };
+        let rgba = pdfcraft_render::Pixels::from(vec![0xFF80_8080; 2]);
+        RenderedPage { request, width: 2, height: 1, rgba, error: error.map(String::from), text: None, warnings, millis: 0 }
+    }
+
+    #[test]
+    fn a_frame_keeps_the_request_the_pixels_and_every_warning() {
+        let frame = frame(rendered(vec![RenderWarning::ContentTruncated, RenderWarning::ColourFallback], None));
+        assert_eq!(frame.request, Request { page: 2, scale: 1.5, tag: 9 });
+        assert_eq!((frame.width, frame.height, &*frame.rgba), (2, 1, &[0x80, 0x80, 0x80, 0xFF, 0x80, 0x80, 0x80, 0xFF][..]));
+        assert_eq!(
+            frame.warnings,
+            ["content past the page's safety budget was skipped", "a colour that could not be computed was painted in a fallback colour"]
+        );
+        assert_eq!(frame.error, None);
+        assert_eq!(super::frame(rendered(Vec::new(), Some("no page box"))).error.as_deref(), Some("no page box"));
+    }
+
+    #[test]
+    fn a_request_asks_pdfcraft_for_pixels() {
+        let r = pdfcraft_request(Request { page: 4, scale: 2.0, tag: 11 });
+        assert_eq!((r.page, r.kind, r.tile, r.scale, r.tag, r.preview), (4, RequestKind::Pixels, None, 2.0, 11, false));
+    }
+}
