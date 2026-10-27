@@ -1,32 +1,67 @@
 //! Command-line options and page lists.
 
-use crate::CliError;
-
-pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
-}
-
-#[derive(Clone, Copy)]
+/// An option: its `name` (`--zoom`), what its value looks like (`None` for one that takes
+/// none) and what it does, as `--help` shows them.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
-    pub(crate) takes_value: bool,
+    pub(crate) value: Option<&'static str>,
+    pub(crate) help: &'static str,
 }
 
-/// Refuse unknown options before any file is read. The value after an option that takes one is
-/// skipped, whatever it is: a password can be anything.
-pub(crate) fn validate_options(args: &[String], specs: &[OptionSpec]) -> Result<(), CliError> {
-    let mut i = 0usize;
-    while let Some(arg) = args.get(i) {
-        if let Some(name) = arg.strip_prefix("--") {
-            let Some(spec) = specs.iter().find(|spec| spec.name == arg) else {
-                return Err(format!("unknown option --{name}").into());
-            };
-            i = i.saturating_add(if spec.takes_value { 2 } else { 1 });
-        } else {
-            i = i.saturating_add(1);
+impl OptionSpec {
+    /// The option as `--help` lists it: `--zoom auto|width|N`.
+    pub(crate) fn shown(&self) -> String {
+        match self.value {
+            Some(value) => format!("{} {value}", self.name),
+            None => self.name.into(),
         }
     }
-    Ok(())
+}
+
+/// A command line read against the options it may hold, before any file is read.
+#[derive(Debug, Default)]
+pub(crate) struct Parsed<'a> {
+    /// The arguments that are neither an option nor an option's value, in order.
+    pub(crate) operands: Vec<&'a str>,
+    /// Each option given, in order, with its value if it takes one.
+    given: Vec<(&'static str, Option<&'a str>)>,
+}
+
+impl<'a> Parsed<'a> {
+    /// Refuses an option not in `specs`, and one left without its value. An option that takes a
+    /// value takes the next argument, whatever it is: a password can be anything.
+    pub(crate) fn parse(args: &'a [String], specs: &[OptionSpec]) -> Result<Self, String> {
+        let mut parsed = Self::default();
+        let mut rest = args.iter();
+        while let Some(arg) = rest.next() {
+            if !arg.starts_with("--") {
+                parsed.operands.push(arg);
+                continue;
+            }
+            let spec = specs.iter().find(|spec| spec.name == arg).ok_or_else(|| format!("unknown option {arg}"))?;
+            let value = match spec.value {
+                Some(_) => Some(rest.next().ok_or_else(|| format!("{arg} needs a value"))?.as_str()),
+                None => None,
+            };
+            parsed.given.push((spec.name, value));
+        }
+        Ok(parsed)
+    }
+
+    /// The value option `name` was given, the first time, if it was.
+    pub(crate) fn value(&self, name: &str) -> Option<&'a str> {
+        self.given.iter().find(|(given, _)| *given == name).and_then(|(_, value)| *value)
+    }
+
+    pub(crate) fn has(&self, name: &str) -> bool {
+        self.given.iter().any(|(given, _)| *given == name)
+    }
+
+    /// The options given, each as often as it was.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.given.iter().map(|(name, _)| *name)
+    }
 }
 
 /// The most pages one `A-B` range, or a whole list, may name: a bound on what a typed list can
@@ -83,11 +118,25 @@ mod tests {
     }
 
     #[test]
-    fn unknown_options_are_refused_and_values_skipped() {
-        let specs = [OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--pager", takes_value: false }];
+    fn unknown_options_are_refused_and_values_taken_whatever_they_are() {
+        let specs = [OptionSpec { name: "--password", value: Some("PW"), help: "" }, OptionSpec { name: "--pager", value: None, help: "" }];
         let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        assert!(validate_options(&args(&["a.pdf", "--pager", "--password", "--anything"]), &specs).is_ok(), "a password can look like an option");
-        assert!(validate_options(&args(&["a.pdf", "--zoom", "2"]), &specs).is_err_and(|e| e.to_string() == "unknown option --zoom"));
-        assert!(validate_options(&args(&["--password"]), &specs).is_ok(), "a missing value is the command's to report");
+        let given = args(&["a.pdf", "--pager", "--password", "--anything", "b.pdf"]);
+        let parsed = Parsed::parse(&given, &specs).unwrap();
+        assert_eq!(parsed.value("--password"), Some("--anything"), "a password can look like an option");
+        assert_eq!(parsed.operands, ["a.pdf", "b.pdf"]);
+        assert!(parsed.has("--pager") && !parsed.has("--zoom"));
+        assert_eq!(parsed.value("--pager"), None);
+        assert_eq!(parsed.names().collect::<Vec<_>>(), ["--pager", "--password"]);
+        let given = args(&["--password", "first", "--password", "second"]);
+        assert_eq!(Parsed::parse(&given, &specs).unwrap().value("--password"), Some("first"));
+        assert_eq!(Parsed::parse(&args(&["a.pdf", "--zoom", "2"]), &specs).unwrap_err(), "unknown option --zoom");
+        assert_eq!(Parsed::parse(&args(&["a.pdf", "--password"]), &specs).unwrap_err(), "--password needs a value");
+    }
+
+    #[test]
+    fn help_shows_an_option_with_its_value() {
+        assert_eq!(OptionSpec { name: "--zoom", value: Some("auto|N"), help: "" }.shown(), "--zoom auto|N");
+        assert_eq!(OptionSpec { name: "--pager", value: None, help: "" }.shown(), "--pager");
     }
 }

@@ -37,7 +37,8 @@ viewer without it, and without a PDF backend.
 ## Plans
 
 The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
-renders. pdfcraft is the one backend so far.
+renders. A file goes to the first backend that opens it, going by its first bytes, and each
+backend brings its own options (`--password` is pdfcraft's). pdfcraft is the one backend so far.
 
 - More than one PDF backend to choose from.
 - Images.

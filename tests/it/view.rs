@@ -225,6 +225,7 @@ fn bad_arguments_say_what_is_allowed() {
         (&["--protocol", "sixel"], "use auto or kitty"),
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),
+        (&["--protocol", "kitty", "--pages"], "--pages needs a value"),
     ] {
         let out = view(&pdf, args);
         assert!(!out.status.success(), "{args:?}");
@@ -392,9 +393,48 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
 #[test]
 fn help_and_version() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
-    assert!(out.status.success() && text(&out.stdout).starts_with("clv <file.pdf> [--pages"), "{}", text(&out.stdout));
+    let help = text(&out.stdout);
+    assert!(out.status.success() && help.starts_with("clv <file> [options]\nclv --help | --version\n"), "{help}");
+    assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
+    // The PDF backend's own option, under the backend.
+    assert!(help.contains("\n\nPDFs, by pdfcraft:\n  --password PW "), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CARGO_PKG_VERSION")));
+}
+
+/// A file is shown by the first backend that opens it, going by its first bytes, not its name.
+#[test]
+fn a_file_no_backend_opens_is_refused_and_a_pdf_is_known_by_its_header() {
+    let notes = tmp("backends", "notes.pdf");
+    std::fs::write(&notes, "not a PDF, whatever its name says\n").unwrap();
+    let out = view(&notes, &["--protocol", "kitty"]);
+    assert_eq!(text(&out.stderr), format!("clv: {}: not a file clv shows (it shows PDFs)\n", notes.display()));
+    assert!(!out.status.success() && out.stdout.is_empty());
+    let pdf = tmp("backends", "page");
+    std::fs::write(&pdf, crate::fixtures::letter("No extension", 1)).unwrap();
+    let out = view(&pdf, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 1);
+}
+
+/// The file is read once, so a PDF can come through a pipe: the bytes read to choose its backend
+/// are not lost to it.
+#[test]
+fn a_pdf_through_a_pipe_is_shown() {
+    use std::io::Write as _;
+    let mut child = Command::new(BIN)
+        .args(["/dev/stdin", "--protocol", "kitty"])
+        .env("TERM", "dumb")
+        .env_remove("TMUX")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&crate::fixtures::letter("Piped", 2)).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 2);
 }
 
 /// Errors are said once, under the command's name.

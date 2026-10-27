@@ -6,7 +6,43 @@ use std::sync::Arc;
 
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
 
-use super::{Frame, Pixels, Request, Source};
+use super::{Backend, Frame, Input, Pixels, Request, Source};
+use crate::args::{OptionSpec, Parsed};
+
+/// PDFs, rendered by pdfcraft.
+pub(super) struct Pdfcraft;
+
+const OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", value: Some("PW"), help: "the user or the owner password of an encrypted PDF" }];
+
+impl Backend for Pdfcraft {
+    fn name(&self) -> &'static str {
+        "pdfcraft"
+    }
+
+    fn shows(&self) -> &'static str {
+        "PDFs"
+    }
+
+    fn options(&self) -> &'static [OptionSpec] {
+        OPTIONS
+    }
+
+    fn opens(&self, _path: &str, head: &[u8]) -> bool {
+        is_pdf(head)
+    }
+
+    fn open(&self, input: Input<'_>, options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+        let path = input.path;
+        Ok(Box::new(Pdf::open(path, Arc::new(input.bytes()?), options.value("--password"))?))
+    }
+}
+
+/// Whether a file starting with `head` is a PDF: its header (`%PDF-` and the version) within the
+/// first 1024 bytes. ISO 32000-2 §7.5.2 puts the header first; readers have long allowed bytes
+/// before it, up to that bound.
+fn is_pdf(head: &[u8]) -> bool {
+    head.get(..1024).unwrap_or(head).windows(5).any(|w| w == b"%PDF-")
+}
 
 /// An open PDF: the display copy the renderers read, and each page's size as shown.
 pub(super) struct Pdf {
@@ -17,8 +53,8 @@ pub(super) struct Pdf {
 }
 
 impl Pdf {
-    pub(super) fn open(path: &str, password: Option<&str>) -> Result<Self, String> {
-        let display = displayed(path, read(path)?, password)?;
+    fn open(path: &str, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<Self, String> {
+        let display = displayed(path, bytes, password)?;
         let info = display.info.map_err(|e| format!("{path}: {e}"))?;
         if info.pages.is_empty() {
             return Err(format!("{path}: no pages to show"));
@@ -95,10 +131,6 @@ fn frame(p: RenderedPage) -> Frame {
     Frame { request, width: p.width, height: p.height, rgba: Pixels::new(p.rgba), error: p.error, warnings }
 }
 
-fn read(path: &str) -> Result<Arc<Vec<u8>>, String> {
-    std::fs::read(path).map(Arc::new).map_err(|e| format!("{path}: {e}"))
-}
-
 /// What is drawn for a file, as the pdfcraft app draws it.
 struct Displayed {
     /// The display copy the renderer reads: comments missing their /AP streams are drawn, and a
@@ -148,6 +180,18 @@ mod tests {
         );
         assert_eq!(frame.error, None);
         assert_eq!(super::frame(rendered(Vec::new(), Some("no page box"))).error.as_deref(), Some("no page box"));
+    }
+
+    #[test]
+    fn a_pdf_is_a_file_with_the_header_in_its_first_kilobyte() {
+        assert!(is_pdf(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"));
+        assert!(is_pdf(b"%PDF-2.0"));
+        let prefixed = [vec![b' '; 1019], b"%PDF-1.4".to_vec()].concat();
+        assert!(is_pdf(&prefixed), "the header may start as late as byte 1019");
+        assert!(!is_pdf(&[vec![b' '; 1020], b"%PDF-1.4".to_vec()].concat()), "it must end within the first 1024 bytes");
+        assert!(!is_pdf(b"%PDF"), "a truncated header");
+        assert!(!is_pdf(b"\x89PNG\r\n\x1a\n"));
+        assert!(!is_pdf(b""));
     }
 
     #[test]

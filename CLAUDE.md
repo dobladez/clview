@@ -6,9 +6,11 @@ began as `pdfcraft-cli view` in storytold/pdfcraft; its README explains how it w
 ## Layout
 - `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
   (`Source`, `Render`, `Pool`, `Frame`), never a backend; `the_viewer_names_no_backend` checks it.
-- `src/source/<backend>.rs`: one backend each, behind a cargo feature, opened from
-  `source::open`. `pdfcraft.rs` (feature `pdfcraft`, default) renders PDFs through pdfcraft, a git
-  dependency pinned in `Cargo.toml`.
+- `src/source/<backend>.rs`: one backend each, behind a cargo feature, listed in
+  `source::BACKENDS`. A backend says whether it opens a file (from its first bytes) and which
+  options it takes; the first that opens a file opens it. Options that belong to one kind of file
+  (a PDF's `--password`) are the backend's, never the viewer's. `pdfcraft.rs` (feature
+  `pdfcraft`, default) renders PDFs through pdfcraft, a git dependency pinned in `Cargo.toml`.
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks.
 

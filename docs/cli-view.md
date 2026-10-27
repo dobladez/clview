@@ -51,11 +51,21 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
 | `--protocol auto` | check that the terminal can show images first (the default) |
 | `--protocol kitty` | skip the check and send the escape codes anyway, even to a file or a pipe |
-| `--password PW` | the password of an encrypted document: the user or the owner password |
 
 Printed without the pager, pages follow the zoom too, a row of them under another: `--zoom 3`
 prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
 when the window is wide enough, as the pager first shows them.
+
+## Which files it shows
+
+A file is shown by the first backend that opens it, going by the file's first bytes, not its
+name. This build's backends, and the options each takes besides the ones above, are listed at the
+end of `clv --help`. An option that only another backend takes is refused, since it would do
+nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin` works too.
+
+| Backend | Shows | Its options |
+|---|---|---|
+| `pdfcraft` (the `pdfcraft` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 
 ## Paging through a document
 

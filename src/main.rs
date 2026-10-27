@@ -1,6 +1,6 @@
-//! clv: PDF pages shown in the terminal through the kitty graphics protocol.
+//! clv: a file's pages shown in the terminal through the kitty graphics protocol.
 //!
-//! Usage: `clv --help`, which prints [`USAGE`].
+//! Usage: `clv --help`, which prints [`view::usage`].
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -16,21 +16,6 @@ use std::process::ExitCode;
 
 /// The command's name, as messages give it.
 const NAME: &str = env!("CARGO_BIN_NAME");
-
-/// What `--help` prints.
-const USAGE: &str = concat!(
-    env!("CARGO_BIN_NAME"),
-    " <file.pdf> [--pages 1,3-5] [--zoom auto|width|N] [--pager | --no-pager]
-    [--compression auto|fast|small] [--protocol auto|kitty] [--password PW]
-
-Shows PDF pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol), tmux
-too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when the
-window is wide enough; - and + zoom out to rows of pages and in to the window's width.
-
-",
-    env!("CARGO_BIN_NAME"),
-    " --help | --version"
-);
 
 // Keep stdout errors typed: a closed pipe is normal, but file and command errors still fail.
 #[derive(Debug)]
@@ -78,7 +63,8 @@ fn main() -> ExitCode {
         }
     }
     let result = match args.first().map(String::as_str) {
-        Some("--help" | "-h") => stdout_line(format_args!("{USAGE}")),
+        #[cfg(unix)]
+        Some("--help" | "-h") => stdout_line(format_args!("{}", view::usage(source::BACKENDS).trim_end())),
         Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CARGO_PKG_VERSION"))),
         #[cfg(unix)]
         _ => view::run(&args),

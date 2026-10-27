@@ -49,6 +49,14 @@ viewer could only abandon the thread. What the pager relies on is that pool's co
 `set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
 request is still listed; `try_recv` never blocks.
 
+A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goes to the first
+that says it opens it, going by the file's first 1024 bytes (`Backend::opens`). Those bytes are
+read once and handed on with the rest of the file (`Input`), so a pipe opens as well as a file.
+Each backend declares its own options (`Backend::options`): the viewer parses the command line
+against its own and every backend's, lists them in `--help` under their backend, and refuses one
+the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
+its own options from it.
+
 The one backend is `source/pdfcraft.rs`, behind the `pdfcraft` feature (on by default). Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.

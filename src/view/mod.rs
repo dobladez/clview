@@ -18,21 +18,27 @@ use std::time::{Duration, Instant};
 use encode::PngEffort;
 
 use crate::CliError;
-use crate::args::{OptionSpec, flag, page_list, validate_options};
-use crate::source::{Frame, Request, Source};
+use crate::args::{OptionSpec, Parsed, page_list};
+use crate::source::{Backend, Frame, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
 
+/// The viewer's own options, whatever it shows. A backend's come from the backend.
 const OPTIONS: &[OptionSpec] = &[
-    OptionSpec { name: "--pages", takes_value: true },
-    OptionSpec { name: "--zoom", takes_value: true },
-    OptionSpec { name: "--protocol", takes_value: true },
-    OptionSpec { name: "--password", takes_value: true },
-    OptionSpec { name: "--pager", takes_value: false },
-    OptionSpec { name: "--no-pager", takes_value: false },
-    OptionSpec { name: "--compression", takes_value: true },
+    OptionSpec { name: "--pages", value: Some("1,3-5"), help: "the pages to show, in this order (default: all)" },
+    OptionSpec { name: "--zoom", value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
+    OptionSpec { name: "--pager", value: None, help: "always page, even through one page" },
+    OptionSpec { name: "--no-pager", value: None, help: "never page: print the pages and exit" },
+    OptionSpec { name: "--compression", value: Some("auto|fast|small"), help: "fast PNGs or small ones (auto: small over SSH, else fast)" },
+    OptionSpec { name: "--protocol", value: Some("auto|kitty"), help: "kitty: send the images without asking the terminal first" },
 ];
+
+/// What `--help` says before the options.
+const ABOUT: &str = "\
+Shows a file's pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol),
+tmux too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when
+the window is wide enough; - and + zoom out to rows of pages and in to the window's width.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -207,15 +213,43 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     })
 }
 
+/// What `--help` prints: the viewer's options, then those of each of `backends`.
+pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
+    let name = crate::NAME;
+    let mut out = format!("{name} <file> [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
+    let width = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).map(|o| o.shown().len()).max().unwrap_or(0);
+    let list = |out: &mut String, options: &[OptionSpec]| {
+        for option in options {
+            out.push_str(&format!("  {:width$}  {}\n", option.shown(), option.help));
+        }
+    };
+    list(&mut out, OPTIONS);
+    for backend in backends {
+        out.push_str(&format!("\n{}, by {}:\n", backend.shows(), backend.name()));
+        match backend.options() {
+            [] => out.push_str("  no options of its own\n"),
+            options => list(&mut out, options),
+        }
+    }
+    if backends.is_empty() {
+        out.push_str("\nThis build has no backends, so it shows nothing.\n");
+    }
+    out
+}
+
 fn view(args: &[String]) -> Result<(), CliError> {
-    validate_options(args, OPTIONS)?;
-    let path = file_arg(args)?;
-    let zoom = flag(args, "--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
-    let protocol = Protocol::parse(flag(args, "--protocol").unwrap_or("auto"))?;
-    let compression = Compression::parse(flag(args, "--compression").unwrap_or("auto"))?;
-    let source = crate::source::open(path, flag(args, "--password"))?;
+    let backends = crate::source::BACKENDS;
+    let known: Vec<OptionSpec> = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().collect();
+    let options = Parsed::parse(args, &known)?;
+    let path = file_arg(&options)?;
+    let zoom = options.value("--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
+    let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
+    let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
+    let (backend, input) = crate::source::choose(path, backends)?;
+    takes_all(backend, &options, path)?;
+    let source = backend.open(input, &options)?;
     let count = source.pages();
-    let pages = match flag(args, "--pages") {
+    let pages = match options.value("--pages") {
         Some(list) => page_list(list).map_err(|e| format!("--pages: {e}"))?,
         None => (0..count).collect(),
     };
@@ -223,8 +257,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
         let plural = if count == 1 { "" } else { "s" };
         return Err(format!("no page {} ({path} has {count} page{plural})", page.saturating_add(1)).into());
     }
-    let has = |name: &str| args.iter().any(|a| a == name);
-    let paging = Paging::from_flags(has("--pager"), has("--no-pager"))?;
+    let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let tty = Tty::open().ok();
     let paging = paging.pages(pages.len(), std::io::stdout().is_terminal() && tty.is_some());
     let inside_tmux = tmux::inside();
@@ -255,23 +288,22 @@ fn view(args: &[String]) -> Result<(), CliError> {
     print_pages(&*source, &pages, zoom, size, &terminal, first_id)
 }
 
-/// The one file argument: the token that is neither an option nor an option's value.
-fn file_arg(args: &[String]) -> Result<&str, String> {
-    let mut files = Vec::new();
-    let mut i = 0usize;
-    while let Some(arg) = args.get(i) {
-        match OPTIONS.iter().find(|o| o.name == arg) {
-            Some(option) => i = i.saturating_add(if option.takes_value { 2 } else { 1 }),
-            None => {
-                files.push(arg.as_str());
-                i = i.saturating_add(1);
-            }
-        }
-    }
-    match files.as_slice() {
+/// The one file argument: the argument that is neither an option nor an option's value.
+fn file_arg<'a>(options: &Parsed<'a>) -> Result<&'a str, String> {
+    match options.operands.as_slice() {
         [file] => Ok(file),
         [] => Err("missing file".into()),
-        _ => Err(format!("one file at a time (got {})", files.join(", "))),
+        files => Err(format!("one file at a time (got {})", files.join(", "))),
+    }
+}
+
+/// Refuses an option only other backends take: it would do nothing for the file at `path`,
+/// which `backend` opens.
+fn takes_all(backend: &dyn Backend, options: &Parsed<'_>, path: &str) -> Result<(), String> {
+    let takes = |name: &str| OPTIONS.iter().chain(backend.options()).any(|o| o.name == name);
+    match options.names().find(|name| !takes(name)) {
+        Some(name) => Err(format!("{name} doesn't apply to {path}, which {} opens", backend.name())),
+        None => Ok(()),
     }
 }
 
@@ -573,17 +605,48 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
+    const PASSWORD: OptionSpec = OptionSpec { name: "--password", value: Some("PW"), help: "a password" };
+
+    /// The viewer's options, and a backend's `--password`.
+    fn parsed(given: &[String]) -> Parsed<'_> {
+        Parsed::parse(given, &[OPTIONS, &[PASSWORD]].concat()).unwrap()
+    }
+
     #[test]
-    fn the_file_is_the_token_that_is_not_an_option_value() {
-        assert_eq!(file_arg(&args(&["a.pdf", "--pages", "2"])), Ok("a.pdf"));
-        assert_eq!(file_arg(&args(&["--pages", "2", "a.pdf"])), Ok("a.pdf"));
-        assert_eq!(file_arg(&args(&["--password", "a.pdf", "b.pdf"])), Ok("b.pdf"));
+    fn the_file_is_the_argument_that_is_not_an_option_value() {
+        let file = |list: &[&str]| file_arg(&parsed(&args(list))).map(String::from);
+        assert_eq!(file(&["a.pdf", "--pages", "2"]), Ok("a.pdf".into()));
+        assert_eq!(file(&["--pages", "2", "a.pdf"]), Ok("a.pdf".into()));
+        assert_eq!(file(&["--password", "a.pdf", "b.pdf"]), Ok("b.pdf".into()));
         // `--pager` takes no value.
-        assert_eq!(file_arg(&args(&["--pager", "a.pdf"])), Ok("a.pdf"));
-        assert!(file_arg(&args(&["--zoom", "2"])).is_err_and(|e| e.contains("missing file")));
-        assert!(file_arg(&args(&["a.pdf", "b.pdf"])).is_err_and(|e| e.contains("one file at a time")));
-        // A value left off the end is not a file.
-        assert!(file_arg(&args(&["--pages"])).is_err());
+        assert_eq!(file(&["--pager", "a.pdf"]), Ok("a.pdf".into()));
+        assert!(file(&["--zoom", "2"]).is_err_and(|e| e.contains("missing file")));
+        assert!(file(&["a.pdf", "b.pdf"]).is_err_and(|e| e == "one file at a time (got a.pdf, b.pdf)"));
+    }
+
+    #[test]
+    fn an_option_only_another_backend_takes_is_refused() {
+        use crate::source::tests::{Fake, PDF};
+        const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD] };
+        let given = args(&["a.pdf", "--zoom", "2", "--password", "pw"]);
+        assert_eq!(takes_all(&LOCKED, &parsed(&given), "a.pdf"), Ok(()));
+        assert_eq!(takes_all(&PDF, &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
+        assert_eq!(takes_all(&PDF, &parsed(&args(&["a.pdf", "--zoom", "2", "--no-pager"])), "a.pdf"), Ok(()), "the viewer's own apply to all");
+    }
+
+    #[test]
+    fn help_lists_the_viewers_options_then_each_backends() {
+        use crate::source::tests::{Fake, PDF};
+        const LOCKED: Fake = Fake { name: "locked", shows: "Locked PDFs", magic: b"%PDF-", options: &[PASSWORD] };
+        let help = usage(&[&LOCKED, &PDF]);
+        assert!(help.starts_with(&format!("{0} <file> [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
+        // Aligned under the longest, `--compression auto|fast|small`.
+        for option in OPTIONS {
+            assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
+        }
+        assert!(help.contains(&format!("\n\nLocked PDFs, by locked:\n  {:29}  a password\n", "--password PW")), "{help}");
+        assert!(help.ends_with("\nPDFs, by pdf-one:\n  no options of its own\n"), "{help}");
+        assert!(usage(&[]).ends_with("\nThis build has no backends, so it shows nothing.\n"));
     }
 
     #[test]
