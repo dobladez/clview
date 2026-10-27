@@ -2,8 +2,12 @@
 //! pager and the printer in `view` see only the traits here; each backend brings its own renderer
 //! and its own threads, so one can cancel or time out work the way it knows how.
 
+#[cfg(feature = "image")]
+mod image;
 #[cfg(feature = "pdfcraft")]
 mod pdfcraft;
+#[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images use these threads so far"))]
+mod threads;
 
 use std::fs::File;
 use std::io::Read;
@@ -15,6 +19,8 @@ use crate::args::{OptionSpec, Parsed};
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "pdfcraft")]
     &pdfcraft::Pdfcraft,
+    #[cfg(feature = "image")]
+    &image::Images,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -54,7 +60,10 @@ impl<'a> Input<'a> {
     }
 
     /// The whole file.
-    #[cfg_attr(all(not(feature = "pdfcraft"), not(test)), expect(dead_code, reason = "only a backend or a test reads a file"))]
+    #[cfg_attr(
+        all(not(feature = "pdfcraft"), not(feature = "image"), not(test)),
+        expect(dead_code, reason = "only a backend or a test reads a file")
+    )]
     pub(crate) fn bytes(self) -> Result<Vec<u8>, String> {
         let Self { path, mut head, mut rest } = self;
         rest.read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
@@ -104,7 +113,6 @@ pub(crate) struct Request {
 pub(crate) struct Pixels(Box<dyn AsRef<[u8]> + Send>);
 
 impl Pixels {
-    #[cfg_attr(all(not(feature = "pdfcraft"), not(test)), expect(dead_code, reason = "only a backend or a test makes pixels"))]
     pub(crate) fn new(pixels: impl AsRef<[u8]> + Send + 'static) -> Self {
         Self(Box::new(pixels))
     }
@@ -130,7 +138,21 @@ pub(crate) struct Frame {
     pub(crate) warnings: Vec<String>,
 }
 
-/// Something with pages to show: a PDF's pages.
+impl Frame {
+    /// No page for `request`, and why.
+    pub(crate) fn failed(request: Request, error: String) -> Self {
+        Self { request, width: 0, height: 0, rgba: Pixels::new(Vec::new()), error: Some(error), warnings: Vec::new() }
+    }
+}
+
+/// What `render` returns, or a failed page if it panics: a backend's bug costs the page, not the
+/// viewer.
+pub(crate) fn guarded(request: Request, render: impl FnOnce() -> Frame) -> Frame {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(render));
+    caught.unwrap_or_else(|_| Frame::failed(request, "the renderer failed on this page".into()))
+}
+
+/// Something with pages to show: a PDF's pages, or an image as one page.
 pub(crate) trait Source {
     /// How many pages: at least one, since a source with none fails to open.
     fn pages(&self) -> usize;
@@ -253,7 +275,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(feature = "pdfcraft"))]
+        #[cfg(not(any(feature = "pdfcraft", feature = "image")))]
         assert!(BACKENDS.is_empty());
     }
 }

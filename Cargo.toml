@@ -1,6 +1,6 @@
 [package]
 name = "clview"
-description = "PDF pages in the terminal, through the kitty graphics protocol"
+description = "PDFs and images in the terminal, through the kitty graphics protocol"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -25,14 +25,23 @@ todo = "warn"
 [dependencies]
 pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
 pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
+# Images, decoded in Rust: the `image` crate's decoders (no rayon: the pager has threads of its
+# own), and jxl-oxide for JPEG XL. Not AVIF: the `image` crate's AVIF decoder (`avif-native`,
+# the dav1d C library) turns most files' colours, as libavif writes them, through the wrong
+# YUV matrix in 0.25.10.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"], optional = true }
+jxl-oxide = { version = "0.12.6", default-features = false, features = ["image"], optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdfcraft"]
+default = ["pdfcraft", "image"]
 # PDFs, rendered by pdfcraft. Without it the viewer builds without pdfcraft at all, and has no
 # PDF backend.
 pdfcraft = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
+# Images: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, TGA, PNM
+# and farbfeld (`source/image.rs` lists them as `DECODED`).
+image = ["dep:image", "dep:jxl-oxide"]
 
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
@@ -40,6 +49,8 @@ pdfcraft = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
 rustix = { version = "1", features = ["process", "termios"] }
 
 [dev-dependencies]
+# Test images, made by the tests.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
 proptest = "1"
 serde_json = "1"

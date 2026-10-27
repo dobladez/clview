@@ -398,6 +398,8 @@ fn help_and_version() {
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
     // The PDF backend's own option, under the backend.
     assert!(help.contains("\n\nPDFs, by pdfcraft:\n  --password PW "), "{help}");
+    #[cfg(feature = "image")]
+    assert!(help.contains("\n\nImages, by image:\n  no options of its own\n"), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CARGO_PKG_VERSION")));
 }
@@ -408,7 +410,8 @@ fn a_file_no_backend_opens_is_refused_and_a_pdf_is_known_by_its_header() {
     let notes = tmp("backends", "notes.pdf");
     std::fs::write(&notes, "not a PDF, whatever its name says\n").unwrap();
     let out = view(&notes, &["--protocol", "kitty"]);
-    assert_eq!(text(&out.stderr), format!("clv: {}: not a file clv shows (it shows PDFs)\n", notes.display()));
+    let shows = if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" };
+    assert_eq!(text(&out.stderr), format!("clv: {}: not a file clv shows (it shows {shows})\n", notes.display()));
     assert!(!out.status.success() && out.stdout.is_empty());
     let pdf = tmp("backends", "page");
     std::fs::write(&pdf, crate::fixtures::letter("No extension", 1)).unwrap();
@@ -435,6 +438,33 @@ fn a_pdf_through_a_pipe_is_shown() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(images(&out.stdout).len(), 2);
+}
+
+/// A `width` × `height` PNG made by the test.
+#[cfg(feature = "image")]
+fn picture(test: &str, name: &str, width: u32, height: u32) -> PathBuf {
+    let path = tmp(test, name);
+    let rgba: Vec<u8> = (0..width * height).flat_map(|i| [(i % 251) as u8, 128, 64, 255]).collect();
+    image::save_buffer(&path, &rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+    path
+}
+
+/// An image is one page, and a PDF's options don't apply to it.
+#[cfg(feature = "image")]
+#[test]
+fn an_image_is_shown_as_one_page_and_takes_no_pdf_options() {
+    let png = picture("image", "photo.png", 300, 200);
+    let out = view(&png, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let drawn = images(&out.stdout);
+    assert_eq!(drawn.len(), 1);
+    let (w, h) = png_size(&drawn[0].png);
+    assert!((w as f32 / h as f32 - 1.5).abs() < 0.01, "{w}×{h}");
+    let out = view(&png, &["--protocol", "kitty", "--password", "pw"]);
+    assert_eq!(text(&out.stderr), format!("clv: --password doesn't apply to {}, which image opens\n", png.display()));
+    assert!(!out.status.success() && out.stdout.is_empty());
+    let out = view(&png, &["--protocol", "kitty", "--pages", "2"]);
+    assert!(text(&out.stderr).contains("no page 2 ") && text(&out.stderr).contains("has 1 page)"), "{}", text(&out.stderr));
 }
 
 /// Errors are said once, under the command's name.

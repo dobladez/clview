@@ -225,7 +225,9 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     };
     list(&mut out, OPTIONS);
     for backend in backends {
-        out.push_str(&format!("\n{}, by {}:\n", backend.shows(), backend.name()));
+        let mut shows = backend.shows().chars();
+        let shows: String = shows.next().map(|first| first.to_uppercase().chain(shows).collect()).unwrap_or_default();
+        out.push_str(&format!("\n{shows}, by {}:\n", backend.name()));
         match backend.options() {
             [] => out.push_str("  no options of its own\n"),
             options => list(&mut out, options),
@@ -637,7 +639,7 @@ mod tests {
     #[test]
     fn help_lists_the_viewers_options_then_each_backends() {
         use crate::source::tests::{Fake, PDF};
-        const LOCKED: Fake = Fake { name: "locked", shows: "Locked PDFs", magic: b"%PDF-", options: &[PASSWORD] };
+        const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD] };
         let help = usage(&[&LOCKED, &PDF]);
         assert!(help.starts_with(&format!("{0} <file> [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.

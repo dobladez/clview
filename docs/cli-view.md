@@ -1,6 +1,6 @@
 # Showing pages in the terminal
 
-`clv` draws PDF pages straight into the terminal, through the
+`clv` draws PDF pages and images straight into the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). kitty, Ghostty
 and WezTerm speak it, among others. It works on macOS, Linux and FreeBSD, and inside tmux.
 
@@ -66,6 +66,16 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 | Backend | Shows | Its options |
 |---|---|---|
 | `pdfcraft` (the `pdfcraft` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
+| `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
+
+An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
+photo taken with the phone on its side shows upright). It is fitted to the window like a page:
+a small picture is enlarged. The first frame of an animation is shown. Colour profiles are not
+applied yet: a picture in a wide-gamut space (Display P3, Adobe RGB) shows a little duller than
+it should. AVIF and DDS files are recognised and refused with their format's name: the `image`
+crate's AVIF decoder gets most AVIFs' colours wrong in 0.25.10, and it has no DDS decoder. A
+picture whose pixels would take more than 512 MiB (about 134 megapixels) is refused when it is
+opened.
 
 ## Paging through a document
 

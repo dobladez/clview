@@ -1,6 +1,6 @@
 # How clv works
 
-`clv` draws the pages of a source (a PDF's, for now) in the terminal through the
+`clv` draws the pages of a source (a PDF's, or an image as one page) in the terminal through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), directly or from
 inside tmux. Usage and behaviour are in [`docs/cli-view.md`](../../docs/cli-view.md); this
 page is for working on the code: how pages get to the terminal, what is kept there, what can go
@@ -47,7 +47,10 @@ tells a page that takes too long to stop at its next drawing operator, retries a
 only waited behind another page's decode, and bounds the threads it replaces; a pool in the
 viewer could only abandon the thread. What the pager relies on is that pool's contract:
 `set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
-request is still listed; `try_recv` never blocks.
+request is still listed; `try_recv` never blocks. A backend that has no better way, such as
+images, gets plain threads from `source/threads.rs`: a render once begun runs to its end, and
+one no longer wanted is dropped when it is done; a render that panics comes back as a failed
+page.
 
 A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goes to the first
 that says it opens it, going by the file's first 1024 bytes (`Backend::opens`). Those bytes are
@@ -57,7 +60,9 @@ against its own and every backend's, lists them in `--help` under their backend,
 the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
 its own options from it.
 
-The one backend is `source/pdfcraft.rs`, behind the `pdfcraft` feature (on by default). Nothing in
+The backends are `source/pdfcraft.rs` and `source/image.rs`, behind features of those names (on
+by default). An image decodes on its first render, on a render thread, so the keys work while a
+large photo decodes; the pixels are kept for its renders at other sizes. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
 

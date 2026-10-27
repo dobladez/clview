@@ -10,9 +10,13 @@ began as `pdfcraft-cli view` in storytold/pdfcraft; its README explains how it w
   `source::BACKENDS`. A backend says whether it opens a file (from its first bytes) and which
   options it takes; the first that opens a file opens it. Options that belong to one kind of file
   (a PDF's `--password`) are the backend's, never the viewer's. `pdfcraft.rs` (feature
-  `pdfcraft`, default) renders PDFs through pdfcraft, a git dependency pinned in `Cargo.toml`.
+  `pdfcraft`, default) renders PDFs through pdfcraft, a git dependency pinned in `Cargo.toml`;
+  `image.rs` (feature `image`, default) decodes images through the `image` crate and jxl-oxide.
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
-  work wanted, a result arrives only while its request is listed, `try_recv` never blocks.
+  work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
+  backend with nothing better (images) lends its render function to `source/threads.rs`.
+- Test pictures are made by the tests, or kept in `tests/data/`, synthetic, with how each was
+  made in its README.
 
 ## Rules
 - **Never panic.** Every file, every byte the terminal sends back and every argument is untrusted
@@ -34,7 +38,8 @@ began as `pdfcraft-cli view` in storytold/pdfcraft; its README explains how it w
 ## Quality gates before every commit
 `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
 the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
-and `cargo test --no-default-features -j 2`. Run them under a `timeout`. The pdfcraft engine is a
+and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
+too (`--no-default-features --features image`, then `pdfcraft`). Run them under a `timeout`. The pdfcraft engine is a
 large build: keep `-j 2` unless the machine is free.
 
 ## Looking at it

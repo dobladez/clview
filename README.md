@@ -1,6 +1,6 @@
 # clview
 
-`clv` shows PDF pages in the terminal, through the
+`clv` shows PDFs and images in the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
 WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 
@@ -8,6 +8,7 @@ WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 clv report.pdf             # page through it, like less
 clv report.pdf --zoom 4    # four pages to a row
 clv report.pdf --no-pager  # print every page and exit, like cat
+clv photo.jpg              # an image, printed at the cursor
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
@@ -17,7 +18,10 @@ inside in [`src/view/README.md`](src/view/README.md).
 
 Pages are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws
 them: comments without an appearance of their own are drawn, dynamic XFA forms are laid out, and
-either password opens a protected file. This began as `pdfcraft-cli view`.
+either password opens a protected file. This began as `pdfcraft-cli view`. Images are decoded
+in Rust by the [`image`](https://crates.io/crates/image) crate, and JPEG XL by
+[jxl-oxide](https://crates.io/crates/jxl-oxide): PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI,
+OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation.
 
 ## Building
 
@@ -38,11 +42,13 @@ viewer without it, and without a PDF backend.
 
 The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
 renders. A file goes to the first backend that opens it, going by its first bytes, and each
-backend brings its own options (`--password` is pdfcraft's). pdfcraft is the one backend so far.
+backend brings its own options (`--password` is pdfcraft's). There are two so far: pdfcraft for
+PDFs, and `image` for images.
 
+- Directories, as a gallery: a tile for each file it can show (its first page), and Enter opens
+  one.
 - More than one PDF backend to choose from.
-- Images.
-- Directories, as a gallery: a tile for each file it can show, and Enter opens one.
+- AVIF, colour profiles, and an animation's frames as its pages.
 
 ## License
 

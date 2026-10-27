@@ -416,6 +416,30 @@ fn a_reply_cut_in_two_is_never_keys_and_esc_still_quits() {
     assert!(view.text().contains("\x1b[?1049l"), "the alternate screen was left");
 }
 
+/// An image pages on threads the viewer lends it, as a PDF does on pdfcraft's: shown without a
+/// key, and rendered again at the new scale when zoomed.
+#[cfg(feature = "image")]
+#[test]
+fn an_image_opens_in_the_pager_and_zooms() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-image-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("photo.png");
+    let rgba: Vec<u8> = (0..400 * 100).flat_map(|i: u32| [(i % 251) as u8, 128, 64, 255]).collect();
+    image::save_buffer(&png, &rgba, 400, 100, image::ExtendedColorType::Rgba8).unwrap();
+    // A window taller than the picture's shape: `+` makes it as wide as the window, larger.
+    let mut view = Session::start(&png, &["--pager", "--protocol", "kitty"], 60, 30);
+    view.wait_until("the image shown", |t| t.contains(" page 1/1 ") && transmitted(t) == 1);
+    view.press("-");
+    view.press("+");
+    view.press("+");
+    view.wait_until("the image rendered again, wider", |t| transmitted(t) == 2);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// The `i=` value at the start of a transmission.
 fn view_id(transmission: &str) -> String {
     transmission.trim_start_matches("a=t,f=100,t=d,q=2,i=").chars().take_while(char::is_ascii_digit).collect()
