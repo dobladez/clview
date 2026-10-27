@@ -1,0 +1,68 @@
+[package]
+name = "clview"
+description = "PDF pages in the terminal, through the kitty graphics protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+# pdfcraft is a git dependency, which crates.io refuses.
+publish = false
+
+[[bin]]
+name = "clv"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+# pdfcraft is not on crates.io: its crates come from one pinned commit of its `main`. Moving the
+# pin means moving every `rev` below together, the [patch.crates-io] ones included;
+# tests/it/pdfcraft_pin.rs fails when they disagree or pdfcraft patches a crate this file doesn't.
+[dependencies]
+pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+base64 = "0.23"
+png = "0.18"
+
+[target.'cfg(unix)'.dependencies]
+# The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
+# files (`process`): safe calls, so no `unsafe` libc.
+rustix = { version = "1", features = ["process", "termios"] }
+
+[dev-dependencies]
+pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+proptest = "1"
+serde_json = "1"
+toml = "0.9"
+
+# The renderer's patched hayro, lopdf and vello_common, from pdfcraft's `vendor/` at the same
+# commit. pdfcraft applies them with its own [patch.crates-io], which Cargo honours only in the
+# root manifest, so without these the stock crates.io releases build silently, without its
+# crash and rendering fixes.
+[patch.crates-io]
+hayro = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+
+# Dependencies optimised even in debug builds: rendering a page unoptimised is slow enough to
+# time the tests out. Our own code keeps line tables, so panics and backtraces still show lines.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
