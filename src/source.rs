@@ -159,6 +159,10 @@ pub(crate) trait Source {
     /// Page `page`'s size as shown, in the source's own unit (points for a PDF), or `None` past
     /// the last page. A render at scale `s` is about `s` times as many pixels on each side.
     fn size(&self, page: usize) -> Option<(f32, f32)>;
+    /// Whether page `page`'s size is its natural size, in pixels of its own (an image's): fitted
+    /// to the window, it is never drawn larger, unless the reader zooms to the width. A PDF's
+    /// points are a unit for any scale.
+    fn natural(&self, page: usize) -> bool;
     /// A renderer on this thread, for pages printed one after another.
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String>;
     /// Renders on threads of their own, for the pager: keys still work while pages render, and

@@ -416,28 +416,70 @@ fn a_reply_cut_in_two_is_never_keys_and_esc_still_quits() {
     assert!(view.text().contains("\x1b[?1049l"), "the alternate screen was left");
 }
 
-/// An image pages on threads the viewer lends it, as a PDF does on pdfcraft's: shown without a
-/// key, and rendered again at the new scale when zoomed.
+/// An image pages on threads the viewer lends it, as a PDF does on its backend's: shown without a
+/// key at its own size, larger only as wide as the window, and rendered again at each new scale.
 #[cfg(feature = "image")]
 #[test]
 fn an_image_opens_in_the_pager_and_zooms() {
     if !pty_works() {
         return;
     }
-    let dir = std::env::temp_dir().join(format!("clview-pager-image-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let png = dir.join("photo.png");
-    let rgba: Vec<u8> = (0..400 * 100).flat_map(|i: u32| [(i % 251) as u8, 128, 64, 255]).collect();
-    image::save_buffer(&png, &rgba, 400, 100, image::ExtendedColorType::Rgba8).unwrap();
-    // A window taller than the picture's shape: `+` makes it as wide as the window, larger.
+    let png = picture("pager-image", 400, 100);
+    // 600 × 580 px above the status line, which would take the picture 1.5 times as wide.
     let mut view = Session::start(&png, &["--pager", "--protocol", "kitty"], 60, 30);
     view.wait_until("the image shown", |t| t.contains(" page 1/1 ") && transmitted(t) == 1);
-    view.press("-");
+    assert_eq!(first_page_size(&view.text()), ((400, 100), (40, 5)));
     view.press("+");
-    view.press("+");
-    view.wait_until("the image rendered again, wider", |t| transmitted(t) == 2);
+    view.wait_until("the image as wide as the window", |t| t.contains(" page 1/1 · width ") && transmitted(t) == 2);
+    // Back to its own size, which is still in the terminal, then two to a row: a smaller one.
+    view.press("--");
+    view.wait_until("the image zoomed out", |t| t.contains(" page 1/1 · 2 per row ") && transmitted(t) == 3);
+    assert_eq!(sent_sizes(&view.text()), [(400, 100), (600, 150), (290, 73)]);
     view.press("q");
     assert!(view.finish().success());
+}
+
+/// Fewer pages than a row takes are a row of their own, in the middle of the screen.
+#[cfg(feature = "image")]
+#[test]
+fn one_image_zoomed_out_sits_in_the_middle() {
+    if !pty_works() {
+        return;
+    }
+    let png = picture("pager-middle", 800, 600);
+    // Four to a row in 80 columns: an 18-column place, 7 rows tall for this picture, in the middle
+    // of the 47 rows above the status line and of the 80 columns, from row 21 and column 32.
+    let mut view = Session::start(&png, &["--pager", "--protocol", "kitty", "--zoom", "4"], 80, 48);
+    view.wait_until("the image placed", |t| t.contains(" page 1/1 · 4 per row ") && t.contains(",p=1,C=1,"));
+    assert_eq!(first_page_size(&view.text()), ((180, 135), (18, 7)));
+    assert!(view.text().contains("\x1b[21;32H\x1b_Ga=p,q=1,"), "{:?}", view.text());
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A `width` × `height` PNG made by the test.
+#[cfg(feature = "image")]
+fn picture(test: &str, width: u32, height: u32) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("picture.png");
+    let rgba: Vec<u8> = (0..width * height).flat_map(|i| [(i % 251) as u8, 128, 64, 255]).collect();
+    image::save_buffer(&png, &rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+    png
+}
+
+/// The size in pixels of every image sent, in order, from its PNG header.
+#[cfg(feature = "image")]
+fn sent_sizes(text: &str) -> Vec<(u32, u32)> {
+    use base64::Engine as _;
+    let sent = text.match_indices("a=t,f=100,t=d,q=2,i=").map(|(at, _)| &text[at..]);
+    sent.map(|t| {
+        let payload = &t[t.find(';').unwrap() + 1..];
+        let header = base64::engine::general_purpose::STANDARD.decode(&payload[..44]).unwrap();
+        let be = |at: usize| u32::from_be_bytes(header[at..at + 4].try_into().unwrap());
+        (be(16), be(20))
+    })
+    .collect()
 }
 
 /// The `i=` value at the start of a transmission.

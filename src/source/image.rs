@@ -139,6 +139,10 @@ impl Source for Image {
         (page == 0).then_some((width as f32, height as f32))
     }
 
+    fn natural(&self, _page: usize) -> bool {
+        true
+    }
+
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
         Ok(Box::new(Renderer(self.0.clone())))
     }

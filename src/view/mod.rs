@@ -20,7 +20,7 @@ use encode::PngEffort;
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
 use crate::source::{Backend, Frame, Request, Source};
-use fit::{Area, Cell, Fit, Grid, Layout, Zoom};
+use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
 
@@ -434,7 +434,7 @@ fn print_pages(source: &dyn Source, pages: &[usize], zoom: Zoom, size: WindowSiz
     let rows = size.rows.saturating_sub(1).max(1);
     let (cols, max_rows) = terminal.output.limits(size.cols);
     let area = Area { cols, rows, cell, max_rows };
-    let size_of = |i: usize| pages.get(i).and_then(|p| source.size(*p));
+    let size_of = |i: usize| pages.get(i).and_then(|p| page_size(source, *p));
     // Every row has as many pages as the first: `auto` decides once.
     let first = fit::grid(zoom, pages.len(), 0, size_of, area);
     let zoom = if first.fit == Fit::Width { Zoom::Width } else { Zoom::PerRow(first.per_row) };
@@ -564,12 +564,17 @@ struct Image {
     warning: Option<String>,
 }
 
+/// `source`'s `page`'s size, and whether it is a natural one; `None` past its last page.
+fn page_size(source: &dyn Source, page: usize) -> Option<Size> {
+    source.size(page).map(|(w, h)| Size { w, h, natural: source.natural(page) })
+}
+
 /// Where `source`'s `page` goes in `cols` × `rows` cells, never more than `max_rows` tall. Errors
 /// name the page.
 fn page_layout(source: &dyn Source, page: usize, fit: Fit, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> Result<Layout, String> {
     let number = page.saturating_add(1);
-    let (w, h) = source.size(page).ok_or_else(|| format!("no page {number}"))?;
-    fit::layout(w, h, cols, rows, cell, fit, max_rows).map_err(|e| format!("page {number}: {e}"))
+    let size = page_size(source, page).ok_or_else(|| format!("no page {number}"))?;
+    fit::layout(size, cols, rows, cell, fit, max_rows).map_err(|e| format!("page {number}: {e}"))
 }
 
 /// The render of `page` at `layout`'s scale, tagged so its result can be told from others.
@@ -745,7 +750,8 @@ mod tests {
         assert_eq!(checked(&rendered(&["a colour was guessed"], Some("no page box"))), Err("page 3: no page box".into()));
     }
 
-    /// Where a page goes depends only on its size: a source past its last page has no layout.
+    /// Where a page goes depends only on its size, and whether it is a natural one: a source past
+    /// its last page has no layout.
     #[test]
     fn a_page_is_laid_out_from_its_sources_size() {
         struct Sizes(Vec<(f32, f32)>);
@@ -755,6 +761,9 @@ mod tests {
             }
             fn size(&self, page: usize) -> Option<(f32, f32)> {
                 self.0.get(page).copied()
+            }
+            fn natural(&self, page: usize) -> bool {
+                page == 2
             }
             fn renderer(&self) -> Result<Box<dyn crate::source::Render + '_>, String> {
                 Err("not here".into())
@@ -770,7 +779,7 @@ mod tests {
                 None
             }
         }
-        let source = Sizes(vec![(612.0, 792.0), (792.0, 612.0)]);
+        let source = Sizes(vec![(612.0, 792.0), (792.0, 612.0), (100.0, 100.0)]);
         let cell = Cell { w: 10.0, h: 20.0 };
         let portrait = page_layout(&source, 0, Fit::Page, 80, 24, cell, 24).unwrap();
         let landscape = page_layout(&source, 1, Fit::Page, 80, 24, cell, 24).unwrap();
@@ -779,6 +788,9 @@ mod tests {
         assert_eq!((portrait.rows, landscape.rows), (24, 24));
         assert!(portrait.cols < landscape.cols, "{portrait:?} {landscape:?}");
         assert!((portrait.scale - 480.0 / 792.0).abs() < 1e-4 && (landscape.scale - 480.0 / 612.0).abs() < 1e-4, "{portrait:?} {landscape:?}");
-        assert_eq!(page_layout(&source, 2, Fit::Page, 80, 24, cell, 24).map(|_| ()), Err("no page 3".into()));
+        // A picture, the size it is.
+        let picture = page_layout(&source, 2, Fit::Page, 80, 24, cell, 24).unwrap();
+        assert_eq!((picture.scale, picture.cols, picture.rows), (1.0, 10, 5));
+        assert_eq!(page_layout(&source, 3, Fit::Page, 80, 24, cell, 24).map(|_| ()), Err("no page 4".into()));
     }
 }

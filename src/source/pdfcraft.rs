@@ -76,6 +76,10 @@ impl Source for Pdf {
         self.sizes.get(page).copied()
     }
 
+    fn natural(&self, _page: usize) -> bool {
+        false
+    }
+
     fn renderer(&self) -> Result<Box<dyn super::Render + '_>, String> {
         let renderer = PageRenderer::new(self.bytes.clone(), self.config.clone());
         // `inspect` read the file, but the renderer's own parser may not.

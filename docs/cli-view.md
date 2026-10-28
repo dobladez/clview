@@ -43,7 +43,7 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 | `--pages 1,3-5` | the pages to show, in order (default: all of them) |
 | `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
-| `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window |
+| `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
@@ -69,8 +69,10 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
 
 An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
-photo taken with the phone on its side shows upright). It is fitted to the window like a page:
-a small picture is enlarged. The first frame of an animation is shown. Colour profiles are not
+photo taken with the phone on its side shows upright). It is fitted to the window like a page,
+but never made larger than it is: a pixel of the picture to a pixel of the screen at most, so an
+icon shows as small as it is. `--zoom width` (and `+` to the width) still makes it as wide as the
+window. The first frame of an animation is shown. Colour profiles are not
 applied yet: a picture in a wide-gamut space (Display P3, Adobe RGB) shows a little duller than
 it should. AVIF and DDS files are recognised and refused with their format's name: the `image`
 crate's AVIF decoder gets most AVIFs' colours wrong in 0.25.10, and it has no DDS decoder. A
@@ -90,7 +92,9 @@ the pager decides this again whenever the window changes size.
 
 `-` zooms out: one more page to a row each time, in as many rows as fit the window, so zoomed
 far out the screen is an overview of the document. It stops at 8 pages to a row, or before a page
-would be narrower than 8 columns, and at as many pages as there are. `+` zooms in: one page fewer
+would be narrower than 8 columns. The zoom is a size, whatever the number of pages: at four to a
+row, a single page takes a quarter of the width, and fewer pages than a row takes sit in the middle
+of the screen. `+` zooms in: one page fewer
 to a row, and from one page, the page as wide as the window, which scrolls; that is as far in as
 it goes. `=` and `_` work too: the same keys, with Shift or without.
 

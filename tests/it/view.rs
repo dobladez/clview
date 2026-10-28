@@ -189,12 +189,13 @@ fn zoom_width_is_wider_than_a_page_to_a_row() {
     // As the width, the page moves the cursor down and the screen with it, as text does: a page
     // taller than the window scrolls by.
     assert!(width[0].keys.starts_with("a=T,f=100,t=d,q=2,c="), "{}", width[0].keys);
-    // One page has no others to share its row: three to a row prints it as one does, and so does
-    // auto.
-    for zoom in ["3", "auto"] {
-        let printed = images(&view(&pdf, &["--protocol", "kitty", "--zoom", zoom]).stdout);
-        assert_eq!((key(&printed[0].keys, "c"), png_size(&printed[0].png)), (cols_page, png_size(&page[0].png)), "--zoom {zoom}");
-    }
+    // Auto prints one page as one to a row does.
+    let auto = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "auto"]).stdout);
+    assert_eq!((key(&auto[0].keys, "c"), png_size(&auto[0].png)), (cols_page, png_size(&page[0].png)));
+    // Three to a row is a size, alone or not: a page in a third of the 80 columns, 25 of them.
+    let third = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "3"]).stdout);
+    assert_eq!(key(&third[0].keys, "c"), 25, "{}", third[0].keys);
+    assert!(png_size(&third[0].png).0 < png_size(&page[0].png).0);
 }
 
 #[test]
@@ -449,17 +450,22 @@ fn picture(test: &str, name: &str, width: u32, height: u32) -> PathBuf {
     path
 }
 
-/// An image is one page, and a PDF's options don't apply to it.
+/// An image is one page, shown no larger than it is, and a PDF's options don't apply to it.
 #[cfg(feature = "image")]
 #[test]
-fn an_image_is_shown_as_one_page_and_takes_no_pdf_options() {
+fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
     let png = picture("image", "photo.png", 300, 200);
     let out = view(&png, &["--protocol", "kitty"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let drawn = images(&out.stdout);
     assert_eq!(drawn.len(), 1);
-    let (w, h) = png_size(&drawn[0].png);
-    assert!((w as f32 / h as f32 - 1.5).abs() < 0.01, "{w}×{h}");
+    // Its own size, 30 × 10 cells of 10 × 20 px, in an 800 × 460 px window it would fill the
+    // height of.
+    assert_eq!(png_size(&drawn[0].png), (300, 200));
+    assert!(drawn[0].keys.contains(",c=30,r=10,"), "{}", drawn[0].keys);
+    // As wide as the window when asked.
+    let wide = images(&view(&png, &["--protocol", "kitty", "--zoom", "width"]).stdout);
+    assert_eq!(png_size(&wide[0].png), (800, 533));
     let out = view(&png, &["--protocol", "kitty", "--password", "pw"]);
     assert_eq!(text(&out.stderr), format!("clv: --password doesn't apply to {}, which image opens\n", png.display()));
     assert!(!out.status.success() && out.stdout.is_empty());

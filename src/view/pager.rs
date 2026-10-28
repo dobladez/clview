@@ -34,7 +34,7 @@ use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
-use super::{FALLBACK_SIZE, Output, QUIET, Terminal, checked, page_layout, png, printable, request, tmux};
+use super::{FALLBACK_SIZE, Output, QUIET, Terminal, checked, page_layout, page_size, png, printable, request, tmux};
 
 /// How often the window size is checked while no key comes.
 const TICK: Duration = Duration::from_millis(200);
@@ -657,7 +657,7 @@ impl Pager<'_> {
     /// as far as the window takes ([`fit::grid`]).
     fn grid(&mut self, area: Area) -> Grid {
         let (nav, source) = (&self.nav, self.source);
-        let grid = fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| source.size(*p)), area);
+        let grid = fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| page_size(source, *p)), area);
         self.nav.grid(grid.per_row, grid.rows, grid.most);
         grid
     }
@@ -747,7 +747,8 @@ impl Pager<'_> {
 
     /// Put the pages on screen in place of the ones before, laid out as `grid` says: the rows of
     /// pages centred, each page centred in its place, and a short last row keeping the places on
-    /// the left. Each place on screen has a placement of its own, so a page given twice shows twice.
+    /// the left, unless it is the only row there is (fewer pages than the zoom puts in a row).
+    /// Each place on screen has a placement of its own, so a page given twice shows twice.
     fn place(&mut self, out: &mut Vec<u8>, size: WindowSize, area_rows: u16, grid: Grid) {
         let wrap = self.output.wrap();
         // Erasing text never erases images (only clearing the whole screen does, by the
@@ -757,7 +758,8 @@ impl Pager<'_> {
         }
         let per_row = grid.per_row.max(1);
         let (across, down) = (grid.cols.saturating_add(fit::GAP), grid.page_rows.saturating_add(fit::ROW_GAP));
-        let width = across.saturating_mul(per_row).saturating_sub(fit::GAP);
+        let filled = u16::try_from(self.nav.pages.len()).map_or(per_row, |n| n.clamp(1, per_row));
+        let width = across.saturating_mul(filled).saturating_sub(fit::GAP);
         // Centred on the rows that have pages: a document shorter than the screen sits in the
         // middle of it, not at the top.
         let last = self.on_screen.iter().rposition(Option::is_some).unwrap_or(0);

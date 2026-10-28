@@ -90,9 +90,20 @@ pub(crate) struct Layout {
     pub(crate) rows: u16,
 }
 
-/// Fit a `page_w` × `page_h` page (in its source's unit) into `cols` × `rows` cells of `cell` pixels, never more
-/// than `max_rows` cells tall or [`MAX_PIXELS`] on a side.
-pub(crate) fn layout(page_w: f32, page_h: f32, cols: u16, rows: u16, cell: Cell, fit: Fit, max_rows: u16) -> Result<Layout, String> {
+/// A page's size in its source's unit, and whether that is its natural size: an image's, in
+/// pixels of its own, which fitting never enlarges (zooming to the width still does). A PDF's
+/// points have no such size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Size {
+    pub(crate) w: f32,
+    pub(crate) h: f32,
+    pub(crate) natural: bool,
+}
+
+/// Fit a page of `size` into `cols` × `rows` cells of `cell` pixels, never more than `max_rows`
+/// cells tall or [`MAX_PIXELS`] on a side.
+pub(crate) fn layout(size: Size, cols: u16, rows: u16, cell: Cell, fit: Fit, max_rows: u16) -> Result<Layout, String> {
+    let Size { w: page_w, h: page_h, natural } = size;
     let positive = |v: f32| v.is_finite() && v > 0.0;
     if !(positive(page_w) && positive(page_h)) {
         return Err("the page has no size".into());
@@ -105,6 +116,8 @@ pub(crate) fn layout(page_w: f32, page_h: f32, cols: u16, rows: u16, cell: Cell,
     }
     let (area_w, area_h) = (f32::from(cols) * cell.w, f32::from(rows) * cell.h);
     let fitted = match fit {
+        // One pixel of its own to a pixel of the screen, at most.
+        Fit::Page if natural => (area_w / page_w).min(area_h / page_h).min(1.0),
         Fit::Page => (area_w / page_w).min(area_h / page_h),
         Fit::Width => area_w / page_w,
     };
@@ -166,14 +179,12 @@ pub(crate) fn grid_rows(page_rows: u16, area_rows: u16, per_row: u16) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX).min(MAX_ON_SCREEN / per_row.max(1)).max(1)
 }
 
-/// Whether two `page_w` × `page_h` pages go side by side in `cols` × `rows` cells: each, fitted
-/// to its half, keeps at least [`TWO_UP_SHARE`] of the size it would have alone. Portrait pages
-/// in a wide window do; anything in a tall window, and landscape pages, mostly don't.
-pub(crate) fn two_up_fits(page_w: f32, page_h: f32, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> bool {
-    match (
-        layout(page_w, page_h, cols, rows, cell, Fit::Page, max_rows),
-        layout(page_w, page_h, per_row_cols(cols, 2), rows, cell, Fit::Page, max_rows),
-    ) {
+/// Whether two pages of `size` go side by side in `cols` × `rows` cells: each, fitted to its
+/// half, keeps at least [`TWO_UP_SHARE`] of the size it would have alone. Portrait pages in a
+/// wide window do; anything in a tall window, and landscape pages, mostly don't; pictures that
+/// keep their natural size beside each other do.
+pub(crate) fn two_up_fits(size: Size, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> bool {
+    match (layout(size, cols, rows, cell, Fit::Page, max_rows), layout(size, per_row_cols(cols, 2), rows, cell, Fit::Page, max_rows)) {
         (Ok(alone), Ok(beside)) => beside.scale >= alone.scale * TWO_UP_SHARE,
         _ => false,
     }
@@ -203,29 +214,30 @@ pub(crate) struct Grid {
 }
 
 /// How `count` pages share `area` at `zoom`, for a reader at `at` among them (`size` is the size
-/// of the page at a place among them): as zoomed, as far as the area takes. Out from the width,
-/// the page at the start of the reader's row sets the place every page is fitted into, and as
-/// many rows of those as fit go one under another: pages never shrink to make room for another
-/// row.
-pub(crate) fn grid(zoom: Zoom, count: usize, at: usize, size: impl Fn(usize) -> Option<(f32, f32)>, area: Area) -> Grid {
+/// of the page at a place among them): as zoomed, as far as the area takes, however few pages
+/// there are (zoomed out, a page is that much smaller, alone or not). Out from the width, the
+/// page at the start of the reader's row sets the place every page is fitted into, and as many
+/// rows of those as fit go one under another: pages never shrink to make room for another row.
+pub(crate) fn grid(zoom: Zoom, count: usize, at: usize, size: impl Fn(usize) -> Option<Size>, area: Area) -> Grid {
     let Area { cols: max_cols, rows: area_rows, cell, max_rows } = area;
-    let most = max_per_row(max_cols).min(u16::try_from(count).unwrap_or(u16::MAX)).max(1);
+    let most = max_per_row(max_cols);
     let per_row = match zoom {
         Zoom::Width => return Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: max_cols, page_rows: area_rows, most },
         // `most` is at least 1, so the clamp can't panic.
         Zoom::PerRow(n) => n.clamp(1, most),
-        // Two side by side when each keeps most of its size alone: the spread's first page
-        // decides.
+        // Two side by side when there are two and each keeps most of its size alone: the
+        // spread's first page decides.
         Zoom::Auto => {
             let spread_first = size(at.saturating_sub(at % 2));
-            let two = most >= 2 && spread_first.is_some_and(|(w, h)| two_up_fits(w, h, max_cols, area_rows, cell, max_rows));
+            let two = count >= 2 && most >= 2 && spread_first.is_some_and(|s| two_up_fits(s, max_cols, area_rows, cell, max_rows));
             if two { 2 } else { 1 }
         }
     };
     let cols = per_row_cols(max_cols, per_row);
-    // `per_row` is at least 1 either way.
+    // `per_row` is at least 1 either way. The place is the whole of the page's share, even for a
+    // picture that keeps a smaller natural size in it: the pages after it may be larger.
     let row_start = size(at.saturating_sub(at % usize::from(per_row)));
-    let place = row_start.and_then(|(w, h)| layout(w, h, cols, area_rows, cell, Fit::Page, max_rows).ok());
+    let place = row_start.and_then(|s| layout(Size { natural: false, ..s }, cols, area_rows, cell, Fit::Page, max_rows).ok());
     let (cols, page_rows) = place.map_or((cols, area_rows), |l| (l.cols, l.rows));
     Grid { fit: Fit::Page, per_row, rows: grid_rows(page_rows, area_rows, per_row), cols, page_rows, most }
 }
@@ -235,33 +247,39 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    const LETTER: (f32, f32) = (612.0, 792.0);
+    const LETTER: Size = pts(612.0, 792.0);
+    const LANDSCAPE: Size = pts(792.0, 612.0);
     const CELL: Cell = Cell { w: 10.0, h: 20.0 };
+
+    /// A PDF's page, `w` × `h` points.
+    const fn pts(w: f32, h: f32) -> Size {
+        Size { w, h, natural: false }
+    }
 
     #[test]
     fn a_portrait_page_fits_the_height_of_a_wide_window() {
-        let l = layout(LETTER.0, LETTER.1, 200, 50, CELL, Fit::Page, u16::MAX).unwrap();
+        let l = layout(LETTER, 200, 50, CELL, Fit::Page, u16::MAX).unwrap();
         assert_eq!(l.scale, 1000.0 / 792.0);
         assert_eq!((l.cols, l.rows), (78, 50));
     }
 
     #[test]
     fn fit_width_fills_the_width_and_runs_past_the_height() {
-        let l = layout(LETTER.0, LETTER.1, 100, 30, CELL, Fit::Width, u16::MAX).unwrap();
+        let l = layout(LETTER, 100, 30, CELL, Fit::Width, u16::MAX).unwrap();
         assert_eq!(l.scale, 1000.0 / 612.0);
         assert_eq!((l.cols, l.rows), (100, 65));
     }
 
     #[test]
     fn max_rows_and_max_pixels_cap_the_size() {
-        let l = layout(LETTER.0, LETTER.1, 100, 30, CELL, Fit::Width, 40).unwrap();
+        let l = layout(LETTER, 100, 30, CELL, Fit::Width, 40).unwrap();
         assert_eq!(l.rows, 40);
         assert!(l.cols < 100);
-        let huge = layout(LETTER.0, LETTER.1, 4000, 4000, CELL, Fit::Page, u16::MAX).unwrap();
-        assert!(LETTER.1 * huge.scale <= MAX_PIXELS * 1.0001);
+        let huge = layout(LETTER, 4000, 4000, CELL, Fit::Page, u16::MAX).unwrap();
+        assert!(LETTER.h * huge.scale <= MAX_PIXELS * 1.0001);
         // A 1000 × 4000 pt page fitted to a 6000 px wide window: 8000 px tall is within the side
         // cap, but 6000 × 24000 px is not within the area cap, which brings it to 2000 × 8000.
-        let strip = layout(1000.0, 4000.0, 600, 50, CELL, Fit::Width, u16::MAX).unwrap();
+        let strip = layout(pts(1000.0, 4000.0), 600, 50, CELL, Fit::Width, u16::MAX).unwrap();
         let area = f64::from(1000.0 * strip.scale) * f64::from(4000.0 * strip.scale);
         assert!(area <= MAX_AREA * 1.0001 && area > MAX_AREA * 0.99, "{area}");
     }
@@ -276,16 +294,16 @@ mod tests {
     #[test]
     fn sizes_that_cannot_be_shown_are_errors() {
         for (w, h) in [(0.0, 792.0), (-1.0, 792.0), (f32::NAN, 792.0), (612.0, f32::INFINITY)] {
-            assert!(layout(w, h, 80, 24, CELL, Fit::Page, u16::MAX).is_err(), "{w}×{h}");
+            assert!(layout(pts(w, h), 80, 24, CELL, Fit::Page, u16::MAX).is_err(), "{w}×{h}");
         }
-        assert!(layout(612.0, 792.0, 0, 24, CELL, Fit::Page, u16::MAX).is_err());
-        assert!(layout(612.0, 792.0, 80, 0, CELL, Fit::Page, u16::MAX).is_err());
-        assert!(layout(612.0, 792.0, 80, 24, CELL, Fit::Page, 0).is_err());
-        assert!(layout(612.0, 792.0, 80, 24, Cell { w: 0.0, h: 20.0 }, Fit::Page, u16::MAX).is_err());
+        assert!(layout(LETTER, 0, 24, CELL, Fit::Page, u16::MAX).is_err());
+        assert!(layout(LETTER, 80, 0, CELL, Fit::Page, u16::MAX).is_err());
+        assert!(layout(LETTER, 80, 24, CELL, Fit::Page, 0).is_err());
+        assert!(layout(LETTER, 80, 24, Cell { w: 0.0, h: 20.0 }, Fit::Page, u16::MAX).is_err());
         // A vanishingly small page needs an infinite scale.
-        assert!(layout(1e-38, 1e-38, 80, 24, CELL, Fit::Page, u16::MAX).is_err());
+        assert!(layout(pts(1e-38, 1e-38), 80, 24, CELL, Fit::Page, u16::MAX).is_err());
         // A huge one gets a tiny scale: the square page fills the 480 px height.
-        let l = layout(f32::MAX, f32::MAX, 80, 24, CELL, Fit::Page, u16::MAX).unwrap();
+        let l = layout(pts(f32::MAX, f32::MAX), 80, 24, CELL, Fit::Page, u16::MAX).unwrap();
         assert_eq!(l.rows, 24);
         assert!((48..=49).contains(&l.cols), "{l:?}");
     }
@@ -294,16 +312,38 @@ mod tests {
     fn two_portrait_pages_share_a_wide_window() {
         // 200 × 50 cells of 10 × 20 px: 2000 × 1000 px. A Letter page is as tall alone as beside
         // another.
-        assert!(two_up_fits(LETTER.0, LETTER.1, 200, 50, CELL, u16::MAX));
+        assert!(two_up_fits(LETTER, 200, 50, CELL, u16::MAX));
         // 80 × 24 (800 × 480 px) is wider than tall, too.
-        assert!(two_up_fits(LETTER.0, LETTER.1, 80, 23, CELL, u16::MAX));
+        assert!(two_up_fits(LETTER, 80, 23, CELL, u16::MAX));
         // A tall window: beside another, a page would be half the size.
-        assert!(!two_up_fits(LETTER.0, LETTER.1, 80, 60, CELL, u16::MAX));
+        assert!(!two_up_fits(LETTER, 80, 60, CELL, u16::MAX));
         // Landscape pages fill a wide window's width on their own.
-        assert!(!two_up_fits(LETTER.1, LETTER.0, 200, 50, CELL, u16::MAX));
+        assert!(!two_up_fits(LANDSCAPE, 200, 50, CELL, u16::MAX));
         // Nothing to split, or nothing to show.
-        assert!(!two_up_fits(LETTER.0, LETTER.1, 2, 50, CELL, u16::MAX));
-        assert!(!two_up_fits(0.0, LETTER.1, 200, 50, CELL, u16::MAX));
+        assert!(!two_up_fits(LETTER, 2, 50, CELL, u16::MAX));
+        assert!(!two_up_fits(pts(0.0, 792.0), 200, 50, CELL, u16::MAX));
+    }
+
+    #[test]
+    fn a_picture_is_fitted_no_larger_than_its_own_pixels_but_the_width_enlarges_it() {
+        // 800 × 480 px of window.
+        let icon = Size { w: 32.0, h: 32.0, natural: true };
+        let fitted = layout(icon, 80, 24, CELL, Fit::Page, u16::MAX).unwrap();
+        assert_eq!((fitted.scale, fitted.cols, fitted.rows), (1.0, 4, 2));
+        // The same size in points fills the height.
+        assert_eq!(layout(pts(32.0, 32.0), 80, 24, CELL, Fit::Page, u16::MAX).unwrap().scale, 15.0);
+        assert_eq!(layout(icon, 80, 24, CELL, Fit::Width, u16::MAX).unwrap().scale, 25.0);
+        // A picture larger than the window is fitted as any page is.
+        let photo = Size { w: 4000.0, h: 3000.0, natural: true };
+        assert_eq!(layout(photo, 80, 24, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.16);
+        // Two that keep their own size side by side share a window they would each fill.
+        let banner = Size { w: 300.0, h: 100.0, natural: true };
+        assert!(two_up_fits(banner, 80, 24, CELL, u16::MAX));
+        assert!(!two_up_fits(Size { natural: false, ..banner }, 80, 24, CELL, u16::MAX));
+        // A picture's place in a row is the whole of its share: a larger one after it fills it.
+        let small_first =
+            grid(Zoom::PerRow(2), 2, 0, |i| Some(if i == 0 { icon } else { photo }), Area { cols: 80, rows: 24, cell: CELL, max_rows: u16::MAX });
+        assert_eq!(small_first.cols, per_row_cols(80, 2));
     }
 
     #[test]
@@ -359,19 +399,22 @@ mod tests {
         assert_eq!(grid(Zoom::Auto, 10, 0, letter, Area { cols: 80, rows: 100, ..wide }).per_row, 1);
         // Or one when there is only one.
         assert_eq!(grid(Zoom::Auto, 1, 0, letter, wide).per_row, 1);
-        // N to a row as far as the window takes them, and never more than there are pages.
+        // N to a row as far as the window takes them, however few pages there are: zoomed out,
+        // one page is as small as it would be among others.
         assert_eq!(grid(Zoom::PerRow(8), 10, 0, letter, Area { cols: 40, ..wide }).per_row, 4);
-        assert_eq!(grid(Zoom::PerRow(8), 3, 0, letter, wide).per_row, 3);
+        let alone = grid(Zoom::PerRow(4), 1, 0, letter, wide);
+        assert_eq!((alone.per_row, alone.cols), (4, per_row_cols(200, 4)), "{alone:?}");
+        assert_eq!(grid(Zoom::PerRow(4), 1, 0, letter, wide), grid(Zoom::PerRow(4), 10, 0, letter, wide));
         // The width: one page, as wide as the window, and the window's rows to scroll it in.
         assert_eq!(grid(Zoom::Width, 10, 4, letter, wide), Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: 200, page_rows: 50, most: 8 });
         // The page at the start of the reader's row sets the place: landscape page 7 starts the
         // row of pages 7–9, at three to a row.
-        let mixed = |i: usize| Some(if i == 6 { (LETTER.1, LETTER.0) } else { LETTER });
+        let mixed = |i: usize| Some(if i == 6 { LANDSCAPE } else { LETTER });
         let (landscape, portrait) = (grid(Zoom::PerRow(3), 10, 7, mixed, wide), grid(Zoom::PerRow(3), 10, 4, mixed, wide));
         assert_eq!((landscape.cols, portrait.cols), (65, 65));
         assert!(landscape.page_rows < portrait.page_rows, "{landscape:?} {portrait:?}");
         // No page to size the place by: the whole of each page's share.
-        assert_eq!(grid(Zoom::PerRow(2), 0, 0, |_| None, wide), Grid { fit: Fit::Page, per_row: 1, rows: 1, cols: 200, page_rows: 50, most: 1 });
+        assert_eq!(grid(Zoom::PerRow(2), 0, 0, |_| None, wide), Grid { fit: Fit::Page, per_row: 2, rows: 1, cols: 99, page_rows: 50, most: 8 });
     }
 
     fn fit() -> impl Strategy<Value = Fit> {
@@ -389,7 +432,7 @@ mod tests {
         fn a_layout_fits(w in 1f32..20_000.0, h in 1f32..20_000.0, cols in 1u16..500, rows in 1u16..300,
                          cw in 2f32..40.0, ch in 4f32..80.0, max_rows in 1u16..400, fit in fit()) {
             let cell = Cell { w: cw, h: ch };
-            let l = layout(w, h, cols, rows, cell, fit, max_rows).unwrap();
+            let l = layout(pts(w, h), cols, rows, cell, fit, max_rows).unwrap();
             let (px_w, px_h) = (w * l.scale, h * l.scale);
             prop_assert!(px_w <= MAX_PIXELS * 1.001 && px_h <= MAX_PIXELS * 1.001);
             prop_assert!(f64::from(px_w) * f64::from(px_h) <= MAX_AREA * 1.001);
@@ -425,12 +468,12 @@ mod tests {
         /// However zoomed, wherever the reader is and whatever the pages' sizes, a grid's places
         /// fit their share of the area, and its pages to a row are within the most it takes.
         #[test]
-        fn a_grid_fits_its_area(zoom in zoom(), count in 0usize..100, at in 0usize..100, sizes in proptest::collection::vec((any::<f32>(), any::<f32>()), 0..100),
+        fn a_grid_fits_its_area(zoom in zoom(), count in 0usize..100, at in 0usize..100, sizes in proptest::collection::vec((any::<f32>(), any::<f32>(), any::<bool>()), 0..100),
                                 cols in any::<u16>(), rows in any::<u16>(), max_rows in any::<u16>()) {
             let area = Area { cols, rows, cell: CELL, max_rows };
-            let g = grid(zoom, count, at, |i| sizes.get(i).copied(), area);
+            let g = grid(zoom, count, at, |i| sizes.get(i).map(|&(w, h, natural)| Size { w, h, natural }), area);
             prop_assert!(g.per_row >= 1 && g.per_row <= g.most && g.most <= MAX_PER_ROW && g.rows >= 1, "{g:?}");
-            prop_assert!(usize::from(g.most) <= count.max(1));
+            prop_assert!(zoom != Zoom::Auto || g.per_row <= 2 && (count >= 2 || g.per_row == 1), "{g:?}");
             match g.fit {
                 Fit::Width => prop_assert_eq!((g.per_row, g.cols, g.page_rows), (1, cols, rows)),
                 Fit::Page => prop_assert!(g.cols <= per_row_cols(cols, g.per_row) && g.page_rows <= rows, "{g:?}"),
@@ -438,9 +481,9 @@ mod tests {
         }
 
         #[test]
-        fn any_numbers_are_an_answer(w in any::<f32>(), h in any::<f32>(), cols in any::<u16>(), rows in any::<u16>(),
+        fn any_numbers_are_an_answer(w in any::<f32>(), h in any::<f32>(), natural in any::<bool>(), cols in any::<u16>(), rows in any::<u16>(),
                                      cw in any::<f32>(), ch in any::<f32>(), max_rows in any::<u16>(), fit in fit()) {
-            if let Ok(l) = layout(w, h, cols, rows, Cell { w: cw, h: ch }, fit, max_rows) {
+            if let Ok(l) = layout(Size { w, h, natural }, cols, rows, Cell { w: cw, h: ch }, fit, max_rows) {
                 prop_assert!(l.scale.is_finite() && l.scale > 0.0);
                 prop_assert!(l.cols >= 1 && l.cols <= cols && l.rows >= 1 && l.rows <= max_rows);
             }

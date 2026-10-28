@@ -171,10 +171,16 @@ to make room for a row, and in a document of one page size every page renders at
 keeps what was sent usable as the reader moves on a row at a time. The same page in a place of
 another size is another render (`View` has the place's size).
 
-`Zoom::Auto` is two to a row when `fit::two_up_fits` says each keeps 80% of its size alone,
-otherwise one, decided at every draw until a key zooms. Zooming out stops at `MAX_PER_ROW` (8),
-before a page would be under `MIN_PAGE_COLS` (8) columns, and at the number of pages; a screen
-holds at most `MAX_ON_SCREEN` (48) pages, which bounds the rows of a strip of short pages.
+`Zoom::Auto` is two to a row when there are two pages and `fit::two_up_fits` says each keeps 80%
+of its size alone, otherwise one, decided at every draw until a key zooms. Zooming out stops at
+`MAX_PER_ROW` (8), or before a page would be under `MIN_PAGE_COLS` (8) columns, however few pages
+there are: N to a row is a size, so one page at four to a row is a quarter of the width, and a row
+with fewer pages than that, when it is the only row, is centred. A screen holds at most
+`MAX_ON_SCREEN` (48) pages, which bounds the rows of a strip of short pages.
+
+A page whose size is natural (`Source::natural`: an image's, in pixels) is fitted at a scale of 1
+at most, so a small picture keeps its size; `Fit::Width` still enlarges it. Its place in the row
+is computed without that bound, since the place is shared by the pages after it.
 
 A screen starts at a multiple of the pages to a row (so two to a row pair pages the way a book's
 spreads do), or higher up near the end, so the last row stays at the bottom. Either way the
