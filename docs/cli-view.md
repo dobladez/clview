@@ -157,12 +157,21 @@ to a row, a tall window shows landscape pages two or three at a time, one under 
 | `-`, `_` | zoom out: one more page to a row |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
+| `?` | these keys, in place of the pages; any key goes back |
 | `q`, `Esc`, `Ctrl-C` | quit |
+
+The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
+`pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`
+before them while the pages on screen render. A narrow window drops the zoom, then `? help`. The
+name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
+at the end still differ), and a message (a page that failed, `fully zoomed in`, a page number
+being typed) sits just left of the right side, cutting the name shorter while it is there. Until
+the first key, the message is a reminder of the main keys.
 
 The pager follows the window: after a resize, the pages are drawn again for the new size, as many
 to a row as you zoomed to, or as the new size allows. Pages are rendered when they are shown, on a thread
-of their own: the keys keep working while a slow page renders (the status line says it is
-rendering), moving on cancels it, and the renderer's watchdog gives up on a page that takes too
+of their own: the keys keep working while a slow page renders (the status line's `…` says it
+is rendering), moving on cancels it, and the renderer's watchdog gives up on a page that takes too
 long (20 seconds a try) and says so.
 
 The pages around the one on screen are prepared ahead, so turning to them is instant. Jumping

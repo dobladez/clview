@@ -77,8 +77,26 @@ const MAX_RESENDS: u32 = 8;
 /// How long the pager waits at the end for the terminal's answers to its last placements, so
 /// none of them lands on the command line.
 const ANSWER_WAIT: Duration = Duration::from_millis(100);
-/// The reminder of the keys on the status line, shorter and shorter for a narrow window.
+/// The reminder of the keys the status line starts with, until the first key: shorter and
+/// shorter for a narrow window.
 const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
+/// The key for the keys, always on the status line.
+const HELP: &str = "? help";
+/// The widest the zoom is said: `8 per row`.
+const ZOOM_WIDTH: usize = 9;
+/// What `?` shows: each key, and what it does.
+const HELP_LINES: &[(&str, &str)] = &[
+    ("space  PageDown", "the next screen, or the rest of a page taller than the window"),
+    ("b  PageUp", "back a screen"),
+    ("j k  ↓ ↑  Enter", "a few rows down or up, or a row of pages"),
+    ("n p  → ←", "the next or the previous screen of pages"),
+    ("g G  Home End", "the first or the last page"),
+    ("12 Enter  12g", "page 12"),
+    ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
+    ("r  Ctrl-L", "render the pages again"),
+    ("q  Esc  Ctrl-C", "quit"),
+    ("?", "these keys: any key goes back"),
+];
 
 /// Page through what is `shown` until the user quits. Image ids are taken in turn from
 /// `first_id` on ([`super::kitty::IdColor::id`]).
@@ -232,6 +250,10 @@ struct Nav {
     typed: String,
     /// Shown in the status line until the next key.
     message: Option<String>,
+    /// Whether the status line still reminds of the keys: until the first key.
+    hint: bool,
+    /// Whether the keys are on screen, in place of the pages (`?`).
+    help: bool,
     /// Render the pages again even if nothing changed (`r`, Ctrl-L).
     rerender: bool,
 }
@@ -251,6 +273,8 @@ impl Nav {
             scroll: 0,
             typed: String::new(),
             message: None,
+            hint: true,
+            help: false,
             rerender: false,
         }
     }
@@ -296,8 +320,14 @@ impl Nav {
 
     fn key(&mut self, key: Key) -> Step {
         self.message = None;
+        self.hint = false;
+        // Any key leaves the keys, but Ctrl-C, which still quits.
+        if std::mem::take(&mut self.help) && key != Key::Interrupt {
+            return Step::Continue;
+        }
         let typing = !self.typed.is_empty();
         match key {
+            Key::Char('?') => self.help = true,
             Key::Char('q') | Key::Interrupt => return Step::Quit,
             Key::Escape if !typing => return Step::Quit,
             Key::Escape => self.typed.clear(),
@@ -394,42 +424,82 @@ impl Nav {
     }
 
     /// The status line for a window `cols` wide: exactly that many characters, none of them a
-    /// control character (the file name and the messages may come from anywhere). The right side
-    /// keeps two spaces from the left: the reminder of the keys gets shorter, then goes, in a
-    /// narrow window, and a message cuts the file name short instead.
+    /// control character (the name and the messages may come from anywhere). The right side is
+    /// at the same place whatever the reader does: where the reader is, padded to the widest it
+    /// gets in this document, the zoom, and the key for the keys; `…` before them while pages
+    /// render. A narrow window drops the zoom, then the key. On the left, the name, cut short in
+    /// its middle to leave room for a message, which ends two spaces before the right side.
+    /// Until the first key, the message is the reminder of the keys, as much of it as fits.
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
-        let said = match (&self.message, self.typed.is_empty(), rendering) {
-            (Some(message), _, _) => Some(message.clone()),
-            (None, false, _) => Some(format!("go to page {}", self.typed)),
-            (None, true, true) => Some("rendering…".into()),
-            (None, true, false) => None,
+        let width = usize::from(cols);
+        let (place, widest) = self.place();
+        let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
+        let slot = if rendering { '…' } else { ' ' };
+        let rights = [
+            format!("{slot} {place:<widest$} · {zoom:<ZOOM_WIDTH$} · {HELP} "),
+            format!("{slot} {place:<widest$} · {HELP} "),
+            format!("{slot} {place} "),
+        ];
+        let right = rights.iter().find(|r| chars(r) <= width).cloned().unwrap_or_else(|| rights[2].chars().take(width).collect());
+        let room = width.saturating_sub(chars(&right));
+        let said = match (&self.message, self.typed.is_empty()) {
+            (Some(message), _) => message.clone(),
+            (None, false) => format!("go to page {}", self.typed),
+            // The keys leave the name room for its first characters at least.
+            (None, true) if self.hint => {
+                let fits = |keys: &&&str| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
+                KEYS.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned())
+            }
+            (None, true) => String::new(),
         };
+        // A space at the start; the message, then two spaces; and at least two spaces between the
+        // name and the message, or one after the name alone.
+        let said = cut(&said, room.saturating_sub(3));
+        let tail = if said.is_empty() { String::new() } else { format!("{said}  ") };
+        let name = cut(name, room.saturating_sub(chars(&tail)).saturating_sub(if said.is_empty() { 2 } else { 3 }));
+        let gap = room.saturating_sub(1usize.saturating_add(chars(&name)).saturating_add(chars(&tail)));
+        let left: String = format!(" {name}{}{tail}", " ".repeat(gap)).chars().chain(std::iter::repeat(' ')).take(room).collect();
+        printable(&format!("{left}{right}"))
+    }
+
+    /// Where the reader is, for the status line, and the most characters it takes in this
+    /// document: the pages on screen, and which of the pages given when they are not all.
+    fn place(&self) -> (String, usize) {
+        let digits = |n: usize| n.to_string().len();
+        let count = self.count;
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-        let pages = match on_screen.as_slice() {
-            [a, .., b] => format!("pages {}–{}/{}", a.saturating_add(1), b.saturating_add(1), self.count),
-            [a] => format!("page {}/{}", a.saturating_add(1), self.count),
+        let mut place = match on_screen.as_slice() {
+            [a, .., b] => format!("pages {}–{}/{count}", a.saturating_add(1), b.saturating_add(1)),
+            [a] => format!("page {}/{count}", a.saturating_add(1)),
             [] => "no page".into(),
         };
-        let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
-        let mut place = format!(" · {pages} · {zoom} ");
-        if self.pages.len() != self.count {
-            place.push_str(&format!("· {} of {} ", self.first().saturating_add(1), self.pages.len()));
+        // `pages a–b/count`, both numbers as long as the count.
+        let mut widest = digits(count).saturating_mul(3).saturating_add(8);
+        let given = self.pages.len();
+        if given != count {
+            place.push_str(&format!(" · {} of {given}", self.first().saturating_add(1)));
+            widest = widest.saturating_add(digits(given).saturating_mul(2).saturating_add(7));
         }
-        let width = usize::from(cols);
-        let chars = |text: &str| text.chars().count();
-        // Both sides, with a space before the name, one at the end, and two between the sides
-        // (`place` ends with one of them).
-        let fits = |name: &str, right: &str| chars(name).saturating_add(chars(&place)).saturating_add(chars(right)).saturating_add(3) <= width;
-        let right = said.unwrap_or_else(|| KEYS.iter().find(|keys| fits(name, keys)).map_or("", |keys| keys).to_owned());
-        // The file name gives way to the rest.
-        let around = chars(&place).saturating_add(chars(&right)).saturating_add(if right.is_empty() { 2 } else { 3 });
-        let room = width.saturating_sub(around);
-        let name: String = if chars(name) <= room { name.to_owned() } else { name.chars().take(room.saturating_sub(1)).chain(['…']).collect() };
-        let left = format!(" {name}{place}");
-        let gap = width.saturating_sub(chars(&left).saturating_add(chars(&right)).saturating_add(1));
-        let line = printable(&format!("{left}{}{right} ", " ".repeat(gap)));
-        line.chars().chain(std::iter::repeat(' ')).take(width).collect()
+        (place, widest)
     }
+}
+
+/// Characters, as the terminal shows them one to a cell.
+fn chars(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// `text` in at most `room` characters: whole, or its start and its end around `…`, the end the
+/// longer, so names that differ only at the end (`IMG_2041.jpg`, `IMG_2042.jpg`) still differ.
+fn cut(text: &str, room: usize) -> String {
+    let count = chars(text);
+    if count <= room {
+        return text.to_owned();
+    }
+    let Some(kept) = room.checked_sub(1) else { return String::new() };
+    let start = kept / 2;
+    let end = kept.saturating_sub(start);
+    text.chars().take(start).chain(['…']).chain(text.chars().skip(count.saturating_sub(end))).collect()
 }
 
 /// The alternate screen, raw mode, no cursor and no line wrap, all undone when this drops (on
@@ -635,7 +705,9 @@ impl Pager<'_> {
         // Synchronized output, where the terminal has it, shows the redraw all at once.
         out.extend_from_slice(b"\x1b[?2026h");
         let ready = on_screen.iter().flatten().all(|v| self.sent.iter().any(|s| s.view == *v) || self.failed.iter().any(|(f, _)| f == v));
-        if ready || self.placed.is_empty() {
+        if self.nav.help {
+            self.help(&mut out, size);
+        } else if ready || self.placed.is_empty() {
             self.place(&mut out, size, area_rows, grid);
         }
         cursor(&mut out, size.rows.saturating_sub(1), 0);
@@ -747,6 +819,29 @@ impl Pager<'_> {
             if self.tty.read_timeout(left).is_err() {
                 break;
             }
+        }
+    }
+
+    /// The keys, in place of the pages: the pages leave the screen, and come back with the next
+    /// draw after it.
+    fn help(&mut self, out: &mut Vec<u8>, size: WindowSize) {
+        for row in 1..=size.rows {
+            out.extend_from_slice(format!("\x1b[{row};1H\x1b[2K").as_bytes());
+        }
+        // Inside tmux, erasing their placeholder cells already took them away.
+        if self.output == Output::Direct {
+            for (id, placement) in &self.placed {
+                kitty::hide(out, *id, *placement, self.output.wrap());
+            }
+        }
+        self.placed.clear();
+        let keys = HELP_LINES.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
+        let lines = std::iter::once(String::from("Keys")).chain(HELP_LINES.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
+        let width = usize::from(size.cols).saturating_sub(2);
+        // Above the status line, as many as fit.
+        for (row, line) in (1..size.rows.saturating_sub(1)).zip(lines) {
+            cursor(out, row, 2);
+            out.extend_from_slice(cut(&line, width).as_bytes());
         }
     }
 
@@ -1103,7 +1198,7 @@ mod tests {
         assert_eq!((nav.zoom, nav.on_screen()), (Zoom::PerRow(2), vec![Some(4), Some(5)]));
         press(&mut nav, &[Key::Char('-')]);
         assert_eq!((nav.zoom, nav.on_screen()), (Zoom::PerRow(3), vec![Some(3), Some(4), Some(5)]));
-        assert!(nav.status("a.pdf", 120, false).contains(" pages 4–6/20 · 3 per row "));
+        assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" pages 4–6/20 · 3 per row "));
         // Keys before the next draw step by the new row.
         press(&mut nav, &[Key::Char('n')]);
         assert_eq!(nav.on_screen(), [Some(6), Some(7), Some(8)]);
@@ -1117,7 +1212,7 @@ mod tests {
         assert_eq!(nav.zoom, Zoom::PerRow(1));
         press(&mut nav, &[Key::Char('+')]);
         assert_eq!(nav.zoom, Zoom::Width);
-        assert!(nav.status("a.pdf", 120, false).contains(" page 7/20 · width "));
+        assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" page 7/20 · width "));
         press(&mut nav, &[Key::Char('+')]);
         assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::Width, Some("fully zoomed in")));
         press(&mut nav, &[Key::Char('-')]);
@@ -1141,7 +1236,7 @@ mod tests {
         nav.shown(20, 20);
         let screen = |first: usize| (first..first + 6).map(|p| (p < 10).then_some(p)).collect::<Vec<_>>();
         assert_eq!(nav.on_screen(), screen(0));
-        assert!(nav.status("a.pdf", 120, false).contains(" pages 1–6/10 · 3 per row "));
+        assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" pages 1–6/10 · 3 per row "));
         assert_eq!(nav.around(2, 1), [6, 7, 8, 9]);
         // A screen on is the last row and the one above: the last row stays at the bottom.
         for (key, first) in [(Key::Char(' '), 6), (Key::Char('b'), 0), (Key::Char('j'), 3), (Key::Down, 6), (Key::Char('j'), 6), (Key::Char('k'), 3)]
@@ -1189,7 +1284,7 @@ mod tests {
         press(&mut nav, &[Key::Char('5'), Key::Enter]);
         assert_eq!(page(&nav), 6);
         assert_eq!(nav.message.as_deref(), Some("page 5 isn't one of the pages given"));
-        assert!(nav.status("a.pdf", 120, false).contains(" page 7/12 · 1 per row · 1 of 3 "));
+        assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" page 7/12 · 1 of 3 · 1 per row "));
     }
 
     #[test]
@@ -1244,46 +1339,106 @@ mod tests {
         assert!(nav.status("a.pdf", 80, false).contains("no page"));
     }
 
-    #[test]
-    fn the_status_line_fills_the_width_exactly() {
-        let nav = reader(2, 12, 40, 40);
-        for cols in [0, 1, 10, 40, 80, 200] {
-            let line = nav.status("report.pdf", cols, false);
-            assert_eq!(line.chars().count(), usize::from(cols), "{line:?}");
-        }
-        let wide = nav.status("report.pdf", 120, false);
-        assert!(wide.starts_with(" report.pdf · page 3/12 · 1 per row ") && wide.ends_with("q quit "), "{wide:?}");
-        let mut two = reader(2, 12, 40, 40);
-        two.grid(2, 1, 8);
-        assert!(two.status("report.pdf", 120, false).starts_with(" report.pdf · pages 3–4/12 · 2 per row "));
-        let mut typing = nav;
-        typing.key(Key::Char('7'));
-        assert!(typing.status("a.pdf", 80, false).contains("go to page 7"));
+    /// `line` with each run of spaces made one: what it says, whatever the padding.
+    fn squeezed(line: &str) -> String {
+        line.split(' ').filter(|w| !w.is_empty()).fold(String::from(" "), |all, w| all + w + " ")
+    }
+
+    /// The character the last `needle` in `line` starts at.
+    fn column(line: &str, needle: &str) -> usize {
+        chars(&line[..line.rfind(needle).unwrap_or_else(|| panic!("{needle:?} in {line:?}"))])
     }
 
     #[test]
-    fn a_narrow_status_line_keeps_its_two_sides_apart() {
-        let nav = reader(4, 13, 40, 40);
-        let left = " quarterly-results.pdf · page 5/13 · 1 per row ";
-        // Half a wide window: the shortest reminder of the keys, two spaces from the page.
-        let half = nav.status("quarterly-results.pdf", 70, false);
-        assert!(half.starts_with(left) && half.ends_with("  n p · q quit "), "{half:?}");
-        for cols in 0..=120 {
-            let line = nav.status("quarterly-results.pdf", cols, false);
-            assert_eq!(line.chars().count(), usize::from(cols), "{line:?}");
-            // Whatever follows the page is a whole reminder of the keys, two spaces or more after
-            // it (`left` ends with one), or nothing.
-            if let Some(rest) = line.strip_prefix(left) {
-                let keys = rest.trim_start();
-                assert!(keys.is_empty() || (rest.starts_with(' ') && KEYS.iter().any(|k| keys == format!("{k} "))), "{line:?}");
+    fn the_status_line_fills_the_width_exactly() {
+        let nav = reader(2, 12, 40, 40);
+        for cols in 0..=200 {
+            let line = nav.status("report.pdf", cols, false);
+            assert_eq!(chars(&line), usize::from(cols), "{line:?}");
+        }
+        let wide = nav.status("report.pdf", 120, false);
+        assert!(wide.starts_with(" report.pdf  ") && wide.ends_with(" page 3/12      · 1 per row · ? help "), "{wide:?}");
+        let mut two = reader(2, 12, 40, 40);
+        two.grid(2, 1, 8);
+        assert!(two.status("report.pdf", 120, false).ends_with(" pages 3–4/12   · 2 per row · ? help "));
+        let mut typing = nav;
+        typing.key(Key::Char('7'));
+        assert!(typing.status("a.pdf", 80, false).contains("  go to page 7  "));
+    }
+
+    /// Where the reader is, the zoom and the key for the keys stay where they are whatever the
+    /// reader does: whatever the page, the name, the message, the zoom or the rendering.
+    #[test]
+    fn the_right_side_of_the_status_line_never_moves() {
+        let long = "a file name long enough to fill most of a window, and then some more.pdf";
+        let mut nav = reader(0, 120, 40, 40);
+        let at = column(&nav.status("a.pdf", 100, false), "page 1/120");
+        for (page, per_row) in [(0, 1), (8, 1), (9, 2), (98, 2), (99, 1), (119, 8)] {
+            nav.go(page);
+            nav.grid(per_row, 1, 8);
+            for name in ["a.pdf", long] {
+                for message in [None, Some("no page 999 (1–120)")] {
+                    nav.message = message.map(String::from);
+                    for rendering in [false, true] {
+                        let line = nav.status(name, 100, rendering);
+                        assert_eq!(column(&line, "page"), at, "{line:?}");
+                        assert_eq!(chars(&line), 100);
+                        assert!(line.ends_with(" per row · ? help "), "{line:?}");
+                    }
+                }
             }
         }
-        // The file name gives way to the page, and to a message, which stays whole.
-        let long = "a file name long enough to fill most of the window.pdf";
-        assert_eq!(nav.status(long, 50, false), " a file name long enoug… · page 5/13 · 1 per row  ");
-        let mut told = nav;
-        told.message = Some("no page 99 (1–13)".into());
-        assert_eq!(told.status(long, 60, false), " a file name lo… · page 5/13 · 1 per row  no page 99 (1–13) ");
+        nav.zoom = Zoom::Width;
+        nav.grid(1, 1, 8);
+        nav.message = None;
+        assert!(nav.status("a.pdf", 100, false).ends_with(" page 120/120      · width     · ? help "));
+        // A message cuts the name short, in its middle, and stays whole itself.
+        nav.message = Some("no page 999 (1–120)".into());
+        let told = nav.status(long, 100, false);
+        assert!(told.starts_with(" a file name long …hen some more.pdf  no page 999 (1–120)    page 120/120 "), "{told:?}");
+        assert_eq!(column(&told, "page 120/120"), at);
+    }
+
+    #[test]
+    fn the_keys_are_reminded_of_until_the_first_one_and_then_the_key_for_them() {
+        let mut nav = reader(4, 13, 40, 40);
+        let first = nav.status("report.pdf", 120, false);
+        assert!(first.contains(&format!("  {}  ", KEYS[0])) && first.ends_with(" · ? help "), "{first:?}");
+        // As much of the reminder as fits, or none.
+        assert!(nav.status("report.pdf", 70, false).contains(&format!("  {}  ", KEYS[2])));
+        assert!(!nav.status("report.pdf", 50, false).contains("quit"));
+        nav.key(Key::Char('x'));
+        let after = nav.status("report.pdf", 120, false);
+        assert!(!after.contains("quit") && after.ends_with(" · ? help "), "{after:?}");
+        // A narrow window drops the zoom, then the key and the padding; the place stays whole as
+        // long as it can.
+        assert_eq!(nav.status("report.pdf", 30, false), " …f   page 5/13      · ? help ");
+        assert_eq!(nav.status("report.pdf", 18, false), " r…df   page 5/13 ");
+        assert_eq!(nav.status("report.pdf", 8, false), "  page 5");
+    }
+
+    #[test]
+    fn a_name_too_long_keeps_its_start_and_its_end() {
+        assert_eq!(cut("IMG_20240817_2041.jpg", 12), "IMG_2…41.jpg");
+        assert_eq!(cut("IMG_20240817_2042.jpg", 11), "IMG_2…2.jpg");
+        assert_eq!(cut("short", 5), "short");
+        assert_eq!(cut("rapport-été.pdf", 6), "ra…pdf");
+        assert_eq!((cut("ab", 1), cut("ab", 0), cut("", 0)), ("…".into(), String::new(), String::new()));
+    }
+
+    #[test]
+    fn question_mark_shows_the_keys_and_any_key_goes_back() {
+        let mut nav = reader(3, 12, 40, 40);
+        press(&mut nav, &[Key::Char('?')]);
+        assert!(nav.help);
+        // That key only goes back: n doesn't turn the page, q doesn't quit, Esc doesn't either.
+        for key in [Key::Char('n'), Key::Char('q'), Key::Escape] {
+            assert_eq!(press(&mut nav, &[key]), Step::Continue);
+            assert_eq!((nav.help, page(&nav)), (false, 3), "{key:?}");
+            press(&mut nav, &[Key::Char('?')]);
+        }
+        // Ctrl-C quits all the same.
+        assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
     }
 
     #[test]
@@ -1293,9 +1448,9 @@ mod tests {
         nav.message = Some("page 1: renderer crashed: \x1b]52;c;cHduZWQ=\x07".into());
         let line = nav.status("evil\x1b]52;c;cHduZWQ=\x07.pdf", 200, false);
         assert!(!line.chars().any(char::is_control), "{line:?}");
-        assert_eq!(line.chars().count(), 200);
+        assert_eq!(chars(&line), 200);
         nav.message = None;
-        assert!(nav.status("a.pdf", 80, true).contains("rendering…"));
+        assert!(nav.status("a.pdf", 80, true).contains("… page 1/3 "));
     }
 
     /// Page `page` sent as image `id`, `mb` megabytes of pixels, with `warning`.

@@ -210,6 +210,23 @@ fn take_files(output: &[u8], mut from: usize, taken: &mut Vec<Result<PathBuf, St
     output.len().saturating_sub(START.len()).max(from)
 }
 
+/// Whether the status line has said `place` with nothing left to render: without the `…` it
+/// carries while the pages on screen render.
+fn drawn(text: &str, place: &str) -> bool {
+    text.contains(&format!("  {place} "))
+}
+
+/// `text` with each run of spaces made one: what the status line says, whatever its padding.
+fn bar(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if !(c == ' ' && out.ends_with(' ')) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// How many images were transmitted (for the pager) or shown at the cursor (when printing).
 fn transmitted(text: &str) -> usize {
     text.matches("a=t,f=100,t=d,q=2,i=").count()
@@ -229,7 +246,7 @@ fn more_than_a_page_opens_the_pager_and_pages_arrive_without_a_key() {
     let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 60);
     // No key yet: the first page arrives from the render thread on its own, its status line
     // replacing "rendering". Before, the pager waited on a read until a key came.
-    view.wait_until("page 1 shown", |t| t.contains("q quit") && t.contains(" page 1/3 "));
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
     let text = view.text();
     assert!(text.contains("\x1b[?1049h"), "the alternate screen");
     assert!(text.contains(",p=1,C=1,"), "placed without moving the cursor");
@@ -248,6 +265,30 @@ fn more_than_a_page_opens_the_pager_and_pages_arrive_without_a_key() {
     assert!(view.text().contains("\x1b[?1049l"), "the alternate screen was left");
 }
 
+/// `?` shows the keys in place of the pages, which come back, unsent, with any key.
+#[test]
+fn question_mark_shows_the_keys_in_place_of_the_pages() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("help", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 60);
+    view.wait_until("pages 1-3 sent", |t| drawn(t, "page 1/3") && transmitted(t) == 3);
+    let before = view.text().len();
+    view.press("?");
+    let after = |t: &str| t.get(before..).unwrap_or_default().to_string();
+    view.wait_until("the keys", |t| after(t).contains("these keys: any key goes back"));
+    let text = view.text();
+    assert!(after(&text).contains(",p=1\x1b\\") && after(&text).contains("a=d,d=i,q=2,i="), "page 1 not hidden: {:?}", after(&text));
+    // Any key goes back to the pages, n too, without turning one: page 1 is placed again.
+    let before = text.len();
+    view.press("n");
+    view.wait_until("page 1 again", |t| t.get(before..).is_some_and(|t| t.contains("a=p,q=1,") && drawn(t, "page 1/3")));
+    assert_eq!(transmitted(&view.text()), 3, "a page was sent again");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 #[test]
 fn a_wide_window_shows_two_pages_and_turns_two_at_a_time() {
     if !pty_works() {
@@ -255,7 +296,7 @@ fn a_wide_window_shows_two_pages_and_turns_two_at_a_time() {
     }
     let pdf = fixture("wide", 3);
     let mut view = Session::start(&pdf, &["--protocol", "kitty"], 120, 24);
-    view.wait_until("pages 1-2 shown", |t| t.contains(" pages 1–2/3 ") && t.contains("q quit"));
+    view.wait_until("pages 1-2 shown", |t| drawn(t, "pages 1–2/3"));
     // Page 3, on the next spread, is sent ahead: three images, three ids.
     view.wait_until("page 3 sent ahead", |t| transmitted(t) == 3);
     let text = view.text();
@@ -269,7 +310,7 @@ fn a_wide_window_shows_two_pages_and_turns_two_at_a_time() {
     // +: one page to the screen, from where the reader is; p goes back one page. A page fits the
     // height of this window as well beside another as alone, so it is only placed again.
     view.press("+p");
-    view.wait_until("page 2 alone", |t| t.contains(" page 2/3 · 1 per row "));
+    view.wait_until("page 2 alone", |t| bar(t).contains(" page 2/3 · 1 per row "));
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(transmitted(&view.text()), 3, "a page was sent again");
     view.press("q");
@@ -284,13 +325,13 @@ fn minus_zooms_out_to_rows_of_pages_and_plus_in_to_the_width() {
     let pdf = fixture("zoom", 6);
     // A tall window: one page to the screen.
     let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 48);
-    view.wait_until("page 1 shown", |t| t.contains(" page 1/6 · 1 per row ") && t.contains("q quit"));
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/6") && bar(t).contains(" page 1/6 · 1 per row "));
     // Out twice: three to a row, in two rows, all six pages, each in a place of its own.
     view.press("--");
-    view.wait_until("six pages shown", |t| t.contains(" pages 1–6/6 · 3 per row ") && (1..=6).all(|p| t.contains(&format!(",p={p},C=1,"))));
+    view.wait_until("six pages shown", |t| bar(t).contains(" pages 1–6/6 · 3 per row ") && (1..=6).all(|p| t.contains(&format!(",p={p},C=1,"))));
     // In three times: two to a row, one, then as wide as the window, which runs past its bottom.
     view.press("+++");
-    view.wait_until("the page as wide as the window", |t| t.contains(" page 1/6 · width ") && t.contains(",C=1,c=80,r=47,"));
+    view.wait_until("the page as wide as the window", |t| bar(t).contains(" page 1/6 · width ") && t.contains(",C=1,c=80,r=47,"));
     view.press("+");
     view.wait_until("no further in", |t| t.contains("fully zoomed in"));
     view.press("q");
@@ -306,7 +347,7 @@ fn the_next_screen_of_a_grid_is_in_the_terminal_before_the_key() {
     // Three to a row in two rows: six pages a screen. The screen and the two after it are 18
     // pages, more than the pager keeps for one page to a screen, and all of them stay.
     let mut view = Session::start(&pdf, &["--protocol", "kitty", "--zoom", "3"], 80, 48);
-    view.wait_until("the screen and two ahead sent", |t| t.contains(" pages 1–6/24 · 3 per row ") && transmitted(t) == 18);
+    view.wait_until("the screen and two ahead sent", |t| bar(t).contains(" pages 1–6/24 · 3 per row ") && transmitted(t) == 18);
     std::thread::sleep(Duration::from_millis(200));
     let before = view.text().len();
     view.press(" ");
@@ -328,7 +369,7 @@ fn a_document_shorter_than_the_screen_sits_in_its_middle() {
     // Three to a row: one row of pages 17 rows tall, where two would fit. It is in the middle of
     // the 47 rows above the status line, from row 16, not where the first of two rows would be.
     let mut view = Session::start(&pdf, &["--protocol", "kitty", "--zoom", "3"], 80, 48);
-    view.wait_until("three pages placed", |t| t.contains(" pages 1–3/3 · 3 per row ") && t.contains(",p=3,C=1,"));
+    view.wait_until("three pages placed", |t| bar(t).contains(" pages 1–3/3 · 3 per row ") && t.contains(",p=3,C=1,"));
     assert!(view.text().contains("\x1b[16;1H\x1b_Ga=p,q=1,"), "{:?}", view.text());
     view.press("q");
     assert!(view.finish().success());
@@ -341,7 +382,7 @@ fn a_page_given_twice_shows_twice_side_by_side() {
     }
     let pdf = fixture("twice", 3);
     let mut view = Session::start(&pdf, &["--protocol", "kitty", "--pages", "1,1"], 120, 24);
-    view.wait_until("page 1 twice", |t| t.contains(" pages 1–1/3 ") && t.contains("q quit"));
+    view.wait_until("page 1 twice", |t| drawn(t, "pages 1–1/3"));
     // One image, placed twice: each place on screen a placement of its own.
     let text = view.text();
     assert_eq!(transmitted(&text), 1, "{text:?}");
@@ -360,7 +401,7 @@ fn an_image_the_terminal_dropped_is_sent_again_and_its_answers_are_never_keys() 
     }
     let pdf = fixture("dropped", 3);
     let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 60);
-    view.wait_until("pages 1-3 sent", |t| t.contains(" page 1/3 ") && t.contains("q quit") && transmitted(t) == 3);
+    view.wait_until("pages 1-3 sent", |t| drawn(t, "page 1/3") && transmitted(t) == 3);
     let text = view.text();
     let at = text.find("a=p,q=1,i=").unwrap();
     let id: String = text[at + "a=p,q=1,i=".len()..].chars().take_while(char::is_ascii_digit).collect();
@@ -392,7 +433,7 @@ fn a_reply_cut_in_two_is_never_keys_and_esc_still_quits() {
     let pdf = fixture("cut", 3);
     let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 60);
     // Settled: page 1 shown, and every page sent.
-    view.wait_until("pages 1-3 sent", |t| t.contains(" page 1/3 ") && t.contains("q quit") && transmitted(t) == 3);
+    view.wait_until("pages 1-3 sent", |t| drawn(t, "page 1/3") && transmitted(t) == 3);
     // A late cell size and device attributes, as over a slow connection: each cut past its CSI
     // prefix, the rest coming later than an Esc waits for more. Neither part is a key: the ESC
     // isn't Esc (which quits), nor are the digits a page number.
@@ -430,10 +471,10 @@ fn an_image_opens_in_the_pager_and_zooms() {
     view.wait_until("the image shown", |t| t.contains(" page 1/1 ") && transmitted(t) == 1 && placed_after_sent(t));
     assert_eq!(first_page_size(&view.text()), ((400, 100), (40, 5)));
     view.press("+");
-    view.wait_until("the image as wide as the window", |t| t.contains(" page 1/1 · width ") && transmitted(t) == 2 && placed_after_sent(t));
+    view.wait_until("the image as wide as the window", |t| bar(t).contains(" page 1/1 · width ") && transmitted(t) == 2 && placed_after_sent(t));
     // Back to its own size, which is still in the terminal, then two to a row: a smaller one.
     view.press("--");
-    view.wait_until("the image zoomed out", |t| t.contains(" page 1/1 · 2 per row ") && transmitted(t) == 3 && placed_after_sent(t));
+    view.wait_until("the image zoomed out", |t| bar(t).contains(" page 1/1 · 2 per row ") && transmitted(t) == 3 && placed_after_sent(t));
     assert_eq!(sent_sizes(&view.text()), [(400, 100), (600, 150), (290, 73)]);
     view.press("q");
     assert!(view.finish().success());
@@ -450,7 +491,7 @@ fn one_image_zoomed_out_sits_in_the_middle() {
     // Four to a row in 80 columns: an 18-column place, 7 rows tall for this picture, in the middle
     // of the 47 rows above the status line and of the 80 columns, from row 21 and column 32.
     let mut view = Session::start(&png, &["--pager", "--protocol", "kitty", "--zoom", "4"], 80, 48);
-    view.wait_until("the image placed", |t| t.contains(" page 1/1 · 4 per row ") && t.contains(",p=1,C=1,"));
+    view.wait_until("the image placed", |t| bar(t).contains(" page 1/1 · 4 per row ") && t.contains(",p=1,C=1,"));
     assert_eq!(first_page_size(&view.text()), ((180, 135), (18, 7)));
     assert!(view.text().contains("\x1b[21;32H\x1b_Ga=p,q=1,"), "{:?}", view.text());
     view.press("q");
@@ -509,11 +550,11 @@ fn several_files_page_as_one_and_the_status_line_names_them() {
     std::fs::write(&notes, "plain text\n").unwrap();
     // A tall window: one page to the screen.
     let mut view = Session::start(&a, &[b.to_str().unwrap(), notes.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
-    view.wait_until("the first file's page", |t| t.contains(" a.pdf · page 1/3 ") && t.contains("1 file left out: notes.txt "));
+    view.wait_until("the first file's page", |t| bar(t).contains(" a.pdf 1 file left out: notes.txt page 1/3 "));
     view.press("n");
-    view.wait_until("the second file's", |t| t.contains(" b.pdf · page 2/3 ") && t.contains("q quit"));
+    view.wait_until("the second file's", |t| bar(t).contains(" b.pdf page 2/3 "));
     view.press("g-");
-    view.wait_until("both files on screen", |t| t.contains(" a.pdf – b.pdf · pages 1–2/3 · 2 per row "));
+    view.wait_until("both files on screen", |t| bar(t).contains(" a.pdf – b.pdf pages 1–2/3 · 2 per row "));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -530,9 +571,9 @@ fn a_directory_pages_through_its_files_named_from_it() {
     save(&dir.join("a.png"), 800, 600);
     save(&dir.join("trip/b.png"), 800, 600);
     let mut view = Session::start(&dir, &["-r", "--protocol", "kitty"], 80, 48);
-    view.wait_until("the first file", |t| t.contains(" a.png · page 1/2 ") && t.contains("q quit"));
+    view.wait_until("the first file", |t| bar(t).contains(" a.png ") && drawn(t, "page 1/2"));
     view.press("n");
-    view.wait_until("the subdirectory's", |t| t.contains(" trip/b.png · page 2/2 "));
+    view.wait_until("the subdirectory's", |t| bar(t).contains(" trip/b.png page 2/2 "));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -566,7 +607,7 @@ fn a_terminal_without_pixels_is_asked_its_cell_size() {
     // cells are 16 × 24 px. One that doesn't know gets the 10 × 20 px assumed.
     for (terminal, (cell_w, cell_h)) in [(Terminal { cell: Some((16, 24)), ..PLAIN }, (16, 24)), (PLAIN, (10, 20))] {
         let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 80, 60);
-        view.wait_until("page 1 shown", |t| t.contains(" page 1/3 ") && t.contains("q quit"));
+        view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
         let text = view.text();
         assert_eq!(text.matches("\x1b[16t").count(), 1, "asked once");
         // Rendered for those cells: the page fills the last of the cells it covers.
@@ -591,7 +632,7 @@ fn the_first_key_after_the_cell_size_question_reaches_the_pager() {
     let pdf = fixture("first-key", 2);
     let sessions: Vec<Session> = (0..16).map(|_| Session::start(&pdf, &["--protocol", "kitty"], 80, 60)).collect();
     for mut view in sessions {
-        view.wait_until("page 1 shown", |t| t.contains(" page 1/2 ") && t.contains("q quit"));
+        view.wait_until("page 1 shown", |t| drawn(t, "page 1/2"));
         assert_eq!(view.text().matches("\x1b[16t").count(), 1, "asked its cell size");
         view.press("q");
         assert!(view.finish().success());
@@ -696,7 +737,7 @@ fn a_terminal_that_takes_files_gets_its_pages_through_them() {
     let dir = tmpdir("files");
     let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), cell: None };
     let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 80, 60);
-    view.wait_until("page 1 shown", |t| t.contains("q quit") && t.contains(" page 1/3 "));
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
     // The probe first: one pixel, its image deleted straight after.
     view.wait_until("the probe taken", |t| t.contains("a=t,f=32,t=t,s=1,v=1,q=2,i="));
     assert!(view.taken.lock().unwrap().first().is_some_and(Result::is_ok), "{:?}", view.taken.lock().unwrap());
