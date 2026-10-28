@@ -61,10 +61,20 @@ the chosen backend doesn't take. The backend's `open` gets the parsed command li
 its own options from it.
 
 The backends are `source/pdfcraft.rs` (feature `pdf`) and `source/image.rs` (feature `image`),
-both on by default. An image decodes on its first render, on a render thread, so the keys work while a
-large photo decodes; the pixels are kept for its renders at other sizes. Nothing in
+both on by default. An image opens by its header alone and decodes on its renderer's or pool's
+first render (on a render thread, so the keys work while a large photo decodes), which keeps the
+pixels for its renders at other sizes and lets them go with it; a picture on disk is read again
+to decode, one from a pipe kept as it came. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
+
+Several files are one source, `source::Joined`: their pages one after another, numbered on
+through them, each part (a file) with the pages it shows and a name for the status line and its
+errors. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
+only the last part's renderer, as pages print in order. The pager's pool hands each request to
+its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so
+a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools
+of the four parts wanted most recently, then lets them go, and an image's decoded pixels with them.
 
 ## Getting pages to the terminal
 

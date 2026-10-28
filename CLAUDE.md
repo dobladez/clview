@@ -20,6 +20,9 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
   backend with nothing better (images) lends its render function to `source/threads.rs`.
+- `source/joined.rs`: several sources as one (several files). It renders a few files at a time
+  and lets go of what the others render with, so a source must hold little while idle: an image
+  holds its header, not its pixels.
 - Test pictures are made by the tests, or kept in `tests/data/`, synthetic, with how each was
   made in its README.
 

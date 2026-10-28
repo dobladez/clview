@@ -9,6 +9,7 @@ clv report.pdf             # page through it, like less
 clv report.pdf --zoom 4    # four pages to a row
 clv report.pdf --no-pager  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
+clv *.jpg                  # several files, one after another
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide

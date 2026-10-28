@@ -1,9 +1,14 @@
 //! Images, decoded in Rust by the `image` crate, and JPEG XL by jxl-oxide: one page each, its
 //! size the picture's in pixels, turned the way its EXIF orientation says. Opening reads only
-//! the header; the picture is decoded by the first render, on a render thread, and kept for the
-//! renders after it.
+//! the header. A renderer, or a pool, decodes the picture on its first render (on a render
+//! thread, for a pool) and keeps it for the renders after, until it goes: the source itself
+//! keeps no pixels, so a directory of photos open at once costs little. A picture on disk is
+//! read again when it decodes; one from a pipe is kept as it came.
 
-use std::io::Cursor;
+use std::borrow::Cow;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Cursor, Read, Seek};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use ::image::imageops::FilterType;
@@ -11,7 +16,7 @@ use ::image::metadata::Orientation;
 use ::image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 
 use super::threads::Threads;
-use super::{Backend, Frame, Input, Pixels, Pool, Render, Request, Source, guarded};
+use super::{Backend, Frame, Input, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Images, decoded by the `image` crate.
@@ -36,9 +41,12 @@ impl Backend for Images {
 
     fn open(&self, input: Input<'_>, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
         let path = input.path;
-        let bytes = input.bytes()?;
-        let format = format(path, &bytes).ok_or_else(|| format!("{path}: not an image"))?;
-        Ok(Box::new(Image::open(bytes, format).map_err(|e| format!("{path}: {e}"))?))
+        let format = format(path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;
+        let image = match input.reopenable()? {
+            Reopenable::Disk(file) => Image::on_disk(Path::new(path), file, format),
+            Reopenable::Bytes(bytes) => Image::in_memory(bytes, format),
+        };
+        Ok(Box::new(image.map_err(|e| format!("{path}: {e}"))?))
     }
 }
 
@@ -93,40 +101,61 @@ fn is_jxl(head: &[u8]) -> bool {
 struct Image(Arc<Picture>);
 
 struct Picture {
-    bytes: Vec<u8>,
+    encoded: Encoded,
     format: Format,
     /// As shown: turned by its orientation.
     size: (u32, u32),
-    /// Premultiplied RGBA, decoded by the first render: the decoder's error, or a panic's, is
-    /// kept too, so a picture that fails is not decoded again for every render.
-    decoded: OnceLock<Result<Arc<RgbaImage>, String>>,
 }
 
+/// Where a picture's bytes are.
+enum Encoded {
+    /// In a file on disk, read again to decode.
+    Disk(PathBuf),
+    /// As they came through a pipe, which can't be read again.
+    Memory(Vec<u8>),
+}
+
+/// The picture as premultiplied RGBA, decoded by the first render of a renderer or a pool, each
+/// of which has its own: the decoder's error, or a panic's, is kept too, so a picture that fails
+/// is not decoded again for every render.
+type Cache = OnceLock<Result<Arc<RgbaImage>, String>>;
+
 impl Image {
-    /// Reads the header: the size, and whether the picture fits [`MAX_BYTES`].
-    fn open(bytes: Vec<u8>, format: Format) -> Result<Self, String> {
-        if let Format::Image(format) = format
-            && !DECODED.contains(&format)
-        {
-            let name = format.extensions_str().first().map_or_else(|| format!("{format:?}"), |e| e.to_uppercase());
-            return Err(format!("{name} pictures aren't decoded by this build of {}", crate::NAME));
-        }
-        let mut decoder = decoder(&bytes, format)?;
-        let (width, height) = decoder.dimensions();
-        if width == 0 || height == 0 {
-            return Err(format!("a {width} × {height} picture has no pixels to show"));
-        }
-        if u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4) > MAX_BYTES {
-            return Err(format!("{width} × {height} pixels is more than {} shows (at most {} MiB decoded)", crate::NAME, MAX_BYTES >> 20));
-        }
-        let turned = matches!(
-            orientation(&mut *decoder, format),
-            Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH
-        );
-        let size = if turned { (height, width) } else { (width, height) };
-        drop(decoder);
-        Ok(Self(Arc::new(Picture { bytes, format, size, decoded: OnceLock::new() })))
+    /// The picture in the file at `path`, whose header is read from `file`, at its start.
+    fn on_disk(path: &Path, file: File, format: Format) -> Result<Self, String> {
+        let size = header(BufReader::new(file), format)?;
+        Ok(Self(Arc::new(Picture { encoded: Encoded::Disk(path.into()), format, size })))
     }
+
+    /// The picture in `bytes`.
+    fn in_memory(bytes: Vec<u8>, format: Format) -> Result<Self, String> {
+        let size = header(Cursor::new(&bytes), format)?;
+        Ok(Self(Arc::new(Picture { encoded: Encoded::Memory(bytes), format, size })))
+    }
+}
+
+/// From the header `reader` starts with: the picture's size as shown, once it is known to be in
+/// a format this build decodes and to fit [`MAX_BYTES`].
+fn header(reader: impl BufRead + Seek, format: Format) -> Result<(u32, u32), String> {
+    if let Format::Image(format) = format
+        && !DECODED.contains(&format)
+    {
+        let name = format.extensions_str().first().map_or_else(|| format!("{format:?}"), |e| e.to_uppercase());
+        return Err(format!("{name} pictures aren't decoded by this build of {}", crate::NAME));
+    }
+    let mut decoder = decoder(reader, format)?;
+    let (width, height) = decoder.dimensions();
+    if width == 0 || height == 0 {
+        return Err(format!("a {width} × {height} picture has no pixels to show"));
+    }
+    if u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4) > MAX_BYTES {
+        return Err(format!("{width} × {height} pixels is more than {} shows (at most {} MiB decoded)", crate::NAME, MAX_BYTES >> 20));
+    }
+    let turned = matches!(
+        orientation(&mut *decoder, format),
+        Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH
+    );
+    Ok(if turned { (height, width) } else { (width, height) })
 }
 
 impl Source for Image {
@@ -144,33 +173,36 @@ impl Source for Image {
     }
 
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
-        Ok(Box::new(Renderer(self.0.clone())))
+        Ok(Box::new(Renderer { picture: self.0.clone(), decoded: Cache::new() }))
     }
 
     fn pool(&self, threads: usize) -> Box<dyn Pool + '_> {
-        let picture = self.0.clone();
-        Box::new(Threads::new(threads, Arc::new(move |request| picture.render(request))))
+        let (picture, decoded) = (self.0.clone(), Arc::new(Cache::new()));
+        Box::new(Threads::new(threads, Arc::new(move |request| picture.render(request, &decoded))))
     }
 }
 
-struct Renderer(Arc<Picture>);
+struct Renderer {
+    picture: Arc<Picture>,
+    decoded: Cache,
+}
 
 impl Render for Renderer {
     fn render(&mut self, request: Request) -> Frame {
-        guarded(request, || self.0.render(request))
+        guarded(request, || self.picture.render(request, &self.decoded))
     }
 }
 
 impl Picture {
-    fn render(&self, request: Request) -> Frame {
-        self.rendered(request).unwrap_or_else(|e| Frame::failed(request, e))
+    fn render(&self, request: Request, decoded: &Cache) -> Frame {
+        self.rendered(request, decoded).unwrap_or_else(|e| Frame::failed(request, e))
     }
 
-    fn rendered(&self, request: Request) -> Result<Frame, String> {
+    fn rendered(&self, request: Request, decoded: &Cache) -> Result<Frame, String> {
         if request.page != 0 {
             return Err(format!("an image has one page, not {}", request.page.saturating_add(1)));
         }
-        let decoded = self.decoded.get_or_init(|| guarded_decode(&self.bytes, self.format)).clone()?;
+        let decoded = decoded.get_or_init(|| self.bytes().and_then(|bytes| guarded_decode(&bytes, self.format))).clone()?;
         let (width, height) = decoded.dimensions();
         // The header promised pixels; a decoder that then makes none leaves nothing to scale.
         if width == 0 || height == 0 {
@@ -189,6 +221,25 @@ impl Picture {
         };
         Ok(Frame { request, width: to_width, height: to_height, rgba, error: None, warnings: Vec::new() })
     }
+
+    /// Its bytes: the ones kept, or the file's again.
+    fn bytes(&self) -> Result<Cow<'_, [u8]>, String> {
+        match &self.encoded {
+            Encoded::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
+            Encoded::Disk(path) => read(path).map(Cow::Owned),
+        }
+    }
+}
+
+/// The file at `path`, as long as it is no larger than [`MAX_BYTES`]: no picture this opens is
+/// larger encoded than that.
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    File::open(path).and_then(|file| file.take(MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(|e| format!("reading the file again: {e}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BYTES {
+        return Err(format!("the file is now more than {} MiB", MAX_BYTES >> 20));
+    }
+    Ok(bytes)
 }
 
 /// The picture decoded once and shared by every render at full size, without a copy.
@@ -217,7 +268,7 @@ fn guarded_decode(bytes: &[u8], format: Format) -> Result<Arc<RgbaImage>, String
 
 /// The picture as premultiplied RGBA, turned the way its orientation says.
 fn decode(bytes: &[u8], format: Format) -> Result<RgbaImage, String> {
-    let mut decoder = decoder(bytes, format)?;
+    let mut decoder = decoder(Cursor::new(bytes), format)?;
     let orientation = orientation(&mut *decoder, format);
     let mut picture = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
     picture.apply_orientation(orientation);
@@ -236,17 +287,17 @@ fn orientation(decoder: &mut dyn ImageDecoder, format: Format) -> Orientation {
     }
 }
 
-/// A decoder for `bytes`, held to [`MAX_BYTES`].
-fn decoder(bytes: &[u8], format: Format) -> Result<Box<dyn ImageDecoder + '_>, String> {
+/// A decoder for the picture `reader` reads, held to [`MAX_BYTES`].
+fn decoder<'a>(reader: impl BufRead + Seek + 'a, format: Format) -> Result<Box<dyn ImageDecoder + 'a>, String> {
     let mut limits = Limits::default();
     limits.max_alloc = Some(MAX_BYTES);
-    let mut decoder: Box<dyn ImageDecoder + '_> = match format {
+    let mut decoder: Box<dyn ImageDecoder + 'a> = match format {
         Format::Image(format) => {
-            let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+            let mut reader = ImageReader::with_format(reader, format);
             reader.limits(limits.clone());
             Box::new(reader.into_decoder().map_err(|e| e.to_string())?)
         }
-        Format::Jxl => Box::new(jxl_oxide::integration::JxlDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?),
+        Format::Jxl => Box::new(jxl_oxide::integration::JxlDecoder::new(reader).map_err(|e| e.to_string())?),
     };
     decoder.set_limits(limits).map_err(|e| e.to_string())?;
     Ok(decoder)
@@ -298,7 +349,7 @@ mod tests {
 
     fn open(name: &str, bytes: Vec<u8>) -> Result<Image, String> {
         let format = format(name, &bytes).ok_or("not an image")?;
-        Image::open(bytes, format)
+        Image::in_memory(bytes, format)
     }
 
     fn render(image: &Image, scale: f32) -> Frame {
@@ -444,6 +495,25 @@ mod tests {
         broken.truncate(8);
         broken.extend_from_slice(b"not a PNG chunk at all");
         assert!(open("a.png", broken).is_err());
+    }
+
+    /// A picture on disk keeps no bytes and no pixels in its source: each renderer reads the file
+    /// when it first renders, and keeps what it decoded for itself.
+    #[test]
+    fn a_picture_on_disk_is_read_by_each_renderer_and_kept_by_it() {
+        let path = std::env::temp_dir().join(format!("clview-image-disk-{}.png", std::process::id()));
+        let coloured = |c: u8| png(&[c, c, c, 255].repeat(6), 3, 2);
+        std::fs::write(&path, coloured(10)).unwrap();
+        let image = Image::on_disk(&path, File::open(&path).unwrap(), Format::Image(ImageFormat::Png)).unwrap();
+        let mut first = image.renderer().unwrap();
+        let pixel = |frame: Frame| frame.rgba.first().copied();
+        assert_eq!(pixel(first.render(Request { page: 0, scale: 1.0, tag: 1 })), Some(10));
+        std::fs::write(&path, coloured(200)).unwrap();
+        // The first renderer has the picture as it decoded it; a new one reads the file anew.
+        assert_eq!(pixel(first.render(Request { page: 0, scale: 2.0, tag: 2 })), Some(10));
+        assert_eq!(pixel(render(&image, 1.0)), Some(200));
+        std::fs::remove_file(&path).unwrap();
+        assert!(render(&image, 1.0).error.is_some_and(|e| e.starts_with("reading the file again: ")));
     }
 
     #[test]

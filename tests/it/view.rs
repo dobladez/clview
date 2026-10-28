@@ -303,7 +303,9 @@ fn a_hostile_file_name_cant_send_escape_sequences_to_the_terminal() {
         let out = Command::new(BIN).arg(&name).args(args).env_remove("TMUX").output().unwrap();
         assert!(!out.status.success());
         let stderr = text(&out.stderr);
-        assert!(stderr.contains("x\u{FFFD}]52;c;cHduZWQ=\u{FFFD}y"), "{stderr:?}");
+        // A bad page list is said, quoted with its escapes spelled out, before any file is read.
+        let said = if args.len() == 2 && args[0] == "--pages" { r"x\u{1b}[2J" } else { "x\u{FFFD}]52;c;cHduZWQ=\u{FFFD}y" };
+        assert!(stderr.contains(said), "{stderr:?}");
         assert!(!out.stderr.iter().any(|b| *b == 0x1b || *b == 0x07), "{stderr:?}");
     }
 }
@@ -332,7 +334,7 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
 fn help_and_version() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    assert!(out.status.success() && help.starts_with("clv <file> [options]\nclv --help | --version\n"), "{help}");
+    assert!(out.status.success() && help.starts_with("clv <file>… [options]\nclv --help | --version\n"), "{help}");
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
     // Each backend under a heading of its own.
     assert!(help.contains("\n\nPDFs, by "), "{help}");
@@ -348,8 +350,7 @@ fn a_file_no_backend_opens_is_refused_and_a_pdf_is_known_by_its_header() {
     let notes = tmp("backends", "notes.pdf");
     std::fs::write(&notes, "not a PDF, whatever its name says\n").unwrap();
     let out = view(&notes, &["--protocol", "kitty"]);
-    let shows = if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" };
-    assert_eq!(text(&out.stderr), format!("clv: {}: not a file clv shows (it shows {shows})\n", notes.display()));
+    assert_eq!(text(&out.stderr), format!("clv: {}: not a file clv shows (it shows {})\n", notes.display(), shows()));
     assert!(!out.status.success() && out.stdout.is_empty());
     let pdf = tmp("backends", "page");
     std::fs::write(&pdf, crate::fixtures::letter("No extension", 1)).unwrap();
@@ -376,6 +377,27 @@ fn a_pdf_through_a_pipe_is_shown() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(images(&out.stdout).len(), 2);
+}
+
+/// A picture through a pipe can't be read again when it renders, so it is kept as it came.
+#[cfg(feature = "image")]
+#[test]
+fn a_picture_through_a_pipe_is_shown() {
+    use std::io::Write as _;
+    let png = std::fs::read(picture("piped", "photo.png", 30, 20)).unwrap();
+    let mut child = Command::new(BIN)
+        .args(["/dev/stdin", "--protocol", "kitty"])
+        .env("TERM", "dumb")
+        .env_remove("TMUX")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&png).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>(), [(30, 20)]);
 }
 
 /// A `width` × `height` PNG made by the test.
@@ -408,6 +430,54 @@ fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
     assert!(!out.status.success() && out.stdout.is_empty());
     let out = view(&png, &["--protocol", "kitty", "--pages", "2"]);
     assert!(text(&out.stderr).contains("no page 2 ") && text(&out.stderr).contains("has 1 page)"), "{}", text(&out.stderr));
+}
+
+/// Several files are one list of pages, numbered on through them: `--pages` counts across them.
+#[cfg(feature = "image")]
+#[test]
+fn several_files_are_one_after_another() {
+    let pdf = fixture("several", 2);
+    let png = picture("several", "photo.png", 300, 200);
+    let both = |args: &[&str]| view(&pdf, &[&[png.to_str().unwrap(), "--protocol", "kitty"], args].concat());
+    let out = both(&[]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let sizes: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
+    assert_eq!(sizes.len(), 3);
+    assert_eq!(sizes[2], (300, 200));
+    let third = both(&["--pages", "3"]);
+    assert_eq!(images(&third.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>(), [(300, 200)]);
+    let past = both(&["--pages", "4"]);
+    assert!(!past.status.success() && past.stdout.is_empty());
+    assert!(text(&past.stderr).contains("no page 4 (the files shown have 3 pages in all)"), "{}", text(&past.stderr));
+    // An option one of the files takes is no error; one none takes is.
+    assert!(both(&["--password", "pw"]).status.success());
+    let png2 = picture("several", "other.png", 30, 20);
+    let out = view(&png, &[png2.to_str().unwrap(), "--protocol", "kitty", "--password", "pw"]);
+    assert_eq!(text(&out.stderr), "clv: --password doesn't apply to any of these files, which image opens\n");
+}
+
+/// Among several files, one that can't be shown is left out: said first, the others shown, and
+/// said again in the exit status. With none left, nothing is shown.
+#[test]
+fn a_file_that_cant_be_shown_among_others_is_left_out() {
+    let pdf = fixture("left-out", 2);
+    let notes = tmp("left-out", "notes.txt");
+    std::fs::write(&notes, "plain text\n").unwrap();
+    let out = view(&pdf, &[notes.to_str().unwrap(), "--protocol", "kitty"]);
+    assert_eq!(images(&out.stdout).len(), 2);
+    let why = format!("{}: not a file clv shows", notes.display());
+    let stderr = text(&out.stderr);
+    assert!(stderr.starts_with(&format!("warning: {why}")), "{stderr}");
+    assert!(stderr.ends_with("clv: 1 file left out: notes.txt\n"), "{stderr}");
+    assert!(!out.status.success());
+    let out = view(&notes, &[notes.to_str().unwrap(), "--protocol", "kitty"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert!(text(&out.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&out.stderr));
+}
+
+/// What this build shows, as a refusal says it.
+fn shows() -> &'static str {
+    if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" }
 }
 
 /// Errors are said once, under the command's name.

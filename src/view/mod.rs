@@ -19,7 +19,7 @@ use encode::PngEffort;
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Frame, Request, Source};
+use crate::source::{Backend, Frame, Joined, Part, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -36,9 +36,10 @@ const OPTIONS: &[OptionSpec] = &[
 
 /// What `--help` says before the options.
 const ABOUT: &str = "\
-Shows a file's pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol),
-tmux too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when
-the window is wide enough; - and + zoom out to rows of pages and in to the window's width.";
+Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol), tmux
+too; macOS, Linux and FreeBSD. Several files are one after another. More than a page opens a
+pager, two pages side by side when the window is wide enough; - and + zoom out to rows of pages
+and in to the window's width.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -216,7 +217,7 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
 /// What `--help` prints: the viewer's options, then those of each of `backends`.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
-    let mut out = format!("{name} <file> [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
+    let mut out = format!("{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
     let width = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).map(|o| o.shown().len()).max().unwrap_or(0);
     let list = |out: &mut String, options: &[OptionSpec]| {
         for option in options {
@@ -243,23 +244,27 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let backends = crate::source::BACKENDS;
     let known: Vec<OptionSpec> = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().collect();
     let options = Parsed::parse(args, &known)?;
-    let path = file_arg(&options)?;
+    let paths = file_args(&options)?;
     let zoom = options.value("--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
     let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
-    let (backend, input) = crate::source::choose(path, backends)?;
-    takes_all(backend, &options, path)?;
-    let source = backend.open(input, &options)?;
+    let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
+    let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
+    let opened = open(paths, backends, &options)?;
+    for (_, why) in &opened.left_out {
+        note(&format!("warning: {why}"));
+    }
+    let source = &*opened.source;
     let count = source.pages();
-    let pages = match options.value("--pages") {
-        Some(list) => page_list(list).map_err(|e| format!("--pages: {e}"))?,
-        None => (0..count).collect(),
-    };
+    let pages = given.unwrap_or_else(|| (0..count).collect());
     if let Some(page) = pages.iter().find(|p| **p >= count) {
         let plural = if count == 1 { "" } else { "s" };
-        return Err(format!("no page {} ({path} has {count} page{plural})", page.saturating_add(1)).into());
+        let has = match paths {
+            [path] => format!("{path} has {count} page{plural}"),
+            _ => format!("the files shown have {count} page{plural} in all"),
+        };
+        return Err(format!("no page {} ({has})", page.saturating_add(1)).into());
     }
-    let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let tty = Tty::open().ok();
     let paging = paging.pages(pages.len(), std::io::stdout().is_terminal() && tty.is_some());
     let inside_tmux = tmux::inside();
@@ -281,32 +286,105 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let (effort, files) = compression.choose(|| over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten()));
     let terminal = Terminal { effort, files, ..terminal };
     let first_id = fresh_index();
+    let left_out = left_out(&opened.left_out);
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
-        let name = std::path::Path::new(path).file_name().map_or_else(|| path.into(), |n| n.to_string_lossy());
-        return pager::run(tty, &*source, &name, &terminal, pages, zoom, first_id).map_err(CliError::from);
+        let shown = Shown { source, name: &opened.name, pages, note: left_out };
+        return pager::run(tty, shown, &terminal, zoom, first_id).map_err(CliError::from);
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
-    print_pages(&*source, &pages, zoom, size, &terminal, first_id)
+    print_pages(source, &pages, zoom, size, &terminal, first_id)?;
+    // Each was said before the pages; the exit status says it too, as for a page that failed.
+    left_out.map_or(Ok(()), |said| Err(said.into()))
 }
 
-/// The one file argument: the argument that is neither an option nor an option's value.
-fn file_arg<'a>(options: &Parsed<'a>) -> Result<&'a str, String> {
+/// What the pager shows: `pages` of `source`, in order, from a file the status line calls `name`
+/// unless the source names its files itself; and `note`, what the reader should know first.
+struct Shown<'a> {
+    source: &'a dyn Source,
+    name: &'a str,
+    pages: Vec<usize>,
+    note: Option<String>,
+}
+
+/// The file arguments: the arguments that are neither an option nor an option's value.
+fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
     match options.operands.as_slice() {
-        [file] => Ok(file),
         [] => Err("missing file".into()),
-        files => Err(format!("one file at a time (got {})", files.join(", "))),
+        files => Ok(files),
     }
 }
 
-/// Refuses an option only other backends take: it would do nothing for the file at `path`,
-/// which `backend` opens.
-fn takes_all(backend: &dyn Backend, options: &Parsed<'_>, path: &str) -> Result<(), String> {
-    let takes = |name: &str| OPTIONS.iter().chain(backend.options()).any(|o| o.name == name);
-    match options.names().find(|name| !takes(name)) {
-        Some(name) => Err(format!("{name} doesn't apply to {path}, which {} opens", backend.name())),
-        None => Ok(()),
+/// The files at `paths`, each opened by the first of `backends` that opens it: one file's source,
+/// or several joined.
+struct Opened {
+    source: Box<dyn Source>,
+    /// What the status line calls a single file ([`file_name`]).
+    name: String,
+    /// Each file that couldn't be shown, among several, and why.
+    left_out: Vec<(String, String)>,
+}
+
+/// [`Opened`] for `paths` with `options`. A file alone that can't be shown is the error; among
+/// several, it is left out, and only none at all is an error. An option that none of the files'
+/// backends takes is refused, since it would do nothing.
+fn open(paths: &[&str], backends: &[&dyn Backend], options: &Parsed<'_>) -> Result<Opened, String> {
+    if let [path] = paths {
+        let (backend, input) = crate::source::choose(path, backends)?;
+        takes_all(&[backend], options, path)?;
+        return Ok(Opened { source: backend.open(input, options)?, name: file_name(path), left_out: Vec::new() });
     }
+    let (mut parts, mut used, mut left_out) = (Vec::new(), Vec::<&dyn Backend>::new(), Vec::new());
+    for path in paths {
+        let opened = crate::source::choose(path, backends).and_then(|(backend, input)| Ok((backend, backend.open(input, options)?)));
+        match opened {
+            Ok((backend, source)) => {
+                if !used.iter().any(|b| b.name() == backend.name()) {
+                    used.push(backend);
+                }
+                parts.push(Part { name: file_name(path), pages: (0..source.pages()).collect(), source });
+            }
+            Err(why) => left_out.push((file_name(path), why)),
+        }
+    }
+    if parts.is_empty() {
+        for (_, why) in &left_out {
+            note(&format!("warning: {why}"));
+        }
+        return Err(format!("none of the {} files can be shown", paths.len()));
+    }
+    takes_all(&used, options, "any of these files")?;
+    let name = paths.first().map_or_else(String::new, |p| file_name(p));
+    Ok(Opened { source: Box::new(Joined::new(parts)), name, left_out })
+}
+
+/// The name of the file at `path`, without its directories, as the status line gives it.
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// What the reader is told about the files left out, if any, once the reasons were said: how
+/// many, and the first one's name.
+fn left_out(files: &[(String, String)]) -> Option<String> {
+    match files {
+        [] => None,
+        [(name, _)] => Some(format!("1 file left out: {name}")),
+        [(name, _), ..] => Some(format!("{} files left out: {name}, …", files.len())),
+    }
+}
+
+/// Refuses an option that none of `backends` takes, nor the viewer: it would do nothing for
+/// `files`, which those backends open.
+fn takes_all(backends: &[&dyn Backend], options: &Parsed<'_>, files: &str) -> Result<(), String> {
+    let takes = |name: &str| OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).any(|o| o.name == name);
+    let Some(name) = options.names().find(|name| !takes(name)) else { return Ok(()) };
+    let names: Vec<&str> = backends.iter().map(|b| b.name()).collect();
+    let (opens, verb) = match names.split_last() {
+        Some((last, [])) => ((*last).to_string(), "opens"),
+        Some((last, rest)) => (format!("{} and {last}", rest.join(", ")), "open"),
+        None => ("nothing".into(), "opens"),
+    };
+    Err(format!("{name} doesn't apply to {files}, which {opens} {verb}"))
 }
 
 /// Make sure stdout is a terminal that shows kitty images, unless `--protocol kitty` says to
@@ -620,25 +698,39 @@ mod tests {
     }
 
     #[test]
-    fn the_file_is_the_argument_that_is_not_an_option_value() {
-        let file = |list: &[&str]| file_arg(&parsed(&args(list))).map(String::from);
-        assert_eq!(file(&["a.pdf", "--pages", "2"]), Ok("a.pdf".into()));
-        assert_eq!(file(&["--pages", "2", "a.pdf"]), Ok("a.pdf".into()));
-        assert_eq!(file(&["--password", "a.pdf", "b.pdf"]), Ok("b.pdf".into()));
-        // `--pager` takes no value.
-        assert_eq!(file(&["--pager", "a.pdf"]), Ok("a.pdf".into()));
-        assert!(file(&["--zoom", "2"]).is_err_and(|e| e.contains("missing file")));
-        assert!(file(&["a.pdf", "b.pdf"]).is_err_and(|e| e == "one file at a time (got a.pdf, b.pdf)"));
+    fn the_files_are_the_arguments_that_are_not_option_values() {
+        let given = |list: &[&str]| file_args(&parsed(&args(list))).map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>());
+        assert_eq!(given(&["a.pdf", "--pages", "2"]), Ok(vec!["a.pdf".into()]));
+        assert_eq!(given(&["--pages", "2", "a.pdf"]), Ok(vec!["a.pdf".into()]));
+        assert_eq!(given(&["--password", "a.pdf", "b.pdf"]), Ok(vec!["b.pdf".into()]));
+        // `--pager` takes no value; the files are in the order given.
+        assert_eq!(given(&["b.png", "--pager", "a.pdf"]), Ok(vec!["b.png".into(), "a.pdf".into()]));
+        assert!(given(&["--zoom", "2"]).is_err_and(|e| e.contains("missing file")));
     }
 
     #[test]
-    fn an_option_only_another_backend_takes_is_refused() {
+    fn an_option_that_none_of_the_files_backends_takes_is_refused() {
         use crate::source::tests::{Fake, PDF};
         const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD] };
+        const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[] };
         let given = args(&["a.pdf", "--zoom", "2", "--password", "pw"]);
-        assert_eq!(takes_all(&LOCKED, &parsed(&given), "a.pdf"), Ok(()));
-        assert_eq!(takes_all(&PDF, &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
-        assert_eq!(takes_all(&PDF, &parsed(&args(&["a.pdf", "--zoom", "2", "--no-pager"])), "a.pdf"), Ok(()), "the viewer's own apply to all");
+        assert_eq!(takes_all(&[&LOCKED], &parsed(&given), "a.pdf"), Ok(()));
+        assert_eq!(takes_all(&[&PDF], &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
+        assert_eq!(takes_all(&[&PDF], &parsed(&args(&["a.pdf", "--zoom", "2", "--no-pager"])), "a.pdf"), Ok(()), "the viewer's own apply to all");
+        // Among several files, it is enough that one of them takes it.
+        assert_eq!(takes_all(&[&PNG, &LOCKED], &parsed(&given), "any of these files"), Ok(()));
+        assert_eq!(
+            takes_all(&[&PNG, &PDF], &parsed(&given), "any of these files"),
+            Err("--password doesn't apply to any of these files, which png and pdf-one open".into())
+        );
+    }
+
+    #[test]
+    fn the_reader_is_told_how_many_files_were_left_out_and_the_first_ones_name() {
+        let file = |name: &str| (name.to_string(), format!("dir/{name}: no"));
+        assert_eq!(left_out(&[]), None);
+        assert_eq!(left_out(&[file("a.txt")]).as_deref(), Some("1 file left out: a.txt"));
+        assert_eq!(left_out(&[file("a.txt"), file("b")]).as_deref(), Some("2 files left out: a.txt, …"));
     }
 
     #[test]
@@ -646,7 +738,7 @@ mod tests {
         use crate::source::tests::{Fake, PDF};
         const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD] };
         let help = usage(&[&LOCKED, &PDF]);
-        assert!(help.starts_with(&format!("{0} <file> [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
+        assert!(help.starts_with(&format!("{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");

@@ -34,7 +34,7 @@ use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
-use super::{FALLBACK_SIZE, Output, QUIET, Terminal, checked, page_layout, page_size, png, printable, request, tmux};
+use super::{FALLBACK_SIZE, Output, QUIET, Shown, Terminal, checked, page_layout, page_size, png, printable, request, tmux};
 
 /// How often the window size is checked while no key comes.
 const TICK: Duration = Duration::from_millis(200);
@@ -80,17 +80,10 @@ const ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// The reminder of the keys on the status line, shorter and shorter for a narrow window.
 const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
 
-/// Page through `pages` of `source` until the user quits. Image ids are taken in turn from
+/// Page through what is `shown` until the user quits. Image ids are taken in turn from
 /// `first_id` on ([`super::kitty::IdColor::id`]).
-pub(super) fn run(
-    tty: &Tty,
-    source: &dyn Source,
-    name: &str,
-    terminal: &Terminal,
-    pages: Vec<usize>,
-    zoom: Zoom,
-    first_id: u64,
-) -> Result<(), String> {
+pub(super) fn run(tty: &Tty, shown: Shown<'_>, terminal: &Terminal, zoom: Zoom, first_id: u64) -> Result<(), String> {
+    let Shown { source, name, pages, note } = shown;
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
     let mut showing = 1;
@@ -110,7 +103,7 @@ pub(super) fn run(
         output: terminal.output,
         cell: terminal.cell,
         effort: terminal.effort,
-        nav: Nav::new(pages, source.pages(), zoom),
+        nav: Nav { message: note, ..Nav::new(pages, source.pages(), zoom) },
         sent: Vec::new(),
         kept: MAX_SENT,
         wanted: Vec::new(),
@@ -647,10 +640,22 @@ impl Pager<'_> {
         }
         cursor(&mut out, size.rows.saturating_sub(1), 0);
         out.extend_from_slice(b"\x1b[2K\x1b[7m");
-        out.extend_from_slice(self.nav.status(self.name, size.cols, !ready).as_bytes());
+        out.extend_from_slice(self.nav.status(&self.name_on_screen(), size.cols, !ready).as_bytes());
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
         self.wrote(0);
         self.tty.write_all(&out)
+    }
+
+    /// What the status line calls the pages on screen: the file they come from, or the first and
+    /// the last when they come from several; or the name given, for a source of one file.
+    fn name_on_screen(&self) -> String {
+        let on_screen: Vec<usize> = self.nav.on_screen().into_iter().flatten().collect();
+        let name = |page: Option<&usize>| page.and_then(|p| self.source.file_name(*p));
+        match (name(on_screen.first()), name(on_screen.last())) {
+            (Some(first), Some(last)) if first != last => format!("{first} – {last}"),
+            (Some(first), _) => first.to_owned(),
+            _ => self.name.to_owned(),
+        }
     }
 
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,

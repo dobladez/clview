@@ -427,13 +427,13 @@ fn an_image_opens_in_the_pager_and_zooms() {
     let png = picture("pager-image", 400, 100);
     // 600 × 580 px above the status line, which would take the picture 1.5 times as wide.
     let mut view = Session::start(&png, &["--pager", "--protocol", "kitty"], 60, 30);
-    view.wait_until("the image shown", |t| t.contains(" page 1/1 ") && transmitted(t) == 1);
+    view.wait_until("the image shown", |t| t.contains(" page 1/1 ") && transmitted(t) == 1 && placed_after_sent(t));
     assert_eq!(first_page_size(&view.text()), ((400, 100), (40, 5)));
     view.press("+");
-    view.wait_until("the image as wide as the window", |t| t.contains(" page 1/1 · width ") && transmitted(t) == 2);
+    view.wait_until("the image as wide as the window", |t| t.contains(" page 1/1 · width ") && transmitted(t) == 2 && placed_after_sent(t));
     // Back to its own size, which is still in the terminal, then two to a row: a smaller one.
     view.press("--");
-    view.wait_until("the image zoomed out", |t| t.contains(" page 1/1 · 2 per row ") && transmitted(t) == 3);
+    view.wait_until("the image zoomed out", |t| t.contains(" page 1/1 · 2 per row ") && transmitted(t) == 3 && placed_after_sent(t));
     assert_eq!(sent_sizes(&view.text()), [(400, 100), (600, 150), (290, 73)]);
     view.press("q");
     assert!(view.finish().success());
@@ -455,6 +455,12 @@ fn one_image_zoomed_out_sits_in_the_middle() {
     assert!(view.text().contains("\x1b[21;32H\x1b_Ga=p,q=1,"), "{:?}", view.text());
     view.press("q");
     assert!(view.finish().success());
+}
+
+/// Whether an image was placed after the last one sent: the draw after it is written out whole.
+#[cfg(feature = "image")]
+fn placed_after_sent(text: &str) -> bool {
+    text.rfind("a=t,f=100,t=d,q=2,i=").is_some_and(|at| text[at..].contains("a=p,q=1,"))
 }
 
 /// A `width` × `height` PNG made by the test.
@@ -480,6 +486,30 @@ fn sent_sizes(text: &str) -> Vec<(u32, u32)> {
         (be(16), be(20))
     })
     .collect()
+}
+
+/// Several files page as one, the status line naming the file on screen, or the first and last
+/// of those on screen; a file left out is said first.
+#[test]
+fn several_files_page_as_one_and_the_status_line_names_them() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-several-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b, notes) = (dir.join("a.pdf"), dir.join("b.pdf"), dir.join("notes.txt"));
+    std::fs::write(&a, crate::fixtures::letter("First", 1)).unwrap();
+    std::fs::write(&b, crate::fixtures::letter("Second", 2)).unwrap();
+    std::fs::write(&notes, "plain text\n").unwrap();
+    // A tall window: one page to the screen.
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), notes.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the first file's page", |t| t.contains(" a.pdf · page 1/3 ") && t.contains("1 file left out: notes.txt "));
+    view.press("n");
+    view.wait_until("the second file's", |t| t.contains(" b.pdf · page 2/3 ") && t.contains("q quit"));
+    view.press("g-");
+    view.wait_until("both files on screen", |t| t.contains(" a.pdf – b.pdf · pages 1–2/3 · 2 per row "));
+    view.press("q");
+    assert!(view.finish().success());
 }
 
 /// The `i=` value at the start of a transmission.

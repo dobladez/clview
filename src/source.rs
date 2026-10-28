@@ -4,16 +4,18 @@
 
 #[cfg(feature = "image")]
 mod image;
+mod joined;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
 #[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images use these threads so far"))]
 mod threads;
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::ops::Deref;
 
 use crate::args::{OptionSpec, Parsed};
+pub(crate) use joined::{Joined, Part};
 
 /// The backends this build has, in the order they are asked whether they open a file.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
@@ -60,12 +62,32 @@ impl<'a> Input<'a> {
     }
 
     /// The whole file.
-    #[cfg_attr(all(not(feature = "pdf"), not(feature = "image"), not(test)), expect(dead_code, reason = "only a backend or a test reads a file"))]
     pub(crate) fn bytes(self) -> Result<Vec<u8>, String> {
         let Self { path, mut head, mut rest } = self;
         rest.read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
         Ok(head)
     }
+
+    /// The file for a backend that reads it again when it renders, and so keeps only what it
+    /// needs meanwhile: on disk, from its start; otherwise the whole of it, read now.
+    #[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images read their file again"))]
+    pub(crate) fn reopenable(self) -> Result<Reopenable, String> {
+        if !self.rest.metadata().is_ok_and(|m| m.is_file()) {
+            return self.bytes().map(Reopenable::Bytes);
+        }
+        let Self { path, mut rest, .. } = self;
+        rest.rewind().map_err(|e| format!("{path}: {e}"))?;
+        Ok(Reopenable::Disk(rest))
+    }
+}
+
+/// A file as [`Input::reopenable`] gives it.
+#[cfg_attr(not(feature = "image"), expect(dead_code, reason = "only images read their file again"))]
+pub(crate) enum Reopenable {
+    /// On disk, from its start: its path opens it again.
+    Disk(File),
+    /// A pipe or a device, which can't be read again: all of it.
+    Bytes(Vec<u8>),
 }
 
 /// `path` opened, with the first of `backends` that opens it.
@@ -160,6 +182,11 @@ pub(crate) trait Source {
     /// to the window, it is never drawn larger, unless the reader zooms to the width. A PDF's
     /// points are a unit for any scale.
     fn natural(&self, page: usize) -> bool;
+    /// The name of the file page `page` comes from, for a source that joins several files' (the
+    /// status line names it); `None` for one file's, which the viewer names itself.
+    fn file_name(&self, _page: usize) -> Option<&str> {
+        None
+    }
     /// A renderer on this thread, for pages printed one after another.
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String>;
     /// Renders on threads of their own, for the pager: keys still work while pages render, and
@@ -276,6 +303,11 @@ pub(crate) mod tests {
         let input = Input::open(path).unwrap();
         assert_eq!(input.head, bytes[..1024]);
         assert_eq!(input.bytes().unwrap(), bytes);
+        // On disk, a backend gets the file back from its start.
+        let Ok(Reopenable::Disk(mut file)) = Input::open(path).unwrap().reopenable() else { panic!("not on disk") };
+        let mut again = Vec::new();
+        file.read_to_end(&mut again).unwrap();
+        assert_eq!(again, bytes);
         std::fs::write(path, b"%PDF").unwrap();
         assert_eq!(Input::open(path).unwrap().head, b"%PDF");
         std::fs::remove_file(path).unwrap();

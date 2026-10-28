@@ -11,6 +11,7 @@ clv report.pdf --zoom width  # as wide as the window
 clv report.pdf --zoom 4      # four pages to a row
 clv report.pdf --no-pager    # print every page and exit, like cat
 clv secret.pdf --password PW
+clv *.png                    # several files, one after another
 ```
 
 On a terminal, more than one page opens the pager: one page at a time, two side by side when
@@ -47,6 +48,23 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 Printed without the pager, pages follow the zoom too, a row of them under another: `--zoom 3`
 prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
 when the window is wide enough, as the pager first shows them.
+
+## Several files
+
+`clv *.png` and `clv a.pdf b.pdf` show the files one after another, as one list of pages numbered
+on through them: the second file's first page follows the first file's last, `--pages 3` is the
+list's third page, and a typed page number goes to that place in the list. The status line names
+the file the page on screen comes from (the first and the last, when the screen holds several).
+
+A file that can't be shown, among others, is left out: why is said on stderr before anything is
+shown, the pager's status line names it at first, and printed pages end with an error that says
+how many were left out. With none left, nothing is shown. An option goes to the files that take
+it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
+
+Opening a file reads what its backend needs to know its pages: an image's header, a PDF's whole
+file. Files are rendered when their pages are wanted, two at a time in the pager, and what a file
+renders with is let go once the reader is elsewhere, so hundreds of photos open at once hold
+little more than their sizes.
 
 ## Which files it shows
 
