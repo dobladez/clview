@@ -12,6 +12,8 @@ clv report.pdf --zoom 4      # four pages to a row
 clv report.pdf --no-pager    # print every page and exit, like cat
 clv secret.pdf --password PW
 clv *.png                    # several files, one after another
+clv ~/Photos                 # a directory: each file by its first page
+clv -r ~/Photos              # its subdirectories' files too
 ```
 
 On a terminal, more than one page opens the pager: one page at a time, two side by side when
@@ -34,6 +36,7 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 | Option | Meaning |
 |---|---|
 | `--pages 1,3-5` | the pages to show, in order (default: all of them) |
+| `-r`, `--recurse` | in a directory, its subdirectories' files too |
 | `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
 | `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
@@ -65,6 +68,24 @@ Opening a file reads what its backend needs to know its pages: an image's header
 file. Files are rendered when their pages are wanted, two at a time in the pager, and what a file
 renders with is let go once the reader is elsewhere, so hundreds of photos open at once hold
 little more than their sizes.
+
+## Directories
+
+A directory shows each of its files that a backend opens by its first page, like a gallery: a
+directory of PDFs shows their covers. They come in the order of their names, numbers by their
+value (`img2` before `img10`), letters regardless of case. Hidden files are left out, and so,
+without a word, are files no backend opens, since a directory holds all sorts. A file a backend
+opens and can't show (a broken picture, a PDF that needs a password) is left out as one given by
+name is, with a warning. The status line names each file from the directory (`2024/beach.jpg`).
+
+Subdirectories are left out unless `-r` (`--recurse`) is given: then each one's files come at its
+place among the names, depth first, down to 32 directories. A link to a file is followed; a link to
+a directory is not, so links can't make a loop. At most 4,096 files are listed from a directory,
+and at most 100,000 entries read, so `clv -r ~` stops in time; a warning says when the listing
+stopped early.
+
+A directory and files can be given together, and so can several directories: each directory's
+files at its place among the arguments.
 
 ## Which files it shows
 

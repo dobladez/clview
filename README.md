@@ -10,6 +10,8 @@ clv report.pdf --zoom 4    # four pages to a row
 clv report.pdf --no-pager  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
 clv *.jpg                  # several files, one after another
+clv ~/Photos               # a directory: each file by its first page
+clv -r ~/Photos            # its subdirectories' files too
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
@@ -50,8 +52,8 @@ renders. A file goes to the first backend that opens it, going by its first byte
 backend brings its own options (`--password` is the PDF backend's). There are two so far, for
 PDFs and for images.
 
-- Directories, as a gallery: a tile for each file it can show (its first page), and Enter opens
-  one.
+- In a directory, Enter on a file to open all of its pages, and a subdirectory as one tile to
+  open.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
 

@@ -469,9 +469,15 @@ fn picture(test: &str, width: u32, height: u32) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("clview-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let png = dir.join("picture.png");
-    let rgba: Vec<u8> = (0..width * height).flat_map(|i| [(i % 251) as u8, 128, 64, 255]).collect();
-    image::save_buffer(&png, &rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+    save(&png, width, height);
     png
+}
+
+/// A `width` × `height` PNG at `path`.
+#[cfg(feature = "image")]
+fn save(path: &Path, width: u32, height: u32) {
+    let rgba: Vec<u8> = (0..width * height).flat_map(|i| [(i % 251) as u8, 128, 64, 255]).collect();
+    image::save_buffer(path, &rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
 }
 
 /// The size in pixels of every image sent, in order, from its PNG header.
@@ -508,6 +514,25 @@ fn several_files_page_as_one_and_the_status_line_names_them() {
     view.wait_until("the second file's", |t| t.contains(" b.pdf · page 2/3 ") && t.contains("q quit"));
     view.press("g-");
     view.wait_until("both files on screen", |t| t.contains(" a.pdf – b.pdf · pages 1–2/3 · 2 per row "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A directory pages through its files, each named from the directory.
+#[cfg(feature = "image")]
+#[test]
+fn a_directory_pages_through_its_files_named_from_it() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-gallery-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("trip")).unwrap();
+    save(&dir.join("a.png"), 800, 600);
+    save(&dir.join("trip/b.png"), 800, 600);
+    let mut view = Session::start(&dir, &["-r", "--protocol", "kitty"], 80, 48);
+    view.wait_until("the first file", |t| t.contains(" a.png · page 1/2 ") && t.contains("q quit"));
+    view.press("n");
+    view.wait_until("the subdirectory's", |t| t.contains(" trip/b.png · page 2/2 "));
     view.press("q");
     assert!(view.finish().success());
 }

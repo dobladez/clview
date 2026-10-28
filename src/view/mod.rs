@@ -26,20 +26,26 @@ use tty::{Tty, WindowSize};
 
 /// The viewer's own options, whatever it shows. A backend's come from the backend.
 const OPTIONS: &[OptionSpec] = &[
-    OptionSpec { name: "--pages", value: Some("1,3-5"), help: "the pages to show, in this order (default: all)" },
-    OptionSpec { name: "--zoom", value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
-    OptionSpec { name: "--pager", value: None, help: "always page, even through one page" },
-    OptionSpec { name: "--no-pager", value: None, help: "never page: print the pages and exit" },
-    OptionSpec { name: "--compression", value: Some("auto|fast|small"), help: "fast PNGs or small ones (auto: small over SSH, else fast)" },
-    OptionSpec { name: "--protocol", value: Some("auto|kitty"), help: "kitty: send the images without asking the terminal first" },
+    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show, in this order (default: all)" },
+    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files too" },
+    OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
+    OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
+    OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit" },
+    OptionSpec {
+        name: "--compression",
+        short: None,
+        value: Some("auto|fast|small"),
+        help: "fast PNGs or small ones (auto: small over SSH, else fast)",
+    },
+    OptionSpec { name: "--protocol", short: None, value: Some("auto|kitty"), help: "kitty: send the images without asking the terminal first" },
 ];
 
 /// What `--help` says before the options.
 const ABOUT: &str = "\
 Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol), tmux
-too; macOS, Linux and FreeBSD. Several files are one after another. More than a page opens a
-pager, two pages side by side when the window is wide enough; - and + zoom out to rows of pages
-and in to the window's width.";
+too; macOS, Linux and FreeBSD. Several files are one after another; a directory shows each of its
+files by its first page. More than a page opens a pager, two pages side by side when the window
+is wide enough; - and + zoom out to rows of pages and in to the window's width.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -250,7 +256,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
-    let opened = open(paths, backends, &options)?;
+    let opened = open(paths, options.has("--recurse"), backends, &options)?;
     for (_, why) in &opened.left_out {
         note(&format!("warning: {why}"));
     }
@@ -325,37 +331,92 @@ struct Opened {
     left_out: Vec<(String, String)>,
 }
 
-/// [`Opened`] for `paths` with `options`. A file alone that can't be shown is the error; among
-/// several, it is left out, and only none at all is an error. An option that none of the files'
+/// [`Opened`] for `paths` with `options`: each file's pages, and each directory's files by their
+/// first page (its subdirectories' too if `recurse`). A file alone that can't be shown is the
+/// error; among several, it is left out, and only nothing at all to show is an error. In a
+/// directory, a file that nothing shows is passed over. An option that none of the files'
 /// backends takes is refused, since it would do nothing.
-fn open(paths: &[&str], backends: &[&dyn Backend], options: &Parsed<'_>) -> Result<Opened, String> {
-    if let [path] = paths {
+fn open(paths: &[&str], recurse: bool, backends: &[&dyn Backend], options: &Parsed<'_>) -> Result<Opened, String> {
+    let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
+    if let [path] = paths
+        && !is_dir(path)
+    {
         let (backend, input) = crate::source::choose(path, backends)?;
         takes_all(&[backend], options, path)?;
         return Ok(Opened { source: backend.open(input, options)?, name: file_name(path), left_out: Vec::new() });
     }
-    let (mut parts, mut used, mut left_out) = (Vec::new(), Vec::<&dyn Backend>::new(), Vec::new());
+    let mut found = Found::default();
     for path in paths {
-        let opened = crate::source::choose(path, backends).and_then(|(backend, input)| Ok((backend, backend.open(input, options)?)));
-        match opened {
-            Ok((backend, source)) => {
-                if !used.iter().any(|b| b.name() == backend.name()) {
-                    used.push(backend);
-                }
-                parts.push(Part { name: file_name(path), pages: (0..source.pages()).collect(), source });
+        if !is_dir(path) {
+            let opened = crate::source::choose(path, backends).and_then(|(backend, input)| Ok((backend, backend.open(input, options)?)));
+            match opened {
+                Ok((backend, source)) => found.add(backend, Part { name: file_name(path), pages: (0..source.pages()).collect(), source }),
+                Err(why) => found.left_out.push((file_name(path), why)),
             }
-            Err(why) => left_out.push((file_name(path), why)),
+            continue;
+        }
+        let listing = match crate::source::list_directory(path, recurse) {
+            Ok(listing) => listing,
+            Err(why) => {
+                found.left_out.push((file_name(path), why));
+                continue;
+            }
+        };
+        let (before, listed) = (found.parts.len(), listing.files.len());
+        for (file, name) in listing.files {
+            let opened = crate::source::shown_by(&file, backends).and_then(|chosen| match chosen {
+                Some((backend, input)) => Ok(Some((backend, backend.open(input, options)?))),
+                None => Ok(None),
+            });
+            match opened {
+                Ok(Some((backend, source))) => found.add(backend, Part { name, pages: vec![0], source }),
+                Ok(None) => {}
+                Err(why) => found.left_out.push((name, why)),
+            }
+        }
+        found.left_out.extend(listing.unread);
+        if listing.cut {
+            note(&format!("warning: {path}: the listing stopped at {listed} files, as many as {} lists", crate::NAME));
+        }
+        if found.parts.len() == before {
+            let hint = if listing.subdirectories { " (its subdirectories' files are shown with -r)" } else { "" };
+            found.left_out.push((file_name(path), format!("{path}: no file in it that {} shows{hint}", crate::NAME)));
         }
     }
+    let Found { parts, used, left_out } = found;
     if parts.is_empty() {
+        if let [(_, why)] = left_out.as_slice() {
+            return Err(why.clone());
+        }
         for (_, why) in &left_out {
             note(&format!("warning: {why}"));
         }
-        return Err(format!("none of the {} files can be shown", paths.len()));
+        return Err(match paths.iter().any(|p| is_dir(p)) {
+            false => format!("none of the {} files can be shown", paths.len()),
+            true => "nothing given can be shown".into(),
+        });
     }
     takes_all(&used, options, "any of these files")?;
     let name = paths.first().map_or_else(String::new, |p| file_name(p));
     Ok(Opened { source: Box::new(Joined::new(parts)), name, left_out })
+}
+
+/// What [`open`] has found so far among several files: the parts to show, the backends that
+/// opened them, and the files left out, with why.
+#[derive(Default)]
+struct Found<'b> {
+    parts: Vec<Part>,
+    used: Vec<&'b dyn Backend>,
+    left_out: Vec<(String, String)>,
+}
+
+impl<'b> Found<'b> {
+    fn add(&mut self, backend: &'b dyn Backend, part: Part) {
+        if !self.used.iter().any(|b| b.name() == backend.name()) {
+            self.used.push(backend);
+        }
+        self.parts.push(part);
+    }
 }
 
 /// The name of the file at `path`, without its directories, as the status line gives it.
@@ -690,7 +751,7 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    const PASSWORD: OptionSpec = OptionSpec { name: "--password", value: Some("PW"), help: "a password" };
+    const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password" };
 
     /// The viewer's options, and a backend's `--password`.
     fn parsed(given: &[String]) -> Parsed<'_> {

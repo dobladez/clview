@@ -2,6 +2,7 @@
 //! pager and the printer in `view` see only the traits here; each backend brings its own renderer
 //! and its own threads, so one can cancel or time out work the way it knows how.
 
+mod dir;
 #[cfg(feature = "image")]
 mod image;
 mod joined;
@@ -15,6 +16,7 @@ use std::io::{Read, Seek};
 use std::ops::Deref;
 
 use crate::args::{OptionSpec, Parsed};
+pub(crate) use dir::list as list_directory;
 pub(crate) use joined::{Joined, Part};
 
 /// The backends this build has, in the order they are asked whether they open a file.
@@ -97,6 +99,14 @@ pub(crate) fn choose<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Res
     }
     let input = Input::open(path)?;
     Ok((pick(backends, path, &input.head)?, input))
+}
+
+/// `path` opened, with the first of `backends` that opens it, or `None` when none does: for a
+/// directory's files, where what nothing shows is no error.
+pub(crate) fn shown_by<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Result<Option<(&'b dyn Backend, Input<'a>)>, String> {
+    let input = Input::open(path)?;
+    let backend = backends.iter().find(|backend| backend.opens(path, &input.head)).copied();
+    Ok(backend.map(|backend| (backend, input)))
 }
 
 /// The first of `backends` that opens the file at `path`, which starts with `head`.
@@ -282,6 +292,18 @@ pub(crate) mod tests {
         assert_eq!(pick(&backends, "a.pdf", b"%PDF-1.7\n").map(|b| b.name()), Ok("pdf-one"));
         assert_eq!(pick(&backends, "a.png", b"\x89PNG\r\n").map(|b| b.name()), Ok("png"));
         assert_eq!(pick(&[&PDF_TOO, &PDF], "a.pdf", b"%PDF-2.0").map(|b| b.name()), Ok("pdf-two"));
+    }
+
+    #[test]
+    fn a_directorys_file_that_no_backend_opens_is_no_error() {
+        let path = std::env::temp_dir().join(format!("clview-shown-by-{}", std::process::id()));
+        std::fs::write(&path, b"hello").unwrap();
+        let path = path.to_str().unwrap();
+        assert!(shown_by(path, &[&PDF, &PNG]).unwrap().is_none());
+        std::fs::write(path, b"\x89PNG\r\n").unwrap();
+        assert_eq!(shown_by(path, &[&PDF, &PNG]).unwrap().map(|(b, _)| b.name()), Some("png"));
+        std::fs::remove_file(path).unwrap();
+        assert!(shown_by(path, &[&PDF]).is_err(), "a file that can't be read is");
     }
 
     #[test]

@@ -70,7 +70,8 @@ to decode, one from a pipe kept as it came. Nothing in
 
 Several files are one source, `source::Joined`: their pages one after another, numbered on
 through them, each part (a file) with the pages it shows and a name for the status line and its
-errors. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
+errors. A directory's files (`source/dir.rs`, in name order, subdirectories' with `-r`) are parts
+too, each with its first page only. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
 only the last part's renderer, as pages print in order. The pager's pool hands each request to
 its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so
 a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools

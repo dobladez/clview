@@ -475,6 +475,59 @@ fn a_file_that_cant_be_shown_among_others_is_left_out() {
     assert!(text(&out.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&out.stderr));
 }
 
+/// A directory shows each file a backend opens by its first page, in the order of their names
+/// (numbers by value); hidden files, files nothing shows and subdirectories are passed over,
+/// subdirectories unless `-r` says otherwise.
+#[cfg(feature = "image")]
+#[test]
+fn a_directory_shows_each_of_its_files_by_its_first_page() {
+    let dir = tmp("gallery", "photos");
+    std::fs::create_dir_all(dir.join("2024")).unwrap();
+    std::fs::write(dir.join("a10.pdf"), crate::fixtures::letter("Gallery", 3)).unwrap();
+    picture("gallery", "photos/a9.png", 300, 200);
+    picture("gallery", "photos/.hidden.png", 50, 50);
+    picture("gallery", "photos/2024/b.png", 30, 20);
+    std::fs::write(dir.join("notes.txt"), "plain text\n").unwrap();
+    let sizes = |args: &[&str]| {
+        let out = view(&dir, &[&["--protocol", "kitty"], args].concat());
+        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
+        images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>()
+    };
+    let shown = sizes(&[]);
+    assert_eq!((shown.len(), shown[0]), (2, (300, 200)), "{shown:?}");
+    let (w, h) = shown[1];
+    assert!((w as f32 / h as f32 - 612.0 / 792.0).abs() < 0.01, "the PDF's first page only: {w}×{h}");
+    // A subdirectory's files come at its place among the names: 2024 before a9.
+    for recurse in ["-r", "--recurse"] {
+        let shown = sizes(&[recurse]);
+        assert_eq!((shown.len(), shown[0], shown[1]), (3, (30, 20), (300, 200)), "{recurse}");
+    }
+    assert_eq!(sizes(&["-r", "--pages", "2,1"]), [(300, 200), (30, 20)]);
+}
+
+/// A directory with nothing to show says so, and where else to look; a file in it that should
+/// show and doesn't is left out, as one given by name is.
+#[cfg(feature = "image")]
+#[test]
+fn a_directory_with_nothing_to_show_says_so() {
+    let dir = tmp("empty-gallery", "photos");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("notes.txt"), "plain text\n").unwrap();
+    std::fs::write(dir.join("sub/one.pdf"), crate::fixtures::letter("Below", 1)).unwrap();
+    let out = view(&dir, &["--protocol", "kitty"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    let said = format!("clv: {}: no file in it that clv shows (its subdirectories' files are shown with -r)\n", dir.display());
+    assert_eq!(text(&out.stderr), said);
+    assert_eq!(images(&view(&dir, &["--protocol", "kitty", "-r"]).stdout).len(), 1);
+    // A picture whose header is broken: opened by the image backend, which then fails.
+    std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nno chunks").unwrap();
+    let out = view(&dir, &["--protocol", "kitty", "-r"]);
+    assert_eq!(images(&out.stdout).len(), 1);
+    let stderr = text(&out.stderr);
+    assert!(stderr.starts_with(&format!("warning: {}: ", dir.join("broken.png").display())), "{stderr}");
+    assert!(stderr.ends_with("clv: 1 file left out: broken.png\n") && !out.status.success(), "{stderr}");
+}
+
 /// What this build shows, as a refusal says it.
 fn shows() -> &'static str {
     if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" }

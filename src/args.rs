@@ -1,20 +1,25 @@
 //! Command-line options and page lists.
 
-/// An option: its `name` (`--zoom`), what its value looks like (`None` for one that takes
-/// none) and what it does, as `--help` shows them.
+/// An option: its `name` (`--zoom`), the `short` one it has too (`-r`), what its value looks like
+/// (`None` for one that takes none) and what it does, as `--help` shows them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
+    pub(crate) short: Option<&'static str>,
     pub(crate) value: Option<&'static str>,
     pub(crate) help: &'static str,
 }
 
 impl OptionSpec {
-    /// The option as `--help` lists it: `--zoom auto|width|N`.
+    /// The option as `--help` lists it: `--zoom auto|width|N`, `-r, --recurse`.
     pub(crate) fn shown(&self) -> String {
-        match self.value {
-            Some(value) => format!("{} {value}", self.name),
+        let name = match self.short {
+            Some(short) => format!("{short}, {}", self.name),
             None => self.name.into(),
+        };
+        match self.value {
+            Some(value) => format!("{name} {value}"),
+            None => name,
         }
     }
 }
@@ -30,16 +35,17 @@ pub(crate) struct Parsed<'a> {
 
 impl<'a> Parsed<'a> {
     /// Refuses an option not in `specs`, and one left without its value. An option that takes a
-    /// value takes the next argument, whatever it is: a password can be anything.
+    /// value takes the next argument, whatever it is: a password can be anything. An argument
+    /// that starts with `-` is an option, but for `-` alone; `./-file` names a file that does.
     pub(crate) fn parse(args: &'a [String], specs: &[OptionSpec]) -> Result<Self, String> {
         let mut parsed = Self::default();
         let mut rest = args.iter();
         while let Some(arg) = rest.next() {
-            if !arg.starts_with("--") {
+            if !arg.starts_with('-') || arg == "-" {
                 parsed.operands.push(arg);
                 continue;
             }
-            let spec = specs.iter().find(|spec| spec.name == arg).ok_or_else(|| format!("unknown option {arg}"))?;
+            let spec = specs.iter().find(|spec| spec.name == arg || spec.short == Some(arg)).ok_or_else(|| format!("unknown option {arg}"))?;
             let value = match spec.value {
                 Some(_) => Some(rest.next().ok_or_else(|| format!("{arg} needs a value"))?.as_str()),
                 None => None,
@@ -119,7 +125,11 @@ mod tests {
 
     #[test]
     fn unknown_options_are_refused_and_values_taken_whatever_they_are() {
-        let specs = [OptionSpec { name: "--password", value: Some("PW"), help: "" }, OptionSpec { name: "--pager", value: None, help: "" }];
+        let specs = [
+            OptionSpec { name: "--password", short: None, value: Some("PW"), help: "" },
+            OptionSpec { name: "--pager", short: None, value: None, help: "" },
+            OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "" },
+        ];
         let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         let given = args(&["a.pdf", "--pager", "--password", "--anything", "b.pdf"]);
         let parsed = Parsed::parse(&given, &specs).unwrap();
@@ -132,11 +142,19 @@ mod tests {
         assert_eq!(Parsed::parse(&given, &specs).unwrap().value("--password"), Some("first"));
         assert_eq!(Parsed::parse(&args(&["a.pdf", "--zoom", "2"]), &specs).unwrap_err(), "unknown option --zoom");
         assert_eq!(Parsed::parse(&args(&["a.pdf", "--password"]), &specs).unwrap_err(), "--password needs a value");
+        // A short name is the option's, as the option's name.
+        let given = args(&["-r", "dir", "-"]);
+        let parsed = Parsed::parse(&given, &specs).unwrap();
+        assert!(parsed.has("--recurse") && parsed.names().eq(["--recurse"]));
+        assert_eq!(parsed.operands, ["dir", "-"], "`-` alone is no option");
+        assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &specs).unwrap_err(), "unknown option -x");
+        assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &specs).unwrap().value("--password"), Some("-r"));
     }
 
     #[test]
     fn help_shows_an_option_with_its_value() {
-        assert_eq!(OptionSpec { name: "--zoom", value: Some("auto|N"), help: "" }.shown(), "--zoom auto|N");
-        assert_eq!(OptionSpec { name: "--pager", value: None, help: "" }.shown(), "--pager");
+        assert_eq!(OptionSpec { name: "--zoom", short: None, value: Some("auto|N"), help: "" }.shown(), "--zoom auto|N");
+        assert_eq!(OptionSpec { name: "--pager", short: None, value: None, help: "" }.shown(), "--pager");
+        assert_eq!(OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "" }.shown(), "-r, --recurse");
     }
 }
