@@ -9,13 +9,16 @@ clv report.pdf             # page through it, like less
 clv report.pdf --zoom 4    # four pages to a row
 clv report.pdf --no-pager  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
-clv *.jpg                  # several files, one after another
-clv ~/Photos               # a directory: each file by its first page
-clv -r ~/Photos            # its subdirectories' files too
+clv *.pdf                  # several files: a tile each, Enter opens one
+clv ~/Photos               # a directory: its files, and its subdirectories as folders
+clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
-enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Everything else
+enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Several files,
+or a directory, are a list: a tile for each, by its first page, its name under it. The arrows
+choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc goes back. `?`
+lists the keys. Everything else
 (the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
 inside in [`src/view/README.md`](src/view/README.md).
 
@@ -52,8 +55,8 @@ renders. A file goes to the first backend that opens it, going by its first byte
 backend brings its own options (`--password` is the PDF backend's). There are two so far, for
 PDFs and for images.
 
-- In a directory, Enter on a file to open all of its pages, and a subdirectory as one tile to
-  open.
+- Open a list's files only when their tiles come on screen, and let go of them after: today
+  every file is opened before anything shows, which for a directory of large PDFs takes a while.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
 

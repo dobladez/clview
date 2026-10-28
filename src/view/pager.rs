@@ -1,6 +1,7 @@
 //! `view --pager`: pages on the alternate screen, like `less`. One at a time, or two side by side
 //! when the window is wide enough, turning two at a time like a book's; zoomed out, rows of
-//! them; zoomed in, one as wide as the window.
+//! them; zoomed in, one as wide as the window. Several files, or a directory, are a list of
+//! tiles, one chosen at a time, which Enter opens: a [`Level`] of its own, which Esc leaves.
 //!
 //! [`Nav`] is where the reader is and what each key does, with no IO. [`Pager`] renders and
 //! draws what `Nav` says, and [`Screen`] puts the terminal back however the pager ends.
@@ -23,6 +24,7 @@
 //! `README.md` beside this file has the details.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -34,7 +36,10 @@ use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
-use super::{FALLBACK_SIZE, Output, QUIET, Shown, Terminal, checked, page_layout, page_size, png, printable, request, tmux};
+use super::{
+    Contents, FALLBACK_SIZE, Item, Output, Pages, QUIET, Shown, Terminal, chars, checked, cut, label, left_out_note, page_layout, page_size, png,
+    printable, request, tiles, tmux,
+};
 
 /// How often the window size is checked while no key comes.
 const TICK: Duration = Duration::from_millis(200);
@@ -78,14 +83,16 @@ const MAX_RESENDS: u32 = 8;
 /// none of them lands on the command line.
 const ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// The reminder of the keys the status line starts with, until the first key: shorter and
-/// shorter for a narrow window.
+/// shorter for a narrow window. In a list; in a file's pages, from a list or not.
+const LIST_KEYS: [&str; 3] = ["arrows move · ⏎ open · + - zoom · q quit", "arrows · ⏎ open · q quit", "⏎ open · q quit"];
+const OPENED_KEYS: [&str; 3] = ["esc back · space b · n p · + - zoom · q quit", "esc back · n p · q quit", "esc back · q quit"];
 const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
 const ZOOM_WIDTH: usize = 9;
-/// What `?` shows: each key, and what it does.
-const HELP_LINES: &[(&str, &str)] = &[
+/// What `?` shows: each key, and what it does. In a file's pages:
+const PAGE_HELP: &[(&str, &str)] = &[
     ("space  PageDown", "the next screen, or the rest of a page taller than the window"),
     ("b  PageUp", "back a screen"),
     ("j k  ↓ ↑  Enter", "a few rows down or up, or a row of pages"),
@@ -94,14 +101,36 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     ("r  Ctrl-L", "render the pages again"),
-    ("q  Esc  Ctrl-C", "quit"),
-    ("?", "these keys: any key goes back"),
 ];
+/// In a list:
+const LIST_HELP: &[(&str, &str)] = &[
+    ("← →  h l", "the one before or after"),
+    ("↑ ↓  k j", "the one above or below"),
+    ("space b  n p", "a screen on or back"),
+    ("g G  Home End", "the first or the last"),
+    ("12 Enter", "the 12th"),
+    ("Enter", "open it: a file's pages, or a directory's files"),
+    ("+ -", "bigger, fewer to a row; smaller, more to a row"),
+    ("r  Ctrl-L", "render again"),
+];
+/// Leaving, gone into from a list or not, and these keys themselves.
+const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace", "back to the list"), ("q  Ctrl-C", "quit")];
+const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
+const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 
-/// Page through what is `shown` until the user quits. Image ids are taken in turn from
-/// `first_id` on ([`super::kitty::IdColor::id`]).
-pub(super) fn run(tty: &Tty, shown: Shown<'_>, terminal: &Terminal, zoom: Zoom, first_id: u64) -> Result<(), String> {
-    let Shown { source, name, pages, note } = shown;
+/// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
+/// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A directory gone into
+/// from a list is listed by `open_directory`. Returns what the reader should know once the screen
+/// is back: why the files those directories left out were.
+pub(super) fn run(
+    tty: &Tty,
+    shown: Shown,
+    note: Option<String>,
+    terminal: &Terminal,
+    zoom: Zoom,
+    first_id: u64,
+    open_directory: &dyn Fn(&str) -> Contents,
+) -> Result<Vec<String>, String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
     let mut showing = 1;
@@ -112,16 +141,21 @@ pub(super) fn run(tty: &Tty, shown: Shown<'_>, terminal: &Terminal, zoom: Zoom, 
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
+    let mut level = match shown {
+        Shown::Pages(pages) => Level::pages(0, &pages, zoom, false),
+        Shown::List(items) => Level::list(0, items, String::new(), zoom, false),
+    };
+    level.nav.message = note;
     let mut pager = Pager {
         screen: Screen::enter(tty)?,
         tty,
-        source,
-        pool: source.pool(THREADS),
-        name,
+        level,
+        parents: Vec::new(),
+        levels: 1,
+        later: Vec::new(),
         output: terminal.output,
         cell: terminal.cell,
         effort: terminal.effort,
-        nav: Nav { message: note, ..Nav::new(pages, source.pages(), zoom) },
         sent: Vec::new(),
         kept: MAX_SENT,
         wanted: Vec::new(),
@@ -189,11 +223,19 @@ pub(super) fn run(tty: &Tty, shown: Shown<'_>, terminal: &Terminal, zoom: Zoom, 
             for key in keys {
                 if let Key::Missing(id) = key {
                     redraw |= pager.missing(id);
-                } else if pager.nav.key(key) == Step::Quit {
-                    quit = true;
+                    continue;
+                }
+                redraw = true;
+                match pager.level.nav.key(key) {
+                    Step::Continue => {}
+                    // Esc at the top, where there is nothing to go back to, quits.
+                    Step::Quit => quit = true,
+                    Step::Leave if pager.parents.is_empty() => quit = true,
+                    Step::Leave | Step::Back => pager.back()?,
+                    Step::Open(at) => pager.open(at, open_directory)?,
+                }
+                if quit {
                     break;
-                } else {
-                    redraw = true;
                 }
             }
             if quit {
@@ -216,24 +258,39 @@ pub(super) fn run(tty: &Tty, shown: Shown<'_>, terminal: &Terminal, zoom: Zoom, 
             pager.draw()?;
         }
     }
-    Ok(())
+    Ok(std::mem::take(&mut pager.later))
 }
 
+/// What a key asks of the pager, beyond where the reader is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
     Continue,
     Quit,
+    /// Esc: back, or, with nowhere to go back to, quit.
+    Leave,
+    /// Backspace: back, if there is somewhere to go back to.
+    Back,
+    /// Open the list's item at this place.
+    Open(usize),
 }
 
-/// Where the reader is, and what keys do to it.
+/// Where the reader is, and what keys do to it: in a file's pages, or in a list, where the reader
+/// is on one of its tiles.
 #[derive(Debug)]
 struct Nav {
-    /// The pages to page through, in order: `--pages`, or the whole document.
+    /// The pages to page through, in order: `--pages`, or the whole document; a list's tiles.
     pages: Vec<usize>,
-    /// Where in `pages` the reader is.
+    /// Where in `pages` the reader is: in a list, the tile chosen.
     at: usize,
-    /// Pages in the document.
+    /// Pages in the document; tiles in the list.
     count: usize,
+    /// Whether this is a list.
+    list: bool,
+    /// Whether this was gone into from a list, which Esc goes back to.
+    nested: bool,
+    /// In a list, the first tile on screen, as the last move left it: the screen moves only when
+    /// the tile chosen leaves it.
+    top: usize,
     /// As asked: `--zoom`, then `+` and `-`.
     zoom: Zoom,
     /// From the last draw: pages to a row, rows of pages, and the most pages to a row the window
@@ -264,6 +321,9 @@ impl Nav {
             pages,
             at: 0,
             count,
+            list: false,
+            nested: false,
+            top: 0,
             zoom,
             per_row: 1,
             grid_rows: 1,
@@ -277,6 +337,18 @@ impl Nav {
             help: false,
             rerender: false,
         }
+    }
+
+    /// A list of `count` tiles, at `zoom`.
+    fn list(count: usize, zoom: Zoom) -> Self {
+        Self { list: true, ..Self::new((0..count).collect(), count, zoom) }
+    }
+
+    /// What `?` shows here.
+    fn help_lines(&self) -> Vec<(&'static str, &'static str)> {
+        let keys = if self.list { LIST_HELP } else { PAGE_HELP };
+        let leave = if self.nested { BACK_HELP } else { QUIT_HELP };
+        keys.iter().chain(leave).copied().chain([HELP_HELP]).collect()
     }
 
     /// Pages to a row.
@@ -294,10 +366,31 @@ impl Nav {
     /// Near the end, higher up, so the last row of pages is at the bottom of the screen, as `less`
     /// keeps the last line there. Either way the reader's page is on screen.
     fn first(&self) -> usize {
+        if self.list {
+            return self.list_first();
+        }
         let row = self.row();
         let last = self.pages.len().saturating_sub(1);
         let last_screen = last.saturating_sub(last % row).saturating_sub(self.per_screen().saturating_sub(row));
         self.at.saturating_sub(self.at % row).min(last_screen)
+    }
+
+    /// In a list, where the screen starts: where it was, unless the tile chosen left it, and then
+    /// as little further on or back as brings that tile's row on screen; near the end, higher up,
+    /// so the last row is at the bottom.
+    fn list_first(&self) -> usize {
+        let (row, per) = (self.row(), self.per_screen());
+        let row_of = |i: usize| i.saturating_sub(i % row);
+        let last = self.pages.len().saturating_sub(1);
+        let (at, top) = (row_of(self.at.min(last)), row_of(self.top.min(last)));
+        let top = if at < top {
+            at
+        } else if at >= top.saturating_add(per) {
+            at.saturating_add(row).saturating_sub(per)
+        } else {
+            top
+        };
+        top.min(row_of(last).saturating_add(row).saturating_sub(per))
     }
 
     /// The pages on screen, row by row (missing past the end).
@@ -329,14 +422,16 @@ impl Nav {
         match key {
             Key::Char('?') => self.help = true,
             Key::Char('q') | Key::Interrupt => return Step::Quit,
-            Key::Escape if !typing => return Step::Quit,
+            Key::Escape if !typing => return Step::Leave,
             Key::Escape => self.typed.clear(),
             // Past MAX_TYPED digits, more are ignored (no other arm takes a digit).
             Key::Char(c @ '0'..='9') if self.typed.len() < MAX_TYPED => self.typed.push(c),
+            Key::Backspace if !typing => return Step::Back,
             Key::Backspace => {
                 self.typed.pop();
             }
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
+            _ if self.list => return self.list_key(key),
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
             Key::Char('j') | Key::Down | Key::Enter => self.forward(STEP, self.row()),
@@ -352,6 +447,47 @@ impl Nav {
             _ => {}
         }
         Step::Continue
+    }
+
+    /// What `key` does in a list: the arrows move from tile to tile, the screen following, and
+    /// Enter opens the tile chosen.
+    fn list_key(&mut self, key: Key) -> Step {
+        let (row, per) = (self.row(), self.per_screen());
+        let last = self.pages.len().saturating_sub(1);
+        match key {
+            Key::Enter if !self.pages.is_empty() => return Step::Open(self.at),
+            Key::Left | Key::Char('h') => self.select(self.at.saturating_sub(1)),
+            Key::Right | Key::Char('l') => self.select(self.at.saturating_add(1)),
+            Key::Up | Key::Char('k') if self.at >= row => self.select(self.at.saturating_sub(row)),
+            // Below, or on the last row, the last tile.
+            Key::Down | Key::Char('j') if self.at.saturating_add(row) <= last => self.select(self.at.saturating_add(row)),
+            Key::Down | Key::Char('j') if last / row > self.at / row => self.select(last),
+            Key::Char(' ' | 'n') | Key::PageDown => {
+                self.top = self.first().saturating_add(per);
+                self.select(self.at.saturating_add(per));
+            }
+            Key::Char('b' | 'p') | Key::PageUp => {
+                self.top = self.first().saturating_sub(per);
+                self.select(self.at.saturating_sub(per));
+            }
+            Key::Char('g') | Key::Home => self.select(0),
+            Key::Char('G') | Key::End => self.select(last),
+            // As wide as the window is one to a row: a tile never scrolls.
+            Key::Char('+' | '=') => {
+                let zoom = (self.per_row > 1).then(|| Zoom::PerRow(self.per_row.saturating_sub(1)));
+                self.zoom_to(zoom, "fully zoomed in");
+            }
+            Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
+            Key::Char('r' | '\u{c}') => self.rerender = true,
+            _ => {}
+        }
+        Step::Continue
+    }
+
+    /// In a list, choose the tile at `index`, or the last: the screen follows it.
+    fn select(&mut self, index: usize) {
+        self.at = index.min(self.pages.len().saturating_sub(1));
+        self.top = self.first();
     }
 
     /// Down `rows` image rows; from the bottom of the screen's pages, on `pages` pages.
@@ -396,9 +532,18 @@ impl Nav {
         self.scroll = 0;
     }
 
-    /// To the page whose number was typed, if it is one being paged through.
+    /// To the page whose number was typed, if it is one being paged through; in a list, to that
+    /// tile.
     fn go_typed(&mut self) {
         let wanted = self.typed.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
+        if self.list {
+            match wanted {
+                Some(index) if index < self.pages.len() => self.select(index),
+                _ => self.message = Some(format!("no {} here (1–{})", self.typed, self.pages.len())),
+            }
+            self.typed.clear();
+            return;
+        }
         match wanted.map(|page| (page, self.pages.iter().position(|p| *p == page))) {
             Some((_, Some(index))) => self.go(index),
             Some((page, None)) if page < self.count => self.message = Some(format!("page {} isn't one of the pages given", self.typed)),
@@ -413,6 +558,7 @@ impl Nav {
         self.per_row = per_row.max(1);
         self.grid_rows = grid_rows.max(1);
         self.most_per_row = most_per_row.max(1);
+        self.top = self.first();
     }
 
     /// After a draw: `visible` of the first page's `rows` image rows are on screen. Keeps `scroll`
@@ -444,11 +590,17 @@ impl Nav {
         let room = width.saturating_sub(chars(&right));
         let said = match (&self.message, self.typed.is_empty()) {
             (Some(message), _) => message.clone(),
+            (None, false) if self.list => format!("go to {}", self.typed),
             (None, false) => format!("go to page {}", self.typed),
             // The keys leave the name room for its first characters at least.
             (None, true) if self.hint => {
                 let fits = |keys: &&&str| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
-                KEYS.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned())
+                let keys = match (self.list, self.nested) {
+                    (true, _) => &LIST_KEYS,
+                    (false, true) => &OPENED_KEYS,
+                    (false, false) => &KEYS,
+                };
+                keys.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned())
             }
             (None, true) => String::new(),
         };
@@ -463,10 +615,14 @@ impl Nav {
     }
 
     /// Where the reader is, for the status line, and the most characters it takes in this
-    /// document: the pages on screen, and which of the pages given when they are not all.
+    /// document: the pages on screen, and which of the pages given when they are not all; in a
+    /// list, which tile of how many.
     fn place(&self) -> (String, usize) {
         let digits = |n: usize| n.to_string().len();
         let count = self.count;
+        if self.list {
+            return (format!("{}/{count}", self.at.saturating_add(1).min(count)), digits(count).saturating_mul(2).saturating_add(1));
+        }
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
         let mut place = match on_screen.as_slice() {
             [a, .., b] => format!("pages {}–{}/{count}", a.saturating_add(1), b.saturating_add(1)),
@@ -482,24 +638,6 @@ impl Nav {
         }
         (place, widest)
     }
-}
-
-/// Characters, as the terminal shows them one to a cell.
-fn chars(text: &str) -> usize {
-    text.chars().count()
-}
-
-/// `text` in at most `room` characters: whole, or its start and its end around `…`, the end the
-/// longer, so names that differ only at the end (`IMG_2041.jpg`, `IMG_2042.jpg`) still differ.
-fn cut(text: &str, room: usize) -> String {
-    let count = chars(text);
-    if count <= room {
-        return text.to_owned();
-    }
-    let Some(kept) = room.checked_sub(1) else { return String::new() };
-    let start = kept / 2;
-    let end = kept.saturating_sub(start);
-    text.chars().take(start).chain(['…']).chain(text.chars().skip(count.saturating_sub(end))).collect()
 }
 
 /// The alternate screen, raw mode, no cursor and no line wrap, all undone when this drops (on
@@ -527,9 +665,11 @@ impl Drop for Screen<'_> {
     }
 }
 
-/// A page as drawn: which page, fitted how, into how many columns and rows of what window.
+/// A page as drawn: of which level's source, which page, fitted how, into how many columns and
+/// rows of what window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct View {
+    level: u64,
     page: usize,
     fit: Fit,
     cols: u16,
@@ -564,18 +704,60 @@ struct Wanted {
     tag: u64,
 }
 
+/// What the pager shows at a time, and where the reader is in it: a file's pages, or a list's
+/// tiles. Each has its own source and render threads.
+struct Level {
+    /// Tells this level's pages apart from another's in the terminal.
+    id: u64,
+    source: Rc<dyn Source>,
+    pool: Box<dyn Pool>,
+    nav: Nav,
+    /// A list's items, which its tiles open to; none for a file's pages.
+    items: Vec<Item>,
+    /// A file's name; for a list, what its items' names follow: the directories gone into from
+    /// the first list.
+    name: String,
+}
+
+impl Level {
+    /// `pages` of a file, at `zoom`; `nested` when opened from a list.
+    fn pages(id: u64, pages: &Pages, zoom: Zoom, nested: bool) -> Self {
+        let nav = Nav { nested, ..Nav::new(pages.pages.clone(), pages.source.pages(), zoom) };
+        Self { id, source: pages.source.clone(), pool: pages.source.pool(THREADS), nav, items: Vec::new(), name: pages.name.clone() }
+    }
+
+    /// A list of `items` as tiles, at `zoom`, their names following `name`. One gone into from a
+    /// list needs no reminder of the keys: they are the list's.
+    fn list(id: u64, items: Vec<Item>, name: String, zoom: Zoom, nested: bool) -> Self {
+        let source: Rc<dyn Source> = Rc::new(tiles(&items));
+        let nav = Nav { nested, hint: !nested, ..Nav::list(items.len(), zoom) };
+        Self { id, pool: source.pool(THREADS), source, nav, items, name }
+    }
+
+    /// What the status line calls what the reader is on: the file, or the tile chosen.
+    fn name(&self) -> String {
+        match self.items.get(self.nav.at) {
+            Some(item) if self.nav.list => format!("{}{}", self.name, item.name()),
+            _ => self.name.clone(),
+        }
+    }
+}
+
 struct Pager<'a> {
     /// Dropped after the pager's own `drop` has deleted its images.
     screen: Screen<'a>,
     tty: &'a Tty,
-    source: &'a dyn Source,
-    pool: Box<dyn Pool + 'a>,
-    name: &'a str,
+    /// What is on screen, and what it was opened from, the first list first.
+    level: Level,
+    parents: Vec<Level>,
+    /// Levels made so far, for their ids.
+    levels: u64,
+    /// What the reader should know once the screen is back.
+    later: Vec<String>,
     output: Output,
     /// The cell size tmux or the terminal reports, for a tty that reports no pixel size.
     cell: Option<Cell>,
     effort: PngEffort,
-    nav: Nav,
     /// Pages in the terminal, ready to place, the most recently shown last.
     sent: Vec<Sent>,
     /// The most pages kept in `sent`: [`MAX_SENT`], or the screen and the screens around it.
@@ -644,7 +826,7 @@ impl Pager<'_> {
         let wrap = self.output.wrap();
         let mut out = Vec::new();
         // Pages made for another window, or asked to be made again, go.
-        if std::mem::take(&mut self.nav.rerender) || self.size != Some(size) {
+        if std::mem::take(&mut self.level.nav.rerender) || self.size != Some(size) {
             for sent in self.sent.drain(..) {
                 kitty::delete(&mut out, sent.id, wrap);
             }
@@ -654,8 +836,9 @@ impl Pager<'_> {
             self.size = Some(size);
         }
         let grid = self.grid(Area { cols: max_cols, rows: area_rows, cell, max_rows });
-        let view = |page| View { page, fit: grid.fit, cols: grid.cols, rows: grid.page_rows, size };
-        let on_screen: Vec<Option<View>> = self.nav.on_screen().into_iter().map(|page| page.map(view)).collect();
+        let (level, source) = (self.level.id, self.level.source.clone());
+        let view = |page| View { level, page, fit: grid.fit, cols: grid.cols, rows: grid.page_rows, size };
+        let on_screen: Vec<Option<View>> = self.level.nav.on_screen().into_iter().map(|page| page.map(view)).collect();
         self.on_screen.clone_from(&on_screen);
         self.kept = MAX_SENT.max(on_screen.len().saturating_mul(1 + AHEAD + BEHIND));
 
@@ -664,7 +847,7 @@ impl Pager<'_> {
         // under way for any of them carry on; the rest stop.
         let mut wanted = Vec::new();
         let mut near = 0u64;
-        for v in on_screen.iter().flatten().copied().chain(self.nav.around(AHEAD, BEHIND).into_iter().map(view)) {
+        for v in on_screen.iter().flatten().copied().chain(self.level.nav.around(AHEAD, BEHIND).into_iter().map(view)) {
             if self.failed.iter().any(|(f, _)| *f == v) || wanted.iter().any(|w: &Wanted| w.view == v) {
                 continue;
             }
@@ -674,14 +857,14 @@ impl Pager<'_> {
             }
             let next = match self.wanted.iter().position(|w| w.view == v) {
                 Some(at) => Ok(self.wanted.swap_remove(at)),
-                None => page_layout(self.source, v.page, v.fit, v.cols, v.rows, cell, max_rows).map(|layout| {
+                None => page_layout(&*source, v.page, v.fit, v.cols, v.rows, cell, max_rows).map(|layout| {
                     self.tag = self.tag.wrapping_add(1);
                     Wanted { view: v, layout, tag: self.tag }
                 }),
             };
             match next {
                 Ok(w) => {
-                    let size = self.source.size(v.page).unwrap_or_default();
+                    let size = source.size(v.page).unwrap_or_default();
                     near = near.saturating_add(pixel_bytes(size, w.layout.scale));
                     if near > self.budget && !on_screen.contains(&Some(v)) {
                         break;
@@ -694,49 +877,96 @@ impl Pager<'_> {
         self.wanted = wanted;
         self.requeue();
 
-        if self.nav.message.is_none() {
-            self.nav.message = note(&on_screen, &self.sent, &self.failed);
+        // What is wrong with a page on screen; in a list, with the tile chosen.
+        if self.level.nav.message.is_none() {
+            let nav = &self.level.nav;
+            let noted = if nav.list { vec![nav.pages.get(nav.at).copied().map(view)] } else { on_screen.clone() };
+            self.level.nav.message = note(&noted, &self.sent, &self.failed);
         }
         // Scrolling follows the first page on screen: only one as wide as the window is ever
         // taller than the window.
         let first_rows = on_screen.first().copied().flatten().and_then(|v| self.rows(&v)).unwrap_or(area_rows);
-        self.nav.shown(first_rows.min(area_rows), first_rows);
+        self.level.nav.shown(first_rows.min(area_rows), first_rows);
 
         // Synchronized output, where the terminal has it, shows the redraw all at once.
         out.extend_from_slice(b"\x1b[?2026h");
         let ready = on_screen.iter().flatten().all(|v| self.sent.iter().any(|s| s.view == *v) || self.failed.iter().any(|(f, _)| f == v));
-        if self.nav.help {
+        // A list's tiles go on screen as they come, as a gallery's do.
+        if self.level.nav.help {
             self.help(&mut out, size);
-        } else if ready || self.placed.is_empty() {
+        } else if ready || self.placed.is_empty() || self.level.nav.list {
             self.place(&mut out, size, area_rows, grid);
         }
         cursor(&mut out, size.rows.saturating_sub(1), 0);
         out.extend_from_slice(b"\x1b[2K\x1b[7m");
-        out.extend_from_slice(self.nav.status(&self.name_on_screen(), size.cols, !ready).as_bytes());
+        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !ready).as_bytes());
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
         self.wrote(0);
         self.tty.write_all(&out)
     }
 
-    /// What the status line calls the pages on screen: the file they come from, or the first and
-    /// the last when they come from several; or the name given, for a source of one file.
-    fn name_on_screen(&self) -> String {
-        let on_screen: Vec<usize> = self.nav.on_screen().into_iter().flatten().collect();
-        let name = |page: Option<&usize>| page.and_then(|p| self.source.file_name(*p));
-        match (name(on_screen.first()), name(on_screen.last())) {
-            (Some(first), Some(last)) if first != last => format!("{first} – {last}"),
-            (Some(first), _) => first.to_owned(),
-            _ => self.name.to_owned(),
-        }
-    }
-
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,
     /// as far as the window takes ([`fit::grid`]).
     fn grid(&mut self, area: Area) -> Grid {
-        let (nav, source) = (&self.nav, self.source);
-        let grid = fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| page_size(source, *p)), area);
-        self.nav.grid(grid.per_row, grid.rows, grid.most);
+        let (nav, source) = (&self.level.nav, &*self.level.source);
+        let grid = match nav.list {
+            true => fit::tiles(nav.zoom, nav.pages.len(), area),
+            false => fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| page_size(source, *p)), area),
+        };
+        self.level.nav.grid(grid.per_row, grid.rows, grid.most);
         grid
+    }
+
+    /// Open the list's item at `at`: a file to its pages, a directory, listed by `open_directory`,
+    /// to a list of its own. What was on screen stops rendering, and waits to be gone back to.
+    fn open(&mut self, at: usize, open_directory: &dyn Fn(&str) -> Contents) -> Result<(), String> {
+        let id = self.levels;
+        let level = match self.level.items.get(at) {
+            Some(Item::File(pages)) => Level { name: format!("{}{}", self.level.name, pages.name), ..Level::pages(id, pages, Zoom::Auto, true) },
+            Some(Item::Directory { name, path }) => {
+                // Its files are opened now, which takes a while for large ones: said first.
+                let (name, path) = (format!("{}{name}", self.level.name), path.clone());
+                self.level.nav.message = Some(format!("opening {name}…"));
+                self.draw()?;
+                self.level.nav.message = None;
+                let Contents { items, left_out, warnings } = open_directory(&path);
+                self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
+                if items.is_empty() {
+                    self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
+                    return Ok(());
+                }
+                let mut level = Level::list(id, items, name, self.level.nav.zoom, true);
+                level.nav.message = left_out_note(&left_out);
+                level
+            }
+            None => return Ok(()),
+        };
+        self.levels = self.levels.wrapping_add(1);
+        // A fresh pool, holding nothing: the old one lets go of what its files rendered with,
+        // which for a PDF is the document parsed again.
+        self.level.pool = self.level.source.pool(THREADS);
+        self.wanted.clear();
+        let parent = std::mem::replace(&mut self.level, level);
+        self.parents.push(parent);
+        Ok(())
+    }
+
+    /// Back to what the reader opened this from, as they left it. What this showed goes from the
+    /// terminal: going back to it opens it anew.
+    fn back(&mut self) -> Result<(), String> {
+        let Some(parent) = self.parents.pop() else { return Ok(()) };
+        let gone = std::mem::replace(&mut self.level, parent).id;
+        let mut out = Vec::new();
+        let wrap = self.output.wrap();
+        for sent in self.sent.iter().filter(|s| s.view.level == gone) {
+            kitty::delete(&mut out, sent.id, wrap);
+        }
+        let deleted: Vec<u32> = self.sent.iter().filter(|s| s.view.level == gone).map(|s| s.id).collect();
+        self.sent.retain(|s| s.view.level != gone);
+        self.placed.retain(|(id, _)| !deleted.contains(id));
+        self.wanted.clear();
+        self.wrote(0);
+        self.tty.write_all(&out)
     }
 
     /// Note a write, with `images` transmissions in it: inside tmux, ask a moment later whether
@@ -776,13 +1006,13 @@ impl Pager<'_> {
         }
         if news.discarded {
             if self.resends >= MAX_RESENDS {
-                self.nav.message = Some("tmux is dropping images: the terminal can't keep up; r sends them again".into());
+                self.level.nav.message = Some("tmux is dropping images: the terminal can't keep up; r sends them again".into());
                 return true;
             }
             self.resends = self.resends.saturating_add(1);
         }
         if news.discarded || news.missed {
-            self.nav.rerender = true;
+            self.level.nav.rerender = true;
             return true;
         }
         false
@@ -799,8 +1029,8 @@ impl Pager<'_> {
             return false;
         }
         if self.resends >= MAX_RESENDS {
-            let said = self.nav.message.as_deref() == Some(DROPPING);
-            self.nav.message = Some(DROPPING.into());
+            let said = self.level.nav.message.as_deref() == Some(DROPPING);
+            self.level.nav.message = Some(DROPPING.into());
             return !said;
         }
         self.resends = self.resends.saturating_add(1);
@@ -835,8 +1065,9 @@ impl Pager<'_> {
             }
         }
         self.placed.clear();
-        let keys = HELP_LINES.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
-        let lines = std::iter::once(String::from("Keys")).chain(HELP_LINES.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
+        let help = self.level.nav.help_lines();
+        let keys = help.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
+        let lines = std::iter::once(String::from("Keys")).chain(help.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
         let width = usize::from(size.cols).saturating_sub(2);
         // Above the status line, as many as fit.
         for (row, line) in (1..size.rows.saturating_sub(1)).zip(lines) {
@@ -857,8 +1088,8 @@ impl Pager<'_> {
             out.extend_from_slice(format!("\x1b[{row};1H\x1b[2K").as_bytes());
         }
         let per_row = grid.per_row.max(1);
-        let (across, down) = (grid.cols.saturating_add(fit::GAP), grid.page_rows.saturating_add(fit::ROW_GAP));
-        let filled = u16::try_from(self.nav.pages.len()).map_or(per_row, |n| n.clamp(1, per_row));
+        let (across, down) = (grid.cols.saturating_add(fit::GAP), grid.page_rows.saturating_add(grid.label).saturating_add(fit::ROW_GAP));
+        let filled = u16::try_from(self.level.nav.pages.len()).map_or(per_row, |n| n.clamp(1, per_row));
         let width = across.saturating_mul(filled).saturating_sub(fit::GAP);
         // Centred on the rows that have pages: a document shorter than the screen sits in the
         // middle of it, not at the top.
@@ -867,7 +1098,7 @@ impl Pager<'_> {
         let height = down.saturating_mul(rows).saturating_sub(fit::ROW_GAP);
         let (left, top) = (size.cols.saturating_sub(width) / 2, area_rows.saturating_sub(height) / 2);
         // Only a page as wide as the window scrolls; the draw keeps the others' scroll at 0.
-        let scroll = self.nav.scroll;
+        let scroll = self.level.nav.scroll;
         let mut placed = Vec::new();
         for ((slot, view), placement) in (0u16..).zip(&self.on_screen).zip(1u32..) {
             let Some(s) = view.and_then(|v| self.sent.iter().find(|s| s.view == v)) else { continue };
@@ -890,6 +1121,18 @@ impl Pager<'_> {
                 }
             }
             placed.push((s.id, placement));
+        }
+        // A tile's name under it, the chosen one's highlighted, whether its tile is there yet or not.
+        let nav = &self.level.nav;
+        let chosen = nav.pages.get(nav.at).copied();
+        let labelled = if grid.label > 0 { self.on_screen.as_slice() } else { &[] };
+        for (slot, view) in (0u16..).zip(labelled) {
+            let Some((v, item)) = view.and_then(|v| Some((v, self.level.items.get(v.page)?))) else { continue };
+            let row = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows);
+            cursor(out, row, left.saturating_add((slot % per_row).saturating_mul(across)));
+            let name = printable(&label(item.name(), grid.cols));
+            let (on, off) = if chosen == Some(v.page) { ("\x1b[7m", "\x1b[0m") } else { ("", "") };
+            out.extend_from_slice(format!("{on}{name}{off}").as_bytes());
         }
         // The pages before leave the screen; their data stays in the terminal for later. Inside
         // tmux, erasing their placeholder cells already did it.
@@ -919,7 +1162,7 @@ impl Pager<'_> {
     fn receive(&mut self) -> Result<bool, String> {
         let wrap = self.output.wrap();
         let (mut any, mut on_screen) = (false, false);
-        while let Some(page) = self.pool.try_recv() {
+        while let Some(page) = self.level.pool.try_recv() {
             // Otherwise a late result for a page no longer wanted.
             let Some(at) = self.wanted.iter().position(|w| w.tag == page.request.tag) else { continue };
             let wanted = self.wanted.remove(at);
@@ -975,7 +1218,7 @@ impl Pager<'_> {
             match files.write(id, page, now) {
                 Written::File(path) => return Ok(Some(Payload::File(path))),
                 Written::Failed(e, back) => {
-                    self.nav.message = Some(format!("{e}; sending pages in the terminal stream instead"));
+                    self.level.nav.message = Some(format!("{e}; sending pages in the terminal stream instead"));
                     page = back;
                 }
                 Written::Stalled => return Ok(None),
@@ -991,7 +1234,7 @@ impl Pager<'_> {
         let Some(files) = self.files.as_mut() else { return Ok(false) };
         let lost = files.check(Instant::now());
         if files.stalled() {
-            self.nav.message = Some("the temporary directory stopped answering; sending pages in the terminal stream instead".into());
+            self.level.nav.message = Some("the temporary directory stopped answering; sending pages in the terminal stream instead".into());
             self.stalled_files = self.files.take();
         }
         if lost.is_empty() {
@@ -1027,7 +1270,7 @@ impl Pager<'_> {
     /// Tell the pool which renders are still wanted, most urgent first: it keeps those and
     /// cancels the rest.
     fn requeue(&self) {
-        self.pool.set_queue(self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag)).collect());
+        self.level.pool.set_queue(self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag)).collect());
     }
 }
 
@@ -1099,8 +1342,9 @@ mod tests {
         nav.on_screen()[0].unwrap()
     }
 
+    /// `keys` pressed: what the first that asks more of the pager than a move asks.
     fn press(nav: &mut Nav, keys: &[Key]) -> Step {
-        keys.iter().map(|k| nav.key(*k)).find(|s| *s == Step::Quit).unwrap_or(Step::Continue)
+        keys.iter().map(|k| nav.key(*k)).fold(Step::Continue, |first, step| if first == Step::Continue { step } else { first })
     }
 
     #[test]
@@ -1270,6 +1514,95 @@ mod tests {
         assert_eq!(reader(1, 3, 40, 40).around(usize::MAX, usize::MAX), [2, 0]);
     }
 
+    /// A list of `count` tiles, `per_row` to a row in `rows` rows, after a draw.
+    fn tiles(count: usize, per_row: u16, rows: u16) -> Nav {
+        let mut nav = Nav::list(count, Zoom::Auto);
+        nav.grid(per_row, rows, 8);
+        nav.shown(10, 10);
+        nav
+    }
+
+    /// The tiles on screen, from the first.
+    fn screen(nav: &Nav) -> (usize, usize) {
+        let on_screen: Vec<usize> = nav.on_screen().into_iter().flatten().collect();
+        (on_screen[0], on_screen.len())
+    }
+
+    #[test]
+    fn in_a_list_the_arrows_go_from_tile_to_tile_and_the_screen_follows_only_when_it_must() {
+        // Ten tiles, three to a row in two rows: six on screen.
+        let mut nav = tiles(10, 3, 2);
+        for (keys, at, first) in [
+            (&[Key::Right, Key::Char('l')][..], 2, 0),
+            (&[Key::Down], 5, 0),
+            // Off the bottom: the screen moves a row, no more.
+            (&[Key::Char('j')], 8, 3),
+            // Back up within the screen: it stays.
+            (&[Key::Up], 5, 3),
+            (&[Key::Char('k')], 2, 0),
+            (&[Key::Left, Key::Char('h'), Key::Left, Key::Left], 0, 0),
+            // Below the last row's tiles, the last tile; then nowhere further.
+            (&[Key::Down, Key::Down, Key::Right], 7, 3),
+            (&[Key::Down], 9, 6),
+            (&[Key::Down, Key::Right, Key::End], 9, 6),
+            (&[Key::Home], 0, 0),
+            // A screen on and back: the tile chosen with it.
+            (&[Key::Right, Key::Char(' ')], 7, 6),
+            (&[Key::Char('b')], 1, 0),
+            (&[Key::Char('G'), Key::Char('p')], 3, 0),
+            (&[Key::Char('n')], 9, 6),
+        ] {
+            assert_eq!(press(&mut nav, keys), Step::Continue, "{keys:?}");
+            assert_eq!((nav.at, screen(&nav).0), (at, first), "{keys:?}");
+        }
+        // The last row stays at the bottom: four tiles on the last screen.
+        assert_eq!(screen(&nav), (6, 4));
+    }
+
+    #[test]
+    fn enter_opens_the_tile_chosen_and_a_number_chooses_one() {
+        let mut nav = tiles(10, 3, 2);
+        press(&mut nav, &[Key::Right]);
+        assert_eq!(press(&mut nav, &[Key::Enter]), Step::Open(1));
+        // A number then Enter chooses that tile, without opening it, the screen moving as little
+        // as brings it on.
+        assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Enter]), Step::Continue);
+        assert_eq!((nav.at, screen(&nav).0), (8, 3));
+        assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Char('9'), Key::Enter]), Step::Continue);
+        assert_eq!((nav.at, nav.message.as_deref()), (8, Some("no 99 here (1–10)")));
+        assert_eq!((press(&mut nav, &[Key::Escape]), press(&mut nav, &[Key::Backspace])), (Step::Leave, Step::Back));
+        // An empty list opens nothing.
+        assert_eq!(press(&mut Nav::list(0, Zoom::Auto), &[Key::Enter]), Step::Continue);
+    }
+
+    #[test]
+    fn a_list_zooms_between_one_tile_to_a_row_and_the_most_the_window_takes() {
+        let mut nav = tiles(10, 3, 2);
+        press(&mut nav, &[Key::Char('+')]);
+        assert_eq!(nav.zoom, Zoom::PerRow(2));
+        press(&mut nav, &[Key::Char('+'), Key::Char('+')]);
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(1), Some("fully zoomed in")));
+        press(&mut nav, &[Key::Char('-'), Key::Char('_')]);
+        assert_eq!(nav.zoom, Zoom::PerRow(3));
+    }
+
+    #[test]
+    fn a_lists_status_line_says_which_tile_of_how_many() {
+        let mut nav = tiles(10, 3, 2);
+        let first = nav.status("a.png", 100, false);
+        assert!(first.contains(&format!("  {}  ", LIST_KEYS[0])) && first.ends_with("  1/10  · 3 per row · ? help "), "{first:?}");
+        press(&mut nav, &[Key::End]);
+        assert!(nav.status("z.png", 100, false).ends_with("  10/10 · 3 per row · ? help "));
+        press(&mut nav, &[Key::Char('4')]);
+        assert!(nav.status("z.png", 100, false).contains("  go to 4  "));
+        // Opened from a list, a file's pages remind of the way back, and its keys list it.
+        let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
+        assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
+        assert!(opened.help_lines().contains(&("Esc  Backspace", "back to the list")));
+        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C", "quit")));
+        assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
+    }
+
     #[test]
     fn pages_given_are_the_only_ones_paged_through() {
         let mut nav = Nav::new(vec![6, 2, 9], 12, Zoom::Auto);
@@ -1299,12 +1632,14 @@ mod tests {
         assert_eq!(nav.message.as_deref(), Some("no page 99 (1–12)"));
         press(&mut nav, &[Key::Char('0'), Key::Enter]);
         assert_eq!(page(&nav), 2);
-        // Backspace and Esc edit and cancel; Esc with nothing typed quits.
+        // Backspace and Esc edit and cancel; with nothing typed, they leave, which at the top
+        // quits.
         press(&mut nav, &[Key::Char('5'), Key::Char('1'), Key::Backspace, Key::Enter]);
         assert_eq!(page(&nav), 4);
         assert_eq!(press(&mut nav, &[Key::Char('7'), Key::Escape]), Step::Continue);
         assert_eq!(nav.typed, "");
-        assert_eq!(press(&mut nav, &[Key::Escape]), Step::Quit);
+        assert_eq!(press(&mut nav, &[Key::Escape]), Step::Leave);
+        assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Back);
         // Long numbers stop growing and simply name no page.
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('9'); 30]);
@@ -1455,7 +1790,7 @@ mod tests {
 
     /// Page `page` sent as image `id`, `mb` megabytes of pixels, with `warning`.
     fn sent(page: usize, id: u32, mb: u32, warning: Option<&str>) -> Sent {
-        let view = View { page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE };
+        let view = View { level: 0, page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE };
         Sent { view, id, cols: 50, rows: 40, width: 1024, height: mb * 256, warning: warning.map(String::from) }
     }
 
@@ -1493,7 +1828,7 @@ mod tests {
     #[test]
     fn the_status_line_names_what_is_wrong_with_a_page_on_screen_whenever_it_is() {
         let kept = [sent(0, 1, 1, None), sent(1, 2, 1, Some("page 2: content past the page's safety budget was skipped"))];
-        let view = |page| Some(View { page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE });
+        let view = |page| Some(View { level: 0, page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE });
         // Page 2 was rendered ahead with something skipped: said when it shows, not before.
         assert_eq!(note(&[view(0), None], &kept, &[]), None);
         assert_eq!(note(&[view(1), None], &kept, &[]).as_deref(), Some("page 2: content past the page's safety budget was skipped"));
@@ -1505,7 +1840,7 @@ mod tests {
 
     #[test]
     fn source_rows_follow_the_scroll() {
-        let view = View { page: 0, fit: Fit::Width, cols: 50, rows: 40, size: FALLBACK_SIZE };
+        let view = View { level: 0, page: 0, fit: Fit::Width, cols: 50, rows: 40, size: FALLBACK_SIZE };
         let shown = Sent { view, id: 1, cols: 50, rows: 100, width: 1000, height: 2000, warning: None };
         assert_eq!(source_rows(&shown, 0, 30), Rect { x: 0, y: 0, w: 1000, h: 600 });
         assert_eq!(source_rows(&shown, 70, 30), Rect { x: 0, y: 1400, w: 1000, h: 600 });
@@ -1517,6 +1852,30 @@ mod tests {
     }
 
     proptest::proptest! {
+        /// In a list, whatever the reader presses and however the draws lay the tiles out, the
+        /// tile chosen is on screen, and the screen starts a row.
+        #[test]
+        fn the_tile_chosen_is_always_on_screen(
+            count in 1usize..60,
+            steps in proptest::collection::vec(
+                (proptest::sample::select(vec![Key::Left, Key::Right, Key::Up, Key::Down, Key::Char(' '), Key::Char('b'), Key::Home, Key::End, Key::Char('+'), Key::Char('-'), Key::Char('7'), Key::Enter]),
+                 proptest::option::of((1u16..=8, 1u16..=6))),
+                0..60,
+            ),
+        ) {
+            let mut nav = Nav::list(count, Zoom::Auto);
+            for (key, draw) in steps {
+                nav.key(key);
+                if let Some((most, rows)) = draw {
+                    let per_row = match nav.zoom { Zoom::PerRow(n) => n.min(most), _ => 4.min(most) };
+                    nav.grid(per_row, rows, most);
+                }
+                let on_screen = nav.on_screen();
+                proptest::prop_assert!(nav.at < count && on_screen.contains(&Some(nav.at)), "{nav:?}");
+                proptest::prop_assert_eq!(nav.first() % nav.row(), 0);
+            }
+        }
+
         /// Whatever the reader presses, zooming included, and however the draws in between lay
         /// the pages out, the reader's page is on screen, and the screen starts a row of pages.
         #[test]

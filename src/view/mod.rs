@@ -12,6 +12,7 @@ mod tmux;
 mod tty;
 
 use std::io::{IsTerminal, Write};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -19,15 +20,15 @@ use encode::PngEffort;
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Frame, Joined, Part, Request, Source};
+use crate::source::{Backend, Folder, Frame, Joined, Part, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
 
 /// The viewer's own options, whatever it shows. A backend's come from the backend.
 const OPTIONS: &[OptionSpec] = &[
-    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show, in this order (default: all)" },
-    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files too" },
+    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show of each file, in this order (default: all)" },
+    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files, not folders" },
     OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
     OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
     OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit" },
@@ -43,9 +44,10 @@ const OPTIONS: &[OptionSpec] = &[
 /// What `--help` says before the options.
 const ABOUT: &str = "\
 Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol), tmux
-too; macOS, Linux and FreeBSD. Several files are one after another; a directory shows each of its
-files by its first page. More than a page opens a pager, two pages side by side when the window
-is wide enough; - and + zoom out to rows of pages and in to the window's width.";
+too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when the
+window is wide enough; - and + zoom out to rows of pages and in to the window's width. Several
+files, or a directory, are a list: a tile each, by its first page, and a folder for each
+subdirectory; Enter opens one, Esc goes back. ? lists the keys.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -256,23 +258,17 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
-    let opened = open(paths, options.has("--recurse"), backends, &options)?;
-    for (_, why) in &opened.left_out {
-        note(&format!("warning: {why}"));
+    let opener = Opener { backends, options: &options, given: given.as_deref() };
+    let Opened { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
+    for warning in warnings.iter().chain(left_out.iter().map(|(_, why)| why)) {
+        note(&format!("warning: {warning}"));
     }
-    let source = &*opened.source;
-    let count = source.pages();
-    let pages = given.unwrap_or_else(|| (0..count).collect());
-    if let Some(page) = pages.iter().find(|p| **p >= count) {
-        let plural = if count == 1 { "" } else { "s" };
-        let has = match paths {
-            [path] => format!("{path} has {count} page{plural}"),
-            _ => format!("the files shown have {count} page{plural} in all"),
-        };
-        return Err(format!("no page {} ({has})", page.saturating_add(1)).into());
-    }
+    let count = match &shown {
+        Shown::Pages(pages) => pages.pages.len(),
+        Shown::List(items) => items.len(),
+    };
     let tty = Tty::open().ok();
-    let paging = paging.pages(pages.len(), std::io::stdout().is_terminal() && tty.is_some());
+    let paging = paging.pages(count, std::io::stdout().is_terminal() && tty.is_some());
     let inside_tmux = tmux::inside();
     // Paging, the terminal stays in raw mode from the first question on (outside tmux, which is
     // asked instead), never back in canonical mode between a question and the pager. On FreeBSD a
@@ -292,25 +288,80 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let (effort, files) = compression.choose(|| over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten()));
     let terminal = Terminal { effort, files, ..terminal };
     let first_id = fresh_index();
-    let left_out = left_out(&opened.left_out);
+    let said = left_out_note(&left_out);
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
-        let shown = Shown { source, name: &opened.name, pages, note: left_out };
-        return pager::run(tty, shown, &terminal, zoom, first_id).map_err(CliError::from);
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &|path: &str| opener.directory(path))?;
+        // Said once the screen is back: what the directories gone into left out.
+        for warning in &later {
+            note(&format!("warning: {warning}"));
+        }
+        return Ok(());
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
-    print_pages(source, &pages, zoom, size, &terminal, first_id)?;
+    match &shown {
+        Shown::Pages(p) => print_pages(&*p.source, &p.pages, None, zoom, size, &terminal, first_id)?,
+        Shown::List(items) => {
+            let names: Vec<String> = items.iter().map(|item| item.name().to_owned()).collect();
+            print_pages(&tiles(items), &(0..items.len()).collect::<Vec<_>>(), Some(&names), zoom, size, &terminal, first_id)?;
+        }
+    }
     // Each was said before the pages; the exit status says it too, as for a page that failed.
-    left_out.map_or(Ok(()), |said| Err(said.into()))
+    said.map_or(Ok(()), |said| Err(said.into()))
 }
 
-/// What the pager shows: `pages` of `source`, in order, from a file the status line calls `name`
-/// unless the source names its files itself; and `note`, what the reader should know first.
-struct Shown<'a> {
-    source: &'a dyn Source,
-    name: &'a str,
-    pages: Vec<usize>,
-    note: Option<String>,
+/// What is shown: one file's pages, or a list of files and directories, a tile each.
+pub(super) enum Shown {
+    Pages(Pages),
+    List(Vec<Item>),
+}
+
+/// A file's pages to page through, in order, at least one.
+pub(super) struct Pages {
+    pub(super) source: Rc<dyn Source>,
+    /// What the status line calls the file.
+    pub(super) name: String,
+    pub(super) pages: Vec<usize>,
+}
+
+/// A tile of a list: a file, shown by its first page and opened to its pages, or a directory,
+/// shown as a folder and opened to a list of its own.
+pub(super) enum Item {
+    File(Pages),
+    /// Its name ends with `/`.
+    Directory {
+        name: String,
+        path: String,
+    },
+}
+
+impl Item {
+    /// As the list names it, from the list's directory: `beach.jpg`, `2024/` (`2024/beach.jpg`,
+    /// recursing).
+    pub(super) fn name(&self) -> &str {
+        match self {
+            Self::File(pages) => &pages.name,
+            Self::Directory { name, .. } => name,
+        }
+    }
+}
+
+/// The tiles of `items` as one source, a page each, in order: a file's first page, a folder for a
+/// directory.
+pub(super) fn tiles(items: &[Item]) -> Joined {
+    let part = |item: &Item| match item {
+        Item::File(p) => Part { name: p.name.clone(), source: p.source.clone(), pages: vec![p.pages.first().copied().unwrap_or(0)] },
+        Item::Directory { name, .. } => Part { name: name.clone(), source: Rc::new(Folder), pages: vec![0] },
+    };
+    Joined::new(items.iter().map(part).collect())
+}
+
+/// What a directory gone into shows: its files and subdirectories, what of them couldn't be
+/// shown, and why, and what else the reader should know.
+pub(super) struct Contents {
+    pub(super) items: Vec<Item>,
+    pub(super) left_out: Vec<(String, String)>,
+    pub(super) warnings: Vec<String>,
 }
 
 /// The file arguments: the arguments that are neither an option nor an option's value.
@@ -321,101 +372,158 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
     }
 }
 
-/// The files at `paths`, each opened by the first of `backends` that opens it: one file's source,
-/// or several joined.
-struct Opened {
-    source: Box<dyn Source>,
-    /// What the status line calls a single file ([`file_name`]).
-    name: String,
-    /// Each file that couldn't be shown, among several, and why.
-    left_out: Vec<(String, String)>,
+/// Opens files for the viewer: with the first of `backends` that opens each, with `options`, and
+/// keeping of each file the pages `given`.
+struct Opener<'o, 'a> {
+    backends: &'o [&'static dyn Backend],
+    options: &'o Parsed<'a>,
+    given: Option<&'o [usize]>,
 }
 
-/// [`Opened`] for `paths` with `options`: each file's pages, and each directory's files by their
-/// first page (its subdirectories' too if `recurse`). A file alone that can't be shown is the
-/// error; among several, it is left out, and only nothing at all to show is an error. In a
-/// directory, a file that nothing shows is passed over. An option that none of the files'
-/// backends takes is refused, since it would do nothing.
-fn open(paths: &[&str], recurse: bool, backends: &[&dyn Backend], options: &Parsed<'_>) -> Result<Opened, String> {
-    let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
-    if let [path] = paths
-        && !is_dir(path)
-    {
-        let (backend, input) = crate::source::choose(path, backends)?;
-        takes_all(&[backend], options, path)?;
-        return Ok(Opened { source: backend.open(input, options)?, name: file_name(path), left_out: Vec::new() });
-    }
-    let mut found = Found::default();
-    for path in paths {
-        if !is_dir(path) {
-            let opened = crate::source::choose(path, backends).and_then(|(backend, input)| Ok((backend, backend.open(input, options)?)));
-            match opened {
-                Ok((backend, source)) => found.add(backend, Part { name: file_name(path), pages: (0..source.pages()).collect(), source }),
-                Err(why) => found.left_out.push((file_name(path), why)),
+/// What the files given show, and what of them couldn't be shown, with why.
+struct Opened {
+    shown: Shown,
+    left_out: Vec<(String, String)>,
+    /// What else the reader should know first: a listing cut short.
+    warnings: Vec<String>,
+}
+
+impl Opener<'_, '_> {
+    /// What `paths` show: one file's pages, or a list. A file alone that can't be shown, or that
+    /// lacks a page given, is the error. Several files, or a directory, are a list: a tile for each
+    /// file, by the first of its pages given, and for each directory (a directory alone, its files
+    /// and subdirectories); recursing, a directory's files and its subdirectories' are tiles
+    /// instead. Among several, a file that can't be shown is left out, and only nothing at all to
+    /// show is an error. In a directory, a file that nothing shows is passed over. An option that
+    /// none of the files' backends takes is refused, since it would do nothing.
+    fn open(&self, paths: &[&str], recurse: bool) -> Result<Opened, String> {
+        let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
+        if let [path] = paths
+            && !is_dir(path)
+        {
+            let (backend, input) = crate::source::choose(path, self.backends)?;
+            takes_all(&[backend], self.options, path)?;
+            let source: Rc<dyn Source> = Rc::from(backend.open(input, self.options)?);
+            let count = source.pages();
+            let pages = self.given.map_or_else(|| (0..count).collect(), <[usize]>::to_vec);
+            if let Some(page) = pages.iter().find(|p| **p >= count) {
+                return Err(format!("no page {} ({path} has {})", page.saturating_add(1), pages_of(count)));
             }
-            continue;
+            let shown = Shown::Pages(Pages { source, name: file_name(path), pages });
+            return Ok(Opened { shown, left_out: Vec::new(), warnings: Vec::new() });
         }
+        let mut found = Found::default();
+        for path in paths {
+            match (is_dir(path), paths.len(), recurse) {
+                (false, ..) => {
+                    let name = file_name(path);
+                    found.file(self.file(path, &name, false), name);
+                }
+                // Alone, its contents, named from it.
+                (true, 1, _) => self.list(&mut found, path, "", recurse),
+                // Among others, recursing: its files, named from its own name.
+                (true, _, true) => self.list(&mut found, path, &format!("{}/", file_name(path)), true),
+                (true, _, false) => found.items.push(Item::Directory { name: format!("{}/", file_name(path)), path: (*path).to_owned() }),
+            }
+        }
+        let Found { items, used, left_out, warnings } = found;
+        if items.is_empty() {
+            if let ([(_, why)], []) = (left_out.as_slice(), warnings.as_slice()) {
+                return Err(why.clone());
+            }
+            for warning in warnings.iter().chain(left_out.iter().map(|(_, why)| why)) {
+                note(&format!("warning: {warning}"));
+            }
+            return Err(match paths.iter().any(|p| is_dir(p)) {
+                false => format!("none of the {} files can be shown", paths.len()),
+                true => "nothing given can be shown".into(),
+            });
+        }
+        // A directory not gone into yet may hold files that take it.
+        if !items.iter().any(|item| matches!(item, Item::Directory { .. })) {
+            takes_all(&used, self.options, "any of these files")?;
+        }
+        Ok(Opened { shown: Shown::List(items), left_out, warnings })
+    }
+
+    /// What the directory at `path` shows, gone into from a list: its files and subdirectories,
+    /// named from it.
+    fn directory(&self, path: &str) -> Contents {
+        let mut found = Found::default();
+        self.list(&mut found, path, "", false);
+        Contents { items: found.items, left_out: found.left_out, warnings: found.warnings }
+    }
+
+    /// Into `found`, the directory at `path`'s files (its subdirectories' too if `recurse`; its
+    /// subdirectories otherwise), each named `prefix` and its name from the directory.
+    fn list(&self, found: &mut Found, path: &str, prefix: &str, recurse: bool) {
         let listing = match crate::source::list_directory(path, recurse) {
             Ok(listing) => listing,
-            Err(why) => {
-                found.left_out.push((file_name(path), why));
-                continue;
-            }
+            Err(why) => return found.left_out.push((file_name(path), why)),
         };
-        let (before, listed) = (found.parts.len(), listing.files.len());
-        for (file, name) in listing.files {
-            let opened = crate::source::shown_by(&file, backends).and_then(|chosen| match chosen {
-                Some((backend, input)) => Ok(Some((backend, backend.open(input, options)?))),
-                None => Ok(None),
-            });
-            match opened {
-                Ok(Some((backend, source))) => found.add(backend, Part { name, pages: vec![0], source }),
-                Ok(None) => {}
-                Err(why) => found.left_out.push((name, why)),
+        let (before, listed) = (found.items.len(), listing.entries.len());
+        for entry in listing.entries {
+            let name = format!("{prefix}{}", entry.name);
+            if entry.directory {
+                found.items.push(Item::Directory { name: format!("{name}/"), path: entry.path });
+            } else {
+                found.file(self.file(&entry.path, &name, true), name);
             }
         }
         found.left_out.extend(listing.unread);
         if listing.cut {
-            note(&format!("warning: {path}: the listing stopped at {listed} files, as many as {} lists", crate::NAME));
+            found.warnings.push(format!("{path}: the listing stopped at {listed} files, as many as {} lists", crate::NAME));
         }
-        if found.parts.len() == before {
-            let hint = if listing.subdirectories { " (its subdirectories' files are shown with -r)" } else { "" };
-            found.left_out.push((file_name(path), format!("{path}: no file in it that {} shows{hint}", crate::NAME)));
+        if found.items.len() == before {
+            found.left_out.push((file_name(path), format!("{path}: nothing in it that {} shows", crate::NAME)));
         }
     }
-    let Found { parts, used, left_out } = found;
-    if parts.is_empty() {
-        if let [(_, why)] = left_out.as_slice() {
-            return Err(why.clone());
+
+    /// The file at `path` as a tile called `name`: opened by the first backend that opens it,
+    /// with those of the pages given that it has, or all of them. `quiet`, as in a directory, a
+    /// file no backend opens is no error but `None`.
+    fn file(&self, path: &str, name: &str, quiet: bool) -> Result<Option<(&'static dyn Backend, Item)>, String> {
+        let chosen = if quiet { crate::source::shown_by(path, self.backends)? } else { Some(crate::source::choose(path, self.backends)?) };
+        let Some((backend, input)) = chosen else { return Ok(None) };
+        let source: Rc<dyn Source> = Rc::from(backend.open(input, self.options)?);
+        let count = source.pages();
+        let pages: Vec<usize> = self.given.map_or_else(|| (0..count).collect(), |given| given.iter().copied().filter(|p| *p < count).collect());
+        match (pages.is_empty(), self.given.and_then(<[usize]>::first)) {
+            (true, Some(page)) => Err(format!("{path}: no page {} (it has {})", page.saturating_add(1), pages_of(count))),
+            (true, None) => Err(format!("{path}: no pages to show")),
+            (false, _) => Ok(Some((backend, Item::File(Pages { source, name: name.to_owned(), pages })))),
         }
-        for (_, why) in &left_out {
-            note(&format!("warning: {why}"));
-        }
-        return Err(match paths.iter().any(|p| is_dir(p)) {
-            false => format!("none of the {} files can be shown", paths.len()),
-            true => "nothing given can be shown".into(),
-        });
     }
-    takes_all(&used, options, "any of these files")?;
-    let name = paths.first().map_or_else(String::new, |p| file_name(p));
-    Ok(Opened { source: Box::new(Joined::new(parts)), name, left_out })
 }
 
-/// What [`open`] has found so far among several files: the parts to show, the backends that
-/// opened them, and the files left out, with why.
+/// `count` pages, in words: `1 page`, `3 pages`.
+fn pages_of(count: usize) -> String {
+    format!("{count} page{}", if count == 1 { "" } else { "s" })
+}
+
+/// What [`Opener::open`] has found so far: the tiles, the backends that opened their files, the
+/// files left out, with why, and what else to say.
 #[derive(Default)]
-struct Found<'b> {
-    parts: Vec<Part>,
-    used: Vec<&'b dyn Backend>,
+struct Found {
+    items: Vec<Item>,
+    used: Vec<&'static dyn Backend>,
     left_out: Vec<(String, String)>,
+    warnings: Vec<String>,
 }
 
-impl<'b> Found<'b> {
-    fn add(&mut self, backend: &'b dyn Backend, part: Part) {
-        if !self.used.iter().any(|b| b.name() == backend.name()) {
-            self.used.push(backend);
+impl Found {
+    /// The file called `name`, as [`Opener::file`] opened it.
+    fn file(&mut self, opened: Result<Option<(&'static dyn Backend, Item)>, String>, name: String) {
+        match opened {
+            Ok(Some((backend, item))) => {
+                if !self.used.iter().any(|b| b.name() == backend.name()) {
+                    self.used.push(backend);
+                }
+                self.items.push(item);
+            }
+            Ok(None) => {}
+            Err(why) => self.left_out.push((name, why)),
         }
-        self.parts.push(part);
     }
 }
 
@@ -426,7 +534,7 @@ fn file_name(path: &str) -> String {
 
 /// What the reader is told about the files left out, if any, once the reasons were said: how
 /// many, and the first one's name.
-fn left_out(files: &[(String, String)]) -> Option<String> {
+pub(super) fn left_out_note(files: &[(String, String)]) -> Option<String> {
     match files {
         [] => None,
         [(name, _)] => Some(format!("1 file left out: {name}")),
@@ -565,8 +673,17 @@ fn note(line: &str) {
 
 /// Draw `pages` at the cursor, one row of them under another, like `cat`: as many to a row as the
 /// pager shows at `zoom` from the first page, each row fitted the way the pager fits the reader's
-/// row. A page that fails is reported at the end; the others are still drawn.
-fn print_pages(source: &dyn Source, pages: &[usize], zoom: Zoom, size: WindowSize, terminal: &Terminal, first_id: u64) -> Result<(), CliError> {
+/// row. A list's tiles come with `labels`, their names, each under its tile, as in the pager. A
+/// page that fails is reported at the end; the others are still drawn.
+fn print_pages(
+    source: &dyn Source,
+    pages: &[usize],
+    labels: Option<&[String]>,
+    zoom: Zoom,
+    size: WindowSize,
+    terminal: &Terminal,
+    first_id: u64,
+) -> Result<(), CliError> {
     let mut renderer = source.renderer()?;
     let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(terminal.cell).unwrap_or(fit::FALLBACK_CELL);
     // One row stays free for the shell prompt after the last page.
@@ -574,15 +691,19 @@ fn print_pages(source: &dyn Source, pages: &[usize], zoom: Zoom, size: WindowSiz
     let (cols, max_rows) = terminal.output.limits(size.cols);
     let area = Area { cols, rows, cell, max_rows };
     let size_of = |i: usize| pages.get(i).and_then(|p| page_size(source, *p));
+    let grid_at = |zoom: Zoom, start: usize| match labels {
+        Some(_) => fit::tiles(zoom, pages.len(), area),
+        None => fit::grid(zoom, pages.len(), start, size_of, area),
+    };
     // Every row has as many pages as the first: `auto` decides once.
-    let first = fit::grid(zoom, pages.len(), 0, size_of, area);
+    let first = grid_at(zoom, 0);
     let zoom = if first.fit == Fit::Width { Zoom::Width } else { Zoom::PerRow(first.per_row) };
     let per_row = usize::from(first.per_row.max(1));
     let (mut failed, mut drawn_rows) = (Vec::new(), 0usize);
     let mut stdout = std::io::stdout().lock();
     for (row, chunk) in pages.chunks(per_row).enumerate() {
         let start = row.saturating_mul(per_row);
-        let grid = fit::grid(zoom, pages.len(), start, size_of, area);
+        let grid = grid_at(zoom, start);
         let mut printed = Vec::new();
         for (slot, &page) in (0u16..).zip(chunk) {
             let drawn = page_layout(source, page, grid.fit, grid.cols, grid.page_rows, cell, max_rows)
@@ -602,12 +723,18 @@ fn print_pages(source: &dyn Source, pages: &[usize], zoom: Zoom, size: WindowSiz
             continue;
         }
         let mut out = Vec::new();
-        // Rows of pages side by side have a row between them, as in the pager.
-        if drawn_rows > 0 && grid.per_row > 1 {
+        // Rows of pages side by side, or of tiles, have a row between them, as in the pager.
+        if drawn_rows > 0 && (grid.per_row > 1 || labels.is_some()) {
             out.extend(std::iter::repeat_n(b'\n', usize::from(fit::ROW_GAP)));
         }
         drawn_rows = drawn_rows.saturating_add(1);
         print_row(&mut out, &printed, grid, terminal.output, first_id);
+        if let Some(labels) = labels {
+            let names = (start..start.saturating_add(chunk.len())).map(|i| labels.get(i).map_or("", String::as_str));
+            let line: Vec<String> = names.map(|name| label(name, grid.cols)).collect();
+            out.extend_from_slice(printable(line.join(&" ".repeat(usize::from(fit::GAP))).trim_end()).as_bytes());
+            out.push(b'\n');
+        }
         stdout.write_all(&out).and_then(|()| stdout.flush()).map_err(CliError::Stdout)?;
     }
     if failed.is_empty() { Ok(()) } else { Err(failed.join("; ").into()) }
@@ -628,7 +755,8 @@ struct Printed {
 /// go into a band of lines made first, each placed from the band's top with the cursor left
 /// where it is; the band is never taller than the window, so going back up to it always works.
 fn print_row(out: &mut Vec<u8>, row: &[Printed], grid: Grid, output: Output, first_id: u64) {
-    let alone = grid.per_row <= 1;
+    // A tile is as tall as its place, which is never taller than the window.
+    let alone = grid.per_row <= 1 && grid.label == 0;
     // Where a page goes in the band: across, and down to centre it in its place.
     let at = |p: &Printed| {
         let across = p.slot.saturating_mul(grid.cols.saturating_add(fit::GAP)).saturating_add(grid.cols.saturating_sub(p.layout.cols) / 2);
@@ -679,6 +807,32 @@ fn print_row(out: &mut Vec<u8>, row: &[Printed], grid: Grid, output: Output, fir
             }
         }
     }
+}
+
+/// Characters, as the terminal shows them one to a cell.
+fn chars(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// `text` in at most `room` characters: whole, or its start and its end around `…`, the end the
+/// longer, so names that differ only at the end (`IMG_2041.jpg`, `IMG_2042.jpg`) still differ.
+fn cut(text: &str, room: usize) -> String {
+    let count = chars(text);
+    if count <= room {
+        return text.to_owned();
+    }
+    let Some(kept) = room.checked_sub(1) else { return String::new() };
+    let start = kept / 2;
+    let end = kept.saturating_sub(start);
+    text.chars().take(start).chain(['…']).chain(text.chars().skip(count.saturating_sub(end))).collect()
+}
+
+/// A tile's name as it goes under the tile, `cols` wide: cut to fit, in the middle of them.
+fn label(name: &str, cols: u16) -> String {
+    let cols = usize::from(cols);
+    let name = cut(name, cols);
+    let left = cols.saturating_sub(chars(&name)) / 2;
+    format!("{}{name}{}", " ".repeat(left), " ".repeat(cols.saturating_sub(left).saturating_sub(chars(&name))))
 }
 
 /// Move the cursor `n` cells (`code`: `A` up, `B` down, `C` right); nothing for 0, which the
@@ -789,9 +943,9 @@ mod tests {
     #[test]
     fn the_reader_is_told_how_many_files_were_left_out_and_the_first_ones_name() {
         let file = |name: &str| (name.to_string(), format!("dir/{name}: no"));
-        assert_eq!(left_out(&[]), None);
-        assert_eq!(left_out(&[file("a.txt")]).as_deref(), Some("1 file left out: a.txt"));
-        assert_eq!(left_out(&[file("a.txt"), file("b")]).as_deref(), Some("2 files left out: a.txt, …"));
+        assert_eq!(left_out_note(&[]), None);
+        assert_eq!(left_out_note(&[file("a.txt")]).as_deref(), Some("1 file left out: a.txt"));
+        assert_eq!(left_out_note(&[file("a.txt"), file("b")]).as_deref(), Some("2 files left out: a.txt, …"));
     }
 
     #[test]
@@ -921,7 +1075,7 @@ mod tests {
             fn renderer(&self) -> Result<Box<dyn crate::source::Render + '_>, String> {
                 Err("not here".into())
             }
-            fn pool(&self, _threads: usize) -> Box<dyn crate::source::Pool + '_> {
+            fn pool(&self, _threads: usize) -> Box<dyn crate::source::Pool> {
                 Box::new(Idle)
             }
         }

@@ -176,7 +176,7 @@ impl Source for Image {
         Ok(Box::new(Renderer { picture: self.0.clone(), decoded: Cache::new() }))
     }
 
-    fn pool(&self, threads: usize) -> Box<dyn Pool + '_> {
+    fn pool(&self, threads: usize) -> Box<dyn Pool> {
         let (picture, decoded) = (self.0.clone(), Arc::new(Cache::new()));
         Box::new(Threads::new(threads, Arc::new(move |request| picture.render(request, &decoded))))
     }

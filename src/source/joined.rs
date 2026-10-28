@@ -5,6 +5,7 @@
 //! pages is first asked for. They are let go of when the reader is elsewhere, since what they
 //! hold (an image's pool keeps its decoded pixels) adds up over hundreds of files.
 
+use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::{Frame, Pool, Render, Request, Source};
@@ -13,17 +14,19 @@ use super::{Frame, Pool, Render, Request, Source};
 /// a reader going back and forth between neighbouring files doesn't wait for their pools again.
 const KEPT: usize = 4;
 
-/// A source among others.
+/// A source among others: one the viewer may show on its own too, so shared.
 pub(crate) struct Part {
-    /// Its file's name, as the status line and messages give it.
+    /// Its file's name, as its errors give it.
     pub(crate) name: String,
-    pub(crate) source: Box<dyn Source>,
+    pub(crate) source: Rc<dyn Source>,
     /// Its pages shown, in order.
     pub(crate) pages: Vec<usize>,
 }
 
-/// Sources shown one after another.
-pub(crate) struct Joined {
+/// Sources shown one after another. Its pools share it, so they need no borrow of it.
+pub(crate) struct Joined(Rc<Parts>);
+
+struct Parts {
     parts: Vec<Part>,
     /// Where each part's pages start among the joined ones.
     starts: Vec<usize>,
@@ -39,9 +42,11 @@ impl Joined {
             starts.push(pages);
             pages = pages.saturating_add(part.pages.len());
         }
-        Self { parts, starts, pages }
+        Self(Rc::new(Parts { parts, starts, pages }))
     }
+}
 
+impl Parts {
     /// The part joined page `page` comes from, and its page there.
     fn locate(&self, page: usize) -> Option<(usize, usize)> {
         let at = self.starts.partition_point(|start| *start <= page).checked_sub(1)?;
@@ -63,36 +68,31 @@ impl Joined {
 
 impl Source for Joined {
     fn pages(&self) -> usize {
-        self.pages
+        self.0.pages
     }
 
     fn size(&self, page: usize) -> Option<(f32, f32)> {
-        let (part, local) = self.locate(page)?;
-        self.parts.get(part)?.source.size(local)
+        let (part, local) = self.0.locate(page)?;
+        self.0.parts.get(part)?.source.size(local)
     }
 
     fn natural(&self, page: usize) -> bool {
-        self.locate(page).and_then(|(part, local)| Some(self.parts.get(part)?.source.natural(local))).unwrap_or(false)
-    }
-
-    fn file_name(&self, page: usize) -> Option<&str> {
-        let (part, _) = self.locate(page)?;
-        self.parts.get(part).map(|p| p.name.as_str())
+        self.0.locate(page).and_then(|(part, local)| Some(self.0.parts.get(part)?.source.natural(local))).unwrap_or(false)
     }
 
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
-        Ok(Box::new(Renderer { joined: self, current: None }))
+        Ok(Box::new(Renderer { joined: &self.0, current: None }))
     }
 
-    fn pool(&self, threads: usize) -> Box<dyn Pool + '_> {
-        Box::new(Pools { joined: self, threads: threads.max(1), live: Mutex::new(Vec::new()) })
+    fn pool(&self, threads: usize) -> Box<dyn Pool> {
+        Box::new(Pools { joined: self.0.clone(), threads: threads.max(1), live: Mutex::new(Vec::new()) })
     }
 }
 
 /// Renders with the renderer of the part asked for, keeping only the last part's: pages printed
 /// in order need each part's once.
 struct Renderer<'a> {
-    joined: &'a Joined,
+    joined: &'a Parts,
     current: Option<(usize, Made<'a>)>,
 }
 
@@ -122,21 +122,21 @@ impl Render for Renderer<'_> {
 
 /// The parts' own pools: those of the most urgent parts, as many parts at once as there are
 /// threads, so hundreds of files never render at once; the others wait their turn.
-struct Pools<'a> {
-    joined: &'a Joined,
+struct Pools {
+    joined: Rc<Parts>,
     threads: usize,
     /// The least recently wanted first.
-    live: Mutex<Vec<Live<'a>>>,
+    live: Mutex<Vec<Live>>,
 }
 
 /// A part's pool, and the joined requests it was given.
-struct Live<'a> {
+struct Live {
     part: usize,
-    pool: Box<dyn Pool + 'a>,
+    pool: Box<dyn Pool>,
     asked: Vec<Request>,
 }
 
-impl Pool for Pools<'_> {
+impl Pool for Pools {
     fn set_queue(&self, requests: Vec<Request>) {
         let mut live = lock(&self.live);
         // Each part's requests with its own page, the parts in the order of their most urgent.
@@ -190,7 +190,7 @@ impl Pool for Pools<'_> {
 }
 
 /// The lock, even after a panic while it was held: the list is whole between statements.
-fn lock<'m, 'a>(live: &'m Mutex<Vec<Live<'a>>>) -> MutexGuard<'m, Vec<Live<'a>>> {
+fn lock(live: &Mutex<Vec<Live>>) -> MutexGuard<'_, Vec<Live>> {
     live.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -242,7 +242,7 @@ mod tests {
             }
             Ok(Box::new(One(self.id)))
         }
-        fn pool(&self, _threads: usize) -> Box<dyn Pool + '_> {
+        fn pool(&self, _threads: usize) -> Box<dyn Pool> {
             self.counts.pools.fetch_add(1, Ordering::Relaxed);
             self.counts.alive.fetch_add(1, Ordering::Relaxed);
             Box::new(Instant { id: self.id, queue: Mutex::new(Vec::new()), counts: self.counts.clone() })
@@ -278,7 +278,7 @@ mod tests {
         let parts = (0..pages.len())
             .map(|i| Part {
                 name: format!("f{}", i + 1),
-                source: Box::new(Fake { id: u8::try_from(i + 1).unwrap(), pages: pages[i], counts: counts.clone() }),
+                source: Rc::new(Fake { id: u8::try_from(i + 1).unwrap(), pages: pages[i], counts: counts.clone() }),
                 pages: (0..pages[i]).collect(),
             })
             .collect();
@@ -295,17 +295,16 @@ mod tests {
         assert_eq!(joined.pages(), 5);
         // The empty part is left out: f3 is the second.
         assert_eq!(
-            (0..6).map(|p| joined.locate(p)).collect::<Vec<_>>(),
+            (0..6).map(|p| joined.0.locate(p)).collect::<Vec<_>>(),
             [Some((0, 0)), Some((0, 1)), Some((1, 0)), Some((1, 1)), Some((1, 2)), None]
         );
         assert_eq!((joined.size(1), joined.size(4), joined.size(5)), (Some((2.0, 10.0)), Some((3.0, 10.0)), None));
-        assert_eq!((joined.file_name(1), joined.file_name(2), joined.file_name(9)), (Some("f1"), Some("f3"), None));
         assert!(!joined.natural(0) && joined.natural(2) && !joined.natural(9));
         // A part shows the pages it was given, in their order.
         let counts = Arc::new(Counts::default());
-        let part = Part { name: "a".into(), source: Box::new(Fake { id: 1, pages: 5, counts }), pages: vec![4, 0] };
+        let part = Part { name: "a".into(), source: Rc::new(Fake { id: 1, pages: 5, counts }), pages: vec![4, 0] };
         let picked = Joined::new(vec![part]);
-        assert_eq!((picked.pages(), picked.locate(0), picked.locate(1)), (2, Some((0, 4)), Some((0, 0))));
+        assert_eq!((picked.pages(), picked.0.locate(0), picked.0.locate(1)), (2, Some((0, 4)), Some((0, 0))));
     }
 
     #[test]

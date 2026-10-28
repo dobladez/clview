@@ -48,14 +48,32 @@ pub(crate) struct Drawn {
 }
 
 /// Split stdout into images: escape codes `ESC _G <control> ; <base64> ESC \`, with `m=1` on
-/// every chunk but an image's last. Anything between images must be a newline, a carriage return
-/// or a cursor move (`ESC [ n A`, `B` or `C`).
+/// every chunk but an image's last. Anything between images must be a newline, a carriage return,
+/// a cursor move (`ESC [ n A`, `B` or `C`), or a line of a list's names ([`names`]).
 pub(crate) fn images(stdout: &[u8]) -> Vec<Drawn> {
+    printed(stdout).0
+}
+
+/// The lines of names under a list's rows of tiles, each with its runs of spaces made one.
+pub(crate) fn names(stdout: &[u8]) -> Vec<String> {
+    printed(stdout).1
+}
+
+/// [`images`], and the lines of names among them.
+fn printed(stdout: &[u8]) -> (Vec<Drawn>, Vec<String>) {
     let mut rest = std::str::from_utf8(stdout).unwrap();
-    let (mut out, mut keys, mut payload) = (Vec::new(), None::<String>, String::new());
+    let (mut out, mut keys, mut payload, mut names) = (Vec::new(), None::<String>, String::new(), Vec::new());
     while !rest.is_empty() {
         if keys.is_none() {
             if let Some(after) = rest.strip_prefix('\n').or_else(|| rest.strip_prefix('\r')) {
+                rest = after;
+                continue;
+            }
+            // Text to the end of its line, without an escape code.
+            if !rest.starts_with('\x1b') {
+                let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
+                assert!(!line.contains('\x1b'), "an escape code in a line of names: {line:?}");
+                names.push(line.split(' ').filter(|w| !w.is_empty()).fold(String::new(), |all, w| all + " " + w));
                 rest = after;
                 continue;
             }
@@ -82,7 +100,7 @@ pub(crate) fn images(stdout: &[u8]) -> Vec<Drawn> {
         rest = &body[end + 2..];
     }
     assert!(keys.is_none(), "an image was left unfinished");
-    out
+    (out, names)
 }
 
 pub(crate) fn png_size(png: &[u8]) -> (u32, u32) {
@@ -434,21 +452,28 @@ fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
 
 /// Several files are one list of pages, numbered on through them: `--pages` counts across them.
 #[cfg(feature = "image")]
+/// Several files are a list, each by the first of its pages given, its name under it.
 #[test]
-fn several_files_are_one_after_another() {
+fn several_files_are_a_list_each_by_its_first_page() {
     let pdf = fixture("several", 2);
     let png = picture("several", "photo.png", 300, 200);
     let both = |args: &[&str]| view(&pdf, &[&[png.to_str().unwrap(), "--protocol", "kitty"], args].concat());
     let out = both(&[]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let sizes: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
-    assert_eq!(sizes.len(), 3);
-    assert_eq!(sizes[2], (300, 200));
-    let third = both(&["--pages", "3"]);
-    assert_eq!(images(&third.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>(), [(300, 200)]);
+    assert_eq!(sizes.len(), 2, "{sizes:?}");
+    assert_eq!(sizes[1], (300, 200));
+    assert_eq!(names(&out.stdout), [" many.pdf photo.png"]);
+    // The pages given, of each file that has them: the PDF's second page, and the picture, which
+    // has none, left out.
+    let second = both(&["--pages", "2"]);
+    assert_eq!(images(&second.stdout).len(), 1);
+    let stderr = text(&second.stderr);
+    assert!(stderr.starts_with(&format!("warning: {}: no page 2 (it has 1 page)\n", png.display())), "{stderr}");
+    assert!(stderr.ends_with("clv: 1 file left out: photo.png\n") && !second.status.success(), "{stderr}");
     let past = both(&["--pages", "4"]);
     assert!(!past.status.success() && past.stdout.is_empty());
-    assert!(text(&past.stderr).contains("no page 4 (the files shown have 3 pages in all)"), "{}", text(&past.stderr));
+    assert!(text(&past.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&past.stderr));
     // An option one of the files takes is no error; one none takes is.
     assert!(both(&["--password", "pw"]).status.success());
     let png2 = picture("several", "other.png", 30, 20);
@@ -456,15 +481,13 @@ fn several_files_are_one_after_another() {
     assert_eq!(text(&out.stderr), "clv: --password doesn't apply to any of these files, which image opens\n");
 }
 
-/// Among several files, one that can't be shown is left out: said first, the others shown, and
-/// said again in the exit status. With none left, nothing is shown.
 #[test]
 fn a_file_that_cant_be_shown_among_others_is_left_out() {
     let pdf = fixture("left-out", 2);
     let notes = tmp("left-out", "notes.txt");
     std::fs::write(&notes, "plain text\n").unwrap();
     let out = view(&pdf, &[notes.to_str().unwrap(), "--protocol", "kitty"]);
-    assert_eq!(images(&out.stdout).len(), 2);
+    assert_eq!((images(&out.stdout).len(), names(&out.stdout)), (1, vec![" many.pdf".to_string()]));
     let why = format!("{}: not a file clv shows", notes.display());
     let stderr = text(&out.stderr);
     assert!(stderr.starts_with(&format!("warning: {why}")), "{stderr}");
@@ -475,12 +498,12 @@ fn a_file_that_cant_be_shown_among_others_is_left_out() {
     assert!(text(&out.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&out.stderr));
 }
 
-/// A directory shows each file a backend opens by its first page, in the order of their names
-/// (numbers by value); hidden files, files nothing shows and subdirectories are passed over,
-/// subdirectories unless `-r` says otherwise.
+/// A directory shows each file a backend opens by its first page, and each subdirectory as a
+/// folder, in the order of their names (numbers by value); hidden files and files nothing shows
+/// are passed over. With `-r`, the subdirectories' files instead of folders.
 #[cfg(feature = "image")]
 #[test]
-fn a_directory_shows_each_of_its_files_by_its_first_page() {
+fn a_directory_shows_each_of_its_files_by_its_first_page_and_its_subdirectories_as_folders() {
     let dir = tmp("gallery", "photos");
     std::fs::create_dir_all(dir.join("2024")).unwrap();
     std::fs::write(dir.join("a10.pdf"), crate::fixtures::letter("Gallery", 3)).unwrap();
@@ -488,36 +511,49 @@ fn a_directory_shows_each_of_its_files_by_its_first_page() {
     picture("gallery", "photos/.hidden.png", 50, 50);
     picture("gallery", "photos/2024/b.png", 30, 20);
     std::fs::write(dir.join("notes.txt"), "plain text\n").unwrap();
-    let sizes = |args: &[&str]| {
+    let shown = |args: &[&str]| {
         let out = view(&dir, &[&["--protocol", "kitty"], args].concat());
         assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
-        images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>()
+        (images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>(), names(&out.stdout))
     };
-    let shown = sizes(&[]);
-    assert_eq!((shown.len(), shown[0]), (2, (300, 200)), "{shown:?}");
-    let (w, h) = shown[1];
+    // 2024 before a9: a folder, wider than tall, then the picture, then the PDF's first page.
+    // Three to a row in 80 columns: square places 250 × 240 px, which the picture fits into.
+    let (sizes, labels) = shown(&[]);
+    assert_eq!((sizes.len(), sizes[1], labels), (3, (250, 167), vec![" 2024/ a9.png a10.pdf".to_string()]), "{sizes:?}");
+    assert!(sizes[0].0 > sizes[0].1, "a folder: {:?}", sizes[0]);
+    let (w, h) = sizes[2];
     assert!((w as f32 / h as f32 - 612.0 / 792.0).abs() < 0.01, "the PDF's first page only: {w}×{h}");
-    // A subdirectory's files come at its place among the names: 2024 before a9.
+    // Recursing, a subdirectory's files come at its place among the names.
     for recurse in ["-r", "--recurse"] {
-        let shown = sizes(&[recurse]);
-        assert_eq!((shown.len(), shown[0], shown[1]), (3, (30, 20), (300, 200)), "{recurse}");
+        let (sizes, labels) = shown(&[recurse]);
+        assert_eq!((sizes.len(), sizes[0], sizes[1]), (3, (30, 20), (250, 167)), "{recurse}");
+        assert_eq!(labels, [" 2024/b.png a9.png a10.pdf"]);
     }
-    assert_eq!(sizes(&["-r", "--pages", "2,1"]), [(300, 200), (30, 20)]);
+    // A row of tiles at a time, names under each row.
+    let out = view(&dir, &["--protocol", "kitty", "-r", "--zoom", "2"]);
+    assert_eq!(names(&out.stdout), [" 2024/b.png a9.png", " a10.pdf"]);
+    // Among others, a directory is a folder, and an option that a file inside it may take is no
+    // error.
+    let out = view(&dir, &[dir.join("2024").to_str().unwrap(), "--protocol", "kitty", "--password", "pw"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(names(&out.stdout), [" photos/ 2024/"]);
 }
 
-/// A directory with nothing to show says so, and where else to look; a file in it that should
-/// show and doesn't is left out, as one given by name is.
+/// A directory with nothing to show says so; a file in it that should show and doesn't is left
+/// out, as one given by name is.
 #[cfg(feature = "image")]
 #[test]
 fn a_directory_with_nothing_to_show_says_so() {
     let dir = tmp("empty-gallery", "photos");
-    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("notes.txt"), "plain text\n").unwrap();
-    std::fs::write(dir.join("sub/one.pdf"), crate::fixtures::letter("Below", 1)).unwrap();
     let out = view(&dir, &["--protocol", "kitty"]);
     assert!(!out.status.success() && out.stdout.is_empty());
-    let said = format!("clv: {}: no file in it that clv shows (its subdirectories' files are shown with -r)\n", dir.display());
-    assert_eq!(text(&out.stderr), said);
+    assert_eq!(text(&out.stderr), format!("clv: {}: nothing in it that clv shows\n", dir.display()));
+    // A subdirectory is a folder to show, and recursing, its files.
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub/one.pdf"), crate::fixtures::letter("Below", 1)).unwrap();
+    assert_eq!(names(&view(&dir, &["--protocol", "kitty"]).stdout), [" sub/"]);
     assert_eq!(images(&view(&dir, &["--protocol", "kitty", "-r"]).stdout).len(), 1);
     // A picture whose header is broken: opened by the image backend, which then fails.
     std::fs::write(dir.join("broken.png"), b"\x89PNG\r\n\x1a\nno chunks").unwrap();
@@ -528,7 +564,6 @@ fn a_directory_with_nothing_to_show_says_so() {
     assert!(stderr.ends_with("clv: 1 file left out: broken.png\n") && !out.status.success(), "{stderr}");
 }
 
-/// What this build shows, as a refusal says it.
 fn shows() -> &'static str {
     if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" }
 }

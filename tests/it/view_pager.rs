@@ -535,10 +535,18 @@ fn sent_sizes(text: &str) -> Vec<(u32, u32)> {
     .collect()
 }
 
-/// Several files page as one, the status line naming the file on screen, or the first and last
-/// of those on screen; a file left out is said first.
+/// The name of the tile chosen last, highlighted under it: the last text in reverse video that
+/// isn't the status line.
+fn chosen(text: &str) -> Option<String> {
+    let labels = text.split("\x1b[7m").skip(1).filter_map(|t| t.split_once("\x1b[0m").map(|(label, _)| label));
+    labels.filter(|label| !label.contains("? help")).last().map(|label| label.trim().to_string())
+}
+
+/// Several files are a list, a tile each: the arrows choose one, its name highlighted under it and
+/// on the status line, Enter opens its pages, and Esc goes back to the list as it was left, its
+/// tiles still in the terminal. A file left out is said first.
 #[test]
-fn several_files_page_as_one_and_the_status_line_names_them() {
+fn several_files_are_a_list_and_enter_opens_one() {
     if !pty_works() {
         return;
     }
@@ -548,34 +556,69 @@ fn several_files_page_as_one_and_the_status_line_names_them() {
     std::fs::write(&a, crate::fixtures::letter("First", 1)).unwrap();
     std::fs::write(&b, crate::fixtures::letter("Second", 2)).unwrap();
     std::fs::write(&notes, "plain text\n").unwrap();
-    // A tall window: one page to the screen.
+    // A tall window: a page to the screen, once opened.
     let mut view = Session::start(&a, &[b.to_str().unwrap(), notes.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
-    view.wait_until("the first file's page", |t| bar(t).contains(" a.pdf 1 file left out: notes.txt page 1/3 "));
+    view.wait_until("the list", |t| bar(t).contains(" a.pdf 1 file left out: notes.txt 1/2 · 2 per row ") && drawn(t, "1/2"));
+    assert_eq!(chosen(&view.text()).as_deref(), Some("a.pdf"));
+    assert_eq!(transmitted(&view.text()), 2, "a tile each");
+    view.press("\x1b[C");
+    view.wait_until("b chosen", |t| bar(t).contains(" b.pdf 2/2 · 2 per row ") && chosen(t).as_deref() == Some("b.pdf"));
+    view.press("\r");
+    view.wait_until("b opened", |t| bar(t).contains(" b.pdf esc back · space b · n p · + - zoom · q quit") && drawn(t, "page 1/2"));
     view.press("n");
-    view.wait_until("the second file's", |t| bar(t).contains(" b.pdf page 2/3 "));
-    view.press("g-");
-    view.wait_until("both files on screen", |t| bar(t).contains(" a.pdf – b.pdf pages 1–2/3 · 2 per row "));
+    view.wait_until("b's second page", |t| drawn(t, "page 2/2"));
+    std::thread::sleep(Duration::from_millis(200));
+    let sent = transmitted(&view.text());
+    let before = view.text().len();
+    view.press("\x1b");
+    view.wait_until("back to the list", |t| t.get(before..).is_some_and(|t| bar(t).contains(" b.pdf 2/2 · 2 per row ")));
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(transmitted(&view.text()), sent, "a tile was sent again");
+    // Backspace has nothing to go back to here; q quits.
+    view.press("\x7f");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(view.child.try_wait().unwrap().is_none(), "Backspace quit");
     view.press("q");
     assert!(view.finish().success());
 }
 
-/// A directory pages through its files, each named from the directory.
+/// A directory's subdirectories are folders to go into: Enter lists one, its files named from
+/// the first directory on the status line, and Backspace goes back. Recursing, their files are
+/// tiles instead.
 #[cfg(feature = "image")]
 #[test]
-fn a_directory_pages_through_its_files_named_from_it() {
+fn a_directorys_subdirectories_are_folders_to_go_into() {
     if !pty_works() {
         return;
     }
     let dir = std::env::temp_dir().join(format!("clview-pager-gallery-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("trip")).unwrap();
+    std::fs::create_dir_all(dir.join("empty")).unwrap();
+    std::fs::write(dir.join("empty/notes.txt"), "plain text\n").unwrap();
     save(&dir.join("a.png"), 800, 600);
     save(&dir.join("trip/b.png"), 800, 600);
-    let mut view = Session::start(&dir, &["-r", "--protocol", "kitty"], 80, 48);
-    view.wait_until("the first file", |t| bar(t).contains(" a.png ") && drawn(t, "page 1/2"));
-    view.press("n");
-    view.wait_until("the subdirectory's", |t| bar(t).contains(" trip/b.png page 2/2 "));
+    save(&dir.join("trip/c.png"), 400, 300);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 80, 48);
+    view.wait_until("the list", |t| bar(t).contains(" a.png arrows move · ⏎ open · + - zoom · q quit 1/3 "));
+    // A folder with nothing to show says so, and stays.
+    view.press("l\r");
+    view.wait_until("empty", |t| bar(t).contains(" empty/ nothing in empty/ that clv shows 2/3 "));
+    view.press("l\r");
+    view.wait_until("in trip", |t| bar(t).contains(" trip/b.png 1/2 ") && chosen(t).as_deref() == Some("b.png"));
+    assert!(bar(&view.text()).contains(" trip/ opening trip/… 3/3 "), "said before opening");
+    view.press("l");
+    view.wait_until("c chosen", |t| bar(t).contains(" trip/c.png 2/2 "));
+    view.press("\x7f");
+    view.wait_until("back", |t| bar(t).contains(" trip/ 3/3 ") && chosen(t).as_deref() == Some("trip/"));
     view.press("q");
     assert!(view.finish().success());
+    std::fs::remove_dir_all(dir.join("empty")).unwrap();
+    let mut flat = Session::start(&dir, &["-r", "--protocol", "kitty"], 80, 48);
+    flat.wait_until("the list", |t| bar(t).contains(" a.png ") && bar(t).contains(" 1/3 "));
+    flat.press("G");
+    flat.wait_until("the last", |t| bar(t).contains(" trip/c.png 3/3 "));
+    flat.press("q");
+    assert!(flat.finish().success());
 }
 
 /// The `i=` value at the start of a transmission.

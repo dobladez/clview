@@ -35,8 +35,8 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 
 | Option | Meaning |
 |---|---|
-| `--pages 1,3-5` | the pages to show, in order (default: all of them) |
-| `-r`, `--recurse` | in a directory, its subdirectories' files too |
+| `--pages 1,3-5` | the pages to show, in order (default: all of them); in a list, of each file |
+| `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
 | `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
 | `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
@@ -54,10 +54,13 @@ when the window is wide enough, as the pager first shows them.
 
 ## Several files
 
-`clv *.png` and `clv a.pdf b.pdf` show the files one after another, as one list of pages numbered
-on through them: the second file's first page follows the first file's last, `--pages 3` is the
-list's third page, and a typed page number goes to that place in the list. The status line names
-the file the page on screen comes from (the first and the last, when the screen holds several).
+`clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
+name under it, in the order given. The arrows choose a tile, its name highlighted and on the
+status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
+been given alone. Esc or Backspace goes back to the list as you left it. `--pages` applies to each
+file: `clv *.pdf --pages 2` shows every file by its second page, and opens each to that page alone.
+A file without any of the pages given is left out. Printed, a list is its tiles, in rows, each
+row's names under it.
 
 A file that can't be shown, among others, is left out: why is said on stderr before anything is
 shown, the pager's status line names it at first, and printed pages end with an error that says
@@ -65,27 +68,32 @@ how many were left out. With none left, nothing is shown. An option goes to the 
 it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
 
 Opening a file reads what its backend needs to know its pages: an image's header, a PDF's whole
-file. Files are rendered when their pages are wanted, two at a time in the pager, and what a file
-renders with is let go once the reader is elsewhere, so hundreds of photos open at once hold
-little more than their sizes.
+file. Every file given is opened before anything shows, which for many large PDFs takes a while
+(20 of an 11 MB, 3,000-page manual take 16 seconds and half a gigabyte); opening only the files
+on screen is planned. Files are rendered when their tiles are wanted, two at a time in the pager,
+and what a file renders with is let go once the reader is elsewhere, so hundreds of photos open
+at once hold little more than their sizes.
 
 ## Directories
 
-A directory shows each of its files that a backend opens by its first page, like a gallery: a
-directory of PDFs shows their covers. They come in the order of their names, numbers by their
-value (`img2` before `img10`), letters regardless of case. Hidden files are left out, and so,
-without a word, are files no backend opens, since a directory holds all sorts. A file a backend
-opens and can't show (a broken picture, a PDF that needs a password) is left out as one given by
-name is, with a warning. The status line names each file from the directory (`2024/beach.jpg`).
+A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
+its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
+which Enter goes into, to a list of its own; Esc or Backspace comes back. They come in the order
+of their names, numbers by their value (`img2` before `img10`), letters regardless of case,
+subdirectories among the files. Hidden files are left out, and so, without a word, are files no
+backend opens, since a directory holds all sorts. A file a backend opens and can't show (a broken
+picture, a PDF that needs a password) is left out as one given by name is, with a warning: before
+anything shows for the directory given, and once the screen is back for one gone into. The status
+line names each file from the directory given (`2024/beach.jpg`).
 
-Subdirectories are left out unless `-r` (`--recurse`) is given: then each one's files come at its
-place among the names, depth first, down to 32 directories. A link to a file is followed; a link to
+With `-r` (`--recurse`), each subdirectory's files are tiles in the list instead of a folder,
+at its place among the names, depth first, down to 32 directories. A link to a file is followed; a link to
 a directory is not, so links can't make a loop. At most 4,096 files are listed from a directory,
 and at most 100,000 entries read, so `clv -r ~` stops in time; a warning says when the listing
 stopped early.
 
-A directory and files can be given together, and so can several directories: each directory's
-files at its place among the arguments.
+A directory and files can be given together, and so can several directories: each directory is a
+folder at its place among the arguments (with `-r`, its files, named from it: `photos/a.jpg`).
 
 ## Which files it shows
 
@@ -158,7 +166,27 @@ to a row, a tall window shows landscape pages two or three at a time, one under 
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
 | `?` | these keys, in place of the pages; any key goes back |
+| `Esc`, `Backspace` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
+
+In a list:
+
+| Keys | Action |
+|---|---|
+| `←` `→`, `h` `l` | the tile before or after |
+| `↑` `↓`, `k` `j` | the tile above or below; below the last row's tiles, the last |
+| `space`, `b`, `n`, `p`, `PgDn`, `PgUp` | a screen on or back |
+| `g`, `G`, `Home`, `End` | the first or the last tile |
+| a number, then `Enter` | that tile |
+| `Enter` | open it: a file to its pages, a folder to its own list |
+| `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
+| `Esc`, `Backspace` | back, in a folder gone into; at the first list, `Esc` quits |
+| `q`, `Ctrl-C` | quit |
+
+A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:
+up to four to a row until you zoom (fewer when there are fewer), as many rows as fit. The screen
+moves only when the tile you choose leaves it, and the tiles show as they render, as a gallery's
+do. `--zoom` sets the list's tiles to a row; a file opened from it starts at `auto`.
 
 The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
 `pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`

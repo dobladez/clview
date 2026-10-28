@@ -20,10 +20,12 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
   backend with nothing better (images) lends its render function to `source/threads.rs`.
-- `source/dir.rs`: a directory's files, in name order (`-r` for its subdirectories'), each shown
-  by its first page. `source/joined.rs`: several sources as one (several files, a directory's). It renders a few files at a time
-  and lets go of what the others render with, so a source must hold little while idle: an image
-  holds its header, not its pixels.
+- `source/dir.rs`: a directory's files and subdirectories, in name order (`-r` for its
+  subdirectories' files instead). Several files, or a directory, are a list (`view/mod.rs`'s
+  `Item`): a tile each, its first page, or a folder (`source/folder.rs`) to go into, and Enter
+  opens one as a level of its own in the pager. `source/joined.rs`: the tiles as one source. It
+  renders a few files at a time and lets go of what the others render with, so a source must hold
+  little while idle: an image holds its header, not its pixels.
 - Test pictures are made by the tests, or kept in `tests/data/`, synthetic, with how each was
   made in its README.
 

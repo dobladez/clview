@@ -90,7 +90,7 @@ impl Source for Pdf {
         Ok(Box::new(Renderer(renderer)))
     }
 
-    fn pool(&self, threads: usize) -> Box<dyn super::Pool + '_> {
+    fn pool(&self, threads: usize) -> Box<dyn super::Pool> {
         Box::new(Pool(RenderPool::new(self.bytes.clone(), threads, self.config.clone())))
     }
 }

@@ -1,13 +1,13 @@
-//! A directory's files, in the order a gallery shows them: by name, the way people number files
-//! (`img2` before `img10`), hidden ones left out. Its subdirectories are left out too, unless
-//! asked to recurse: then each one's files come at its place among the names, depth first. A
-//! link to a file is followed; a link to a directory is not, so no loop of links goes on forever.
+//! A directory's files and subdirectories, in the order a gallery shows them: by name, the way
+//! people number files (`img2` before `img10`), hidden ones left out. Asked to recurse, each
+//! subdirectory's files come at its place among the names instead, depth first. A link to a file
+//! is followed; a link to a directory is not, so no loop of links goes on forever.
 
 use std::cmp::Ordering;
 use std::path::Path;
 
-/// The most files listed from a directory: each becomes a source, and a source holds its header
-/// (a PDF, its whole file).
+/// The most files and subdirectories listed from a directory: each becomes a source, and a
+/// source holds its header (a PDF, its whole file).
 const MAX_FILES: usize = 4096;
 
 /// The most directories down a recursion goes.
@@ -20,15 +20,22 @@ const MAX_ENTRIES: usize = 100_000;
 /// What a directory holds to show.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Listing {
-    /// Each file: its path, and its name from the directory listed (`2024/beach.jpg`).
-    pub(crate) files: Vec<(String, String)>,
+    /// Each file, and each subdirectory unless recursing, in order.
+    pub(crate) entries: Vec<Listed>,
     /// What couldn't be read, by its name from the directory listed, and why: a subdirectory,
     /// a name that isn't UTF-8.
     pub(crate) unread: Vec<(String, String)>,
-    /// Whether subdirectories were left out, not recursed into.
-    pub(crate) subdirectories: bool,
     /// Whether the listing stopped at one of the limits before the end.
     pub(crate) cut: bool,
+}
+
+/// A file or a subdirectory listed.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Listed {
+    pub(crate) path: String,
+    /// From the directory listed: `2024/beach.jpg`, recursing.
+    pub(crate) name: String,
+    pub(crate) directory: bool,
 }
 
 /// [`Listing`] of the directory at `dir`, its subdirectories' too if `recurse`.
@@ -48,7 +55,7 @@ fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> 
         let depth = open.len();
         open.push((prefix.clone(), left));
         read = read.saturating_add(1);
-        if listing.files.len() >= max_files || read > MAX_ENTRIES {
+        if listing.entries.len() >= max_files || read > MAX_ENTRIES {
             listing.cut = true;
             break;
         }
@@ -59,8 +66,8 @@ fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> 
             continue;
         };
         match entry.kind {
-            Kind::File => listing.files.push((path, name)),
-            Kind::Directory if !recurse => listing.subdirectories = true,
+            Kind::File => listing.entries.push(Listed { path, name, directory: false }),
+            Kind::Directory if !recurse => listing.entries.push(Listed { path, name, directory: true }),
             Kind::Directory if depth >= max_depth => listing.unread.push((name, format!("{path}: more than {max_depth} directories down"))),
             Kind::Directory => match entries(Path::new(&path)) {
                 Ok(inside) => open.push((format!("{name}/"), inside.into_iter())),
@@ -171,8 +178,9 @@ mod tests {
         dir
     }
 
-    fn names(listing: &Listing) -> Vec<&str> {
-        listing.files.iter().map(|(_, name)| name.as_str()).collect()
+    /// The names listed, a directory's with a `/` after it.
+    fn names(listing: &Listing) -> Vec<String> {
+        listing.entries.iter().map(|e| if e.directory { format!("{}/", e.name) } else { e.name.clone() }).collect()
     }
 
     #[test]
@@ -185,12 +193,13 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_lists_its_files_by_name_and_leaves_out_hidden_ones_and_subdirectories() {
-        let dir = tree("flat", &["b10.pdf", "b9.png", ".hidden.png", "sub/c.png", "empty/"]);
+    fn a_directory_lists_its_files_and_subdirectories_by_name_and_leaves_out_hidden_ones() {
+        let dir = tree("flat", &["b10.pdf", "b9.png", ".hidden.png", "sub/c.png", "empty/", ".git/"]);
         let listing = list(dir.to_str().unwrap(), false).unwrap();
-        assert_eq!(names(&listing), ["b9.png", "b10.pdf"]);
-        assert_eq!(listing.files[0].0, dir.join("b9.png").to_str().unwrap());
-        assert!(listing.subdirectories && !listing.cut && listing.unread.is_empty(), "{listing:?}");
+        assert_eq!(names(&listing), ["b9.png", "b10.pdf", "empty/", "sub/"]);
+        assert_eq!(listing.entries[0].path, dir.join("b9.png").to_str().unwrap());
+        assert_eq!(listing.entries[3].path, dir.join("sub").to_str().unwrap());
+        assert!(!listing.cut && listing.unread.is_empty(), "{listing:?}");
         assert!(list(dir.join("nothing").to_str().unwrap(), false).is_err_and(|e| e.contains("nothing: ")));
     }
 
@@ -199,11 +208,11 @@ mod tests {
         let dir = tree("deep", &["a.png", "m/b.png", "m/n/c.png", "m/.d/e.png", "z.png"]);
         let listing = list(dir.to_str().unwrap(), true).unwrap();
         assert_eq!(names(&listing), ["a.png", "m/b.png", "m/n/c.png", "z.png"]);
-        assert_eq!(listing.files[2].0, dir.join("m/n/c.png").to_str().unwrap());
-        assert!(!listing.subdirectories);
+        assert_eq!(listing.entries[2].path, dir.join("m/n/c.png").to_str().unwrap());
         // Within limits: two files, or one directory down.
         let cut = list_within(dir.to_str().unwrap(), true, 2, MAX_DEPTH).unwrap();
-        assert_eq!((names(&cut), cut.cut), (vec!["a.png", "m/b.png"], true));
+        assert_eq!(names(&cut), ["a.png", "m/b.png"]);
+        assert!(cut.cut);
         let shallow = list_within(dir.to_str().unwrap(), true, MAX_FILES, 1).unwrap();
         assert_eq!(names(&shallow), ["a.png", "m/b.png", "z.png"]);
         assert!(shallow.unread.iter().any(|(name, why)| name == "m/n" && why.ends_with("m/n: more than 1 directories down")), "{shallow:?}");
@@ -220,5 +229,6 @@ mod tests {
         let made = std::process::Command::new("mkfifo").arg(dir.join("pipe.png")).status().is_ok_and(|s| s.success());
         let listing = list(dir.to_str().unwrap(), true).unwrap();
         assert_eq!(names(&listing), ["a.png", "sub/b.png", "to-a.png"], "made a pipe: {made}");
+        assert_eq!(names(&list(dir.join("sub").to_str().unwrap(), false).unwrap()), ["b.png"], "a link to a directory isn't one");
     }
 }

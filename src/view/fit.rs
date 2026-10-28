@@ -201,8 +201,9 @@ pub(crate) struct Area {
 }
 
 /// How pages share an [`Area`]: `per_row` to a row in `rows` rows, each fitted into a place
-/// `cols` × `page_rows` cells and centred in it (at the width, a taller page scrolls), and the
-/// most pages to a row the area takes.
+/// `cols` × `page_rows` cells and centred in it (at the width, a taller page scrolls), with
+/// `label` rows under it for its name (a list's tiles), and the most pages to a row the area
+/// takes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Grid {
     pub(crate) fit: Fit,
@@ -210,7 +211,36 @@ pub(crate) struct Grid {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
     pub(crate) page_rows: u16,
+    pub(crate) label: u16,
     pub(crate) most: u16,
+}
+
+/// The rows a tile's name takes, under the tile.
+pub(crate) const LABEL_ROWS: u16 = 1;
+
+/// The most tiles to a row until the reader zooms: fewer when there are fewer.
+pub(crate) const TILES_PER_ROW: u16 = 4;
+
+/// How a list of `count` tiles shares `area` at `zoom`: each in a place the same for all, whatever
+/// it shows, square in pixels (but no taller than the area), its name under it. `auto` puts up to
+/// [`TILES_PER_ROW`] to a row, and `width` one. The places never change with what is on screen,
+/// so moving through the list moves nothing else.
+pub(crate) fn tiles(zoom: Zoom, count: usize, area: Area) -> Grid {
+    let Area { cols: max_cols, rows: area_rows, cell, max_rows } = area;
+    let most = max_per_row(max_cols);
+    let per_row = match zoom {
+        Zoom::PerRow(n) => n.clamp(1, most),
+        Zoom::Width => 1,
+        Zoom::Auto => u16::try_from(count).unwrap_or(u16::MAX).clamp(1, TILES_PER_ROW).min(most),
+    };
+    let cols = per_row_cols(max_cols, per_row).max(1);
+    let room = area_rows.saturating_sub(LABEL_ROWS).min(max_rows).max(1);
+    // As many rows as the place is wide in pixels; finite and clamped to `room`, so the cast is
+    // exact.
+    let square = (f32::from(cols) * cell.w / cell.h).floor();
+    let page_rows = if square.is_finite() { square.clamp(1.0, f32::from(room)) as u16 } else { room };
+    let rows = grid_rows(page_rows.saturating_add(LABEL_ROWS), area_rows, per_row);
+    Grid { fit: Fit::Page, per_row, rows, cols, page_rows, label: LABEL_ROWS, most }
 }
 
 /// How `count` pages share `area` at `zoom`, for a reader at `at` among them (`size` is the size
@@ -222,7 +252,7 @@ pub(crate) fn grid(zoom: Zoom, count: usize, at: usize, size: impl Fn(usize) -> 
     let Area { cols: max_cols, rows: area_rows, cell, max_rows } = area;
     let most = max_per_row(max_cols);
     let per_row = match zoom {
-        Zoom::Width => return Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: max_cols, page_rows: area_rows, most },
+        Zoom::Width => return Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: max_cols, page_rows: area_rows, label: 0, most },
         // `most` is at least 1, so the clamp can't panic.
         Zoom::PerRow(n) => n.clamp(1, most),
         // Two side by side when there are two and each keeps most of its size alone: the
@@ -239,7 +269,7 @@ pub(crate) fn grid(zoom: Zoom, count: usize, at: usize, size: impl Fn(usize) -> 
     let row_start = size(at.saturating_sub(at % usize::from(per_row)));
     let place = row_start.and_then(|s| layout(Size { natural: false, ..s }, cols, area_rows, cell, Fit::Page, max_rows).ok());
     let (cols, page_rows) = place.map_or((cols, area_rows), |l| (l.cols, l.rows));
-    Grid { fit: Fit::Page, per_row, rows: grid_rows(page_rows, area_rows, per_row), cols, page_rows, most }
+    Grid { fit: Fit::Page, per_row, rows: grid_rows(page_rows, area_rows, per_row), cols, page_rows, label: 0, most }
 }
 
 #[cfg(test)]
@@ -395,7 +425,7 @@ mod tests {
         // Two portrait pages side by side in a wide window, each the size it is alone; one in a
         // tall window, where two would be half the size.
         let two = grid(Zoom::Auto, 10, 0, letter, wide);
-        assert_eq!(two, Grid { fit: Fit::Page, per_row: 2, rows: 1, cols: 78, page_rows: 50, most: MAX_PER_ROW });
+        assert_eq!(two, Grid { fit: Fit::Page, per_row: 2, rows: 1, cols: 78, page_rows: 50, label: 0, most: MAX_PER_ROW });
         assert_eq!(grid(Zoom::Auto, 10, 0, letter, Area { cols: 80, rows: 100, ..wide }).per_row, 1);
         // Or one when there is only one.
         assert_eq!(grid(Zoom::Auto, 1, 0, letter, wide).per_row, 1);
@@ -406,7 +436,10 @@ mod tests {
         assert_eq!((alone.per_row, alone.cols), (4, per_row_cols(200, 4)), "{alone:?}");
         assert_eq!(grid(Zoom::PerRow(4), 1, 0, letter, wide), grid(Zoom::PerRow(4), 10, 0, letter, wide));
         // The width: one page, as wide as the window, and the window's rows to scroll it in.
-        assert_eq!(grid(Zoom::Width, 10, 4, letter, wide), Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: 200, page_rows: 50, most: 8 });
+        assert_eq!(
+            grid(Zoom::Width, 10, 4, letter, wide),
+            Grid { fit: Fit::Width, per_row: 1, rows: 1, cols: 200, page_rows: 50, label: 0, most: 8 }
+        );
         // The page at the start of the reader's row sets the place: landscape page 7 starts the
         // row of pages 7–9, at three to a row.
         let mixed = |i: usize| Some(if i == 6 { LANDSCAPE } else { LETTER });
@@ -414,7 +447,30 @@ mod tests {
         assert_eq!((landscape.cols, portrait.cols), (65, 65));
         assert!(landscape.page_rows < portrait.page_rows, "{landscape:?} {portrait:?}");
         // No page to size the place by: the whole of each page's share.
-        assert_eq!(grid(Zoom::PerRow(2), 0, 0, |_| None, wide), Grid { fit: Fit::Page, per_row: 2, rows: 1, cols: 99, page_rows: 50, most: 8 });
+        assert_eq!(
+            grid(Zoom::PerRow(2), 0, 0, |_| None, wide),
+            Grid { fit: Fit::Page, per_row: 2, rows: 1, cols: 99, page_rows: 50, label: 0, most: 8 }
+        );
+    }
+
+    #[test]
+    fn tiles_are_square_places_the_same_whatever_they_show() {
+        // 200 × 50 cells of 10 × 20 px. Four to a row: 48 columns, 480 px, so 24 rows, and one for
+        // the name: a row of them in 50, two in 51, a row between.
+        let wide = Area { cols: 200, rows: 50, cell: CELL, max_rows: u16::MAX };
+        assert_eq!(tiles(Zoom::Auto, 40, wide), Grid { fit: Fit::Page, per_row: 4, rows: 1, cols: 48, page_rows: 24, label: 1, most: 8 });
+        assert_eq!(tiles(Zoom::Auto, 40, Area { rows: 51, ..wide }).rows, 2);
+        // Fewer tiles, fewer to a row, each its share; one alone as wide as it can be, but no
+        // taller than the window.
+        assert_eq!(tiles(Zoom::Auto, 2, wide).per_row, 2);
+        assert_eq!((tiles(Zoom::Auto, 1, wide).cols, tiles(Zoom::Auto, 1, wide).page_rows), (200, 49));
+        assert_eq!(tiles(Zoom::Width, 40, wide).per_row, 1);
+        // As zoomed, as far as the window takes; at least a cell, however small the window.
+        assert_eq!(tiles(Zoom::PerRow(8), 40, Area { cols: 40, ..wide }).per_row, 4);
+        let tiny = tiles(Zoom::Auto, 40, Area { cols: 1, rows: 1, cell: CELL, max_rows: 1 });
+        assert!(tiny.cols >= 1 && tiny.page_rows >= 1 && tiny.rows >= 1, "{tiny:?}");
+        let odd = tiles(Zoom::Auto, 40, Area { cell: Cell { w: f32::NAN, h: 0.0 }, ..wide });
+        assert_eq!(odd.page_rows, 49);
     }
 
     fn fit() -> impl Strategy<Value = Fit> {
@@ -473,6 +529,11 @@ mod tests {
             let area = Area { cols, rows, cell: CELL, max_rows };
             let g = grid(zoom, count, at, |i| sizes.get(i).map(|&(w, h, natural)| Size { w, h, natural }), area);
             prop_assert!(g.per_row >= 1 && g.per_row <= g.most && g.most <= MAX_PER_ROW && g.rows >= 1, "{g:?}");
+            // A list's tiles, and their names, fit too, when a tile fits at all.
+            let t = tiles(zoom, count, area);
+            prop_assert!(t.per_row >= 1 && t.per_row <= t.most && t.rows >= 1 && t.cols >= 1 && t.page_rows >= 1, "{t:?}");
+            prop_assert!(rows <= 1 || t.page_rows + t.label <= rows, "{t:?}");
+            prop_assert!(t.cols <= per_row_cols(cols, t.per_row).max(1), "{t:?}");
             prop_assert!(zoom != Zoom::Auto || g.per_row <= 2 && (count >= 2 || g.per_row == 1), "{g:?}");
             match g.fit {
                 Fit::Width => prop_assert_eq!((g.per_row, g.cols, g.page_rows), (1, cols, rows)),

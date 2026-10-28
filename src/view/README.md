@@ -68,10 +68,14 @@ to decode, one from a pipe kept as it came. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
 
-Several files are one source, `source::Joined`: their pages one after another, numbered on
-through them, each part (a file) with the pages it shows and a name for the status line and its
-errors. A directory's files (`source/dir.rs`, in name order, subdirectories' with `-r`) are parts
-too, each with its first page only. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
+Several files, or a directory's files and subdirectories (`source/dir.rs`, in name order,
+subdirectories' files instead with `-r`), are a list: each an `Item` (`mod.rs`), a file's pages
+or a directory. The list's tiles are one source, `source::Joined`: one page from each item, a
+file's first, or a folder (`source::Folder`, drawn in code) for a directory, each part with a name
+for its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
+pages opened from it, each with its own source and pool; going back drops the level and its
+images in the terminal, and the list's are still there. A directory is listed when it is gone
+into, through a function `mod.rs` hands the pager. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
 only the last part's renderer, as pages print in order. The pager's pool hands each request to
 its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so
 a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools

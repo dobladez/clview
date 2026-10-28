@@ -3,12 +3,12 @@
 //! and its own threads, so one can cancel or time out work the way it knows how.
 
 mod dir;
+mod folder;
 #[cfg(feature = "image")]
 mod image;
 mod joined;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
-#[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images use these threads so far"))]
 mod threads;
 
 use std::fs::File;
@@ -17,6 +17,7 @@ use std::ops::Deref;
 
 use crate::args::{OptionSpec, Parsed};
 pub(crate) use dir::list as list_directory;
+pub(crate) use folder::Folder;
 pub(crate) use joined::{Joined, Part};
 
 /// The backends this build has, in the order they are asked whether they open a file.
@@ -192,16 +193,12 @@ pub(crate) trait Source {
     /// to the window, it is never drawn larger, unless the reader zooms to the width. A PDF's
     /// points are a unit for any scale.
     fn natural(&self, page: usize) -> bool;
-    /// The name of the file page `page` comes from, for a source that joins several files' (the
-    /// status line names it); `None` for one file's, which the viewer names itself.
-    fn file_name(&self, _page: usize) -> Option<&str> {
-        None
-    }
     /// A renderer on this thread, for pages printed one after another.
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String>;
     /// Renders on threads of their own, for the pager: keys still work while pages render, and
-    /// a page that takes too long is given up on.
-    fn pool(&self, threads: usize) -> Box<dyn Pool + '_>;
+    /// a page that takes too long is given up on. The pool holds what it needs of the source,
+    /// so the pager can keep both.
+    fn pool(&self, threads: usize) -> Box<dyn Pool>;
 }
 
 /// Renders on the caller's thread.
