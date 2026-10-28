@@ -1,8 +1,9 @@
-//! The one integration-test binary: its modules share the fixtures.
-//! Every test here shows PDFs, so needs the pdfcraft backend.
-#![cfg(feature = "pdfcraft")]
+//! The one integration-test binary: its modules share the fixtures. Every test here shows PDFs,
+//! so needs the PDF backend (the `pdf` feature).
+#![cfg(feature = "pdf")]
 
 mod fixtures;
+mod pdfcraft;
 mod pdfcraft_pin;
 mod view;
 mod view_pager;

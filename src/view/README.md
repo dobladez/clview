@@ -42,10 +42,10 @@ and a pool of render threads for the pager. A render is asked for as a page and 
 pixels per unit) and comes back as a `Frame`: premultiplied RGBA in the backend's own buffer, so
 the pixels reach the terminal without a copy, or the error, and the warnings for the reader.
 
-Each backend brings its own threads, because only it knows how to stop a page. pdfcraft's pool
-tells a page that takes too long to stop at its next drawing operator, retries a page that had
-only waited behind another page's decode, and bounds the threads it replaces; a pool in the
-viewer could only abandon the thread. What the pager relies on is that pool's contract:
+Each backend brings its own threads, because only it knows how to stop a page. The PDF
+backend's pool tells a page that takes too long to stop at its next drawing operator, retries a
+page that had only waited behind another page's decode, and bounds the threads it replaces; a
+pool in the viewer could only abandon the thread. What the pager relies on is that pool's contract:
 `set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
 request is still listed; `try_recv` never blocks. A backend that has no better way, such as
 images, gets plain threads from `source/threads.rs`: a render once begun runs to its end, and
@@ -60,8 +60,8 @@ against its own and every backend's, lists them in `--help` under their backend,
 the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
 its own options from it.
 
-The backends are `source/pdfcraft.rs` and `source/image.rs`, behind features of those names (on
-by default). An image decodes on its first render, on a render thread, so the keys work while a
+The backends are `source/pdfcraft.rs` (feature `pdf`) and `source/image.rs` (feature `image`),
+both on by default. An image decodes on its first render, on a render thread, so the keys work while a
 large photo decodes; the pixels are kept for its renders at other sizes. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
@@ -283,8 +283,9 @@ only.
 - **Unit tests** in each module, among them property tests for the key decoder, the fit and the
   grid, and that the reader's page stays on screen.
 - **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`. Its PDFs, and the
-  other files', are made in-process by pdfcraft (`tests/it/fixtures.rs`).
-- **`tests/it/pdfcraft_pin.rs`**: every crate pdfcraft patches comes from the pinned commit.
+  other files', are written by hand (`tests/it/fixtures.rs`), so any PDF backend reads them.
+- **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
+  XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers.
@@ -304,4 +305,4 @@ and use a private `tmux -L <name>` server for tmux.
 Behaviour comes from the kitty graphics protocol specification, the tmux manual and black-box
 observation of terminals and of other programs' output. Never read the source of another
 terminal-graphics program or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF and so on): most are
-GPL or AGPL, and this code is MIT or Apache-2.0. It is also the rule in pdfcraft, where this began.
+GPL or AGPL, and this code is MIT or Apache-2.0.

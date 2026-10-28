@@ -25,14 +25,6 @@ Printed pages are drawn in rows one under another and stay in the terminal's scr
 same as text that `cat` prints. `--pages` takes single pages and ranges, in
 the order given. Without it, `view` shows the whole document.
 
-The pages are the ones [pdfcraft](https://github.com/storytold/pdfcraft) draws, in its app and in
-`pdfcraft-cli render`: comments without an appearance of their own are
-drawn too, and a dynamic XFA form shows the pages its template lays out into, not the
-placeholder page the file carries for viewers that can't.
-
-To write an image file instead, use pdfcraft's
-`pdfcraft-cli render report.pdf --page 1 --out page.png`.
-
 How `view` works inside (the transports, what the terminal keeps, what tmux loses and the numbers
 behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 
@@ -65,8 +57,16 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 
 | Backend | Shows | Its options |
 |---|---|---|
-| `pdfcraft` (the `pdfcraft` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
+| `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
+
+PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
+`pdfcraft-cli render` draw them: comments without an appearance of their own are drawn too, and a
+dynamic XFA form shows the pages its template lays out into, not the placeholder page the file
+carries for viewers that can't. A page whose content runs past pdfcraft's safety budget is drawn
+without the rest of it, and a colour it can't compute (a colour space it can't read, a tint
+transform it can't evaluate) is painted in a fallback colour, each with a warning. To write an
+image file instead, use `pdfcraft-cli render report.pdf --page 1 --out page.png`.
 
 An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
 photo taken with the phone on its side shows upright). It is fitted to the window like a page,
@@ -213,10 +213,8 @@ inside tmux even though they draw pages outside it.
 - A page number past the end of the document fails before anything is drawn.
 - A page that can't be rendered is reported at the end. The other pages are still drawn, and
   `view` exits with an error.
-- A page whose content runs past the renderer's safety budget is drawn without the rest of its
-  content, with a warning, as `pdfcraft-cli render` does.
-- A colour the renderer can't compute (a colour space it can't read, a tint transform it can't
-  evaluate) is painted in a fallback colour, with a warning, as `pdfcraft-cli render` does.
+- What a backend warns about on a page (content it left out, a colour it had to guess) is said
+  with the page's number: on stderr when printed, on the status line in the pager.
 - File names and messages are written with their control characters replaced, so neither a file
   name nor a document can send escape sequences (a clipboard write, a window title) to the
   terminal through them.

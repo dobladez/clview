@@ -6,8 +6,8 @@
 //! draws what `Nav` says, and [`Screen`] puts the terminal back however the pager ends.
 //!
 //! Turning a page should be instant, so the pager works ahead. The pages on screen render first,
-//! then the next screens and the one before, on worker threads (keys keep working meanwhile, and
-//! the renderer's watchdog gives up on a page that takes too long). Each page is sent to the
+//! then the next screens and the one before, on the source's threads (keys keep working meanwhile,
+//! and a backend may give up on a page that takes too long). Each page is sent to the
 //! terminal as soon as it is ready, under an image id of its own, and stays there while it is
 //! near: turning to it only places it. The pages on screen stay until the next ones are ready,
 //! so the screen never goes blank in between.
@@ -1259,12 +1259,12 @@ mod tests {
     #[test]
     fn a_narrow_status_line_keeps_its_two_sides_apart() {
         let nav = reader(4, 13, 40, 40);
-        let left = " pdfcraft-showcase.pdf · page 5/13 · 1 per row ";
+        let left = " quarterly-results.pdf · page 5/13 · 1 per row ";
         // Half a wide window: the shortest reminder of the keys, two spaces from the page.
-        let half = nav.status("pdfcraft-showcase.pdf", 70, false);
+        let half = nav.status("quarterly-results.pdf", 70, false);
         assert!(half.starts_with(left) && half.ends_with("  n p · q quit "), "{half:?}");
         for cols in 0..=120 {
-            let line = nav.status("pdfcraft-showcase.pdf", cols, false);
+            let line = nav.status("quarterly-results.pdf", cols, false);
             assert_eq!(line.chars().count(), usize::from(cols), "{line:?}");
             // Whatever follows the page is a whole reminder of the keys, two spaces or more after
             // it (`left` ends with one), or nothing.

@@ -16,12 +16,15 @@ enough; `-` and `+` zoom out to rows of pages and back in to the window's width.
 (the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
 inside in [`src/view/README.md`](src/view/README.md).
 
-Pages are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws
-them: comments without an appearance of their own are drawn, dynamic XFA forms are laid out, and
-either password opens a protected file. This began as `pdfcraft-cli view`. Images are decoded
-in Rust by the [`image`](https://crates.io/crates/image) crate, and JPEG XL by
-[jxl-oxide](https://crates.io/crates/jxl-oxide): PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI,
-OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation.
+What it shows comes from backends, one for each kind of file, each behind a cargo feature and
+none of them known to the viewer by name:
+
+| Feature | Shows | Rendered by |
+|---|---|---|
+| `pdf` | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws them: comments without an appearance of their own are drawn, dynamic XFA forms are laid out, and either password opens a protected file |
+| `image` | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide), in Rust |
+
+This began as `view` in pdfcraft's command line.
 
 ## Building
 
@@ -29,21 +32,22 @@ OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation.
 cargo install --path .      # installs `clv`
 ```
 
-pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its `main` in
-[`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
+Both features are on by default; `cargo build --no-default-features --features image` builds
+the viewer without the PDF backend, and `--no-default-features` alone without any.
+
+The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
+`main` in [`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
 `[patch.crates-io]` ones included (they are pdfcraft's patched hayro and lopdf), then run the
 tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
-instead.
-
-pdfcraft is the `pdfcraft` feature, on by default. `cargo build --no-default-features` builds the
-viewer without it, and without a PDF backend.
+instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
+renderer would replace that file and the dependencies, and nothing else.
 
 ## Plans
 
 The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
 renders. A file goes to the first backend that opens it, going by its first bytes, and each
-backend brings its own options (`--password` is pdfcraft's). There are two so far: pdfcraft for
-PDFs, and `image` for images.
+backend brings its own options (`--password` is the PDF backend's). There are two so far, for
+PDFs and for images.
 
 - Directories, as a gallery: a tile for each file it can show (its first page), and Enter opens
   one.

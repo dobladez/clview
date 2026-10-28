@@ -9,7 +9,7 @@ use base64::Engine as _;
 
 const BIN: &str = env!("CARGO_BIN_EXE_clv");
 
-fn tmp(test: &str, name: &str) -> PathBuf {
+pub(crate) fn tmp(test: &str, name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("clview-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d.join(name)
@@ -23,12 +23,12 @@ fn fixture(test: &str, pages: usize) -> PathBuf {
 }
 
 /// Run `view`, kept away from the terminal, the tmux and the SSH login the tests may run in.
-fn view(pdf: &Path, args: &[&str]) -> Output {
+pub(crate) fn view(pdf: &Path, args: &[&str]) -> Output {
     view_with(pdf, args, &[])
 }
 
 /// [`view`], with `env` set.
-fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+pub(crate) fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(BIN);
     command.arg(pdf).args(args).env("TERM", "dumb");
     for name in ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
@@ -37,20 +37,20 @@ fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     command.envs(env.iter().copied()).output().unwrap()
 }
 
-fn text(bytes: &[u8]) -> String {
+pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// One image drawn by `view`: its first control keys and its decoded payload.
-struct Drawn {
-    keys: String,
-    png: Vec<u8>,
+pub(crate) struct Drawn {
+    pub(crate) keys: String,
+    pub(crate) png: Vec<u8>,
 }
 
 /// Split stdout into images: escape codes `ESC _G <control> ; <base64> ESC \`, with `m=1` on
 /// every chunk but an image's last. Anything between images must be a newline, a carriage return
 /// or a cursor move (`ESC [ n A`, `B` or `C`).
-fn images(stdout: &[u8]) -> Vec<Drawn> {
+pub(crate) fn images(stdout: &[u8]) -> Vec<Drawn> {
     let mut rest = std::str::from_utf8(stdout).unwrap();
     let (mut out, mut keys, mut payload) = (Vec::new(), None::<String>, String::new());
     while !rest.is_empty() {
@@ -85,7 +85,7 @@ fn images(stdout: &[u8]) -> Vec<Drawn> {
     out
 }
 
-fn png_size(png: &[u8]) -> (u32, u32) {
+pub(crate) fn png_size(png: &[u8]) -> (u32, u32) {
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     assert_eq!(&png[12..16], b"IHDR");
     let be32 = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
@@ -112,69 +112,6 @@ fn each_page_is_a_png_shown_at_the_cursor() {
         assert!((ratio - 612.0 / 792.0).abs() < 0.01, "{w}×{h}");
         assert!(key(&image.keys, "c") >= 1 && key(&image.keys, "r") >= 1);
     }
-}
-
-/// `view` takes the owner password as `render` does, also of revision 2–4 files, whose owner
-/// password the renderer doesn't take: what reaches it is the user password owner authentication
-/// recovers (#2670). A wrong password still shows nothing.
-#[test]
-fn either_password_opens_a_protected_file_of_any_revision() {
-    for algorithm in crate::fixtures::ALGORITHMS {
-        let pdf = tmp("passwords", &format!("{algorithm:?}.pdf"));
-        std::fs::write(&pdf, crate::fixtures::protected(algorithm)).unwrap();
-        for password in ["user", "owner"] {
-            let out = view(&pdf, &["--password", password, "--protocol", "kitty"]);
-            assert!(out.status.success(), "{algorithm:?} with {password:?}: {}", text(&out.stderr));
-            let drawn = images(&out.stdout);
-            assert_eq!(drawn.len(), 1, "{algorithm:?} with {password:?}");
-            let (w, h) = png_size(&drawn[0].png);
-            assert!((w as f32 / h as f32 - 200.0 / 300.0).abs() < 0.01, "{algorithm:?} with {password:?}: {w}×{h}");
-        }
-        let out = view(&pdf, &["--password", "wrong", "--protocol", "kitty"]);
-        assert!(!out.status.success() && out.stdout.is_empty(), "{algorithm:?} with a wrong password");
-    }
-}
-
-/// A dynamic XFA form shows the pages its template lays out into, as `render`, `text` and the
-/// app do (#1645), not the placeholder page the file carries; the file itself is left alone.
-#[test]
-fn a_dynamic_xfa_form_shows_its_laid_out_pages() {
-    let pdf = crate::fixtures::xfa_form("view");
-    let original = std::fs::read(&pdf).unwrap();
-    let out = view(&pdf, &["--protocol", "kitty"]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
-    let drawn = images(&out.stdout);
-    assert_eq!(drawn.len(), 2, "the form lays out into two pages; the file has one placeholder");
-    for image in &drawn {
-        let (w, h) = png_size(&image.png);
-        // 200 × 300 pt, the form's medium: the placeholder is US Letter.
-        assert!((w as f32 / h as f32 - 200.0 / 300.0).abs() < 0.01, "{w}×{h}");
-    }
-    assert_eq!(std::fs::read(&pdf).unwrap(), original, "viewing must not write the layout to the file");
-}
-
-/// A colour the renderer can't compute is painted in a fallback colour (pdfcraft#4260): `view`
-/// says so, in the words `pdfcraft-cli render` uses.
-#[test]
-fn a_colour_painted_in_a_fallback_colour_is_said() {
-    // A Separation colour whose tint transform is of no known function type.
-    let content = "/CS1 cs 1 scn 0 0 200 200 re f";
-    let bytes = format!(
-        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
-         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
-         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] \
-         /Resources << /ColorSpace << /CS1 [/Separation /Spot /DeviceRGB << /FunctionType 7 /Domain [0 1] >>] >> >> /Contents 4 0 R >> endobj\n\
-         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
-         trailer << /Root 1 0 R >>\n%%EOF",
-        content.len()
-    );
-    let pdf = tmp("fallback", "fallback.pdf");
-    std::fs::write(&pdf, bytes).unwrap();
-    let said = "warning: page 1: a colour that could not be computed was painted in a fallback colour";
-    let out = view(&pdf, &["--protocol", "kitty"]);
-    assert!(out.status.success(), "{}", text(&out.stderr));
-    assert_eq!(images(&out.stdout).len(), 1, "the page is still drawn");
-    assert!(text(&out.stderr).contains(said), "{}", text(&out.stderr));
 }
 
 #[test]
@@ -397,8 +334,8 @@ fn help_and_version() {
     let help = text(&out.stdout);
     assert!(out.status.success() && help.starts_with("clv <file> [options]\nclv --help | --version\n"), "{help}");
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
-    // The PDF backend's own option, under the backend.
-    assert!(help.contains("\n\nPDFs, by pdfcraft:\n  --password PW "), "{help}");
+    // Each backend under a heading of its own.
+    assert!(help.contains("\n\nPDFs, by "), "{help}");
     #[cfg(feature = "image")]
     assert!(help.contains("\n\nImages, by image:\n  no options of its own\n"), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();

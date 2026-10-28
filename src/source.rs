@@ -4,7 +4,7 @@
 
 #[cfg(feature = "image")]
 mod image;
-#[cfg(feature = "pdfcraft")]
+#[cfg(feature = "pdf")]
 mod pdfcraft;
 #[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images use these threads so far"))]
 mod threads;
@@ -17,7 +17,7 @@ use crate::args::{OptionSpec, Parsed};
 
 /// The backends this build has, in the order they are asked whether they open a file.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
-    #[cfg(feature = "pdfcraft")]
+    #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
     &image::Images,
@@ -60,10 +60,7 @@ impl<'a> Input<'a> {
     }
 
     /// The whole file.
-    #[cfg_attr(
-        all(not(feature = "pdfcraft"), not(feature = "image"), not(test)),
-        expect(dead_code, reason = "only a backend or a test reads a file")
-    )]
+    #[cfg_attr(all(not(feature = "pdf"), not(feature = "image"), not(test)), expect(dead_code, reason = "only a backend or a test reads a file"))]
     pub(crate) fn bytes(self) -> Result<Vec<u8>, String> {
         let Self { path, mut head, mut rest } = self;
         rest.read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
@@ -74,7 +71,7 @@ impl<'a> Input<'a> {
 /// `path` opened, with the first of `backends` that opens it.
 pub(crate) fn choose<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Result<(&'b dyn Backend, Input<'a>), String> {
     if backends.is_empty() {
-        return Err(format!("{path}: this {} was built without backends (cargo features such as `pdfcraft`), so it shows nothing", crate::NAME));
+        return Err(format!("{path}: this {} was built without backends (cargo features such as `pdf`), so it shows nothing", crate::NAME));
     }
     let input = Input::open(path)?;
     Ok((pick(backends, path, &input.head)?, input))
@@ -188,17 +185,26 @@ pub(crate) trait Pool {
 pub(crate) mod tests {
     use super::*;
 
-    /// The viewer knows sources only through the traits here: nothing in `src/view/` names a
-    /// backend. A build without default features checks it too, for the code it compiles.
+    /// The viewer knows sources only through the items here: nothing in `src/view/` reaches into
+    /// a module of `src/source/`, a backend or the threads lent to one. (What a backend renders
+    /// with is named only by the backend and its own tests, which check it.)
     #[test]
     fn the_viewer_names_no_backend() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/view");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let modules: Vec<String> = std::fs::read_dir(root.join("src/source"))
+            .unwrap()
+            .filter_map(|e| e.unwrap().path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .collect();
+        assert!(modules.len() >= 3, "{modules:?}");
+        let dir = root.join("src/view");
         let mut read = 0;
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap();
-                assert!(!text.contains("pdfcraft_"), "{} names a pdfcraft crate", path.display());
+                for module in &modules {
+                    assert!(!text.contains(&format!("source::{module}")), "{} names source::{module}", path.display());
+                }
                 read += 1;
             }
         }
@@ -279,7 +285,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdfcraft", feature = "image")))]
+        #[cfg(not(any(feature = "pdf", feature = "image")))]
         assert!(BACKENDS.is_empty());
     }
 }
