@@ -27,7 +27,7 @@ use tty::{Tty, WindowSize};
 
 /// The viewer's own options, whatever it shows. A backend's come from the backend.
 const OPTIONS: &[OptionSpec] = &[
-    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show of each file, in this order (default: all)" },
+    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show, in this order (default: all); of a list, its tiles" },
     OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files, not folders" },
     OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
     OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
@@ -260,9 +260,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let opener = Opener { backends, options: &options, given: given.as_deref() };
     let Opened { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
-    for warning in warnings.iter().chain(left_out.iter().map(|(_, why)| why)) {
-        note(&format!("warning: {warning}"));
-    }
+    warn(&warnings, &left_out);
     let count = match &shown {
         Shown::Pages(pages) => pages.pages.len(),
         Shown::List(items) => items.len(),
@@ -293,9 +291,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
         let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &|path: &str| opener.directory(path))?;
         // Said once the screen is back: what the directories gone into left out.
-        for warning in &later {
-            note(&format!("warning: {warning}"));
-        }
+        warn(&later, &[]);
         return Ok(());
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
@@ -317,6 +313,7 @@ pub(super) enum Shown {
 }
 
 /// A file's pages to page through, in order, at least one.
+#[derive(Clone)]
 pub(super) struct Pages {
     pub(super) source: Rc<dyn Source>,
     /// What the status line calls the file.
@@ -326,6 +323,7 @@ pub(super) struct Pages {
 
 /// A tile of a list: a file, shown by its first page and opened to its pages, or a directory,
 /// shown as a folder and opened to a list of its own.
+#[derive(Clone)]
 pub(super) enum Item {
     File(Pages),
     /// Its name ends with `/`.
@@ -372,8 +370,8 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
     }
 }
 
-/// Opens files for the viewer: with the first of `backends` that opens each, with `options`, and
-/// keeping of each file the pages `given`.
+/// Opens files for the viewer: with the first of `backends` that opens each, with `options`. What
+/// is shown is what `given` names of it: a file's pages, or a list's tiles.
 struct Opener<'o, 'a> {
     backends: &'o [&'static dyn Backend],
     options: &'o Parsed<'a>,
@@ -391,11 +389,13 @@ struct Opened {
 impl Opener<'_, '_> {
     /// What `paths` show: one file's pages, or a list. A file alone that can't be shown, or that
     /// lacks a page given, is the error. Several files, or a directory, are a list: a tile for each
-    /// file, by the first of its pages given, and for each directory (a directory alone, its files
-    /// and subdirectories); recursing, a directory's files and its subdirectories' are tiles
-    /// instead. Among several, a file that can't be shown is left out, and only nothing at all to
-    /// show is an error. In a directory, a file that nothing shows is passed over. An option that
-    /// none of the files' backends takes is refused, since it would do nothing.
+    /// file, by its first page, and for each directory (a directory alone, its files and
+    /// subdirectories); recursing, a directory's files and its subdirectories' are tiles instead.
+    /// Among several, a file that can't be shown is left out, and only nothing at all to show is an
+    /// error. In a directory, a file that nothing shows is passed over. The tiles given are those
+    /// of the list as it would be shown whole, and one past its end is the error, as a page past a
+    /// file's is. An option that none of the files' backends takes is refused, since it would do
+    /// nothing.
     fn open(&self, paths: &[&str], recurse: bool) -> Result<Opened, String> {
         let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
         if let [path] = paths
@@ -431,9 +431,7 @@ impl Opener<'_, '_> {
             if let ([(_, why)], []) = (left_out.as_slice(), warnings.as_slice()) {
                 return Err(why.clone());
             }
-            for warning in warnings.iter().chain(left_out.iter().map(|(_, why)| why)) {
-                note(&format!("warning: {warning}"));
-            }
+            warn(&warnings, &left_out);
             return Err(match paths.iter().any(|p| is_dir(p)) {
                 false => format!("none of the {} files can be shown", paths.len()),
                 true => "nothing given can be shown".into(),
@@ -443,6 +441,17 @@ impl Opener<'_, '_> {
         if !items.iter().any(|item| matches!(item, Item::Directory { .. })) {
             takes_all(&used, self.options, "any of these files")?;
         }
+        let items = match self.given {
+            None => items,
+            Some(given) => match given.iter().find(|tile| **tile >= items.len()) {
+                Some(tile) => {
+                    // What was left out may be why the list is shorter than expected.
+                    warn(&warnings, &left_out);
+                    return Err(format!("no tile {} (the list has {})", tile.saturating_add(1), items.len()));
+                }
+                None => given.iter().filter_map(|tile| items.get(*tile).cloned()).collect(),
+            },
+        };
         Ok(Opened { shown: Shown::List(items), left_out, warnings })
     }
 
@@ -479,19 +488,15 @@ impl Opener<'_, '_> {
         }
     }
 
-    /// The file at `path` as a tile called `name`: opened by the first backend that opens it,
-    /// with those of the pages given that it has, or all of them. `quiet`, as in a directory, a
-    /// file no backend opens is no error but `None`.
+    /// The file at `path` as a tile called `name`: opened by the first backend that opens it, to
+    /// all its pages. `quiet`, as in a directory, a file no backend opens is no error but `None`.
     fn file(&self, path: &str, name: &str, quiet: bool) -> Result<Option<(&'static dyn Backend, Item)>, String> {
         let chosen = if quiet { crate::source::shown_by(path, self.backends)? } else { Some(crate::source::choose(path, self.backends)?) };
         let Some((backend, input)) = chosen else { return Ok(None) };
         let source: Rc<dyn Source> = Rc::from(backend.open(input, self.options)?);
-        let count = source.pages();
-        let pages: Vec<usize> = self.given.map_or_else(|| (0..count).collect(), |given| given.iter().copied().filter(|p| *p < count).collect());
-        match (pages.is_empty(), self.given.and_then(<[usize]>::first)) {
-            (true, Some(page)) => Err(format!("{path}: no page {} (it has {})", page.saturating_add(1), pages_of(count))),
-            (true, None) => Err(format!("{path}: no pages to show")),
-            (false, _) => Ok(Some((backend, Item::File(Pages { source, name: name.to_owned(), pages })))),
+        match source.pages() {
+            0 => Err(format!("{path}: no pages to show")),
+            count => Ok(Some((backend, Item::File(Pages { source, name: name.to_owned(), pages: (0..count).collect() })))),
         }
     }
 }
@@ -530,6 +535,13 @@ impl Found {
 /// The name of the file at `path`, without its directories, as the status line gives it.
 fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Says `warnings`, then why each of the files `left_out` was, on stderr.
+fn warn(warnings: &[String], left_out: &[(String, String)]) {
+    for warning in warnings.iter().chain(left_out.iter().map(|(_, why)| why)) {
+        note(&format!("warning: {warning}"));
+    }
 }
 
 /// What the reader is told about the files left out, if any, once the reasons were said: how

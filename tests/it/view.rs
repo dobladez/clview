@@ -450,9 +450,9 @@ fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
     assert!(text(&out.stderr).contains("no page 2 ") && text(&out.stderr).contains("has 1 page)"), "{}", text(&out.stderr));
 }
 
-/// Several files are one list of pages, numbered on through them: `--pages` counts across them.
+/// Several files are a list, each by its first page, its name under it. `--pages` picks the
+/// list's tiles, in its order.
 #[cfg(feature = "image")]
-/// Several files are a list, each by the first of its pages given, its name under it.
 #[test]
 fn several_files_are_a_list_each_by_its_first_page() {
     let pdf = fixture("several", 2);
@@ -464,16 +464,17 @@ fn several_files_are_a_list_each_by_its_first_page() {
     assert_eq!(sizes.len(), 2, "{sizes:?}");
     assert_eq!(sizes[1], (300, 200));
     assert_eq!(names(&out.stdout), [" many.pdf photo.png"]);
-    // The pages given, of each file that has them: the PDF's second page, and the picture, which
-    // has none, left out.
+    // The second tile, not each file's second page: the picture, which has no second page.
     let second = both(&["--pages", "2"]);
-    assert_eq!(images(&second.stdout).len(), 1);
-    let stderr = text(&second.stderr);
-    assert!(stderr.starts_with(&format!("warning: {}: no page 2 (it has 1 page)\n", png.display())), "{stderr}");
-    assert!(stderr.ends_with("clv: 1 file left out: photo.png\n") && !second.status.success(), "{stderr}");
-    let past = both(&["--pages", "4"]);
+    assert!(second.status.success() && second.stderr.is_empty(), "{}", text(&second.stderr));
+    assert_eq!(names(&second.stdout), [" photo.png"]);
+    // In the order given, each still by its first page.
+    let turned = both(&["--pages", "2,1"]);
+    let turned_sizes: Vec<(u32, u32)> = images(&turned.stdout).iter().map(|d| png_size(&d.png)).collect();
+    assert_eq!((turned_sizes, names(&turned.stdout)), (vec![sizes[1], sizes[0]], vec![" photo.png many.pdf".to_string()]));
+    let past = both(&["--pages", "3"]);
     assert!(!past.status.success() && past.stdout.is_empty());
-    assert!(text(&past.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&past.stderr));
+    assert_eq!(text(&past.stderr), "clv: no tile 3 (the list has 2)\n");
     // An option one of the files takes is no error; one none takes is.
     assert!(both(&["--password", "pw"]).status.success());
     let png2 = picture("several", "other.png", 30, 20);
@@ -496,6 +497,12 @@ fn a_file_that_cant_be_shown_among_others_is_left_out() {
     let out = view(&notes, &[notes.to_str().unwrap(), "--protocol", "kitty"]);
     assert!(!out.status.success() && out.stdout.is_empty());
     assert!(text(&out.stderr).ends_with("clv: none of the 2 files can be shown\n"), "{}", text(&out.stderr));
+    // A tile past the end of a list made shorter by a file left out: why it is shorter is said.
+    let out = view(&pdf, &[notes.to_str().unwrap(), "--protocol", "kitty", "--pages", "2"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    let stderr = text(&out.stderr);
+    assert!(stderr.starts_with(&format!("warning: {why}")) && stderr.lines().count() == 2, "{stderr}");
+    assert!(stderr.ends_with("\nclv: no tile 2 (the list has 1)\n"), "{stderr}");
 }
 
 /// A directory shows each file a backend opens by its first page, and each subdirectory as a

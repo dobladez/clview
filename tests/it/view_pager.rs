@@ -544,7 +544,8 @@ fn chosen(text: &str) -> Option<String> {
 
 /// Several files are a list, a tile each: the arrows choose one, its name highlighted under it and
 /// on the status line, Enter opens its pages, and Esc goes back to the list as it was left, its
-/// tiles still in the terminal. A file left out is said first.
+/// tiles still in the terminal. A file left out is said first. `--pages` picks tiles, and a tile
+/// opens to all its file's pages.
 #[test]
 fn several_files_are_a_list_and_enter_opens_one() {
     if !pty_works() {
@@ -578,6 +579,15 @@ fn several_files_are_a_list_and_enter_opens_one() {
     view.press("\x7f");
     std::thread::sleep(Duration::from_millis(200));
     assert!(view.child.try_wait().unwrap().is_none(), "Backspace quit");
+    view.press("q");
+    assert!(view.finish().success());
+    // The second tile alone, paged since it can be opened.
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty", "--pages", "2", "--pager"], 100, 60);
+    view.wait_until("b's tile alone", |t| bar(t).contains(" b.pdf ") && drawn(t, "1/1"));
+    view.press("\r");
+    view.wait_until("all of b", |t| drawn(t, "page 1/2"));
+    view.press("n");
+    view.wait_until("b's second page", |t| drawn(t, "page 2/2"));
     view.press("q");
     assert!(view.finish().success());
 }

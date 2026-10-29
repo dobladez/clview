@@ -11,7 +11,7 @@ clv report.pdf --zoom width  # as wide as the window
 clv report.pdf --zoom 4      # four pages to a row
 clv report.pdf --no-pager    # print every page and exit, like cat
 clv secret.pdf --password PW
-clv *.png                    # several files, one after another
+clv *.png                    # several files: a tile each, Enter opens one
 clv ~/Photos                 # a directory: each file by its first page
 clv -r ~/Photos              # its subdirectories' files too
 ```
@@ -35,7 +35,7 @@ behind each choice) is in [`src/view/README.md`](../src/view/README.md).
 
 | Option | Meaning |
 |---|---|
-| `--pages 1,3-5` | the pages to show, in order (default: all of them); in a list, of each file |
+| `--pages 1,3-5` | the pages to show, in order (default: all of them); in a list, the tiles |
 | `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
 | `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
@@ -57,10 +57,14 @@ when the window is wide enough, as the pager first shows them.
 `clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
 name under it, in the order given. The arrows choose a tile, its name highlighted and on the
 status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
-been given alone. Esc or Backspace goes back to the list as you left it. `--pages` applies to each
-file: `clv *.pdf --pages 2` shows every file by its second page, and opens each to that page alone.
-A file without any of the pages given is left out. Printed, a list is its tiles, in rows, each
-row's names under it.
+been given alone. Esc or Backspace goes back to the list as you left it. Printed, a list is its
+tiles, in rows, each row's names under it.
+
+`--pages` applies to what is shown, and a list's pages are its tiles: `clv *.pdf --pages 2-3`
+shows the second and third files, numbered as the whole list would show them, each still by its
+first page and opened to all its pages. A number past the end of the list is an error, as a page
+past the end of a file is. A pattern that matches a single file gives that file's pages, as
+naming it alone does.
 
 A file that can't be shown, among others, is left out: why is said on stderr before anything is
 shown, the pager's status line names it at first, and printed pages end with an error that says
