@@ -581,9 +581,12 @@ fn several_files_are_a_list_and_enter_opens_one() {
     assert!(view.child.try_wait().unwrap().is_none(), "Backspace quit");
     view.press("q");
     assert!(view.finish().success());
-    // The second tile alone, paged since it can be opened.
+    // The second tile alone, still numbered as the list's, paged since it can be opened.
     let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty", "--pages", "2", "--pager"], 100, 60);
-    view.wait_until("b's tile alone", |t| bar(t).contains(" b.pdf ") && drawn(t, "1/1"));
+    view.wait_until("b's tile alone", |t| drawn(t, "2/2 · 1 of 1"));
+    // A key, so that the status line names the tile chosen in place of the keys.
+    view.press("\x1b[C");
+    view.wait_until("b named", |t| bar(t).contains(" b.pdf 2/2 · 1 of 1 · 1 per row "));
     view.press("\r");
     view.wait_until("all of b", |t| drawn(t, "page 1/2"));
     view.press("n");

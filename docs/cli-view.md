@@ -61,10 +61,11 @@ been given alone. Esc or Backspace goes back to the list as you left it. Printed
 tiles, in rows, each row's names under it.
 
 `--pages` applies to what is shown, and a list's pages are its tiles: `clv *.pdf --pages 2-3`
-shows the second and third files, numbered as the whole list would show them, each still by its
-first page and opened to all its pages. A number past the end of the list is an error, as a page
-past the end of a file is. A pattern that matches a single file gives that file's pages, as
-naming it alone does.
+shows the second and third files, each still by its first page and opened to all its pages. The
+tiles given keep the list's numbers, as a document's pages given keep theirs: the status line
+says `3/12 · 2 of 2`, and a number typed is one of the list's. A number past the end of the list
+is an error, as a page past the end of a file is. A pattern that matches a single file gives
+that file's pages, as naming it alone does.
 
 A file that can't be shown, among others, is left out: why is said on stderr before anything is
 shown, the pager's status line names it at first, and printed pages end with an error that says

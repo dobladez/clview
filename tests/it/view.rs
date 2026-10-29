@@ -447,7 +447,7 @@ fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
     assert_eq!(text(&out.stderr), format!("clv: --password doesn't apply to {}, which image opens\n", png.display()));
     assert!(!out.status.success() && out.stdout.is_empty());
     let out = view(&png, &["--protocol", "kitty", "--pages", "2"]);
-    assert!(text(&out.stderr).contains("no page 2 ") && text(&out.stderr).contains("has 1 page)"), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "clv: no page 2 (photo.png has 1 page)\n");
 }
 
 /// Several files are a list, each by its first page, its name under it. `--pages` picks the
@@ -474,7 +474,7 @@ fn several_files_are_a_list_each_by_its_first_page() {
     assert_eq!((turned_sizes, names(&turned.stdout)), (vec![sizes[1], sizes[0]], vec![" photo.png many.pdf".to_string()]));
     let past = both(&["--pages", "3"]);
     assert!(!past.status.success() && past.stdout.is_empty());
-    assert_eq!(text(&past.stderr), "clv: no tile 3 (the list has 2)\n");
+    assert_eq!(text(&past.stderr), "clv: no tile 3 (the list has 2 tiles)\n");
     // An option one of the files takes is no error; one none takes is.
     assert!(both(&["--password", "pw"]).status.success());
     let png2 = picture("several", "other.png", 30, 20);
@@ -502,7 +502,7 @@ fn a_file_that_cant_be_shown_among_others_is_left_out() {
     assert!(!out.status.success() && out.stdout.is_empty());
     let stderr = text(&out.stderr);
     assert!(stderr.starts_with(&format!("warning: {why}")) && stderr.lines().count() == 2, "{stderr}");
-    assert!(stderr.ends_with("\nclv: no tile 2 (the list has 1)\n"), "{stderr}");
+    assert!(stderr.ends_with("\nclv: no tile 2 (the list has 1 tile)\n"), "{stderr}");
 }
 
 /// A directory shows each file a backend opens by its first page, and each subdirectory as a

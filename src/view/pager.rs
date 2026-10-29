@@ -38,7 +38,7 @@ use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
     Contents, FALLBACK_SIZE, Item, Output, Pages, QUIET, Shown, Terminal, chars, checked, cut, label, left_out_note, page_layout, page_size, png,
-    printable, request, tiles, tmux,
+    printable, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -141,10 +141,7 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let mut level = match shown {
-        Shown::Pages(pages) => Level::pages(0, &pages, zoom, false),
-        Shown::List(items) => Level::list(0, items, String::new(), zoom, false),
-    };
+    let mut level = Level::new(0, shown, zoom, false);
     level.nav.message = note;
     let mut pager = Pager {
         screen: Screen::enter(tty)?,
@@ -339,9 +336,9 @@ impl Nav {
         }
     }
 
-    /// A list of `count` tiles, at `zoom`.
-    fn list(count: usize, zoom: Zoom) -> Self {
-        Self { list: true, ..Self::new((0..count).collect(), count, zoom) }
+    /// What `pages` are called here: a list's are its tiles.
+    fn unit(&self) -> &'static str {
+        if self.list { "tile" } else { "page" }
     }
 
     /// What `?` shows here.
@@ -455,7 +452,7 @@ impl Nav {
         let (row, per) = (self.row(), self.per_screen());
         let last = self.pages.len().saturating_sub(1);
         match key {
-            Key::Enter if !self.pages.is_empty() => return Step::Open(self.at),
+            Key::Enter => return self.pages.get(self.at).map_or(Step::Continue, |tile| Step::Open(*tile)),
             Key::Left | Key::Char('h') => self.select(self.at.saturating_sub(1)),
             Key::Right | Key::Char('l') => self.select(self.at.saturating_add(1)),
             Key::Up | Key::Char('k') if self.at >= row => self.select(self.at.saturating_sub(row)),
@@ -536,18 +533,12 @@ impl Nav {
     /// tile.
     fn go_typed(&mut self) {
         let wanted = self.typed.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
-        if self.list {
-            match wanted {
-                Some(index) if index < self.pages.len() => self.select(index),
-                _ => self.message = Some(format!("no {} here (1–{})", self.typed, self.pages.len())),
-            }
-            self.typed.clear();
-            return;
-        }
+        let unit = self.unit();
         match wanted.map(|page| (page, self.pages.iter().position(|p| *p == page))) {
+            Some((_, Some(index))) if self.list => self.select(index),
             Some((_, Some(index))) => self.go(index),
-            Some((page, None)) if page < self.count => self.message = Some(format!("page {} isn't one of the pages given", self.typed)),
-            _ => self.message = Some(format!("no page {} (1–{})", self.typed, self.count)),
+            Some((page, None)) if page < self.count => self.message = Some(format!("{unit} {} isn't one of the {unit}s given", self.typed)),
+            _ => self.message = Some(format!("no {unit} {} (1–{})", self.typed, self.count)),
         }
         self.typed.clear();
     }
@@ -590,8 +581,7 @@ impl Nav {
         let room = width.saturating_sub(chars(&right));
         let said = match (&self.message, self.typed.is_empty()) {
             (Some(message), _) => message.clone(),
-            (None, false) if self.list => format!("go to {}", self.typed),
-            (None, false) => format!("go to page {}", self.typed),
+            (None, false) => format!("go to {} {}", self.unit(), self.typed),
             // The keys leave the name room for its first characters at least.
             (None, true) if self.hint => {
                 let fits = |keys: &&&str| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
@@ -615,25 +605,27 @@ impl Nav {
     }
 
     /// Where the reader is, for the status line, and the most characters it takes in this
-    /// document: the pages on screen, and which of the pages given when they are not all; in a
-    /// list, which tile of how many.
+    /// document: the pages on screen, in a list the tile chosen, of how many; and where among the
+    /// pages given when they are not all.
     fn place(&self) -> (String, usize) {
         let digits = |n: usize| n.to_string().len();
         let count = self.count;
-        if self.list {
-            return (format!("{}/{count}", self.at.saturating_add(1).min(count)), digits(count).saturating_mul(2).saturating_add(1));
-        }
-        let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-        let mut place = match on_screen.as_slice() {
-            [a, .., b] => format!("pages {}–{}/{count}", a.saturating_add(1), b.saturating_add(1)),
-            [a] => format!("page {}/{count}", a.saturating_add(1)),
-            [] => "no page".into(),
+        let (mut place, mut widest, at) = if self.list {
+            let tile = self.pages.get(self.at).map_or(0, |tile| tile.saturating_add(1));
+            (format!("{tile}/{count}"), digits(count).saturating_mul(2).saturating_add(1), self.at)
+        } else {
+            let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
+            let place = match on_screen.as_slice() {
+                [a, .., b] => format!("pages {}–{}/{count}", a.saturating_add(1), b.saturating_add(1)),
+                [a] => format!("page {}/{count}", a.saturating_add(1)),
+                [] => "no page".into(),
+            };
+            // `pages a–b/count`, both numbers as long as the count.
+            (place, digits(count).saturating_mul(3).saturating_add(8), self.first())
         };
-        // `pages a–b/count`, both numbers as long as the count.
-        let mut widest = digits(count).saturating_mul(3).saturating_add(8);
         let given = self.pages.len();
         if given != count {
-            place.push_str(&format!(" · {} of {given}", self.first().saturating_add(1)));
+            place.push_str(&format!(" · {} of {given}", at.saturating_add(1)));
             widest = widest.saturating_add(digits(given).saturating_mul(2).saturating_add(7));
         }
         (place, widest)
@@ -720,23 +712,18 @@ struct Level {
 }
 
 impl Level {
-    /// `pages` of a file, at `zoom`; `nested` when opened from a list.
-    fn pages(id: u64, pages: &Pages, zoom: Zoom, nested: bool) -> Self {
-        let nav = Nav { nested, ..Nav::new(pages.pages.clone(), pages.source.pages(), zoom) };
-        Self { id, source: pages.source.clone(), pool: pages.source.pool(THREADS), nav, items: Vec::new(), name: pages.name.clone() }
-    }
-
-    /// A list of `items` as tiles, at `zoom`, their names following `name`. One gone into from a
-    /// list needs no reminder of the keys: they are the list's.
-    fn list(id: u64, items: Vec<Item>, name: String, zoom: Zoom, nested: bool) -> Self {
-        let source: Rc<dyn Source> = Rc::new(tiles(&items));
-        let nav = Nav { nested, hint: !nested, ..Nav::list(items.len(), zoom) };
+    /// What is `shown`, at `zoom`; `nested` when opened from a list. A list gone into from a list
+    /// needs no reminder of the keys: they are the list's.
+    fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool) -> Self {
+        let list = shown.is_list();
+        let Shown { pages: Pages { source, name, pages }, items } = shown;
+        let nav = Nav { list, nested, hint: !(list && nested), ..Nav::new(pages, source.pages(), zoom) };
         Self { id, pool: source.pool(THREADS), source, nav, items, name }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
     fn name(&self) -> String {
-        match self.items.get(self.nav.at) {
+        match self.nav.pages.get(self.nav.at).and_then(|tile| self.items.get(*tile)) {
             Some(item) if self.nav.list => format!("{}{}", self.name, item.name()),
             _ => self.name.clone(),
         }
@@ -922,7 +909,10 @@ impl Pager<'_> {
     fn open(&mut self, at: usize, open_directory: &dyn Fn(&str) -> Contents) -> Result<(), String> {
         let id = self.levels;
         let level = match self.level.items.get(at) {
-            Some(Item::File(pages)) => Level { name: format!("{}{}", self.level.name, pages.name), ..Level::pages(id, pages, Zoom::Auto, true) },
+            Some(Item::File(pages)) => {
+                let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
+                Level::new(id, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
+            }
             Some(Item::Directory { name, path }) => {
                 // Its files are opened now, which takes a while for large ones: said first.
                 let (name, path) = (format!("{}{name}", self.level.name), path.clone());
@@ -935,7 +925,7 @@ impl Pager<'_> {
                     self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
                     return Ok(());
                 }
-                let mut level = Level::list(id, items, name, self.level.nav.zoom, true);
+                let mut level = Level::new(id, Shown::list(items, name), self.level.nav.zoom, true);
                 level.nav.message = left_out_note(&left_out);
                 level
             }
@@ -1514,9 +1504,14 @@ mod tests {
         assert_eq!(reader(1, 3, 40, 40).around(usize::MAX, usize::MAX), [2, 0]);
     }
 
+    /// A list of `count` tiles, all of them.
+    fn list(count: usize) -> Nav {
+        Nav { list: true, ..Nav::new((0..count).collect(), count, Zoom::Auto) }
+    }
+
     /// A list of `count` tiles, `per_row` to a row in `rows` rows, after a draw.
     fn tiles(count: usize, per_row: u16, rows: u16) -> Nav {
-        let mut nav = Nav::list(count, Zoom::Auto);
+        let mut nav = list(count);
         nav.grid(per_row, rows, 8);
         nav.shown(10, 10);
         nav
@@ -1569,10 +1564,29 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Enter]), Step::Continue);
         assert_eq!((nav.at, screen(&nav).0), (8, 3));
         assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Char('9'), Key::Enter]), Step::Continue);
-        assert_eq!((nav.at, nav.message.as_deref()), (8, Some("no 99 here (1–10)")));
+        assert_eq!((nav.at, nav.message.as_deref()), (8, Some("no tile 99 (1–10)")));
         assert_eq!((press(&mut nav, &[Key::Escape]), press(&mut nav, &[Key::Backspace])), (Step::Leave, Step::Back));
         // An empty list opens nothing.
-        assert_eq!(press(&mut Nav::list(0, Zoom::Auto), &[Key::Enter]), Step::Continue);
+        assert_eq!(press(&mut list(0), &[Key::Enter]), Step::Continue);
+    }
+
+    /// Tiles given are a list's as pages given are a document's: they keep their numbers, a number
+    /// typed is one of them, and Enter opens the tile chosen.
+    #[test]
+    fn tiles_given_keep_the_lists_numbers() {
+        let mut nav = Nav { list: true, ..Nav::new(vec![6, 2, 9], 12, Zoom::Auto) };
+        nav.grid(4, 1, 8);
+        assert!(squeezed(&nav.status("", 120, false)).contains(" 7/12 · 1 of 3 · 4 per row "));
+        press(&mut nav, &[Key::Right]);
+        assert!(squeezed(&nav.status("", 120, false)).contains(" 3/12 · 2 of 3 · 4 per row "));
+        assert_eq!(press(&mut nav, &[Key::Enter]), Step::Open(2));
+        press(&mut nav, &[Key::Char('1'), Key::Char('0'), Key::Enter]);
+        assert_eq!((nav.at, nav.message.as_deref()), (2, None));
+        // 2 is a tile of the list, not the second of those given.
+        press(&mut nav, &[Key::Char('2'), Key::Enter]);
+        assert_eq!((nav.at, nav.message.as_deref()), (2, Some("tile 2 isn't one of the tiles given")));
+        press(&mut nav, &[Key::Char('1'), Key::Char('3'), Key::Enter]);
+        assert_eq!(nav.message.as_deref(), Some("no tile 13 (1–12)"));
     }
 
     #[test]
@@ -1594,7 +1608,7 @@ mod tests {
         press(&mut nav, &[Key::End]);
         assert!(nav.status("z.png", 100, false).ends_with("  10/10 · 3 per row · ? help "));
         press(&mut nav, &[Key::Char('4')]);
-        assert!(nav.status("z.png", 100, false).contains("  go to 4  "));
+        assert!(nav.status("z.png", 100, false).contains("  go to tile 4  "));
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
@@ -1863,7 +1877,7 @@ mod tests {
                 0..60,
             ),
         ) {
-            let mut nav = Nav::list(count, Zoom::Auto);
+            let mut nav = list(count);
             for (key, draw) in steps {
                 nav.key(key);
                 if let Some((most, rows)) = draw {
