@@ -85,7 +85,8 @@ each file as an `Input`, which goes to the first backend that opens it, as a fil
 command line does; the viewer knows a container only through the trait. A directory is one
 (`source::Directory`, in `source/dir.rs`: in name order, subdirectories' files instead with
 `-r`). The list's tiles are one source, `source::Joined`: one page from each item, a file's
-first, or a folder (`source::Folder`, drawn in code) for a container, each part with a name for
+first, or a folder (`source::Folder`, drawn in code, with the badge its container gives it:
+`Container::badge`, a parcel for an archive, none for a directory) for a container, each part with a name for
 its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
 pages opened from it, each with its own source and pool; going back drops the level and its
 images in the terminal, and the list's are still there. A container is listed when it is gone

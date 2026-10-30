@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::args::{OptionSpec, Parsed};
 pub(crate) use dir::Directory;
-pub(crate) use folder::Folder;
+pub(crate) use folder::{Badge, Folder};
 pub(crate) use joined::{Joined, Part};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
@@ -179,6 +179,10 @@ pub(crate) trait Container {
     fn list(&self, recurse: bool) -> Result<Listing, String>;
     /// The file it listed as `name`, opened.
     fn open(&self, name: &str) -> Result<Input, String>;
+    /// What its folder carries, saying what kind of container it is: nothing, for a directory.
+    fn badge(&self) -> Badge {
+        Badge::None
+    }
 }
 
 impl std::fmt::Debug for dyn Container + '_ {
@@ -376,7 +380,7 @@ pub(crate) mod tests {
         fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
             Ok(match self.holds {
                 true => Opened::Files(Rc::new(Directory::new(&format!("{}.d", input.path)))),
-                false => Opened::Pages(Box::new(Folder)),
+                false => Opened::Pages(Box::new(Folder(Badge::None))),
             })
         }
     }

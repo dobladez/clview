@@ -391,7 +391,7 @@ impl Item {
 fn tiles(items: &[Item]) -> Joined {
     let part = |item: &Item| match item {
         Item::File(p) => Part { name: p.name.clone(), source: p.source.clone(), pages: vec![p.pages.first().copied().unwrap_or(0)] },
-        Item::Container { name, .. } => Part { name: name.clone(), source: Rc::new(Folder), pages: vec![0] },
+        Item::Container { name, container } => Part { name: name.clone(), source: Rc::new(Folder(container.badge())), pages: vec![0] },
     };
     Joined::new(items.iter().map(part).collect())
 }

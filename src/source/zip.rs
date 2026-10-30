@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use ::zip::ZipArchive;
 
-use super::{Again, Backend, Container, HEAD, Input, Listed, Listing, Opened, Reopenable};
+use super::{Again, Backend, Badge, Container, HEAD, Input, Listed, Listing, Opened, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive is read to: a picture larger than that is more than the
@@ -242,6 +242,11 @@ impl Container for Directory {
         let again: Again = Arc::new(move || archive.whole(index, MAX_BYTES));
         Ok(Input::held(path, head, again))
     }
+
+    /// The archive itself is a parcel; a directory in it, a folder as any directory is.
+    fn badge(&self) -> Badge {
+        if self.at.is_empty() { Badge::Parcel } else { Badge::None }
+    }
 }
 
 /// An archive's bytes, for the zip crate to seek through: in memory, or on disk, where the file
@@ -371,6 +376,8 @@ mod tests {
         assert_eq!(top.path(), path);
         let listing = top.list(false).unwrap();
         assert_eq!(names(&listing), ["b9.png", "b10.png", "empty/", "m/", "sub/"]);
+        // The archive is a parcel, a directory in it a plain folder.
+        assert_eq!((top.badge(), inner(&listing, "sub").badge()), (Badge::Parcel, Badge::None));
         assert!(listing.unread.is_empty() && !listing.cut, "{listing:?}");
         // Each directory a container of its own, named from the archive.
         let sub = inner(&listing, "sub");

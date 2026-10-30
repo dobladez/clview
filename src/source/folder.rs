@@ -1,4 +1,5 @@
-//! A directory as a list shows it, to be opened: one page, a folder drawn here, in code.
+//! A container as a list shows it, to be opened: one page, a folder drawn here, in code, with
+//! the badge its container gives it.
 
 use std::sync::Arc;
 
@@ -16,8 +17,24 @@ const MAX_PIXELS: u64 = 16_000_000;
 const BACK: [f32; 3] = [107.0, 143.0, 191.0];
 const FRONT: [f32; 3] = [140.0, 174.0, 216.0];
 
-/// The page a directory shows: a folder.
-pub(crate) struct Folder;
+/// A parcel's tape and bow, and the line around each of their pieces.
+const TAPE: [f32; 3] = [150.0, 106.0, 62.0];
+const LINE: [f32; 3] = [28.0, 24.0, 22.0];
+
+/// What a folder carries, saying what kind of container it is: the container's to say
+/// ([`super::Container::badge`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Badge {
+    /// Nothing: a directory.
+    #[default]
+    None,
+    /// Tied up as a parcel, tape down and across it and a bow where they cross: an archive.
+    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives are parcels"))]
+    Parcel,
+}
+
+/// The page a container shows: a folder, with its badge.
+pub(crate) struct Folder(pub(crate) Badge);
 
 impl Source for Folder {
     fn pages(&self) -> usize {
@@ -33,25 +50,26 @@ impl Source for Folder {
     }
 
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
-        Ok(Box::new(Drawer))
+        Ok(Box::new(Drawer(self.0)))
     }
 
     fn pool(&self, _threads: usize) -> Box<dyn Pool> {
-        Box::new(Threads::new(1, Arc::new(draw)))
+        let badge = self.0;
+        Box::new(Threads::new(1, Arc::new(move |request| draw(request, badge))))
     }
 }
 
-struct Drawer;
+struct Drawer(Badge);
 
 impl Render for Drawer {
     fn render(&mut self, request: Request) -> Frame {
-        draw(request)
+        draw(request, self.0)
     }
 }
 
 /// The folder at `request`'s scale: a back with a tab at its top left, and a front over it,
-/// rounded, their edges smoothed over a pixel.
-fn draw(request: Request) -> Frame {
+/// rounded, their edges smoothed over a pixel; then its badge.
+fn draw(request: Request, badge: Badge) -> Frame {
     let side = |units: f32| {
         let pixels = (f64::from(units) * f64::from(request.scale)).ceil();
         // Finite and at most 8192, so the cast is exact.
@@ -71,22 +89,84 @@ fn draw(request: Request) -> Frame {
     // In pixels: left, top, right, bottom.
     let at = |l: f32, t: f32, r: f32, b: f32| [l * fw, t * fh, r * fw, b * fh];
     let (back, tab, front) = (at(0.06, 0.14, 0.94, 0.92), at(0.06, 0.06, 0.42, 0.24), at(0.06, 0.28, 0.94, 0.92));
+    let pieces: &[Shape] = match badge {
+        Badge::None => &[],
+        Badge::Parcel => &parcel(fw, fh),
+    };
+    let line = (fw.min(fh) * 0.02).max(1.0);
     let mut rgba = Vec::with_capacity(usize::try_from(u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4)).unwrap_or(0));
     for y in 0..h {
         for x in 0..w {
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             let b = covered(back, radius, px, py).max(covered(tab, radius, px, py));
-            let f = covered(front, radius, px, py);
-            // The front over the back, premultiplied.
-            let alpha = f + b * (1.0 - f);
-            for channel in 0..3 {
-                let value = FRONT.get(channel).copied().unwrap_or(0.0) * f + BACK.get(channel).copied().unwrap_or(0.0) * b * (1.0 - f);
-                rgba.push(byte(value));
+            // The front over the back, then each piece of the badge over them, its line first.
+            let mut pixel = over(([0.0; 3], 0.0), BACK, b);
+            pixel = over(pixel, FRONT, covered(front, radius, px, py));
+            for piece in pieces {
+                pixel = over(pixel, LINE, piece.covered(line, px, py));
+                pixel = over(pixel, TAPE, piece.covered(0.0, px, py));
             }
+            let (colour, alpha) = pixel;
+            rgba.extend(colour.map(byte));
             rgba.push(byte(alpha * 255.0));
         }
     }
     Frame { request, width: w, height: h, rgba: Pixels::new(rgba), error: None, warnings: Vec::new() }
+}
+
+/// `colour` over a premultiplied pixel (0 to 255, and its alpha), covering `cover` of it.
+fn over((below, alpha): ([f32; 3], f32), colour: [f32; 3], cover: f32) -> ([f32; 3], f32) {
+    let mut out = below;
+    for (value, top) in out.iter_mut().zip(colour) {
+        *value = top * cover + *value * (1.0 - cover);
+    }
+    (out, cover + alpha * (1.0 - cover))
+}
+
+/// A parcel's pieces in pixels, in the order they are drawn, each over a line of its own: the tape
+/// down the whole folder and across it, then the bow, its two loops and its knot. The lines go a
+/// little past the folder's edges, as if the tape went round it.
+fn parcel(fw: f32, fh: f32) -> [Shape; 5] {
+    let at = |l: f32, t: f32, r: f32, b: f32| [l * fw, t * fh, r * fw, b * fh];
+    let point = |x: f32, y: f32| (x * fw, y * fh);
+    [
+        Shape::Rect(at(0.45, 0.14, 0.55, 0.92), 0.0),
+        Shape::Rect(at(0.06, 0.5375, 0.94, 0.6625), 0.0),
+        Shape::Triangle([point(0.5, 0.6), point(0.34, 0.45), point(0.32, 0.675)]),
+        Shape::Triangle([point(0.5, 0.6), point(0.66, 0.45), point(0.68, 0.675)]),
+        Shape::Rect(at(0.44, 0.525, 0.56, 0.675), fw.min(fh) * 0.03),
+    ]
+}
+
+/// A piece of a badge, in pixels: a rectangle `[left, top, right, bottom]` with its corners
+/// rounded by a radius, or a triangle.
+enum Shape {
+    Rect([f32; 4], f32),
+    Triangle([(f32, f32); 3]),
+}
+
+impl Shape {
+    /// How much of the pixel centred at `x`, `y` it covers, grown by `grow` pixels all round.
+    fn covered(&self, grow: f32, x: f32, y: f32) -> f32 {
+        match *self {
+            Shape::Rect([l, t, r, b], radius) => covered([l - grow, t - grow, r + grow, b + grow], radius + grow, x, y),
+            Shape::Triangle([a, b, c]) => {
+                // Which way round its points go: a point is in where it is on the third point's
+                // side of each edge. A triangle with no area covers nothing.
+                let side = |(x0, y0): (f32, f32), (x1, y1): (f32, f32), (px, py): (f32, f32)| (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+                let turn = side(a, b, c);
+                if turn == 0.0 {
+                    return 0.0;
+                }
+                // The distance out past its farthest edge: negative inside.
+                let distance = [(a, b), (b, c), (c, a)]
+                    .map(|(p, q)| -turn.signum() * side(p, q, (x, y)) / (q.0 - p.0).hypot(q.1 - p.1))
+                    .into_iter()
+                    .fold(f32::MIN, f32::max);
+                (0.5 - (distance - grow)).clamp(0.0, 1.0)
+            }
+        }
+    }
 }
 
 /// How much of the pixel centred at `x`, `y` the rectangle `[left, top, right, bottom]` with
@@ -115,7 +195,7 @@ mod tests {
 
     #[test]
     fn a_folder_is_its_front_over_its_back_with_a_tab_and_nothing_around() {
-        let frame = Folder.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3 });
+        let frame = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3 });
         assert_eq!((frame.width, frame.height, frame.error.as_deref(), frame.request.tag), (100, 80, None, 3));
         // Around it, nothing; the tab is the back's colour; the front is lighter.
         assert_eq!(pixel(&frame, 1, 1), [0; 4]);
@@ -126,15 +206,40 @@ mod tests {
         assert!(frame.rgba.chunks(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
     }
 
+    /// A parcel: tape down the whole folder and across it, each piece outlined, the line going
+    /// past the folder's edge, and a bow rising above the tape.
+    #[test]
+    fn a_parcel_is_a_folder_tied_up_with_tape_and_a_bow() {
+        let frame = Folder(Badge::Parcel).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0 });
+        let plain = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0 });
+        let (tape, line, front) = ([150, 106, 62, 255], [28, 24, 22, 255], [140, 174, 216, 255]);
+        // The knot, the tape over the back, and across it; the bow's loop above the tape.
+        for (x, y) in [(50, 48), (50, 15), (20, 48), (37, 40)] {
+            assert_eq!(pixel(&frame, x, y), tape, "({x}, {y})");
+        }
+        assert_eq!(pixel(&plain, 37, 40), front);
+        // The line beside the tape, and past the folder's left edge.
+        assert_eq!((pixel(&frame, 44, 30), pixel(&frame, 5, 48)), (line, line));
+        assert_eq!(pixel(&plain, 5, 48), [0; 4]);
+        // Away from it, the folder as it is.
+        assert_eq!(pixel(&frame, 20, 30), pixel(&plain, 20, 30));
+        assert!(frame.rgba.chunks(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
+        // At any scale, small or large, it draws.
+        for scale in [0.001, 0.3, 7.5] {
+            assert!(draw(Request { page: 0, scale, tag: 0 }, Badge::Parcel).error.is_none(), "{scale}");
+        }
+    }
+
     #[test]
     fn a_folder_is_drawn_at_any_scale_it_can_be_and_refuses_the_rest() {
-        let draw = |scale: f32, page: usize| draw(Request { page, scale, tag: 0 });
+        let draw = |scale: f32, page: usize| draw(Request { page, scale, tag: 0 }, Badge::None);
         assert_eq!((draw(0.25, 0).width, draw(0.25, 0).height), (25, 20));
         assert_eq!((draw(0.001, 0).width, draw(0.001, 0).height), (1, 1));
         for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 1000.0] {
             assert!(draw(scale, 0).error.is_some(), "{scale}");
         }
         assert!(draw(1.0, 1).error.is_some_and(|e| e.contains("one page")));
-        assert_eq!((Folder.pages(), Folder.size(0), Folder.size(1)), (1, Some(SIZE), None));
+        let folder = Folder(Badge::Parcel);
+        assert_eq!((folder.pages(), folder.size(0), folder.size(1)), (1, Some(SIZE), None));
     }
 }
