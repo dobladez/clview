@@ -7,6 +7,7 @@
 //! line; only the pager's placements have errors answered (`q=1`), which the pager reads among
 //! the keys.
 
+use std::collections::{HashMap, HashSet};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 
@@ -197,6 +198,131 @@ pub(crate) fn placeholder_row(out: &mut Vec<u8>, id: u32, color: IdColor, row: u
     }
     out.extend_from_slice(b"\x1b[39m");
     true
+}
+
+/// The ids of the images that placeholder cells in `text` name: text with its colours in SGR
+/// sequences, as tmux's `capture-pane -e` gives it, whatever the program that drew them. A cell
+/// names its image by its foreground colour (the id's low bits: 24 in 24-bit colour, 8 in the
+/// palette) and its third diacritic (the high byte). A cell without one, right after a cell in
+/// the same colour, takes its high byte, as the protocol has it ([`placeholder_row`] writes
+/// them so).
+pub(crate) fn placeholder_ids(text: &str) -> HashSet<u32> {
+    let marks: HashMap<char, u32> = DIACRITICS.iter().copied().zip(0u32..).collect();
+    let mut ids = HashSet::new();
+    let mut fg: Option<u32> = None;
+    // The colour and the high byte of the placeholder just before, when the last cell was one.
+    let mut left: Option<(u32, u32)> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            let before = fg;
+            escape(&mut chars, &mut fg);
+            if fg != before {
+                left = None;
+            }
+            continue;
+        }
+        if c != PLACEHOLDER {
+            left = None;
+            continue;
+        }
+        let mut diacritics = Vec::new();
+        while let Some(mark) = chars.peek().and_then(|c| marks.get(c)) {
+            diacritics.push(*mark);
+            chars.next();
+        }
+        let Some(low) = fg else {
+            left = None;
+            continue;
+        };
+        let high = match (diacritics.get(2), left) {
+            (Some(high), _) => *high,
+            (None, Some((colour, high))) if colour == low => high,
+            _ => 0,
+        };
+        // A high byte past 255 names no 32-bit id: not one of ours to keep.
+        if let Ok(high) = u8::try_from(high) {
+            ids.insert(u32::from(high) << 24 | low);
+        }
+        left = Some((low, high));
+    }
+    ids
+}
+
+/// Read an escape sequence from `chars` (its `ESC` already read), following the foreground
+/// colour in `fg` through SGR (`CSI … m`). Other CSI sequences are passed over, and so are OSC
+/// ones (tmux's hyperlinks) up to their terminator.
+fn escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, fg: &mut Option<u32>) {
+    match chars.next() {
+        Some('[') => {
+            let mut params = String::new();
+            for c in chars.by_ref() {
+                if ('\x40'..='\x7e').contains(&c) {
+                    if c == 'm' {
+                        sgr(&params, fg);
+                    }
+                    return;
+                }
+                // Parameters past any sane length are dropped, not held.
+                if params.len() < 256 {
+                    params.push(c);
+                }
+            }
+        }
+        Some(']') => {
+            while let Some(c) = chars.next() {
+                if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Apply SGR `params` (`1;38;2;0;1;7`, or colons within one: `38:2::0:1:7`) to the foreground
+/// colour: a palette index, or a 24-bit colour as one number.
+fn sgr(params: &str, fg: &mut Option<u32>) {
+    let mut fields = params.split(';').peekable();
+    while let Some(field) = fields.next() {
+        if field.contains(':') {
+            let sub: Vec<u32> = field.split(':').map(|n| n.parse().unwrap_or(0)).collect();
+            if sub.first() == Some(&38) {
+                *fg = match sub.get(1) {
+                    Some(5) => sub.get(2).copied(),
+                    Some(2) => sub.len().checked_sub(3).and_then(|at| sub.get(at..)).and_then(rgb),
+                    _ => *fg,
+                };
+            }
+            continue;
+        }
+        let Ok(n) = (if field.is_empty() { Ok(0) } else { field.parse::<u32>() }) else { continue };
+        let mut take = |count: usize| -> Vec<u32> { (0..count).map_while(|_| fields.next().and_then(|n| n.parse().ok())).collect() };
+        match n {
+            0 | 39 => *fg = None,
+            30..=37 => *fg = Some(n - 30),
+            90..=97 => *fg = Some(n - 90 + 8),
+            38 | 48 | 58 => {
+                let colour = match take(1).first() {
+                    Some(5) => take(1).first().copied(),
+                    Some(2) => rgb(&take(3)),
+                    _ => None,
+                };
+                if n == 38 {
+                    *fg = colour;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Red, green and blue, each below 256, as one 24-bit number.
+fn rgb(parts: &[u32]) -> Option<u32> {
+    match parts {
+        [r, g, b] if *r < 256 && *g < 256 && *b < 256 => Some(r << 16 | g << 8 | b),
+        _ => None,
+    }
 }
 
 /// The bytes that base64 to exactly one full chunk.
@@ -483,5 +609,69 @@ mod tests {
         assert_eq!(distinct.len(), DIACRITICS.len());
         // rowcolumn-diacritics.txt's first two and last entries.
         assert_eq!((DIACRITICS[0], DIACRITICS[1], DIACRITICS[296]), ('\u{0305}', '\u{030D}', '\u{1D244}'));
+    }
+
+    /// `rows` rows of each of `ids`' placeholder cells, `cols` wide, one image under another.
+    fn drawn(ids: &[u32], colour: IdColor, rows: u16, cols: u16) -> String {
+        let mut out = Vec::new();
+        for id in ids {
+            for row in 0..rows {
+                assert!(placeholder_row(&mut out, *id, colour, row, cols));
+                out.extend_from_slice(b"  text\n");
+            }
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn placeholder_cells_name_the_images_they_were_drawn_for() {
+        // Ids with and without a high byte, in 24-bit colour and in the palette.
+        let rgb = [7, 0x00AB_CDEF, 0x1800_0007, 0xFF12_3456];
+        assert_eq!(placeholder_ids(&drawn(&rgb, IdColor::Rgb, 3, 4)), rgb.into());
+        let palette = [1, 255, 0x0300_0021];
+        assert_eq!(placeholder_ids(&drawn(&palette, IdColor::Indexed, 2, 5)), palette.into());
+        // Side by side on a line, as a printed row of pages has them.
+        let mut line = Vec::new();
+        assert!(placeholder_row(&mut line, 0x0100_0009, IdColor::Indexed, 0, 3));
+        line.extend_from_slice(b"   ");
+        assert!(placeholder_row(&mut line, 0x0200_0008, IdColor::Indexed, 0, 3));
+        assert_eq!(placeholder_ids(&String::from_utf8(line).unwrap()), [0x0100_0009, 0x0200_0008].into());
+        assert!(placeholder_ids("plain text, \x1b[38;2;1;2;3mcoloured\x1b[0m").is_empty());
+    }
+
+    /// tmux gives the colours back its own way: other attributes in the same SGR, a palette colour
+    /// below 16 as `31`, a colon form, a background between, a hyperlink around.
+    #[test]
+    fn placeholder_cells_are_read_however_their_colours_are_written() {
+        let cell = |sgr: &str, marks: &str| format!("\x1b[{sgr}m\u{10EEEE}{marks}\x1b[39m ");
+        let (row, col, high) = ('\u{0305}', '\u{0305}', '\u{030D}');
+        let text = [
+            cell("1;38;2;0;1;7", &format!("{row}{col}{high}")),
+            cell("31", &format!("{row}{col}")),
+            cell("38:2::0:2:0", &format!("{row}{col}")),
+            cell("48;2;9;9;9;38;5;200", ""),
+            format!("\x1b]8;;https://example.com\x1b\\{}\x1b]8;;\x1b\\", cell("38;5;77", "")),
+        ]
+        .concat();
+        assert_eq!(placeholder_ids(&text), [0x0100_0107, 1, 0x200, 200, 77].into());
+    }
+
+    /// A bare cell takes its high byte from the cell to its left, only when that is a placeholder
+    /// in the same colour; cells in the default colour name nothing.
+    #[test]
+    fn a_bare_placeholder_cell_takes_its_high_byte_only_from_its_neighbour() {
+        let (row, col, high) = ('\u{0305}', '\u{0305}', '\u{030D}');
+        let first = format!("\x1b[38;5;9m\u{10EEEE}{row}{col}{high}");
+        assert_eq!(placeholder_ids(&format!("{first}\u{10EEEE}\u{10EEEE}")), [0x0100_0009].into());
+        assert_eq!(placeholder_ids(&format!("{first} \u{10EEEE}")), [0x0100_0009, 9].into());
+        assert_eq!(placeholder_ids(&format!("{first}\x1b[38;5;10m\u{10EEEE}")), [0x0100_0009, 10].into());
+        assert!(placeholder_ids("\u{10EEEE}\u{0305}\u{0305}\x1b[39m\u{10EEEE}").is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn any_text_reads_as_placeholders_or_none(text in "(\\PC|\u{1b}|\u{10EEEE}|\u{0305}|\\[|;|m|:|[0-9])*") {
+            let _ = placeholder_ids(&text);
+        }
     }
 }

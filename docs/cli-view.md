@@ -304,6 +304,13 @@ would also bring the terminals that speak only sixel.
 - tmux throws output away when it decides the terminal can't keep up, images with it. `view`
   notices and sends the pages again. If tmux keeps dropping them, the status line says so, and
   `r` sends them again.
+- A printed page stays in the terminal after `view` exits, so its placeholders show it again when
+  they scroll back, and the terminal holds its pixels until something deletes it. `view` records
+  each page it prints in the tmux server's `@clv-printed` option, and each later run deletes the
+  pages no pane holds any more: after `clear-history`, a closed pane, or the history past
+  `history-limit`. Until the next run they stay. The deletes reach the terminals showing the pane
+  that run is in, so a terminal attached only to another session keeps its copies. Closing the
+  terminal's tab frees them all.
 
 The terminal itself must support Unicode placeholders. kitty does. Other terminals may draw nothing
 inside tmux even though they draw pages outside it.

@@ -8,6 +8,7 @@ mod fit;
 mod keys;
 mod kitty;
 mod pager;
+mod sweep;
 mod tmux;
 mod tty;
 
@@ -283,6 +284,16 @@ fn view(args: &[String]) -> Result<(), CliError> {
     };
     let (effort, files) = compression.choose(|| over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten()));
     let terminal = Terminal { effort, files, ..terminal };
+    // Inside tmux, what this run prints stays in the terminal after it, for tmux's placeholder
+    // cells (`sweep.rs`): so it is recorded, and first the pictures no pane holds any more go.
+    // Only when the output is this pane's, not a file `cat` shows later.
+    let tidies = inside_tmux && std::io::stdout().is_terminal();
+    if tidies {
+        let mut out = Vec::new();
+        sweep::forget(&mut out);
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(&out).and_then(|()| stdout.flush()).map_err(CliError::Stdout)?;
+    }
     let first_id = fresh_index();
     let said = left_out_note(&left_out);
     if paging {
@@ -294,7 +305,12 @@ fn view(args: &[String]) -> Result<(), CliError> {
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
     let names: Option<Vec<String>> = shown.is_list().then(|| shown.items.iter().map(|item| item.name().to_owned()).collect());
-    print_pages(&*shown.pages.source, &shown.pages.pages, names.as_deref(), zoom, size, &terminal, first_id)?;
+    let mut sent = Vec::new();
+    let printed = print_pages(&*shown.pages.source, &shown.pages.pages, names.as_deref(), zoom, size, &terminal, first_id, &mut sent);
+    if tidies {
+        sweep::remember(&sent);
+    }
+    printed?;
     // Each was said before the pages; the exit status says it too, as for a page that failed.
     said.map_or(Ok(()), |said| Err(said.into()))
 }
@@ -703,7 +719,9 @@ fn note(line: &str) {
 /// Draw `pages` at the cursor, one row of them under another, like `cat`: as many to a row as the
 /// pager shows at `zoom` from the first page, each row fitted the way the pager fits the reader's
 /// row. A list's tiles come with `labels`, the names of `source`'s pages, each under its tile, as in
-/// the pager. A page that fails is reported at the end; the others are still drawn.
+/// the pager. A page that fails is reported at the end; the others are still drawn. Inside tmux,
+/// the ids of the images written to the terminal go into `sent`.
+#[expect(clippy::too_many_arguments, reason = "each is a different part of what is printed, and where")]
 fn print_pages(
     source: &dyn Source,
     pages: &[usize],
@@ -712,6 +730,7 @@ fn print_pages(
     size: WindowSize,
     terminal: &Terminal,
     first_id: u64,
+    sent: &mut Vec<u32>,
 ) -> Result<(), CliError> {
     let mut renderer = source.renderer()?;
     let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(terminal.cell).unwrap_or(fit::FALLBACK_CELL);
@@ -758,6 +777,9 @@ fn print_pages(
         }
         drawn_rows = drawn_rows.saturating_add(1);
         print_row(&mut out, &printed, grid, terminal.output, first_id);
+        if let Output::Tmux(colour) = terminal.output {
+            sent.extend(printed.iter().map(|p| colour.id(first_id.wrapping_add(p.index))));
+        }
         if let Some(labels) = labels {
             let names = chunk.iter().map(|page| labels.get(*page).map_or("", String::as_str));
             let line: Vec<String> = names.map(|name| label(name, grid.cols)).collect();

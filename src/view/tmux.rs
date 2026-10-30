@@ -3,6 +3,7 @@
 //! and draws Unicode placeholders that tmux keeps as text (see `kitty.rs`). Inside tmux, `TERM`
 //! names tmux, not the terminal, so tmux is asked which terminal its client is.
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -62,7 +63,7 @@ pub(crate) fn passthrough_off() -> String {
 /// [`passthrough_off`] for `pane`, which the command names when it is a pane id (`%3`): run from
 /// the shell, tmux's current pane is the session's active one, which may be another.
 fn passthrough_off_for(pane: Option<&str>) -> String {
-    let pane_id = pane.filter(|p| p.strip_prefix('%').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())));
+    let pane_id = pane.filter(|p| is_pane_id(p));
     let target = pane_id.map(|p| format!(" -t {p}")).unwrap_or_default();
     format!(
         "tmux's allow-passthrough is off for this pane, so tmux would drop the images. Turn it on for this pane with \
@@ -230,10 +231,57 @@ fn parse_ssh(out: &str) -> Option<bool> {
     }
 }
 
+/// The pane `view` runs in, by its id (`%3`), when tmux says so.
+pub(crate) fn pane() -> Option<String> {
+    this_pane().filter(|pane| is_pane_id(pane))
+}
+
+/// Whether `pane` is a pane id: `%` and digits.
+fn is_pane_id(pane: &str) -> bool {
+    pane.strip_prefix('%').is_some_and(|n| !n.is_empty() && n.len() <= 10 && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Every pane of this tmux server, by id.
+pub(crate) fn panes() -> Result<HashSet<String>, String> {
+    Ok(tmux(&["list-panes", "-a", "-F", "#{pane_id}"])?.lines().map(str::trim).filter(|p| is_pane_id(p)).map(str::to_owned).collect())
+}
+
+/// The most bytes of a pane read: a long history of placeholder cells. Past it, what the pane
+/// shows isn't known.
+const MAX_CAPTURE: u64 = 32 << 20;
+
+/// What `pane` holds, with its colours (`capture-pane -e`): its history and screen and, while a
+/// full-screen program is on the alternate screen, the screen saved behind it (`-a`), which the
+/// plain capture leaves out. `None` when there is more of it than [`MAX_CAPTURE`]. Anything but
+/// a pane id (`%3`) is refused rather than handed to `-t`, which reads it as a target of its own.
+pub(crate) fn capture(pane: &str) -> Result<Option<String>, String> {
+    if !is_pane_id(pane) {
+        return Err("not a tmux pane id".into());
+    }
+    let (held, cut) = tmux_capped(&["capture-pane", "-p", "-e", "-S", "-", "-E", "-", "-t", pane], MAX_CAPTURE)?;
+    let (saved, saved_cut) = tmux_capped(&["capture-pane", "-p", "-e", "-a", "-q", "-t", pane], MAX_CAPTURE)?;
+    Ok((!cut && !saved_cut).then(|| held + &saved))
+}
+
+/// The server's user option `name`, empty when it isn't set.
+pub(crate) fn server_option(name: &str) -> Result<String, String> {
+    tmux(&["show-options", "-sqv", name]).map(|value| value.trim().to_owned())
+}
+
+/// Set the server's user option `name` to `value`, or unset it for an empty one.
+pub(crate) fn set_server_option(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() { tmux(&["set-option", "-su", name]) } else { tmux(&["set-option", "-s", name, value]) }.map(drop)
+}
+
 /// Run `tmux` with `args` and return its output, or say why not. Bounded however tmux behaves:
 /// [`TIMEOUT`] covers both its exit and the end of its output (a process it left behind could
 /// keep the pipes open), and at most [`MAX_OUTPUT`] bytes of each pipe are read.
 fn tmux(args: &[&str]) -> Result<String, String> {
+    tmux_capped(args, MAX_OUTPUT).map(|(out, _)| out)
+}
+
+/// [`tmux`], reading up to `max` bytes of its output, and saying whether there was more.
+fn tmux_capped(args: &[&str], max: u64) -> Result<(String, bool), String> {
     let what = || format!("tmux {}", args.join(" "));
     let no_answer = || format!("{}: no answer within {} s", what(), TIMEOUT.as_secs());
     let deadline = Instant::now() + TIMEOUT;
@@ -248,7 +296,7 @@ fn tmux(args: &[&str]) -> Result<String, String> {
     let (sender, receiver) = std::sync::mpsc::channel();
     // A reader left blocked past the deadline ends with the process.
     let reader = std::thread::Builder::new().spawn(move || {
-        let _ = sender.send((read_capped(stdout), read_capped(stderr)));
+        let _ = sender.send((read_capped(stdout, max.saturating_add(1)), read_capped(stderr, MAX_OUTPUT)));
     });
     if let Err(e) = reader {
         let _ = child.kill();
@@ -271,17 +319,19 @@ fn tmux(args: &[&str]) -> Result<String, String> {
     if !status.success() {
         return Err(format!("{}: {}", what(), String::from_utf8_lossy(&err).trim()));
     }
-    Ok(String::from_utf8_lossy(&out).into_owned())
+    let cut = u64::try_from(out.len()).unwrap_or(u64::MAX) > max;
+    let kept = out.get(..usize::try_from(max).unwrap_or(usize::MAX)).unwrap_or(&out);
+    Ok((String::from_utf8_lossy(kept).into_owned(), cut))
 }
 
 /// The most bytes read from each of tmux's pipes: its answers here are a line.
 const MAX_OUTPUT: u64 = 64 * 1024;
 
-/// Up to [`MAX_OUTPUT`] bytes from `pipe`, until it closes.
-fn read_capped(pipe: Option<impl Read>) -> Vec<u8> {
+/// Up to `max` bytes from `pipe`, until it closes.
+fn read_capped(pipe: Option<impl Read>, max: u64) -> Vec<u8> {
     let mut bytes = Vec::new();
     if let Some(pipe) = pipe {
-        let _ = pipe.take(MAX_OUTPUT).read_to_end(&mut bytes);
+        let _ = pipe.take(max).read_to_end(&mut bytes);
     }
     bytes
 }
@@ -379,6 +429,14 @@ mod tests {
         // Anything but a pane id is left out of a command the user may paste.
         for pane in ["%", "%1; rm -rf ~", "12", ""] {
             assert!(passthrough_off_for(Some(pane)).contains("`tmux set -p allow-passthrough on`"), "{pane:?}");
+        }
+    }
+
+    /// `-t` would read these as targets of their own: the current pane, a session, a window.
+    #[test]
+    fn only_a_pane_id_is_captured() {
+        for pane in ["", "%", "%1:2", "main", "{last}", "-a", "%12345678901"] {
+            assert_eq!(capture(pane), Err("not a tmux pane id".into()), "{pane:?}");
         }
     }
 }

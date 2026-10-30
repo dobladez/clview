@@ -19,7 +19,8 @@ through tmux, the same answers, the 320 MB quota and the cell size.
 | `keys.rs` | Bytes from the terminal into keys, and the terminal's answers to graphics commands. Pure, total over any bytes |
 | `fit.rs` | The render scale and the cells a page covers, the zoom, and how many pages share the window. Pure arithmetic |
 | `kitty.rs` | The protocol's escape codes, and the Unicode placeholders used inside tmux. Pure |
-| `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, and who shows the pane |
+| `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
+| `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
@@ -252,12 +253,17 @@ kitty takes a temporary file before it reads the next escape code, so a placemen
 one never gets this answer by mistake.
 
 What the pager deletes, kitty frees, and so are pictures printed at the cursor, PNG or raw, once
-they leave the scrollback. Inside tmux, what `view` prints stays: it can't delete an image whose
-placeholders tmux may show again, so each printed picture is kept until kitty's quota pushes it
-out, about 400 MB of GPU memory a window, through `clear-history` and the tmux server's exit
-alike; closing the kitty tab, or deleting the ids, frees them. (Measured in a visible kitty
-0.49.2 window: cleared, 40 printed photos went from 399 MB of GPU memory to 89 MB directly, and
-stayed at 395 MB inside tmux.)
+they leave the scrollback. Inside tmux, a printed page has to outlive `view`, its placeholder
+cells being tmux's text, and nothing tells kitty when tmux lets go of them, so kitty keeps it
+until its quota pushes it out: about 400 MB of GPU memory a window, through `clear-history` and
+the tmux server's exit alike. `sweep.rs` deletes them instead: each page printed inside tmux is
+recorded in the server's `@clv-printed` option (`%pane:id`, the newest 2048), and every run
+inside tmux, before it draws, reads each recorded pane (`capture-pane -e` of its history and
+screen, and with `-a` the screen saved behind a full-screen program) and deletes the images
+whose cells are gone, or whose pane is. A pane it can't read, or one holding more than 32 MiB,
+keeps its records. The deletes go through the running pane, to the terminals showing it then.
+[ADR-0001](../../docs/adr/0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) has
+the measurements and the alternatives.
 
 Any other answer is dropped. An answer must never be read as keys: its `ESC` would be the Esc
 key, which quits, and its letters keys. One cut off between reads waits for the rest, up to 512
@@ -321,7 +327,8 @@ only.
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
-  clients on script(1) pseudo-terminals. It covers flips, a hidden pane, and a second client.
+  clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
+  pages printed from a shell, deleted once no pane holds them.
 
 The terminal tests skip with a warning where tmux or script(1) can't run, so CI machines without
 them pass.

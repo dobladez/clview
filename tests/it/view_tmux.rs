@@ -351,3 +351,119 @@ fn an_off_allow_passthrough_is_left_as_it_was() {
     }
     assert_eq!(server.run(&["show-options", "-g", "allow-passthrough"]), global, "the global setting changed");
 }
+
+/// A private tmux server with one client, its session `print` running a shell: the server, the
+/// shell's pane, what the client's terminal gets, and a one-page document to print. `None`, with
+/// a warning, where tmux or script(1) can't run.
+fn shell(test: &str) -> Option<Shell> {
+    if let Some(what) = missing() {
+        eprintln!("warning: skipped: {what} here");
+        return None;
+    }
+    let pdf = fixture(test, 1);
+    let config = pdf.with_file_name("tmux.conf");
+    std::fs::write(&config, "set -g allow-passthrough on\n").unwrap();
+    let mut server = Server::new(test, config);
+    let output = server.client("new-session -s print sh");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while server.run(&["has-session"]).is_none() {
+        if Instant::now() > deadline {
+            eprintln!("warning: skipped: tmux didn't start here");
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.started();
+    let pane = String::from_utf8_lossy(&server.tmux(&["display-message", "-p", "-t", "print", "#{pane_id}"])).trim().to_string();
+    Some(Shell { server, pane, output, pdf })
+}
+
+/// What [`shell`] starts.
+struct Shell {
+    server: Server,
+    pane: String,
+    output: Arc<Mutex<Vec<u8>>>,
+    pdf: PathBuf,
+}
+
+/// The graphics commands in `out` with action `action`: the image id of each, in order.
+fn ids_of(out: &[u8], action: &str) -> Vec<u32> {
+    let text = String::from_utf8_lossy(out);
+    text.split("\x1b_G")
+        .skip(1)
+        .filter_map(|code| {
+            let control = code.split([';', '\x1b']).next().unwrap_or_default();
+            let keys: Vec<(&str, &str)> = control.split(',').filter_map(|kv| kv.split_once('=')).collect();
+            let get = |k: &str| keys.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+            (get("a") == Some(action) && (action != "d" || get("d") == Some("I"))).then(|| get("i")?.parse().ok()).flatten()
+        })
+        .collect()
+}
+
+/// Run `line` in `pane`'s shell, and wait until it is done.
+fn in_pane(server: &Server, pane: &str, line: &str, done: &std::path::Path) {
+    let _ = std::fs::remove_file(done);
+    server.tmux(&["send-keys", "-t", pane, &format!("{line}; touch '{}'", done.display()), "Enter"]);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done.exists() {
+        assert!(Instant::now() < deadline, "{line}: never done");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Print `pdf` in `pane`, and wait for its image to reach the terminal: what the terminal got from
+/// this run (everything after `output`'s first `from` bytes), and the image's id.
+fn print(server: &Server, pane: &str, output: &Mutex<Vec<u8>>, pdf: &std::path::Path) -> (Vec<u8>, u32) {
+    let from = output.lock().unwrap().len();
+    in_pane(server, pane, &format!("'{BIN}' '{}' --protocol kitty", pdf.display()), &pdf.with_file_name("done"));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let got = output.lock().unwrap()[from..].to_vec();
+        // Deletes go before the page, so once its image is in, they are too.
+        if let Some(&id) = ids_of(&got, "t").last() {
+            return (got, id);
+        }
+        assert!(Instant::now() < deadline, "the page never reached the terminal");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The records of pictures printed, as tmux keeps them.
+fn recorded(server: &Server) -> String {
+    String::from_utf8_lossy(&server.tmux(&["show-options", "-sqv", "@clv-printed"])).trim().to_string()
+}
+
+/// A page printed inside tmux stays in the terminal for its placeholder cells; once no pane holds
+/// them (the history cleared), the next run deletes it from the terminal, and only it.
+#[test]
+fn a_page_printed_inside_tmux_goes_from_the_terminal_once_no_pane_holds_it() {
+    let Some(Shell { server, pane, output, pdf }) = shell("printed") else { return };
+    let (_, a) = print(&server, &pane, &output, &pdf);
+    assert_eq!(recorded(&server), format!("{pane}:{a}"));
+    // Still in the pane: kept.
+    let (got, b) = print(&server, &pane, &output, &pdf);
+    assert_eq!(ids_of(&got, "d"), [0u32; 0], "deleted while the pane shows it");
+    assert_eq!(recorded(&server), format!("{pane}:{a} {pane}:{b}"));
+    in_pane(&server, &pane, "clear && tmux clear-history", &pdf.with_file_name("cleared"));
+    let (got, c) = print(&server, &pane, &output, &pdf);
+    assert_eq!(ids_of(&got, "d"), [a, b]);
+    assert_eq!(recorded(&server), format!("{pane}:{c}"));
+}
+
+/// A page behind a full-screen program (the pane on its alternate screen) is still the pane's,
+/// even with no row of it left in the history; once the pane closes, the next run, in another
+/// pane, deletes it.
+#[test]
+fn a_page_behind_a_full_screen_program_stays_until_its_pane_closes() {
+    let Some(Shell { server, pane, output, pdf }) = shell("alternate") else { return };
+    let (_, a) = print(&server, &pane, &output, &pdf);
+    in_pane(&server, &pane, "tmux clear-history && printf '\\033[?1049h\\033[2J'", &pdf.with_file_name("alternate"));
+    assert_eq!(String::from_utf8_lossy(&server.tmux(&["display-message", "-p", "-t", &pane, "#{alternate_on}"])).trim(), "1");
+    let other = String::from_utf8_lossy(&server.tmux(&["split-window", "-t", &pane, "-P", "-F", "#{pane_id}", "sh"])).trim().to_string();
+    let (got, b) = print(&server, &other, &output, &pdf);
+    assert_eq!(ids_of(&got, "d"), [0u32; 0], "deleted from behind the alternate screen");
+    server.tmux(&["kill-pane", "-t", &pane]);
+    let (got, _) = print(&server, &other, &output, &pdf);
+    assert_eq!(ids_of(&got, "d"), [a]);
+    assert!(recorded(&server).contains(&format!("{other}:{b}")));
+}

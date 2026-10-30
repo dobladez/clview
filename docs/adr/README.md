@@ -10,7 +10,9 @@ Use [`template.md`](template.md) as the starting point.
 
 ## Index
 
-None yet.
+| # | Title | Status |
+|---|---|---|
+| 0001 | [Delete pages printed inside tmux once no pane holds them](0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) | Accepted |
 
 ## When to write one
 
