@@ -44,6 +44,11 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 - **Rust only.**
 - **The pdfcraft pin:** every `rev` in `Cargo.toml` moves together, the `[patch.crates-io]` ones
   included; `tests/it/pdfcraft_pin.rs` checks it.
+- **Record decisions in an ADR** (`docs/adr/`, its README says when and how): a choice between
+  real alternatives that a later reader would otherwise undo or redo, above all one resting on a
+  measurement or an observed terminal behaviour, or a fix measured and rejected. Write it in the
+  commit that makes the choice, with the versions, setup and commands that get the evidence
+  again, and link it from the doc that describes the behaviour.
 - **Clean room.** Behaviour comes from specifications (the kitty graphics protocol, the tmux
   manual) and black-box observation. Never read the source of another terminal-graphics program
   or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF…): most are GPL or AGPL, and this is MIT or
@@ -65,4 +70,6 @@ as a GitHub release. It refuses a tag that disagrees with `Cargo.toml`. Run by h
 ## Looking at it
 Output is images in a terminal, so look at the result in kitty, Ghostty or WezTerm. Without a
 terminal, `--protocol kitty` writes the escape codes to stdout (the integration tests read them
-back), and `script(1)` gives a test a pseudo-terminal (`tests/it/view_pager.rs`).
+back), and `script(1)` gives a test a pseudo-terminal (`tests/it/view_pager.rs`). A hidden kitty
+(`--start-as=hidden`) answers as a visible one does, but measure memory in a visible window: a
+hidden one keeps images a visible one frees.

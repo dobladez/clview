@@ -21,7 +21,8 @@ a directory or an archive, are a list: a tile for each, by its first page, its n
 choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc goes back. `?`
 lists the keys. Everything else
 (the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
-inside in [`src/view/README.md`](src/view/README.md).
+inside in [`src/view/README.md`](src/view/README.md), and why some choices were made in
+[`docs/adr/`](docs/adr/README.md).
 
 What it shows comes from backends, one for each kind of file, each behind a cargo feature and
 none of them known to the viewer by name:

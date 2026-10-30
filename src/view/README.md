@@ -251,6 +251,14 @@ again, and halves its budget, at most 8 times (`MAX_RESENDS`; `r` still sends ev
 kitty takes a temporary file before it reads the next escape code, so a placement right after
 one never gets this answer by mistake.
 
+What the pager deletes, kitty frees, and so are pictures printed at the cursor, PNG or raw, once
+they leave the scrollback. Inside tmux, what `view` prints stays: it can't delete an image whose
+placeholders tmux may show again, so each printed picture is kept until kitty's quota pushes it
+out, about 400 MB of GPU memory a window, through `clear-history` and the tmux server's exit
+alike; closing the kitty tab, or deleting the ids, frees them. (Measured in a visible kitty
+0.49.2 window: cleared, 40 printed photos went from 399 MB of GPU memory to 89 MB directly, and
+stayed at 395 MB inside tmux.)
+
 Any other answer is dropped. An answer must never be read as keys: its `ESC` would be the Esc
 key, which quits, and its letters keys. One cut off between reads waits for the rest, up to 512
 bytes and 1 s, and is dropped whole if the rest doesn't come. So does any escape sequence cut off
@@ -321,7 +329,9 @@ them pass.
 To try a real kitty without touching your own, run `kitty --start-as=hidden --config NONE` with
 `TMUX` and `TMUX_PANE` unset (an inherited `TMUX` makes `view` think it is inside your tmux: it
 asks your tmux server about your pane, and wraps its escape codes for a tmux that isn't there),
-and use a private `tmux -L <name>` server for tmux.
+and use a private `tmux -L <name>` server for tmux. A hidden kitty answers as a visible one does,
+but doesn't free images the same way: there, cleared PNGs stayed while raw pixels went, which a
+visible window doesn't do. Measure memory in a visible window.
 
 ## Clean room
 
