@@ -1,0 +1,56 @@
+# The quality gates in CLAUDE.md, on Linux and macOS: every feature set, formatted and lint-free.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gates:
+    name: gates (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Cargo.toml's rust-version: CI builds with the oldest Rust it promises.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # tests/it/view_tmux.rs skips, with a warning, without tmux.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: no backends
+        run: |
+          cargo clippy --locked --no-default-features --all-targets -- -D warnings
+          cargo test --locked --no-default-features
+      - name: image alone
+        run: |
+          cargo clippy --locked --no-default-features --features image --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features image
+      - name: pdf alone
+        run: |
+          cargo clippy --locked --no-default-features --features pdf --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features pdf

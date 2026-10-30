@@ -32,6 +32,17 @@ none of them known to the viewer by name:
 
 This began as `view` in pdfcraft's command line.
 
+## Installing
+
+Binaries for macOS and Linux are on the [releases page](https://github.com/dobladez/clview/releases):
+unpack one and put `clv` on your `PATH`. They aren't signed, so on macOS one downloaded by a
+browser wants `xattr -d com.apple.quarantine clv` before it runs. Or build it, with Rust 1.95 or
+later:
+
+```sh
+cargo install --locked --git https://github.com/dobladez/clview    # installs `clv`
+```
+
 ## Building
 
 ```sh

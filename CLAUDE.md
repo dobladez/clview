@@ -51,7 +51,13 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
 and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
 too (`--no-default-features --features image`, then `pdf`). Run them under a `timeout`. The PDF
-backend is a large build: keep `-j 2` unless the machine is free.
+backend is a large build: keep `-j 2` unless the machine is free. CI
+(`.github/workflows/ci.yml`) runs them all on Linux and macOS, with Rust 1.95.0, the `rust-version`.
+
+## Releases
+Bump `version` in `Cargo.toml`, commit, tag `v<version>` and push the tag:
+`.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
+as a GitHub release. It refuses a tag that disagrees with `Cargo.toml`. Run by hand, it only builds.
 
 ## Looking at it
 Output is images in a terminal, so look at the result in kitty, Ghostty or WezTerm. Without a
