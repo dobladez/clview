@@ -9,6 +9,8 @@ mod image;
 mod joined;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
+#[cfg(feature = "svg")]
+mod svg;
 mod threads;
 #[cfg(feature = "zip")]
 mod zip;
@@ -24,8 +26,12 @@ pub(crate) use dir::Directory;
 pub(crate) use folder::Folder;
 pub(crate) use joined::{Joined, Part};
 
-/// The backends this build has, in the order they are asked whether they open a file.
+/// The backends this build has, in the order they are asked whether they open a file. SVG
+/// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
+/// 1024 bytes, which a drawing's text may hold.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
+    #[cfg(feature = "svg")]
+    &svg::Svg,
     #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
@@ -56,7 +62,10 @@ pub(crate) trait Backend {
 
 /// What a backend opened a file to.
 pub(crate) enum Opened {
-    #[cfg_attr(not(any(feature = "pdf", feature = "image", test)), expect(dead_code, reason = "only PDFs and images have pages"))]
+    #[cfg_attr(
+        not(any(feature = "pdf", feature = "image", feature = "svg", test)),
+        expect(dead_code, reason = "only PDFs, images and drawings have pages")
+    )]
     Pages(Box<dyn Source>),
     #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives hold files"))]
     Files(Rc<dyn Container>),
@@ -114,8 +123,8 @@ impl Input {
     /// needs meanwhile: on disk, from its start; held in another, how to read it from there;
     /// otherwise the whole of it, read now.
     #[cfg_attr(
-        all(not(feature = "image"), not(feature = "zip"), not(test)),
-        expect(dead_code, reason = "only images and archives read their file again")
+        all(not(feature = "image"), not(feature = "svg"), not(feature = "zip"), not(test)),
+        expect(dead_code, reason = "only images, drawings and archives read their file again")
     )]
     pub(crate) fn reopenable(self) -> Result<Reopenable, String> {
         let Self { path, head, rest } = self;
@@ -131,7 +140,10 @@ impl Input {
 }
 
 /// A file as [`Input::reopenable`] gives it.
-#[cfg_attr(not(any(feature = "image", feature = "zip")), expect(dead_code, reason = "only images and archives read their file again"))]
+#[cfg_attr(
+    not(any(feature = "image", feature = "svg", feature = "zip")),
+    expect(dead_code, reason = "only images, drawings and archives read their file again")
+)]
 pub(crate) enum Reopenable {
     /// On disk, from its start: its path opens it again.
     Disk(File),
@@ -446,7 +458,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdf", feature = "image", feature = "zip")))]
+        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip")))]
         assert!(BACKENDS.is_empty());
     }
 }

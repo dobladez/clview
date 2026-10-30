@@ -1,6 +1,6 @@
 # Showing pages in the terminal
 
-`clv` draws PDF pages and images straight into the terminal, through the
+`clv` draws PDF pages, images and SVG drawings straight into the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). kitty, Ghostty
 and WezTerm speak it, among others. It works on macOS, Linux and FreeBSD, and inside tmux.
 
@@ -127,6 +127,7 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 
 | Backend | Shows | Its options |
 |---|---|---|
+| `resvg` (the `svg` feature, on by default) | SVG drawings: XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its `.svg` or `.svgz` name. Other XML is not one. Asked first: a PDF's header may be anywhere in those bytes, which a drawing's text may hold | none |
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
 | `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and documents that are zips inside too, as directories ([Archives](#archives)) | none |
@@ -149,6 +150,41 @@ it should. AVIF and DDS files are recognised and refused with their format's nam
 crate's AVIF decoder gets most AVIFs' colours wrong in 0.25.10, and it has no DDS decoder. A
 picture whose pixels would take more than 512 MiB (about 134 megapixels) is refused when it is
 opened.
+
+An SVG drawing is one page, rendered by [resvg](https://github.com/linebender/resvg) at the size
+it is shown, so it stays sharp however far it is zoomed. Its size is its own (`width` and
+`height`, in CSS pixels at 96 per inch), or its `viewBox`'s; one that says neither is as large as
+what it draws reaches from its origin, as resvg sizes it, and 100 × 100 if it draws nothing.
+Unlike a picture, it is fitted to the window as a PDF's page is, made larger as well as smaller:
+a 24-pixel icon fills the window. Text is drawn with the system's fonts, which are looked for
+only once a drawing has text (about 15 ms on macOS); a `font-family` the system lacks falls back
+to its serif font, and a drawing with no fonts to draw its text with is drawn
+without it, with a warning. Pictures embedded in it (JPEG, PNG, GIF and WebP `data:` URLs) are
+drawn, and so are SVGs embedded in it, down to four deep.
+
+A drawing reads nothing but itself: a picture, a stylesheet, a font or another drawing it links
+to by a path or a URL is left out, and a warning on the page says how many links weren't
+followed. An entity declared outside it (`SYSTEM`) is never read. What a drawing costs is
+bounded before it is spent ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)):
+
+- A drawing larger than 64 MiB, or an svgz that unpacks to more, is refused.
+- Before it is parsed, what it repeats is counted: its entities expanded, each `use` copied, a
+  marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to
+  for each shape. More than 128 MiB of content that way, more than a million elements, more than
+  1024 levels deep, or stylesheets whose rules times its elements are more than 50 million, and
+  it is refused.
+- More than 200,000 characters of text (its `use`s counted) are left out, with a warning, and
+  the rest is drawn; so is text that would take more than about three seconds to lay out (a
+  `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s). So is an embedded picture
+  of more than 64 MiB decoded, and an embedded drawing that is broken or nested too deep.
+- Before a page renders, what resvg will hold at once (a layer for each group with opacity, a
+  clip path, a mask or a filter, a filter's buffers, a pattern's tile) and how many pixels it
+  will paint are estimated. A page that would hold more than 1 GiB, or paint more than 4,000
+  million pixels (about seven seconds), fails with why; the same drawing smaller, its tile in a
+  list, still renders. resvg itself bounds a layer only to 25 times the window.
+
+A render once begun can't be stopped: a page within the limits but slow still takes its time on
+a render thread, while the keys work.
 
 ## Paging through a document
 

@@ -13,6 +13,8 @@ Use [`template.md`](template.md) as the starting point.
 | # | Title | Status |
 |---|---|---|
 | 0001 | [Delete pages printed inside tmux once no pane holds them](0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) | Accepted |
+| 0002 | [Render SVG with resvg](0002-render-svg-with-resvg.md) | Accepted |
+| 0003 | [Bound what a drawing costs before usvg and resvg spend it](0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) | Accepted |
 
 ## When to write one
 

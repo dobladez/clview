@@ -572,10 +572,9 @@ fn a_directory_with_nothing_to_show_says_so() {
 }
 
 fn shows() -> String {
-    let shown: Vec<&str> = [("PDFs", true), ("images", cfg!(feature = "image")), ("zip archives", cfg!(feature = "zip"))]
-        .into_iter()
-        .filter_map(|(what, built)| built.then_some(what))
-        .collect();
+    let backends =
+        [("SVG drawings", cfg!(feature = "svg")), ("PDFs", true), ("images", cfg!(feature = "image")), ("zip archives", cfg!(feature = "zip"))];
+    let shown: Vec<&str> = backends.into_iter().filter_map(|(what, built)| built.then_some(what)).collect();
     match shown.split_last() {
         Some((last, [])) => (*last).to_string(),
         Some((last, rest)) => format!("{} and {last}", rest.join(", ")),

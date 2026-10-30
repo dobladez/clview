@@ -1,6 +1,6 @@
 [package]
 name = "clview"
-description = "PDFs and images in the terminal, through the kitty graphics protocol"
+description = "PDFs, images and SVG drawings in the terminal, through the kitty graphics protocol"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -34,17 +34,26 @@ jxl-oxide = { version = "0.12.6", default-features = false, features = ["image"]
 # Zip archives, read in Rust: deflate through zlib-rs, deflate64, bzip2 through libbz2-rs-sys, LZMA
 # and XZ. Not zstd (the zstd C library), and no encrypted entries.
 zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz"], optional = true }
+# SVG drawings, rendered in Rust by resvg (usvg parses, tiny-skia paints): text with the system's
+# fonts, and the JPEG, PNG, GIF and WebP pictures a drawing embeds. Not resvg's own svgz, whose
+# gunzip has no cap: `source/svg.rs` unpacks one itself, through flate2 (which png already
+# builds), and asks imagesize (which usvg already builds) how large an embedded picture is.
+resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"], optional = true }
+flate2 = { version = "1.1", optional = true }
+imagesize = { version = "0.15", optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "zip"]
+default = ["pdf", "image", "svg", "zip"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
 # Images: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, TGA, PNM
 # and farbfeld (`source/image.rs` lists them as `DECODED`).
 image = ["dep:image", "dep:jxl-oxide"]
+# SVG drawings, and svgz (gzipped SVG): `source/svg.rs`, which renders them through resvg.
+svg = ["dep:resvg", "dep:flate2", "dep:imagesize"]
 # Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: `source/zip.rs`.
 zip = ["dep:zip"]
 

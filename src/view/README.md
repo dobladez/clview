@@ -49,7 +49,7 @@ page that had only waited behind another page's decode, and bounds the threads i
 pool in the viewer could only abandon the thread. What the pager relies on is that pool's contract:
 `set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
 request is still listed; `try_recv` never blocks. A backend that has no better way, such as
-images, gets plain threads from `source/threads.rs`: a render once begun runs to its end, and
+images and drawings, gets plain threads from `source/threads.rs`: a render once begun runs to its end, and
 one no longer wanted is dropped when it is done; a render that panics comes back as a failed
 page.
 
@@ -61,8 +61,13 @@ against its own and every backend's, lists them in `--help` under their backend,
 the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
 its own options from it.
 
-The backends are `source/pdfcraft.rs` (feature `pdf`), `source/image.rs` (feature `image`) and
-`source/zip.rs` (feature `zip`), all on by default. An image opens by its header alone and
+The backends are `source/svg.rs` (feature `svg`), `source/pdfcraft.rs` (feature `pdf`),
+`source/image.rs` (feature `image`) and `source/zip.rs` (feature `zip`), all on by default, the
+SVG one asked first since it goes by how a file starts and a PDF's header may come anywhere in
+its first 1024 bytes. A drawing parses once to open and keeps only where its bytes are; its
+renderer or pool parses it again on its first render and keeps the tree for renders at other
+sizes, each of which is estimated before it starts
+([ADR-0003](../../docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)). An image opens by its header alone and
 decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
 large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
 it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive

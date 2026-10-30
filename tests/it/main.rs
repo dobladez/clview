@@ -5,6 +5,7 @@
 mod fixtures;
 mod pdfcraft;
 mod pdfcraft_pin;
+mod resvg;
 mod view;
 mod view_pager;
 mod view_tmux;

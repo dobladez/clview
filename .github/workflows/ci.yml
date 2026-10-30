@@ -54,6 +54,10 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features pdf --all-targets -- -D warnings
           cargo test --locked --no-default-features --features pdf
+      - name: svg alone
+        run: |
+          cargo clippy --locked --no-default-features --features svg --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features svg
       - name: zip alone
         run: |
           cargo clippy --locked --no-default-features --features zip --all-targets -- -D warnings
