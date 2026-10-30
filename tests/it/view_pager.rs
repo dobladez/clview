@@ -596,8 +596,8 @@ fn several_files_are_a_list_and_enter_opens_one() {
 }
 
 /// A directory's subdirectories are folders to go into: Enter lists one, its files named from
-/// the first directory on the status line, and Backspace goes back. Recursing, their files are
-/// tiles instead.
+/// the first directory on the status line, and Backspace or `u` goes back; `u` at the top, where
+/// there is nothing to go back to, doesn't quit. Recursing, their files are tiles instead.
 #[cfg(feature = "image")]
 #[test]
 fn a_directorys_subdirectories_are_folders_to_go_into() {
@@ -623,6 +623,12 @@ fn a_directorys_subdirectories_are_folders_to_go_into() {
     view.wait_until("c chosen", |t| bar(t).contains(" trip/c.png 2/2 "));
     view.press("\x7f");
     view.wait_until("back", |t| bar(t).contains(" trip/ 3/3 ") && chosen(t).as_deref() == Some("trip/"));
+    view.press("\r");
+    view.wait_until("in trip again", |t| bar(t).contains(" trip/b.png 1/2 "));
+    view.press("u");
+    view.wait_until("up", |t| bar(t).contains(" trip/ 3/3 ") && chosen(t).as_deref() == Some("trip/"));
+    view.press("ug");
+    view.wait_until("still there, at the first", |t| bar(t).contains(" a.png ") && bar(t).contains(" 1/3 "));
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(dir.join("empty")).unwrap();

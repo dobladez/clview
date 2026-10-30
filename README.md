@@ -19,7 +19,7 @@ clv comics.zip             # an archive: its files and directories, as a directo
 More than a page opens a pager: one page at a time, two side by side when the window is wide
 enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Several files,
 a directory or an archive, are a list: a tile for each, by its first page, its name under it. The arrows
-choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc goes back. `?`
+choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc or `u` goes back. `?`
 lists the keys. Everything else
 (the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
 inside in [`src/view/README.md`](src/view/README.md), and why some choices were made in

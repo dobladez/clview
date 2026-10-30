@@ -58,7 +58,7 @@ when the window is wide enough, as the pager first shows them.
 `clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
 name under it, in the order given. The arrows choose a tile, its name highlighted and on the
 status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
-been given alone. Esc or Backspace goes back to the list as you left it. Printed, a list is its
+been given alone. Esc, Backspace or `u` goes back to the list as you left it. Printed, a list is its
 tiles, in rows, each row's names under it.
 
 `--pages` applies to what is shown, and a list's pages are its tiles: `clv *.pdf --pages 2-3`
@@ -84,7 +84,7 @@ at once hold little more than their sizes.
 
 A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
 its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
-which Enter goes into, to a list of its own; Esc or Backspace comes back. They come in the order
+which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. They come in the order
 of their names, numbers by their value (`img2` before `img10`), letters regardless of case,
 subdirectories among the files. Hidden files are left out, and so, without a word, are files no
 backend opens, since a directory holds all sorts. A file a backend opens and can't show (a broken
@@ -226,7 +226,7 @@ to a row, a tall window shows landscape pages two or three at a time, one under 
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace` | back to the list, for a file opened from one |
+| `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
 
 In a list:
@@ -240,7 +240,7 @@ In a list:
 | a number, then `Enter` | that tile |
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
-| `Esc`, `Backspace` | back, in a folder gone into; at the first list, `Esc` quits |
+| `Esc`, `Backspace`, `u` | back (up), in a folder gone into; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
 A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:

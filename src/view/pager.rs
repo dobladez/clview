@@ -114,7 +114,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("r  Ctrl-L", "render again"),
 ];
 /// Leaving, gone into from a list or not, and these keys themselves.
-const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace", "back to the list"), ("q  Ctrl-C", "quit")];
+const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list"), ("q  Ctrl-C", "quit")];
 const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
 const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 
@@ -265,7 +265,7 @@ enum Step {
     Quit,
     /// Esc: back, or, with nowhere to go back to, quit.
     Leave,
-    /// Backspace: back, if there is somewhere to go back to.
+    /// Backspace or `u` (up): back, if there is somewhere to go back to; at the top, nothing.
     Back,
     /// Open the list's item at this place.
     Open(usize),
@@ -427,6 +427,7 @@ impl Nav {
             Key::Backspace => {
                 self.typed.pop();
             }
+            Key::Char('u') => return Step::Back,
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
             _ if self.list => return self.list_key(key),
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
@@ -1566,6 +1567,7 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Char('9'), Key::Enter]), Step::Continue);
         assert_eq!((nav.at, nav.message.as_deref()), (8, Some("no tile 99 (1–10)")));
         assert_eq!((press(&mut nav, &[Key::Escape]), press(&mut nav, &[Key::Backspace])), (Step::Leave, Step::Back));
+        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Back);
         // An empty list opens nothing.
         assert_eq!(press(&mut list(0), &[Key::Enter]), Step::Continue);
     }
@@ -1612,7 +1614,7 @@ mod tests {
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace", "back to the list")));
+        assert!(opened.help_lines().contains(&("Esc  Backspace  u", "back to the list")));
         assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C", "quit")));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
@@ -1654,6 +1656,9 @@ mod tests {
         assert_eq!(nav.typed, "");
         assert_eq!(press(&mut nav, &[Key::Escape]), Step::Leave);
         assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Back);
+        // `u` goes up, a number typed or not.
+        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Back);
+        assert_eq!(press(&mut nav, &[Key::Char('4'), Key::Char('u')]), Step::Back);
         // Long numbers stop growing and simply name no page.
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('9'); 30]);
