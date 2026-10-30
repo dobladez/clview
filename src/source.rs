@@ -14,9 +14,10 @@ mod threads;
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::args::{OptionSpec, Parsed};
-pub(crate) use dir::list as list_directory;
+pub(crate) use dir::Directory;
 pub(crate) use folder::Folder;
 pub(crate) use joined::{Joined, Part};
 
@@ -44,24 +45,24 @@ pub(crate) trait Backend {
     /// a shorter file.
     fn opens(&self, path: &str, head: &[u8]) -> bool;
     /// `input` opened, with the values `options` gives its own options.
-    fn open(&self, input: Input<'_>, options: &Parsed<'_>) -> Result<Box<dyn Source>, String>;
+    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Box<dyn Source>, String>;
 }
 
 /// A file being opened: its first bytes, read to choose a backend, and the rest still to read. A
 /// file is read once, so a pipe (`/dev/stdin`) opens too.
-pub(crate) struct Input<'a> {
-    pub(crate) path: &'a str,
+pub(crate) struct Input {
+    pub(crate) path: String,
     head: Vec<u8>,
     rest: File,
 }
 
-impl<'a> Input<'a> {
-    fn open(path: &'a str) -> Result<Self, String> {
+impl Input {
+    fn open(path: &str) -> Result<Self, String> {
         let error = |e: std::io::Error| format!("{path}: {e}");
         let mut rest = File::open(path).map_err(error)?;
         let mut head = Vec::new();
         Read::by_ref(&mut rest).take(HEAD).read_to_end(&mut head).map_err(error)?;
-        Ok(Self { path, head, rest })
+        Ok(Self { path: path.to_owned(), head, rest })
     }
 
     /// The whole file.
@@ -94,7 +95,7 @@ pub(crate) enum Reopenable {
 }
 
 /// `path` opened, with the first of `backends` that opens it.
-pub(crate) fn choose<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Result<(&'b dyn Backend, Input<'a>), String> {
+pub(crate) fn choose<'b>(path: &str, backends: &[&'b dyn Backend]) -> Result<(&'b dyn Backend, Input), String> {
     if backends.is_empty() {
         return Err(format!("{path}: this {} was built without backends (cargo features such as `pdf`), so it shows nothing", crate::NAME));
     }
@@ -102,12 +103,50 @@ pub(crate) fn choose<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Res
     Ok((pick(backends, path, &input.head)?, input))
 }
 
-/// `path` opened, with the first of `backends` that opens it, or `None` when none does: for a
-/// directory's files, where what nothing shows is no error.
-pub(crate) fn shown_by<'a, 'b>(path: &'a str, backends: &[&'b dyn Backend]) -> Result<Option<(&'b dyn Backend, Input<'a>)>, String> {
-    let input = Input::open(path)?;
-    let backend = backends.iter().find(|backend| backend.opens(path, &input.head)).copied();
-    Ok(backend.map(|backend| (backend, input)))
+/// `input`, with the first of `backends` that opens it, or `None` when none does: for a
+/// container's files, where what nothing shows is no error.
+pub(crate) fn shown_by<'b>(input: Input, backends: &[&'b dyn Backend]) -> Option<(&'b dyn Backend, Input)> {
+    let backend = backends.iter().find(|backend| backend.opens(&input.path, &input.head)).copied();
+    backend.map(|backend| (backend, input))
+}
+
+/// Files held together, shown as a list: a directory's. Each file is opened from it, and each
+/// container it holds is listed from that one, when the reader goes into it.
+pub(crate) trait Container {
+    /// Where it is, as messages give it: a directory's path.
+    fn path(&self) -> &str;
+    /// What it holds to show, in order: its files and the containers in it, or with `recurse`,
+    /// those containers' files at their place instead.
+    fn list(&self, recurse: bool) -> Result<Listing, String>;
+    /// The file it listed as `name`, opened.
+    fn open(&self, name: &str) -> Result<Input, String>;
+}
+
+impl std::fmt::Debug for dyn Container + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Container({:?})", self.path())
+    }
+}
+
+/// What a container holds to show.
+#[derive(Debug, Default)]
+pub(crate) struct Listing {
+    /// Each file, and each container in it unless recursing, in order.
+    pub(crate) entries: Vec<Listed>,
+    /// What couldn't be read, by its name in the container, and why: a subdirectory, a name that
+    /// isn't UTF-8.
+    pub(crate) unread: Vec<(String, String)>,
+    /// Whether the listing stopped at one of the container's limits before the end.
+    pub(crate) cut: bool,
+}
+
+/// A file or a container listed.
+#[derive(Debug)]
+pub(crate) struct Listed {
+    /// In the container listed: `2024/beach.jpg`, recursing. A file opens by it.
+    pub(crate) name: String,
+    /// A container's own, to list; `None` for a file.
+    pub(crate) container: Option<Rc<dyn Container>>,
 }
 
 /// The first of `backends` that opens the file at `path`, which starts with `head`.
@@ -273,7 +312,7 @@ pub(crate) mod tests {
         fn opens(&self, _path: &str, head: &[u8]) -> bool {
             head.starts_with(self.magic)
         }
-        fn open(&self, input: Input<'_>, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+        fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
             Err(format!("{} opened by {}", input.path, self.name))
         }
     }
@@ -296,11 +335,10 @@ pub(crate) mod tests {
         let path = std::env::temp_dir().join(format!("clview-shown-by-{}", std::process::id()));
         std::fs::write(&path, b"hello").unwrap();
         let path = path.to_str().unwrap();
-        assert!(shown_by(path, &[&PDF, &PNG]).unwrap().is_none());
+        assert!(shown_by(Input::open(path).unwrap(), &[&PDF, &PNG]).is_none());
         std::fs::write(path, b"\x89PNG\r\n").unwrap();
-        assert_eq!(shown_by(path, &[&PDF, &PNG]).unwrap().map(|(b, _)| b.name()), Some("png"));
+        assert_eq!(shown_by(Input::open(path).unwrap(), &[&PDF, &PNG]).map(|(b, _)| b.name()), Some("png"));
         std::fs::remove_file(path).unwrap();
-        assert!(shown_by(path, &[&PDF]).is_err(), "a file that can't be read is");
     }
 
     #[test]

@@ -20,7 +20,7 @@ use encode::PngEffort;
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Folder, Frame, Joined, Part, Request, Source};
+use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Part, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -287,7 +287,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let said = left_out_note(&left_out);
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
-        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &|path: &str| opener.directory(path))?;
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &|container: &dyn Container| opener.contents(container))?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());
@@ -353,14 +353,14 @@ impl Pages {
     }
 }
 
-/// A tile of a list: a file, shown by its first page and opened to its pages, or a directory,
-/// shown as a folder and opened to a list of its own.
+/// A tile of a list: a file, shown by its first page and opened to its pages, or a container (a
+/// directory), shown as a folder and opened to a list of its own.
 pub(super) enum Item {
     File(Pages),
     /// Its name ends with `/`.
-    Directory {
+    Container {
         name: String,
-        path: String,
+        container: Rc<dyn Container>,
     },
 }
 
@@ -370,22 +370,22 @@ impl Item {
     pub(super) fn name(&self) -> &str {
         match self {
             Self::File(pages) => &pages.name,
-            Self::Directory { name, .. } => name,
+            Self::Container { name, .. } => name,
         }
     }
 }
 
 /// The tiles of `items` as one source, a page each, in order: a file's first page, a folder for a
-/// directory.
+/// container.
 fn tiles(items: &[Item]) -> Joined {
     let part = |item: &Item| match item {
         Item::File(p) => Part { name: p.name.clone(), source: p.source.clone(), pages: vec![p.pages.first().copied().unwrap_or(0)] },
-        Item::Directory { name, .. } => Part { name: name.clone(), source: Rc::new(Folder), pages: vec![0] },
+        Item::Container { name, .. } => Part { name: name.clone(), source: Rc::new(Folder), pages: vec![0] },
     };
     Joined::new(items.iter().map(part).collect())
 }
 
-/// What a directory gone into shows: its files and subdirectories, what of them couldn't be
+/// What a container gone into shows: its files and the containers in it, what of them couldn't be
 /// shown, and why, and what else the reader should know.
 pub(super) struct Contents {
     pub(super) items: Vec<Item>,
@@ -438,13 +438,15 @@ impl Opener<'_, '_> {
             match (is_dir(path), paths.len(), recurse) {
                 (false, ..) => {
                     let name = file_name(path);
-                    found.file(self.file(path, &name, false), name);
+                    found.file(crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name)), name);
                 }
                 // Alone, its contents, named from it.
-                (true, 1, _) => self.list(&mut found, path, "", recurse),
+                (true, 1, _) => self.list(&mut found, &Directory::new(path), "", recurse),
                 // Among others, recursing: its files, named from its own name.
-                (true, _, true) => self.list(&mut found, path, &format!("{}/", file_name(path)), true),
-                (true, _, false) => found.items.push(Item::Directory { name: format!("{}/", file_name(path)), path: (*path).to_owned() }),
+                (true, _, true) => self.list(&mut found, &Directory::new(path), &format!("{}/", file_name(path)), true),
+                (true, _, false) => {
+                    found.items.push(Item::Container { name: format!("{}/", file_name(path)), container: Rc::new(Directory::new(path)) });
+                }
             }
         }
         let Found { items, used, left_out, warnings } = found;
@@ -459,34 +461,38 @@ impl Opener<'_, '_> {
             });
         }
         // A directory not gone into yet may hold files that take it.
-        if !items.iter().any(|item| matches!(item, Item::Directory { .. })) {
+        if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
             takes_all(&used, self.options, "any of these files")?;
         }
         Ok(Opened { shown: Shown::list(items, String::new()), left_out, warnings })
     }
 
-    /// What the directory at `path` shows, gone into from a list: its files and subdirectories,
-    /// named from it.
-    fn directory(&self, path: &str) -> Contents {
+    /// What `container` shows, gone into from a list: its files and the containers in it, named
+    /// from it.
+    fn contents(&self, container: &dyn Container) -> Contents {
         let mut found = Found::default();
-        self.list(&mut found, path, "", false);
+        self.list(&mut found, container, "", false);
         Contents { items: found.items, left_out: found.left_out, warnings: found.warnings }
     }
 
-    /// Into `found`, the directory at `path`'s files (its subdirectories' too if `recurse`; its
-    /// subdirectories otherwise), each named `prefix` and its name from the directory.
-    fn list(&self, found: &mut Found, path: &str, prefix: &str, recurse: bool) {
-        let listing = match crate::source::list_directory(path, recurse) {
+    /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
+    /// otherwise), each named `prefix` and its name in the container.
+    fn list(&self, found: &mut Found, container: &dyn Container, prefix: &str, recurse: bool) {
+        let path = container.path();
+        let listing = match container.list(recurse) {
             Ok(listing) => listing,
             Err(why) => return found.left_out.push((file_name(path), why)),
         };
         let (before, listed) = (found.items.len(), listing.entries.len());
         for entry in listing.entries {
             let name = format!("{prefix}{}", entry.name);
-            if entry.directory {
-                found.items.push(Item::Directory { name: format!("{name}/"), path: entry.path });
-            } else {
-                found.file(self.file(&entry.path, &name, true), name);
+            match entry.container {
+                Some(inner) => found.items.push(Item::Container { name: format!("{name}/"), container: inner }),
+                // A file that nothing shows is passed over: a directory holds all sorts.
+                None => {
+                    let shown = container.open(&entry.name).map(|input| crate::source::shown_by(input, self.backends));
+                    found.file(shown.and_then(|chosen| self.file(chosen, &name)), name);
+                }
             }
         }
         found.left_out.extend(listing.unread);
@@ -498,11 +504,11 @@ impl Opener<'_, '_> {
         }
     }
 
-    /// The file at `path` as a tile called `name`: opened by the first backend that opens it, to
-    /// all its pages. `quiet`, as in a directory, a file no backend opens is no error but `None`.
-    fn file(&self, path: &str, name: &str, quiet: bool) -> Result<Option<(&'static dyn Backend, Item)>, String> {
-        let chosen = if quiet { crate::source::shown_by(path, self.backends)? } else { Some(crate::source::choose(path, self.backends)?) };
+    /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
+    /// its pages. A file no backend opens, `None`, is none.
+    fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str) -> Result<Option<(&'static dyn Backend, Item)>, String> {
         let Some((backend, input)) = chosen else { return Ok(None) };
+        let path = input.path.clone();
         let source: Rc<dyn Source> = Rc::from(backend.open(input, self.options)?);
         match source.pages() {
             0 => Err(format!("{path}: no pages to show")),

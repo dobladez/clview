@@ -39,11 +39,11 @@ impl Backend for Images {
         format(path, head).is_some()
     }
 
-    fn open(&self, input: Input<'_>, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
-        let path = input.path;
-        let format = format(path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;
+    fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+        let path = input.path.clone();
+        let format = format(&path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;
         let image = match input.reopenable()? {
-            Reopenable::Disk(file) => Image::on_disk(Path::new(path), file, format),
+            Reopenable::Disk(file) => Image::on_disk(Path::new(&path), file, format),
             Reopenable::Bytes(bytes) => Image::in_memory(bytes, format),
         };
         Ok(Box::new(image.map_err(|e| format!("{path}: {e}"))?))

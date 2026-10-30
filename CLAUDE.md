@@ -5,7 +5,7 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 
 ## Layout
 - `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
-  (`Source`, `Render`, `Pool`, `Frame`), never a backend; `the_viewer_names_no_backend` checks it.
+  (`Source`, `Render`, `Pool`, `Frame`, `Container`), never a backend; `the_viewer_names_no_backend` checks it.
 - `src/source/<backend>.rs`: one backend each, behind a cargo feature, listed in
   `source::BACKENDS`. A backend says whether it opens a file (from its first bytes) and which
   options it takes; the first that opens a file opens it. Options that belong to one kind of file
@@ -20,8 +20,9 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
   backend with nothing better (images) lends its render function to `source/threads.rs`.
-- `source/dir.rs`: a directory's files and subdirectories, in name order (`-r` for its
-  subdirectories' files instead). Several files, or a directory, are a list (`view/mod.rs`'s
+- `source/dir.rs`: a directory as a `Container`, which lists files and the containers in it and
+  opens each file as an `Input`: its files and subdirectories, in name order (`-r` for its
+  subdirectories' files instead). Several files, or a container, are a list (`view/mod.rs`'s
   `Item`): a tile each, its first page, or a folder (`source/folder.rs`) to go into, and Enter
   opens one as a level of its own in the pager. `source/joined.rs`: the tiles as one source. It
   renders a few files at a time and lets go of what the others render with, so a source must hold

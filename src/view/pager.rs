@@ -29,7 +29,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::encode::PngEffort;
-use crate::source::{Frame, Pool, Source};
+use crate::source::{Container, Frame, Pool, Source};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -119,9 +119,9 @@ const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
 const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 
 /// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
-/// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A directory gone into
-/// from a list is listed by `open_directory`. Returns what the reader should know once the screen
-/// is back: why the files those directories left out were.
+/// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A container gone into
+/// from a list is listed by `open_container`. Returns what the reader should know once the screen
+/// is back: why the files those containers left out were.
 pub(super) fn run(
     tty: &Tty,
     shown: Shown,
@@ -129,7 +129,7 @@ pub(super) fn run(
     terminal: &Terminal,
     zoom: Zoom,
     first_id: u64,
-    open_directory: &dyn Fn(&str) -> Contents,
+    open_container: &dyn Fn(&dyn Container) -> Contents,
 ) -> Result<Vec<String>, String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
@@ -229,7 +229,7 @@ pub(super) fn run(
                     Step::Quit => quit = true,
                     Step::Leave if pager.parents.is_empty() => quit = true,
                     Step::Leave | Step::Back => pager.back()?,
-                    Step::Open(at) => pager.open(at, open_directory)?,
+                    Step::Open(at) => pager.open(at, open_container)?,
                 }
                 if quit {
                     break;
@@ -904,22 +904,22 @@ impl Pager<'_> {
         grid
     }
 
-    /// Open the list's item at `at`: a file to its pages, a directory, listed by `open_directory`,
+    /// Open the list's item at `at`: a file to its pages, a container, listed by `open_container`,
     /// to a list of its own. What was on screen stops rendering, and waits to be gone back to.
-    fn open(&mut self, at: usize, open_directory: &dyn Fn(&str) -> Contents) -> Result<(), String> {
+    fn open(&mut self, at: usize, open_container: &dyn Fn(&dyn Container) -> Contents) -> Result<(), String> {
         let id = self.levels;
         let level = match self.level.items.get(at) {
             Some(Item::File(pages)) => {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
                 Level::new(id, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
             }
-            Some(Item::Directory { name, path }) => {
+            Some(Item::Container { name, container }) => {
                 // Its files are opened now, which takes a while for large ones: said first.
-                let (name, path) = (format!("{}{name}", self.level.name), path.clone());
+                let (name, container) = (format!("{}{name}", self.level.name), container.clone());
                 self.level.nav.message = Some(format!("opening {name}…"));
                 self.draw()?;
                 self.level.nav.message = None;
-                let Contents { items, left_out, warnings } = open_directory(&path);
+                let Contents { items, left_out, warnings } = open_container(&*container);
                 self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
                 if items.is_empty() {
                     self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));

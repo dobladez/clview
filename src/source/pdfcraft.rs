@@ -32,9 +32,9 @@ impl Backend for Pdfcraft {
         is_pdf(head)
     }
 
-    fn open(&self, input: Input<'_>, options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
-        let path = input.path;
-        Ok(Box::new(Pdf::open(path, Arc::new(input.bytes()?), options.value("--password"))?))
+    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+        let path = input.path.clone();
+        Ok(Box::new(Pdf::open(&path, Arc::new(input.bytes()?), options.value("--password"))?))
     }
 }
 

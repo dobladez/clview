@@ -68,13 +68,16 @@ to decode, one from a pipe kept as it came. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
 
-Several files, or a directory's files and subdirectories (`source/dir.rs`, in name order,
-subdirectories' files instead with `-r`), are a list: each an `Item` (`mod.rs`), a file's pages
-or a directory. The list's tiles are one source, `source::Joined`: one page from each item, a
-file's first, or a folder (`source::Folder`, drawn in code) for a directory, each part with a name
-for its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
+Several files, or a container's files and the containers in it, are a list: each an `Item`
+(`mod.rs`), a file's pages or a container. A `source::Container` lists what it holds and opens
+each file as an `Input`, which goes to the first backend that opens it, as a file named on the
+command line does; the viewer knows a container only through the trait. A directory is one
+(`source::Directory`, in `source/dir.rs`: in name order, subdirectories' files instead with
+`-r`). The list's tiles are one source, `source::Joined`: one page from each item, a file's
+first, or a folder (`source::Folder`, drawn in code) for a container, each part with a name for
+its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
 pages opened from it, each with its own source and pool; going back drops the level and its
-images in the terminal, and the list's are still there. A directory is listed when it is gone
+images in the terminal, and the list's are still there. A container is listed when it is gone
 into, through a function `mod.rs` hands the pager. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
 only the last part's renderer, as pages print in order. The pager's pool hands each request to
 its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so

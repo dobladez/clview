@@ -5,6 +5,9 @@
 
 use std::cmp::Ordering;
 use std::path::Path;
+use std::rc::Rc;
+
+use super::{Container, Input, Listed, Listing};
 
 /// The most files and subdirectories listed from a directory: each becomes a source, and a
 /// source holds its header (a PDF, its whole file).
@@ -17,33 +20,35 @@ const MAX_DEPTH: usize = 32;
 /// a home directory stops in time.
 const MAX_ENTRIES: usize = 100_000;
 
-/// What a directory holds to show.
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct Listing {
-    /// Each file, and each subdirectory unless recursing, in order.
-    pub(crate) entries: Vec<Listed>,
-    /// What couldn't be read, by its name from the directory listed, and why: a subdirectory,
-    /// a name that isn't UTF-8.
-    pub(crate) unread: Vec<(String, String)>,
-    /// Whether the listing stopped at one of the limits before the end.
-    pub(crate) cut: bool,
+/// A directory, as a container: its files, and its subdirectories as directories of their own.
+pub(crate) struct Directory {
+    path: String,
 }
 
-/// A file or a subdirectory listed.
-#[derive(Debug, PartialEq)]
-pub(crate) struct Listed {
-    pub(crate) path: String,
-    /// From the directory listed: `2024/beach.jpg`, recursing.
-    pub(crate) name: String,
-    pub(crate) directory: bool,
+impl Directory {
+    /// The directory at `path`.
+    pub(crate) fn new(path: &str) -> Self {
+        Self { path: path.to_owned() }
+    }
 }
 
-/// [`Listing`] of the directory at `dir`, its subdirectories' too if `recurse`.
-pub(crate) fn list(dir: &str, recurse: bool) -> Result<Listing, String> {
-    list_within(dir, recurse, MAX_FILES, MAX_DEPTH)
+impl Container for Directory {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn list(&self, recurse: bool) -> Result<Listing, String> {
+        list_within(&self.path, recurse, MAX_FILES, MAX_DEPTH)
+    }
+
+    fn open(&self, name: &str) -> Result<Input, String> {
+        let path = Path::new(&self.path).join(name);
+        Input::open(path.to_str().ok_or_else(|| format!("{}: the name isn't UTF-8", path.display()))?)
+    }
 }
 
-/// [`list`], within `max_files` files and `max_depth` directories down.
+/// What the directory at `dir` holds to show ([`Container::list`]), within `max_files` files and
+/// `max_depth` directories down.
 fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> Result<Listing, String> {
     let mut listing = Listing::default();
     let top = entries(Path::new(dir)).map_err(|e| format!("{dir}: {e}"))?;
@@ -66,8 +71,8 @@ fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> 
             continue;
         };
         match entry.kind {
-            Kind::File => listing.entries.push(Listed { path, name, directory: false }),
-            Kind::Directory if !recurse => listing.entries.push(Listed { path, name, directory: true }),
+            Kind::File => listing.entries.push(Listed { name, container: None }),
+            Kind::Directory if !recurse => listing.entries.push(Listed { name, container: Some(Rc::new(Directory { path })) }),
             Kind::Directory if depth >= max_depth => listing.unread.push((name, format!("{path}: more than {max_depth} directories down"))),
             Kind::Directory => match entries(Path::new(&path)) {
                 Ok(inside) => open.push((format!("{name}/"), inside.into_iter())),
@@ -178,9 +183,19 @@ mod tests {
         dir
     }
 
+    /// What the directory at `dir` holds, its subdirectories' files too if `recurse`.
+    fn list(dir: &str, recurse: bool) -> Result<Listing, String> {
+        Directory::new(dir).list(recurse)
+    }
+
     /// The names listed, a directory's with a `/` after it.
     fn names(listing: &Listing) -> Vec<String> {
-        listing.entries.iter().map(|e| if e.directory { format!("{}/", e.name) } else { e.name.clone() }).collect()
+        listing.entries.iter().map(|e| if e.container.is_some() { format!("{}/", e.name) } else { e.name.clone() }).collect()
+    }
+
+    /// The path the file listed `at` in `dir` opens at.
+    fn opened(dir: &Path, listing: &Listing, at: usize) -> String {
+        Directory::new(dir.to_str().unwrap()).open(&listing.entries[at].name).unwrap().path
     }
 
     #[test]
@@ -197,8 +212,9 @@ mod tests {
         let dir = tree("flat", &["b10.pdf", "b9.png", ".hidden.png", "sub/c.png", "empty/", ".git/"]);
         let listing = list(dir.to_str().unwrap(), false).unwrap();
         assert_eq!(names(&listing), ["b9.png", "b10.pdf", "empty/", "sub/"]);
-        assert_eq!(listing.entries[0].path, dir.join("b9.png").to_str().unwrap());
-        assert_eq!(listing.entries[3].path, dir.join("sub").to_str().unwrap());
+        assert_eq!(opened(&dir, &listing, 0), dir.join("b9.png").to_str().unwrap());
+        assert_eq!(listing.entries[3].container.as_ref().unwrap().path(), dir.join("sub").to_str().unwrap());
+        assert!(listing.entries[0].container.is_none());
         assert!(!listing.cut && listing.unread.is_empty(), "{listing:?}");
         assert!(list(dir.join("nothing").to_str().unwrap(), false).is_err_and(|e| e.contains("nothing: ")));
     }
@@ -208,7 +224,7 @@ mod tests {
         let dir = tree("deep", &["a.png", "m/b.png", "m/n/c.png", "m/.d/e.png", "z.png"]);
         let listing = list(dir.to_str().unwrap(), true).unwrap();
         assert_eq!(names(&listing), ["a.png", "m/b.png", "m/n/c.png", "z.png"]);
-        assert_eq!(listing.entries[2].path, dir.join("m/n/c.png").to_str().unwrap());
+        assert_eq!(opened(&dir, &listing, 2), dir.join("m/n/c.png").to_str().unwrap());
         // Within limits: two files, or one directory down.
         let cut = list_within(dir.to_str().unwrap(), true, 2, MAX_DEPTH).unwrap();
         assert_eq!(names(&cut), ["a.png", "m/b.png"]);
