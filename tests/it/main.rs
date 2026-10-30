@@ -8,3 +8,4 @@ mod pdfcraft_pin;
 mod view;
 mod view_pager;
 mod view_tmux;
+mod zip;

@@ -60,11 +60,16 @@ against its own and every backend's, lists them in `--help` under their backend,
 the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
 its own options from it.
 
-The backends are `source/pdfcraft.rs` (feature `pdf`) and `source/image.rs` (feature `image`),
-both on by default. An image opens by its header alone and decodes on its renderer's or pool's
-first render (on a render thread, so the keys work while a large photo decodes), which keeps the
-pixels for its renders at other sizes and lets them go with it; a picture on disk is read again
-to decode, one from a pipe kept as it came. Nothing in
+The backends are `source/pdfcraft.rs` (feature `pdf`), `source/image.rs` (feature `image`) and
+`source/zip.rs` (feature `zip`), all on by default. An image opens by its header alone and
+decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
+large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
+it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive
+read from it again. A backend opens a file to pages (`Opened::Pages`) or, for an archive, to the
+files it holds (`Opened::Files`, a `Container`). The zip backend parses the central directory
+once and reads a file from it on demand: the first bytes, for `Input`, and the whole file through
+the `Input`'s `Again`, on a render thread. It holds no open file while idle, so a directory of
+archives doesn't run out of file descriptors. Nothing in
 `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
 `cargo clippy --no-default-features` builds the viewer with no backend at all.
 

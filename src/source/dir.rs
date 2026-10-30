@@ -131,7 +131,7 @@ fn entries(dir: &Path) -> Result<Vec<Entry>, String> {
 
 /// `a` against `b` the way people number files: runs of digits by their value, so `img2` comes
 /// before `img10`, the rest letter by letter, ignoring ASCII case until all else is equal.
-fn natural(a: &str, b: &str) -> Ordering {
+pub(super) fn natural(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
     loop {
         let order = match (x.peek().copied(), y.peek().copied()) {

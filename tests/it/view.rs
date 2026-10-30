@@ -571,8 +571,16 @@ fn a_directory_with_nothing_to_show_says_so() {
     assert!(stderr.ends_with("clv: 1 file left out: broken.png\n") && !out.status.success(), "{stderr}");
 }
 
-fn shows() -> &'static str {
-    if cfg!(feature = "image") { "PDFs and images" } else { "PDFs" }
+fn shows() -> String {
+    let shown: Vec<&str> = [("PDFs", true), ("images", cfg!(feature = "image")), ("zip archives", cfg!(feature = "zip"))]
+        .into_iter()
+        .filter_map(|(what, built)| built.then_some(what))
+        .collect();
+    match shown.split_last() {
+        Some((last, [])) => (*last).to_string(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    }
 }
 
 /// Errors are said once, under the command's name.

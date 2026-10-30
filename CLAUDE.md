@@ -11,7 +11,9 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   options it takes; the first that opens a file opens it. Options that belong to one kind of file
   (a PDF's `--password`) are the backend's, never the viewer's. `pdfcraft.rs` (feature `pdf`,
   default) renders PDFs through pdfcraft, a git dependency pinned in `Cargo.toml`; `image.rs`
-  (feature `image`, default) decodes images through the `image` crate and jxl-oxide.
+  (feature `image`, default) decodes images through the `image` crate and jxl-oxide; `zip.rs`
+  (feature `zip`, default) opens zip archives through the `zip` crate, to a `Container` rather
+  than pages (`Opened::Files`), its files read from it on demand, never unpacked to disk.
 - **A backend's library is its own.** pdfcraft is named only in `src/source/pdfcraft.rs`, its
   tests (`tests/it/pdfcraft*.rs`), `Cargo.toml`, the line listing it in `source::BACKENDS`, and
   the backend tables in the README and `docs/cli-view.md`; swapping the PDF renderer must touch
@@ -51,7 +53,7 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
 the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
 and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
-too (`--no-default-features --features image`, then `pdf`). Run them under a `timeout`. The PDF
+too (`--no-default-features --features image`, then `pdf`, then `zip`). Run them under a `timeout`. The PDF
 backend is a large build: keep `-j 2` unless the machine is free. CI
 (`.github/workflows/ci.yml`) runs them all on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 

@@ -12,11 +12,12 @@ clv photo.jpg              # an image, printed at the cursor
 clv *.pdf                  # several files: a tile each, Enter opens one
 clv ~/Photos               # a directory: its files, and its subdirectories as folders
 clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
+clv comics.zip             # an archive: its files and directories, as a directory's
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
 enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Several files,
-or a directory, are a list: a tile for each, by its first page, its name under it. The arrows
+a directory or an archive, are a list: a tile for each, by its first page, its name under it. The arrows
 choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc goes back. `?`
 lists the keys. Everything else
 (the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
@@ -29,6 +30,7 @@ none of them known to the viewer by name:
 |---|---|---|
 | `pdf` | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws them: comments without an appearance of their own are drawn, dynamic XFA forms are laid out, and either password opens a protected file |
 | `image` | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide), in Rust |
+| `zip` | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: the files in one that another backend opens, and its directories as folders | the [`zip`](https://crates.io/crates/zip) crate, in Rust: deflate, deflate64, bzip2, LZMA and XZ, not zstd or encrypted entries |
 
 This began as `view` in pdfcraft's command line.
 
@@ -49,8 +51,8 @@ cargo install --locked --git https://github.com/dobladez/clview    # installs `c
 cargo install --path .      # installs `clv`
 ```
 
-Both features are on by default; `cargo build --no-default-features --features image` builds
-the viewer without the PDF backend, and `--no-default-features` alone without any.
+All three features are on by default; `cargo build --no-default-features --features image`
+builds the viewer with images alone, and `--no-default-features` alone without any backend.
 
 The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
 `main` in [`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
@@ -63,13 +65,16 @@ renderer would replace that file and the dependencies, and nothing else.
 
 The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
 renders. A file goes to the first backend that opens it, going by its first bytes, and each
-backend brings its own options (`--password` is the PDF backend's). There are two so far, for
-PDFs and for images.
+backend brings its own options (`--password` is the PDF backend's). A backend may open a file to
+files instead of pages, as an archive holds them, which the viewer lists as it lists a directory.
+There are three so far: PDFs, images and zip archives.
 
 - Open a list's files only when their tiles come on screen, and let go of them after: today
   every file is opened before anything shows, which for a directory of large PDFs takes a while.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
+- More archives: tar (gzip, xz, zstd), 7z; a comic book archive (cbz) as a book, its pictures
+  its pages.
 
 ## License
 

@@ -31,17 +31,22 @@ pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d04
 # YUV matrix in 0.25.10.
 image = { version = "0.25.10", default-features = false, features = ["bmp", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"], optional = true }
 jxl-oxide = { version = "0.12.6", default-features = false, features = ["image"], optional = true }
+# Zip archives, read in Rust: deflate through zlib-rs, deflate64, bzip2 through libbz2-rs-sys, LZMA
+# and XZ. Not zstd (the zstd C library), and no encrypted entries.
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "bzip2", "lzma", "xz"], optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image"]
+default = ["pdf", "image", "zip"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
 # Images: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, TGA, PNM
 # and farbfeld (`source/image.rs` lists them as `DECODED`).
 image = ["dep:image", "dep:jxl-oxide"]
+# Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: `source/zip.rs`.
+zip = ["dep:zip"]
 
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
@@ -52,6 +57,8 @@ rustix = { version = "1", features = ["process", "termios"] }
 # Test images, made by the tests. pdfcraft-cos encrypts PDFs for the PDF backend's own tests
 # (tests/it/pdfcraft.rs).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+# Test archives, made by the tests (source/zip.rs, tests/it/zip.rs).
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
 proptest = "1"
 serde_json = "1"

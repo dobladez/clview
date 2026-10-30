@@ -16,7 +16,7 @@ use ::image::metadata::Orientation;
 use ::image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 
 use super::threads::Threads;
-use super::{Backend, Frame, Input, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Images, decoded by the `image` crate.
@@ -39,14 +39,15 @@ impl Backend for Images {
         format(path, head).is_some()
     }
 
-    fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+    fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
         let format = format(&path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;
         let image = match input.reopenable()? {
             Reopenable::Disk(file) => Image::on_disk(Path::new(&path), file, format),
             Reopenable::Bytes(bytes) => Image::in_memory(bytes, format),
+            Reopenable::Again(again) => Image::held(again, format),
         };
-        Ok(Box::new(image.map_err(|e| format!("{path}: {e}"))?))
+        Ok(Opened::Pages(Box::new(image.map_err(|e| format!("{path}: {e}"))?)))
     }
 }
 
@@ -113,6 +114,8 @@ enum Encoded {
     Disk(PathBuf),
     /// As they came through a pipe, which can't be read again.
     Memory(Vec<u8>),
+    /// In another file (an archive), read from it again to decode.
+    Held(Again),
 }
 
 /// The picture as premultiplied RGBA, decoded by the first render of a renderer or a pool, each
@@ -125,6 +128,12 @@ impl Image {
     fn on_disk(path: &Path, file: File, format: Format) -> Result<Self, String> {
         let size = header(BufReader::new(file), format)?;
         Ok(Self(Arc::new(Picture { encoded: Encoded::Disk(path.into()), format, size })))
+    }
+
+    /// The picture that `again` reads from the file holding it: read once now for its header.
+    fn held(again: Again, format: Format) -> Result<Self, String> {
+        let size = header(Cursor::new(&within(again()?)?), format)?;
+        Ok(Self(Arc::new(Picture { encoded: Encoded::Held(again), format, size })))
     }
 
     /// The picture in `bytes`.
@@ -227,6 +236,7 @@ impl Picture {
         match &self.encoded {
             Encoded::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
             Encoded::Disk(path) => read(path).map(Cow::Owned),
+            Encoded::Held(again) => again().and_then(within).map(Cow::Owned),
         }
     }
 }
@@ -240,6 +250,15 @@ fn read(path: &Path) -> Result<Vec<u8>, String> {
         return Err(format!("the file is now more than {} MiB", MAX_BYTES >> 20));
     }
     Ok(bytes)
+}
+
+/// `bytes`, read from the file holding a picture, as long as they are no more than
+/// [`MAX_BYTES`], as [`read`] reads a file of its own.
+fn within(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    match u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BYTES {
+        true => Err(format!("the file is more than {} MiB", MAX_BYTES >> 20)),
+        false => Ok(bytes),
+    }
 }
 
 /// The picture decoded once and shared by every render at full size, without a copy.

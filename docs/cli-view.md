@@ -14,6 +14,7 @@ clv secret.pdf --password PW
 clv *.png                    # several files: a tile each, Enter opens one
 clv ~/Photos                 # a directory: each file by its first page
 clv -r ~/Photos              # its subdirectories' files too
+clv comics.zip               # an archive, as a directory
 ```
 
 On a terminal, more than one page opens the pager: one page at a time, two side by side when
@@ -100,6 +101,23 @@ stopped early.
 A directory and files can be given together, and so can several directories: each directory is a
 folder at its place among the arguments (with `-r`, its files, named from it: `photos/a.jpg`).
 
+## Archives
+
+A zip archive is shown as a directory is: a list of the files in it that a backend opens, read
+from the archive, and a folder for each directory in it. Given alone it is that list; among other
+files, or in a directory, it is a folder, which Enter goes into, and the status line names its
+files from it (`trip.zip/2024/beach.jpg`). `-r` lists its directories' files instead of folders
+when the archive is given; an archive in a directory stays a folder even then, since `-r` goes
+through directories, not into every archive (a jar, a document that is a zip inside). An archive
+in an archive is a folder too.
+
+Nothing is unpacked to disk: a file in an archive is read from it to choose its backend and again,
+whole, when it is drawn, so an archive open holds its list of names, not its files. Hidden names
+are left out, as on disk, and so is macOS's `__MACOSX` directory. A file larger than 512 MiB
+unpacked, an encrypted one, or one packed in a way this build doesn't read (zstd) is left out
+with a warning, as a broken file in a directory is. At most 100,000 entries are read from an
+archive, 4,096 files listed from a directory in it, and names 32 directories deep.
+
 ## Which files it shows
 
 A file is shown by the first backend that opens it, going by the file's first bytes, not its
@@ -111,6 +129,7 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 |---|---|---|
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
+| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and documents that are zips inside too, as directories ([Archives](#archives)) | none |
 
 PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
 `pdfcraft-cli render` draw them: comments without an appearance of their own are drawn too, and a

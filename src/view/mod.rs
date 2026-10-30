@@ -20,7 +20,7 @@ use encode::PngEffort;
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Part, Request, Source};
+use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Opened, Part, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -259,7 +259,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let opener = Opener { backends, options: &options };
-    let Opened { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
+    let Given { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
     warn(&warnings, &left_out);
     // Said first, what was left out may be why there are fewer than asked for.
     let shown = shown.pick(given.as_deref())?;
@@ -308,11 +308,6 @@ pub(super) struct Shown {
 }
 
 impl Shown {
-    /// A file's pages, all of them.
-    fn file(source: Rc<dyn Source>, name: String) -> Self {
-        Self { pages: Pages::all(source, name), items: Vec::new() }
-    }
-
     /// A list of `items`, every tile, its items' names following `name`.
     pub(super) fn list(items: Vec<Item>, name: String) -> Self {
         Self { pages: Pages::all(Rc::new(tiles(&items)), name), items }
@@ -408,7 +403,7 @@ struct Opener<'o, 'a> {
 }
 
 /// What the files given show, and what of them couldn't be shown, with why.
-struct Opened {
+struct Given {
     shown: Shown,
     left_out: Vec<(String, String)>,
     /// What else the reader should know first: a listing cut short.
@@ -417,36 +412,40 @@ struct Opened {
 
 impl Opener<'_, '_> {
     /// What `paths` show: one file's pages, or a list. A file alone that can't be shown is the
-    /// error. Several files, or a directory, are a list: a tile for each file, by its first page,
-    /// and for each directory (a directory alone, its files and subdirectories); recursing, a
-    /// directory's files and its subdirectories' are tiles instead. Among several, a file that
-    /// can't be shown is left out, and only nothing at all to show is an error. In a directory, a
-    /// file that nothing shows is passed over. An option that none of the files' backends takes is
-    /// refused, since it would do nothing.
-    fn open(&self, paths: &[&str], recurse: bool) -> Result<Opened, String> {
+    /// error. Several files, or a container (a directory, or a file that holds files, an
+    /// archive), are a list: a tile for each file, by its first page, and for each container (a
+    /// container alone, its files and the containers in it); recursing, a container's files and
+    /// its containers' are tiles instead. Among several, a file that can't be shown is left out,
+    /// and only nothing at all to show is an error. In a container, a file that nothing shows is
+    /// passed over. An option that none of the files' backends takes is refused, since it would
+    /// do nothing.
+    fn open(&self, paths: &[&str], recurse: bool) -> Result<Given, String> {
         let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
-        if let [path] = paths
-            && !is_dir(path)
-        {
-            let (backend, input) = crate::source::choose(path, self.backends)?;
-            takes_all(&[backend], self.options, path)?;
-            let shown = Shown::file(Rc::from(backend.open(input, self.options)?), file_name(path));
-            return Ok(Opened { shown, left_out: Vec::new(), warnings: Vec::new() });
-        }
         let mut found = Found::default();
         for path in paths {
-            match (is_dir(path), paths.len(), recurse) {
-                (false, ..) => {
-                    let name = file_name(path);
-                    found.file(crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name)), name);
+            let name = file_name(path);
+            let container: Rc<dyn Container> = if is_dir(path) {
+                Rc::new(Directory::new(path))
+            } else {
+                match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name)) {
+                    Ok(Some((_, Item::Container { container, .. }))) => container,
+                    Ok(Some((backend, Item::File(pages)))) if paths.len() == 1 => {
+                        takes_all(&[backend], self.options, path)?;
+                        return Ok(Given { shown: Shown { pages, items: Vec::new() }, left_out: Vec::new(), warnings: Vec::new() });
+                    }
+                    Err(why) if paths.len() == 1 => return Err(why),
+                    opened => {
+                        found.file(opened, name);
+                        continue;
+                    }
                 }
+            };
+            match (paths.len(), recurse) {
                 // Alone, its contents, named from it.
-                (true, 1, _) => self.list(&mut found, &Directory::new(path), "", recurse),
+                (1, _) => self.list(&mut found, &*container, "", recurse),
                 // Among others, recursing: its files, named from its own name.
-                (true, _, true) => self.list(&mut found, &Directory::new(path), &format!("{}/", file_name(path)), true),
-                (true, _, false) => {
-                    found.items.push(Item::Container { name: format!("{}/", file_name(path)), container: Rc::new(Directory::new(path)) });
-                }
+                (_, true) => self.list(&mut found, &*container, &format!("{name}/"), true),
+                (_, false) => found.items.push(Item::Container { name: format!("{name}/"), container }),
             }
         }
         let Found { items, used, left_out, warnings } = found;
@@ -460,11 +459,11 @@ impl Opener<'_, '_> {
                 true => "nothing given can be shown".into(),
             });
         }
-        // A directory not gone into yet may hold files that take it.
+        // A container not gone into yet may hold files that take it.
         if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
             takes_all(&used, self.options, "any of these files")?;
         }
-        Ok(Opened { shown: Shown::list(items, String::new()), left_out, warnings })
+        Ok(Given { shown: Shown::list(items, String::new()), left_out, warnings })
     }
 
     /// What `container` shows, gone into from a list: its files and the containers in it, named
@@ -505,15 +504,17 @@ impl Opener<'_, '_> {
     }
 
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
-    /// its pages. A file no backend opens, `None`, is none.
+    /// its pages, or for a file that holds files, to a container of them. A file no backend
+    /// opens, `None`, is none.
     fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str) -> Result<Option<(&'static dyn Backend, Item)>, String> {
         let Some((backend, input)) = chosen else { return Ok(None) };
         let path = input.path.clone();
-        let source: Rc<dyn Source> = Rc::from(backend.open(input, self.options)?);
-        match source.pages() {
-            0 => Err(format!("{path}: no pages to show")),
-            _ => Ok(Some((backend, Item::File(Pages::all(source, name.to_owned()))))),
-        }
+        let item = match backend.open(input, self.options)? {
+            Opened::Files(container) => Item::Container { name: format!("{name}/"), container },
+            Opened::Pages(source) if source.pages() == 0 => return Err(format!("{path}: no pages to show")),
+            Opened::Pages(source) => Item::File(Pages::all(Rc::from(source), name.to_owned())),
+        };
+        Ok(Some((backend, item)))
     }
 }
 
@@ -954,8 +955,8 @@ mod tests {
     #[test]
     fn an_option_that_none_of_the_files_backends_takes_is_refused() {
         use crate::source::tests::{Fake, PDF};
-        const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD] };
-        const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[] };
+        const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
+        const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[], holds: false };
         let given = args(&["a.pdf", "--zoom", "2", "--password", "pw"]);
         assert_eq!(takes_all(&[&LOCKED], &parsed(&given), "a.pdf"), Ok(()));
         assert_eq!(takes_all(&[&PDF], &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
@@ -976,10 +977,41 @@ mod tests {
         assert_eq!(left_out_note(&[file("a.txt"), file("b")]).as_deref(), Some("2 files left out: a.txt, …"));
     }
 
+    /// A file that holds files (an archive) is a container: alone, a list of its files, as a
+    /// directory alone; among others, a folder; recursing among others, its files, named from it.
+    #[test]
+    fn a_file_that_holds_files_is_listed_as_a_directory_is() {
+        use crate::source::tests::{ARCHIVE, PDF};
+        let dir = std::env::temp_dir().join(format!("clview-holds-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("book.arc.d/ch")).unwrap();
+        for (name, bytes) in [("book.arc", &b"\0arc"[..]), ("book.arc.d/a.pdf", b"%PDF-"), ("book.arc.d/ch/b.pdf", b"%PDF-"), ("c.pdf", b"%PDF-")] {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        let (book, c) = (dir.join("book.arc"), dir.join("c.pdf"));
+        let (book, c) = (book.to_str().unwrap(), c.to_str().unwrap());
+        let given = args(&[]);
+        let opener = Opener { backends: &[&PDF, &ARCHIVE], options: &parsed(&given) };
+        let names = |paths: &[&str], recurse: bool| {
+            let shown = opener.open(paths, recurse).map_err(|e| e.to_string()).unwrap().shown;
+            shown.items.iter().map(|item| item.name().to_owned()).collect::<Vec<_>>()
+        };
+        assert_eq!(names(&[book], false), ["a.pdf", "ch/"]);
+        assert_eq!(names(&[book], true), ["a.pdf", "ch/b.pdf"]);
+        assert_eq!(names(&[book, c], false), ["book.arc/", "c.pdf"]);
+        assert_eq!(names(&[book, c], true), ["book.arc/a.pdf", "book.arc/ch/b.pdf", "c.pdf"]);
+        // A file alone is its pages, not a list.
+        assert!(!opener.open(&[c], false).map_err(|e| e.to_string()).unwrap().shown.is_list());
+        // In a directory, a folder, even recursing.
+        std::fs::remove_dir_all(dir.join("book.arc.d/ch")).unwrap();
+        let top = dir.to_str().unwrap();
+        assert_eq!(names(&[top], true), ["book.arc/", "book.arc.d/a.pdf", "c.pdf"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn help_lists_the_viewers_options_then_each_backends() {
         use crate::source::tests::{Fake, PDF};
-        const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD] };
+        const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
         let help = usage(&[&LOCKED, &PDF]);
         assert!(help.starts_with(&format!("{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.

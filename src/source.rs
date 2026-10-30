@@ -10,11 +10,14 @@ mod joined;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
 mod threads;
+#[cfg(feature = "zip")]
+mod zip;
 
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::args::{OptionSpec, Parsed};
 pub(crate) use dir::Directory;
@@ -27,6 +30,8 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
     &image::Images,
+    #[cfg(feature = "zip")]
+    &zip::Zip,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -44,8 +49,17 @@ pub(crate) trait Backend {
     /// Whether it opens the file at `path`, going by `head`: its first [`HEAD`] bytes, or all of
     /// a shorter file.
     fn opens(&self, path: &str, head: &[u8]) -> bool;
-    /// `input` opened, with the values `options` gives its own options.
-    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Box<dyn Source>, String>;
+    /// `input` opened, with the values `options` gives its own options: its pages, or for a file
+    /// that holds files (an archive), a container of them.
+    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String>;
+}
+
+/// What a backend opened a file to.
+pub(crate) enum Opened {
+    #[cfg_attr(not(any(feature = "pdf", feature = "image", test)), expect(dead_code, reason = "only PDFs and images have pages"))]
+    Pages(Box<dyn Source>),
+    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives hold files"))]
+    Files(Rc<dyn Container>),
 }
 
 /// A file being opened: its first bytes, read to choose a backend, and the rest still to read. A
@@ -53,8 +67,20 @@ pub(crate) trait Backend {
 pub(crate) struct Input {
     pub(crate) path: String,
     head: Vec<u8>,
-    rest: File,
+    rest: Rest,
 }
+
+/// The rest of a file being opened.
+enum Rest {
+    /// A file of its own, read on from its head.
+    File(File),
+    /// A file held in another (an archive's), read whole, again, from there.
+    Held(Again),
+}
+
+/// A file held in another, read whole from it, every time it is called: within the holder's
+/// limits, and on any thread, since a render reads it.
+pub(crate) type Again = Arc<dyn Fn() -> Result<Vec<u8>, String> + Send + Sync>;
 
 impl Input {
     fn open(path: &str) -> Result<Self, String> {
@@ -62,36 +88,57 @@ impl Input {
         let mut rest = File::open(path).map_err(error)?;
         let mut head = Vec::new();
         Read::by_ref(&mut rest).take(HEAD).read_to_end(&mut head).map_err(error)?;
-        Ok(Self { path: path.to_owned(), head, rest })
+        Ok(Self { path: path.to_owned(), head, rest: Rest::File(rest) })
+    }
+
+    /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
+    /// of a shorter file) and which `again` reads whole.
+    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives hold files"))]
+    fn held(path: String, head: Vec<u8>, again: Again) -> Self {
+        Self { path, head, rest: Rest::Held(again) }
     }
 
     /// The whole file.
     pub(crate) fn bytes(self) -> Result<Vec<u8>, String> {
-        let Self { path, mut head, mut rest } = self;
-        rest.read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
-        Ok(head)
+        match self.rest {
+            Rest::File(mut rest) => {
+                let mut head = self.head;
+                rest.read_to_end(&mut head).map_err(|e| format!("{}: {e}", self.path))?;
+                Ok(head)
+            }
+            Rest::Held(again) => again().map_err(|e| format!("{}: {e}", self.path)),
+        }
     }
 
     /// The file for a backend that reads it again when it renders, and so keeps only what it
-    /// needs meanwhile: on disk, from its start; otherwise the whole of it, read now.
-    #[cfg_attr(all(not(feature = "image"), not(test)), expect(dead_code, reason = "only images read their file again"))]
+    /// needs meanwhile: on disk, from its start; held in another, how to read it from there;
+    /// otherwise the whole of it, read now.
+    #[cfg_attr(
+        all(not(feature = "image"), not(feature = "zip"), not(test)),
+        expect(dead_code, reason = "only images and archives read their file again")
+    )]
     pub(crate) fn reopenable(self) -> Result<Reopenable, String> {
-        if !self.rest.metadata().is_ok_and(|m| m.is_file()) {
-            return self.bytes().map(Reopenable::Bytes);
+        let Self { path, head, rest } = self;
+        match rest {
+            Rest::File(mut file) if file.metadata().is_ok_and(|m| m.is_file()) => {
+                file.rewind().map_err(|e| format!("{path}: {e}"))?;
+                Ok(Reopenable::Disk(file))
+            }
+            Rest::File(file) => Self { path, head, rest: Rest::File(file) }.bytes().map(Reopenable::Bytes),
+            Rest::Held(again) => Ok(Reopenable::Again(again)),
         }
-        let Self { path, mut rest, .. } = self;
-        rest.rewind().map_err(|e| format!("{path}: {e}"))?;
-        Ok(Reopenable::Disk(rest))
     }
 }
 
 /// A file as [`Input::reopenable`] gives it.
-#[cfg_attr(not(feature = "image"), expect(dead_code, reason = "only images read their file again"))]
+#[cfg_attr(not(any(feature = "image", feature = "zip")), expect(dead_code, reason = "only images and archives read their file again"))]
 pub(crate) enum Reopenable {
     /// On disk, from its start: its path opens it again.
     Disk(File),
     /// A pipe or a device, which can't be read again: all of it.
     Bytes(Vec<u8>),
+    /// Held in another: how to read it whole from there.
+    Again(Again),
 }
 
 /// `path` opened, with the first of `backends` that opens it.
@@ -291,12 +338,14 @@ pub(crate) mod tests {
         assert!(Pixels::new(Vec::new()).is_empty());
     }
 
-    /// A backend that opens files starting with `magic`.
+    /// A backend that opens files starting with `magic`: to a page (a folder's), or if it
+    /// `holds` files, to the directory beside the file, named as it is with `.d` after.
     pub(crate) struct Fake {
         pub(crate) name: &'static str,
         pub(crate) shows: &'static str,
         pub(crate) magic: &'static [u8],
         pub(crate) options: &'static [OptionSpec],
+        pub(crate) holds: bool,
     }
 
     impl Backend for Fake {
@@ -312,15 +361,20 @@ pub(crate) mod tests {
         fn opens(&self, _path: &str, head: &[u8]) -> bool {
             head.starts_with(self.magic)
         }
-        fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
-            Err(format!("{} opened by {}", input.path, self.name))
+        fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
+            Ok(match self.holds {
+                true => Opened::Files(Rc::new(Directory::new(&format!("{}.d", input.path)))),
+                false => Opened::Pages(Box::new(Folder)),
+            })
         }
     }
 
-    pub(crate) const PDF: Fake = Fake { name: "pdf-one", shows: "PDFs", magic: b"%PDF-", options: &[] };
-    const PDF_TOO: Fake = Fake { name: "pdf-two", shows: "PDFs", magic: b"%PDF-", options: &[] };
-    const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[] };
-    const DIR: Fake = Fake { name: "dir", shows: "directories", magic: b"\0dir", options: &[] };
+    pub(crate) const PDF: Fake = Fake { name: "pdf-one", shows: "PDFs", magic: b"%PDF-", options: &[], holds: false };
+    const PDF_TOO: Fake = Fake { name: "pdf-two", shows: "PDFs", magic: b"%PDF-", options: &[], holds: false };
+    const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[], holds: false };
+    const DIR: Fake = Fake { name: "dir", shows: "directories", magic: b"\0dir", options: &[], holds: false };
+    /// Files that hold files.
+    pub(crate) const ARCHIVE: Fake = Fake { name: "archive", shows: "archives", magic: b"\0arc", options: &[], holds: true };
 
     #[test]
     fn the_first_backend_that_opens_a_file_opens_it() {
@@ -372,9 +426,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_file_held_in_another_is_read_from_it_again_each_time() {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = reads.clone();
+        let again: Again = Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(b"%PDF-1.7 whole".to_vec())
+        });
+        let input = Input::held("a.zip/b.pdf".into(), b"%PDF-1.7".to_vec(), again.clone());
+        assert_eq!(pick(&[&PNG, &PDF], &input.path, &input.head).map(|b| b.name()), Ok("pdf-one"));
+        assert_eq!(input.bytes().unwrap(), b"%PDF-1.7 whole");
+        let Ok(Reopenable::Again(again)) = Input::held("a.zip/b.pdf".into(), Vec::new(), again).reopenable() else { panic!("held") };
+        assert_eq!(again().unwrap(), b"%PDF-1.7 whole");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 2, "read when asked, not before");
+        let failing: Again = Arc::new(|| Err("gone".into()));
+        assert_eq!(Input::held("a.zip/c.pdf".into(), Vec::new(), failing).bytes().err().as_deref(), Some("a.zip/c.pdf: gone"));
+    }
+
+    #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdf", feature = "image")))]
+        #[cfg(not(any(feature = "pdf", feature = "image", feature = "zip")))]
         assert!(BACKENDS.is_empty());
     }
 }

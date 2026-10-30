@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
 
-use super::{Backend, Frame, Input, Pixels, Request, Source};
+use super::{Backend, Frame, Input, Opened, Pixels, Request, Source};
 use crate::args::{OptionSpec, Parsed};
 
 /// PDFs, rendered by pdfcraft.
@@ -32,9 +32,9 @@ impl Backend for Pdfcraft {
         is_pdf(head)
     }
 
-    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Box<dyn Source>, String> {
+    fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
-        Ok(Box::new(Pdf::open(&path, Arc::new(input.bytes()?), options.value("--password"))?))
+        Ok(Opened::Pages(Box::new(Pdf::open(&path, Arc::new(input.bytes()?), options.value("--password"))?)))
     }
 }
 

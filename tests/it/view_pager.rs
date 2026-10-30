@@ -40,7 +40,7 @@ fn script(line: &str) -> Command {
 /// Whether script(1) gives a command a pseudo-terminal of the size asked for, which every test
 /// here stands on. Where it can't (no script, or one that can't open a terminal), the tests skip
 /// with a warning instead of failing over something that isn't `view`'s.
-fn pty_works() -> bool {
+pub(crate) fn pty_works() -> bool {
     static WORKS: OnceLock<bool> = OnceLock::new();
     *WORKS.get_or_init(|| {
         let works = (|| {
@@ -68,7 +68,7 @@ fn pty_works() -> bool {
 }
 
 /// `view pdf args…` running on a `cols` × `rows` pseudo-terminal.
-struct Session {
+pub(crate) struct Session {
     child: Child,
     /// script's stdin: keys, and the terminal's answers to `view`'s questions.
     keys: Arc<Mutex<Option<ChildStdin>>>,
@@ -94,7 +94,7 @@ const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None 
 const CELL_QUERY: &[u8] = b"\x1b[16t\x1b[c";
 
 impl Session {
-    fn start(pdf: &Path, args: &[&str], cols: u16, rows: u16) -> Self {
+    pub(crate) fn start(pdf: &Path, args: &[&str], cols: u16, rows: u16) -> Self {
         Self::start_on(PLAIN, pdf, args, cols, rows)
     }
 
@@ -140,12 +140,12 @@ impl Session {
         Session { child, keys, output, taken }
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
     }
 
     /// Wait until `done` holds for what was drawn so far; panics with the output if it never does.
-    fn wait_until(&self, what: &str, done: impl Fn(&str) -> bool) {
+    pub(crate) fn wait_until(&self, what: &str, done: impl Fn(&str) -> bool) {
         let deadline = Instant::now() + PATIENCE;
         while !done(&self.text()) {
             assert!(Instant::now() < deadline, "{what} never happened: {:?}", self.text());
@@ -153,7 +153,7 @@ impl Session {
         }
     }
 
-    fn press(&mut self, keys: &str) {
+    pub(crate) fn press(&mut self, keys: &str) {
         let mut stdin = self.keys.lock().unwrap();
         let stdin = stdin.as_mut().unwrap();
         stdin.write_all(keys.as_bytes()).unwrap();
@@ -161,7 +161,7 @@ impl Session {
     }
 
     /// Wait for `view` to exit, all of its output collected.
-    fn finish(&mut self) -> ExitStatus {
+    pub(crate) fn finish(&mut self) -> ExitStatus {
         let deadline = Instant::now() + PATIENCE;
         let status = loop {
             if let Some(status) = self.child.try_wait().unwrap() {
@@ -217,7 +217,7 @@ fn drawn(text: &str, place: &str) -> bool {
 }
 
 /// `text` with each run of spaces made one: what the status line says, whatever its padding.
-fn bar(text: &str) -> String {
+pub(crate) fn bar(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         if !(c == ' ' && out.ends_with(' ')) {
@@ -537,7 +537,7 @@ fn sent_sizes(text: &str) -> Vec<(u32, u32)> {
 
 /// The name of the tile chosen last, highlighted under it: the last text in reverse video that
 /// isn't the status line.
-fn chosen(text: &str) -> Option<String> {
+pub(crate) fn chosen(text: &str) -> Option<String> {
     let labels = text.split("\x1b[7m").skip(1).filter_map(|t| t.split_once("\x1b[0m").map(|(label, _)| label));
     labels.filter(|label| !label.contains("? help")).last().map(|label| label.trim().to_string())
 }
