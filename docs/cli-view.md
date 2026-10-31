@@ -142,17 +142,18 @@ takes (`--password` for a `.pdf.gz`) is refused, as an option no backend takes i
 
 ## Which files it shows
 
-A file is shown by the first backend that opens it, going by the file's first bytes, not its
-name. This build's backends, and the options each takes besides the ones above, are listed at the
+A file is shown by the first backend that opens it, going by the file's first bytes, and by its
+name only where they can't tell (a TGA, a Word document in a compound file). This build's backends, and the options each takes besides the ones above, are listed at the
 end of `clv --help`. An option that only another backend takes is refused, since it would do
 nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
 | Backend | Shows | Its options |
 |---|---|---|
 | `resvg` (the `svg` feature, on by default) | SVG drawings: XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its `.svg` or `.svgz` name. Other XML is not one. Asked first: a PDF's header may be anywhere in those bytes, which a drawing's text may hold | none |
+| `wordcraft` (the `word` feature, on by default) | Word documents, OpenDocument text and RTF ([Documents](#documents)): an RTF by its first bytes (`{\rtf`), whatever its name; an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document, a compound file, by such a name only, since spreadsheets and slides are compound files too. Asked third, for the reason SVG is first (an RTF's text), and before zip | `--password PW`: the password of a protected Word document |
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
-| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and documents that are zips inside too, as directories ([Archives](#archives)) | none |
+| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips the Word backend doesn't take, as directories ([Archives](#archives)) | none |
 | `tar` (the `tar` feature, on by default) | Tar archives, by a POSIX or GNU header first (`ustar`, its checksum right), as directories; and files compressed with gzip, bzip2 or xz, by their signature: a compressed tar as an archive, anything else as the file it unpacks to ([Archives](#archives)). Asked second, for the reason SVG is first: a tar's first file starts 512 bytes in | none |
 
 PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
@@ -208,6 +209,27 @@ bounded before it is spent ([ADR-0003](adr/0003-bound-what-a-drawing-costs-befor
 
 A render once begun can't be stopped: a page within the limits but slow still takes its time on
 a render thread, while the keys work.
+
+### Documents
+
+A Word document (docx, or a Word 97-2003 doc), an OpenDocument text (odt) or an RTF is laid out
+into pages by [wordcraft](https://github.com/storytold/wordcraft), as its app prints them: each
+page its own size, in points, fitted to the window as a PDF's is; headers and footers, tables,
+lists, pictures and shapes; tracked changes marked up, as Word prints them unless told not to
+(what was deleted struck through, what was inserted underlined, a bar beside each changed line);
+no comment balloons, no proofing marks. Text is set in the fonts it names when the system has
+them, and otherwise in the ones wordcraft substitutes, its own included (Source Serif, Source
+Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens with `--password`;
+without it, clv says it needs one.
+
+Opening a document reads and lays it out whole, to know its pages (a quarter of a second for 500
+pages, on an M3 Max), and keeps only their sizes: shown, it is read and laid out again, and kept
+while it is (about 200 MB for those 500 pages). A file larger than 256 MiB is refused, and a
+page that would take more than 64 million pixels fails, as a drawing's does. Beyond those, what a
+document may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it
+nests), not by clv's: one slow to lay out holds up its opening. Why it is read this way, and
+not through wordcraft's engine, is in
+[ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md).
 
 ## Paging through a document
 

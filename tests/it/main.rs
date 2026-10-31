@@ -10,4 +10,5 @@ mod tar;
 mod view;
 mod view_pager;
 mod view_tmux;
+mod wordcraft;
 mod zip;

@@ -61,13 +61,17 @@ against its own and every backend's, lists them in `--help` under their backend,
 the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
 its own options from it.
 
-The backends are `source/svg.rs` (feature `svg`), `source/pdfcraft.rs` (feature `pdf`),
-`source/image.rs` (feature `image`) and `source/zip.rs` (feature `zip`), all on by default, the
-SVG one asked first since it goes by how a file starts and a PDF's header may come anywhere in
-its first 1024 bytes. A drawing parses once to open and keeps only where its bytes are; its
-renderer or pool parses it again on its first render and keeps the tree for renders at other
-sizes, each of which is estimated before it starts
-([ADR-0003](../../docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)). An image opens by its header alone and
+The backends are `source/svg.rs` (feature `svg`), `source/tar.rs` (feature `tar`),
+`source/wordcraft.rs` (feature `word`), `source/pdfcraft.rs` (feature `pdf`), `source/image.rs`
+(feature `image`) and `source/zip.rs` (feature `zip`), all on by default and asked in that order:
+the ones that go by how a file starts before the PDF one, since a PDF's header may come anywhere
+in its first 1024 bytes, and the Word one before zip, since a docx is a zip. A drawing parses once
+to open and keeps only where its bytes are; its renderer or pool parses it again on its first
+render and keeps the tree for renders at other sizes, each of which is estimated before it starts
+([ADR-0003](../../docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)).
+A document is read and laid out to open, and keeps only where its bytes are and its pages' sizes;
+its renderer or pool reads and lays it out again on its first render, and keeps that
+([ADR-0005](../../docs/adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)). An image opens by its header alone and
 decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
 large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
 it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive

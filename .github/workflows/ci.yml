@@ -66,3 +66,7 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features tar --all-targets -- -D warnings
           cargo test --locked --no-default-features --features tar
+      - name: word alone
+        run: |
+          cargo clippy --locked --no-default-features --features word --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features word

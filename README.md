@@ -1,6 +1,6 @@
 # clview
 
-`clv` shows PDFs, images and SVG drawings in the terminal, through the
+`clv` shows PDFs, images, SVG drawings and Word documents in the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
 WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 
@@ -10,6 +10,7 @@ clv report.pdf --zoom 4    # four pages to a row
 clv report.pdf --no-pager  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
 clv diagram.svg            # a drawing, as large as the window and sharp at that size
+clv letter.docx            # a Word document's pages, laid out as Word prints them (odt, rtf too)
 clv *.pdf                  # several files: a tile each, Enter opens one
 clv ~/Photos               # a directory: its files, and its subdirectories as folders
 clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
@@ -36,6 +37,7 @@ none of them known to the viewer by name:
 | `image` | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide), in Rust |
 | `svg` | SVG drawings and svgz, drawn at the size shown: text in the system's fonts, embedded pictures, filters; nothing they link to outside the file | [resvg](https://github.com/linebender/resvg), in Rust, within limits of clv's own on what a drawing may cost ([ADR-0002](docs/adr/0002-render-svg-with-resvg.md), [ADR-0003](docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)) |
 | `zip` | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: the files in one that another backend opens, and its directories as folders | the [`zip`](https://crates.io/crates/zip) crate, in Rust: deflate, deflate64, bzip2, LZMA and XZ, not zstd or encrypted entries |
+| `word` | Word documents (docx, doc), OpenDocument text (odt) and RTF, laid out into pages as their app prints them: headers and footers, tables, pictures, text in the system's fonts or bundled ones; a password opens a protected Word document | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, in Rust (not its editing engine), with fonts of its own under the SIL Open Font License |
 | `tar` | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories, read through once on a thread of their own while the pager says how far it has got; and a file compressed alone (`paper.pdf.gz`) as the file it unpacks to | in Rust: [flate2](https://crates.io/crates/flate2) (gzip), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2) (xz), and a tar reader of clv's own; unpacked into a temporary file that nothing names ([ADR-0004](docs/adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). Not zstd |
 
 This began as `view` in pdfcraft's command line.
@@ -57,7 +59,7 @@ cargo install --locked --git https://github.com/dobladez/clview    # installs `c
 cargo install --path .      # installs `clv`
 ```
 
-All four features are on by default; `cargo build --no-default-features --features image`
+All six features are on by default; `cargo build --no-default-features --features image`
 builds the viewer with images alone, and `--no-default-features` alone without any backend.
 
 The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
@@ -67,19 +69,24 @@ tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be bui
 instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
 renderer would replace that file and the dependencies, and nothing else.
 
+The Word backend's wordcraft comes from git the same way, every `rev` of its crates at one commit;
+it needs no patches, since clv builds its readers, layout and renderer but not its engine, whose
+PDF export does. `tests/it/wordcraft.rs` fails if the crates disagree, or if a crate wordcraft
+patches comes to be built here. Only `src/source/wordcraft.rs` and its tests name wordcraft.
+
 ## Plans
 
 The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
 renders. A file goes to the first backend that opens it, going by its first bytes, and each
-backend brings its own options (`--password` is the PDF backend's). A backend may open a file to
+backend brings its own options (`--password` is the PDF and Word backends'). A backend may open a file to
 files instead of pages, as an archive holds them, which the viewer lists as it lists a directory.
-There are four so far: PDFs, images, SVG drawings and zip archives.
+There are six so far: PDFs, images, SVG drawings, Word documents, and zip and tar archives.
 
 - Open a list's files only when their tiles come on screen, and let go of them after: today
   every file is opened before anything shows, which for a directory of large PDFs takes a while.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
-- More archives: tar (gzip, xz, zstd), 7z; a comic book archive (cbz) as a book, its pictures
+- More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
   its pages.
 
 ## License
