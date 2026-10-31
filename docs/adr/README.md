@@ -18,7 +18,8 @@ Use [`template.md`](template.md) as the starting point.
 | 0004 | [Read a compressed tar through once, into a file nothing names](0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md) | Accepted |
 | 0005 | [Word documents through wordcraft's readers, layout and renderer](0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md) | Accepted |
 | 0006 | [Spreadsheets printed by gridcraft to a PDF the PDF backend shows](0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md) | Accepted |
-| 0007 | [vectorcraft drawings through its format and renderer](0007-vectorcraft-drawings-through-its-format-and-renderer.md) | Accepted |
+| 0007 | [vectorcraft drawings through its format and renderer](0007-vectorcraft-drawings-through-its-format-and-renderer.md) | Superseded by ADR-0008 |
+| 0008 | [No vectorcraft backend for its own format alone](0008-no-vectorcraft-backend-for-its-own-format-alone.md) | Accepted |
 
 ## When to write one
 

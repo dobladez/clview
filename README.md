@@ -1,7 +1,6 @@
 # clview
 
-`clv` shows PDFs, images, SVG and vectorcraft drawings, Word documents and spreadsheets in the
-terminal, through the
+`clv` shows PDFs, images, SVG drawings, Word documents and spreadsheets in the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
 WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 
@@ -13,7 +12,6 @@ clv photo.jpg              # an image, printed at the cursor
 clv diagram.svg            # a drawing, as large as the window and sharp at that size
 clv letter.docx            # a Word document's pages, laid out as Word prints them (odt, rtf too)
 clv budget.xlsx            # a workbook's sheets, printed as its app prints them (xls, ods, csv too)
-clv poster.vectorcraft     # a vectorcraft drawing: each artboard a page
 clv *.pdf                  # several files: a tile each, Enter opens one
 clv ~/Photos               # a directory: its files, and its subdirectories as folders
 clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
@@ -42,7 +40,6 @@ none of them known to the viewer by name:
 | `zip` | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: the files in one that another backend opens, and its directories as folders | the [`zip`](https://crates.io/crates/zip) crate, in Rust: deflate, deflate64, bzip2, LZMA and XZ, not zstd or encrypted entries |
 | `word` | Word documents (docx, doc), OpenDocument text (odt) and RTF, laid out into pages as their app prints them: headers and footers, tables, pictures, text in the system's fonts or bundled ones; a password opens a protected Word document | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, in Rust (not its editing engine), with fonts of its own under the SIL Open Font License |
 | `sheet` | Spreadsheets: Excel workbooks (xlsx, xlsm, xlsb, xls), OpenDocument spreadsheets (ods) and values separated by commas or tabs (csv, tsv), each visible sheet as the pages it prints to, its formulas recalculated; a password opens a protected workbook. Text outside Western European letters prints blank, with a warning | [gridcraft](https://github.com/storytold/gridcraft)'s engine, in Rust, which prints a workbook to a PDF that the `pdf` backend then shows, so `sheet` brings `pdf` too |
-| `vector` | Drawings saved by vectorcraft (`.vectorcraft`, and `.drawcraft` from before its rename), compressed or not: each artboard a page, drawn as the app exports it, text in the system's fonts | [vectorcraft](https://github.com/storytold/vectorcraft)'s file format, document and renderer, in Rust (not its engine or importers), a render stopped after 10 seconds ([ADR-0007](docs/adr/0007-vectorcraft-drawings-through-its-format-and-renderer.md)) |
 | `tar` | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories, read through once on a thread of their own while the pager says how far it has got; and a file compressed alone (`paper.pdf.gz`) as the file it unpacks to | in Rust: [flate2](https://crates.io/crates/flate2) (gzip), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2) (xz), and a tar reader of clv's own; unpacked into a temporary file that nothing names ([ADR-0004](docs/adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). Not zstd |
 
 This began as `view` in pdfcraft's command line.
@@ -64,7 +61,7 @@ cargo install --locked --git https://github.com/dobladez/clview    # installs `c
 cargo install --path .      # installs `clv`
 ```
 
-All eight features are on by default; `cargo build --no-default-features --features image`
+All seven features are on by default; `cargo build --no-default-features --features image`
 builds the viewer with images alone, and `--no-default-features` alone without any backend.
 
 The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
@@ -81,9 +78,6 @@ patches comes to be built here. Only `src/source/wordcraft.rs` and its tests nam
 The spreadsheet backend's gridcraft likewise, from `tests/it/gridcraft.rs` and
 `src/source/gridcraft.rs`; it reaches the PDF backend only by asking which backend opens the PDF
 it prints, never by name.
-The vectorcraft backend's vectorcraft too, with `tests/it/vectorcraft.rs` checking the same: its
-crates at one commit, and none it patches among what they are built with. Only
-`src/source/vectorcraft.rs` and its tests name vectorcraft.
 
 ## Plans
 
@@ -91,8 +85,8 @@ The pager shows sources (`src/source.rs`): anything with pages of a known size t
 renders. A file goes to the first backend that opens it, going by its first bytes, and each
 backend brings its own options (`--password` is the PDF, Word and spreadsheet backends'). A backend may open a file to
 files instead of pages, as an archive holds them, which the viewer lists as it lists a directory.
-There are eight so far: PDFs, images, SVG and vectorcraft drawings, Word documents, spreadsheets,
-and zip and tar archives.
+There are seven so far: PDFs, images, SVG drawings, Word documents, spreadsheets, and zip and tar
+archives.
 
 - Open a list's files only when their tiles come on screen, and let go of them after: today
   every file is opened before anything shows, which for a directory of large PDFs takes a while.

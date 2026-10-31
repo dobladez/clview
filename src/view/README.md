@@ -63,11 +63,11 @@ its own options from it.
 
 The backends are `source/svg.rs` (feature `svg`), `source/tar.rs` (feature `tar`),
 `source/wordcraft.rs` (feature `word`), `source/gridcraft.rs` (feature `sheet`),
-`source/vectorcraft.rs` (feature `vector`), `source/pdfcraft.rs` (feature `pdf`),
-`source/image.rs` (feature `image`) and `source/zip.rs` (feature `zip`), all on by default and
-asked in that order: the ones that go by how a file starts before the PDF one, since a PDF's
-header may come anywhere in its first 1024 bytes, and the Word and spreadsheet ones before zip,
-since a docx and an xlsx are zips (`source/head.rs` reads what a zip's first files say). A drawing parses once
+`source/pdfcraft.rs` (feature `pdf`), `source/image.rs` (feature `image`) and `source/zip.rs`
+(feature `zip`), all on by default and asked in that order: the ones that go by how a file starts
+before the PDF one, since a PDF's header may come anywhere in its first 1024 bytes, and the Word
+and spreadsheet ones before zip, since a docx and an xlsx are zips (`source/head.rs` reads what a
+zip's first files say). A drawing parses once
 to open and keeps only where its bytes are; its renderer or pool parses it again on its first
 render and keeps the tree for renders at other sizes, each of which is estimated before it starts
 ([ADR-0003](../../docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)).
@@ -77,11 +77,7 @@ its renderer or pool reads and lays it out again on its first render, and keeps 
 A spreadsheet is printed to a PDF when it opens, and opened as that PDF by the backend that
 opens it, found the way any file's backend is, not by name; what gridcraft said on reading the
 workbook rides with the first page's warnings
-([ADR-0006](../../docs/adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)).
-A vectorcraft drawing parses once to open, as an SVG one does, and keeps its artboards' sizes;
-its renderer or pool keeps too a vectorcraft renderer for each thread that draws, and a watchdog
-thread stops a render past its time
-([ADR-0007](../../docs/adr/0007-vectorcraft-drawings-through-its-format-and-renderer.md)). An image opens by its header alone and
+([ADR-0006](../../docs/adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)). An image opens by its header alone and
 decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
 large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
 it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive

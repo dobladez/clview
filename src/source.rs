@@ -20,8 +20,6 @@ mod tar;
 mod threads;
 #[cfg(any(feature = "zip", feature = "tar"))]
 mod tree;
-#[cfg(feature = "vector")]
-mod vectorcraft;
 #[cfg(feature = "word")]
 mod wordcraft;
 #[cfg(feature = "zip")]
@@ -42,8 +40,7 @@ pub(crate) use joined::{Joined, Part};
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
 /// 1024 bytes, which a drawing's text may hold. Tar next, for the same reason: a tar's first file
 /// starts 512 bytes in. Then documents, for the same reason (an RTF's text), and spreadsheets,
-/// both before zip, since a docx and an xlsx are zips; then the `vector` drawings, again for the
-/// PDF's reason (their JSON).
+/// both before zip, since a docx and an xlsx are zips.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -53,8 +50,6 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &wordcraft::Wordcraft,
     #[cfg(feature = "sheet")]
     &gridcraft::Gridcraft,
-    #[cfg(feature = "vector")]
-    &vectorcraft::Vectorcraft,
     #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
@@ -86,7 +81,7 @@ pub(crate) trait Backend {
 /// What a backend opened a file to.
 pub(crate) enum Opened {
     #[cfg_attr(
-        not(any(feature = "pdf", feature = "image", feature = "svg", feature = "word", feature = "sheet", feature = "vector", test)),
+        not(any(feature = "pdf", feature = "image", feature = "svg", feature = "word", feature = "sheet", test)),
         expect(dead_code, reason = "only PDFs, images, drawings, documents and spreadsheets have pages")
     )]
     Pages(Box<dyn Source>),
@@ -156,7 +151,6 @@ impl Input {
             not(feature = "tar"),
             not(feature = "word"),
             not(feature = "sheet"),
-            not(feature = "vector"),
             not(test)
         ),
         expect(dead_code, reason = "only images, drawings, documents and archives read their file again")
@@ -176,7 +170,7 @@ impl Input {
 
 /// A file as [`Input::reopenable`] gives it.
 #[cfg_attr(
-    not(any(feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet", feature = "vector")),
+    not(any(feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet")),
     expect(dead_code, reason = "only images, drawings, documents and archives read their file again")
 )]
 pub(crate) enum Reopenable {
@@ -520,16 +514,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(
-            feature = "pdf",
-            feature = "image",
-            feature = "svg",
-            feature = "zip",
-            feature = "tar",
-            feature = "word",
-            feature = "sheet",
-            feature = "vector"
-        )))]
+        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet")))]
         assert!(BACKENDS.is_empty());
     }
 }

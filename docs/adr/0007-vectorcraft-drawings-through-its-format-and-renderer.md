@@ -1,6 +1,6 @@
 # ADR-0007: vectorcraft drawings through its format and renderer
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0008
 - **Date:** 2026-10-30
 
 ## Context
