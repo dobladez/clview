@@ -20,6 +20,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0006 | [Spreadsheets printed by gridcraft to a PDF the PDF backend shows](0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md) | Accepted |
 | 0007 | [vectorcraft drawings through its format and renderer](0007-vectorcraft-drawings-through-its-format-and-renderer.md) | Superseded by ADR-0008 |
 | 0008 | [No vectorcraft backend for its own format alone](0008-no-vectorcraft-backend-for-its-own-format-alone.md) | Accepted |
+| 0009 | [Copy a page through the terminal's clipboard protocol, else the system's clipboard](0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md) | Accepted |
 | 0010 | [A filtered list keeps the whole list's tile size](0010-a-filtered-list-keeps-the-whole-lists-tile-size.md) | Accepted |
 
 ## When to write one

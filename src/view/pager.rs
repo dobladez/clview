@@ -29,6 +29,7 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use super::clip;
 use super::encode::PngEffort;
 use crate::source::{Container, Frame, Pool, Ready, Source};
 
@@ -108,6 +109,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     ("r  Ctrl-L", "render the pages again"),
+    ("c", "copy the page to the clipboard"),
 ];
 /// In a list:
 const LIST_HELP: &[(&str, &str)] = &[
@@ -120,6 +122,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
     ("+ -", "bigger, fewer to a row; smaller, more to a row"),
     ("r  Ctrl-L", "render again"),
+    ("c", "copy its picture to the clipboard"),
 ];
 /// Leaving, gone into from a list or not, and these keys themselves.
 const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list"), ("q  Ctrl-C", "quit")];
@@ -182,6 +185,7 @@ pub(super) fn run(
         files: None,
         stalled_files: None,
         placed_at: None,
+        copier: clip::Copier::new(terminal.local, terminal.effort, terminal.output.wrap()),
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -206,6 +210,8 @@ pub(super) fn run(
             Duration::ZERO
         } else if pager.reading.is_some() {
             PROGRESS_EVERY.min(TICK)
+        } else if let Some(wait) = pager.copier.wait() {
+            wait
         } else if !pager.wanted.is_empty() && !pager.hidden {
             POLL
         } else {
@@ -237,6 +243,10 @@ pub(super) fn run(
                     redraw |= pager.missing(id);
                     continue;
                 }
+                if let Key::Clipboard(_) | Key::Copied(..) = key {
+                    redraw |= pager.copied(key);
+                    continue;
+                }
                 redraw = true;
                 // Reading a container gone into: Esc (or the others that go back) stops it, and
                 // the keys that quit, quit. Nothing else moves meanwhile.
@@ -258,6 +268,7 @@ pub(super) fn run(
                     Step::Leave if pager.parents.is_empty() => quit = true,
                     Step::Leave | Step::Back => pager.back()?,
                     Step::Open(at) => pager.open(at, opener)?,
+                    Step::ToClipboard(page) => pager.copy(page)?,
                 }
                 if quit {
                     break;
@@ -277,6 +288,7 @@ pub(super) fn run(
         if pager.reading.is_some() {
             redraw |= pager.read_on(opener)?;
         }
+        redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
         let arrived = !pager.hidden && pager.receive()?;
@@ -301,6 +313,8 @@ enum Step {
     Back,
     /// Open the list's item at this place.
     Open(usize),
+    /// Copy this page of the source to the clipboard: in a list, this tile's picture.
+    ToClipboard(usize),
 }
 
 /// Where the reader is, and what keys do to it: in a file's pages, or in a list, where the reader
@@ -498,6 +512,7 @@ impl Nav {
             }
             Key::Char('u') => return Step::Back,
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
+            Key::Char('c') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
             _ if self.list => return self.list_key(key),
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
@@ -987,6 +1002,8 @@ struct Pager<'a> {
     stalled_files: Option<Files>,
     /// When the last placements went out: their errors are answered.
     placed_at: Option<Instant>,
+    /// Copies to the clipboard (`c`), and what the terminal said of its clipboard.
+    copier: clip::Copier,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1220,6 +1237,9 @@ impl Pager<'_> {
         self.level.pool = self.level.source.pool(THREADS);
         self.wanted.clear();
         let parent = std::mem::replace(&mut self.level, level);
+        if let Some(said) = self.copier.left(parent.id) {
+            self.level.nav.message.get_or_insert(said);
+        }
         self.parents.push(parent);
     }
 
@@ -1234,6 +1254,9 @@ impl Pager<'_> {
         }
         let gone = left.id;
         drop(left);
+        if let Some(said) = self.copier.left(gone) {
+            self.level.nav.message = Some(said);
+        }
         let mut out = Vec::new();
         let wrap = self.output.wrap();
         for sent in self.sent.iter().filter(|s| s.view.level == gone) {
@@ -1245,6 +1268,53 @@ impl Pager<'_> {
         self.wanted.clear();
         self.wrote(0);
         self.tty.write_all(&out)
+    }
+
+    /// `c`: copy page `page` of this level's source to the clipboard: the page, or in a list the
+    /// chosen tile's picture (a folder has none). It renders on the level's pool beside the pages
+    /// ([`clip::Copier`]).
+    fn copy(&mut self, page: usize) -> Result<(), String> {
+        let what = match self.level.items.get(page) {
+            Some(Item::Container { name, .. }) => {
+                self.level.nav.message = Some(format!("{name} is a folder: no picture to copy"));
+                return Ok(());
+            }
+            Some(item) => item.name().to_owned(),
+            // A picture, or a document of one page: by its name.
+            None if self.level.source.pages() == 1 => self.level.name.clone(),
+            None => format!("page {}", page.saturating_add(1)),
+        };
+        self.tag = self.tag.wrapping_add(1);
+        let (mut out, size) = (Vec::new(), page_size(&*self.level.source, page));
+        self.level.nav.message = Some(self.copier.start(what, self.level.id, page, size, self.tag, Instant::now(), &mut out));
+        self.requeue();
+        self.write_copy(&out)
+    }
+
+    /// Carry a copy on, if one is under way: says whether the status line has news.
+    fn copy_on(&mut self) -> Result<bool, String> {
+        // Nothing goes through tmux while the pane is hidden: it would be thrown away.
+        if self.hidden {
+            return Ok(false);
+        }
+        let mut out = Vec::new();
+        let said = self.copier.on(Instant::now(), &mut out);
+        self.write_copy(&out)?;
+        Ok(said.map(|said| self.level.nav.message = Some(said)).is_some())
+    }
+
+    /// The terminal's answer about its clipboard: says whether the status line has news.
+    fn copied(&mut self, answer: Key) -> bool {
+        self.copier.answer(answer).map(|said| self.level.nav.message = Some(said)).is_some()
+    }
+
+    /// Write what a copy put in `out`, if anything.
+    fn write_copy(&mut self, out: &[u8]) -> Result<(), String> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        self.wrote(0);
+        self.tty.write_all(out)
     }
 
     /// Note a write, with `images` transmissions in it: inside tmux, ask a moment later whether
@@ -1283,6 +1353,9 @@ impl Pager<'_> {
             return false;
         }
         if news.discarded {
+            if let Some(said) = self.copier.lost() {
+                self.level.nav.message = Some(said);
+            }
             if self.resends >= MAX_RESENDS {
                 self.level.nav.message = Some("tmux is dropping images: the terminal can't keep up; r sends them again".into());
                 return true;
@@ -1318,11 +1391,11 @@ impl Pager<'_> {
         true
     }
 
-    /// Before the screen is put back: wait a moment for the answers to the last placements, so
-    /// none of them reaches the command line.
+    /// Before the screen is put back: wait a moment for the answers to the last placements, and
+    /// to the clipboard's question or write, so none of them reaches the command line.
     fn await_answers(&self) {
-        let Some(at) = self.placed_at else { return };
-        let deadline = at + ANSWER_WAIT;
+        let placed = self.placed_at.map(|at| at + ANSWER_WAIT);
+        let Some(deadline) = placed.max(self.copier.due().map(|at| at + clip::ANSWER_WAIT)) else { return };
         while let Some(left) = deadline.checked_duration_since(Instant::now()).filter(|d| !d.is_zero()) {
             if self.tty.read_timeout(left).is_err() {
                 break;
@@ -1441,6 +1514,11 @@ impl Pager<'_> {
         let wrap = self.output.wrap();
         let (mut any, mut on_screen) = (false, false);
         while let Some(page) = self.level.pool.try_recv() {
+            if self.copier.wants(page.request.tag) {
+                self.copier.rendered(page);
+                any = true;
+                continue;
+            }
             // Otherwise a late result for a page no longer wanted.
             let Some(at) = self.wanted.iter().position(|w| w.tag == page.request.tag) else { continue };
             let wanted = self.wanted.remove(at);
@@ -1545,10 +1623,11 @@ impl Pager<'_> {
         id
     }
 
-    /// Tell the pool which renders are still wanted, most urgent first: it keeps those and
-    /// cancels the rest.
+    /// Tell the pool which renders are still wanted, most urgent first (a page being copied, then
+    /// the pages): it keeps those and cancels the rest.
     fn requeue(&self) {
-        self.level.pool.set_queue(self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag)).collect());
+        let copy = self.copier.request(self.level.id);
+        self.level.pool.set_queue(copy.into_iter().chain(self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag))).collect());
     }
 }
 
@@ -1966,6 +2045,35 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('q')]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Char('x'), Key::PageUp, Key::End]), Step::Continue);
+    }
+
+    /// `c` copies the page the reader is on, by its number in the document; in a list, the tile
+    /// chosen. Nothing else moves.
+    #[test]
+    fn c_copies_the_page_the_reader_is_on_or_the_tile_chosen() {
+        let mut nav = reader(4, 10, 40, 40);
+        assert_eq!(press(&mut nav, &[Key::Char('c')]), Step::ToClipboard(4));
+        assert_eq!(page(&nav), 4);
+        // Two side by side: the reader's page, the one zooming and typed numbers anchor on.
+        nav.grid(2, 1, 8);
+        press(&mut nav, &[Key::Char('n')]);
+        assert_eq!((nav.on_screen(), press(&mut nav, &[Key::Char('c')])), (vec![Some(6), Some(7)], Step::ToClipboard(6)));
+        // Pages given keep their numbers.
+        let mut given = Nav::new(vec![6, 2, 9], 12, Zoom::Auto);
+        given.shown(40, 40);
+        press(&mut given, &[Key::Char(' ')]);
+        assert_eq!(press(&mut given, &[Key::Char('c')]), Step::ToClipboard(2));
+        // In a list, the tile chosen; the pager tells a folder's from a file's.
+        let mut chosen = tiles(10, 3, 2);
+        press(&mut chosen, &[Key::Right, Key::Down]);
+        assert_eq!(press(&mut chosen, &[Key::Char('c')]), Step::ToClipboard(4));
+        assert_eq!(chosen.at, 4);
+        assert_eq!(press(&mut Nav { list: true, ..Nav::new(vec![6, 2, 9], 12, Zoom::Auto) }, &[Key::Char('c')]), Step::ToClipboard(6));
+        // Nothing to copy in an empty list; with the keys on screen, `c` only goes back.
+        assert_eq!(press(&mut list(0), &[Key::Char('c')]), Step::Continue);
+        press(&mut nav, &[Key::Char('?')]);
+        assert_eq!((press(&mut nav, &[Key::Char('c')]), nav.help), (Step::Continue, false));
+        assert!(PAGE_HELP.iter().chain(LIST_HELP).filter(|(keys, _)| *keys == "c").count() == 2);
     }
 
     #[test]

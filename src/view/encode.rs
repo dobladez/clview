@@ -57,7 +57,7 @@ pub(crate) fn encode_png(width: u32, height: u32, premultiplied: &[u8], effort: 
 }
 
 /// Whether `premultiplied` holds exactly `width` × `height` RGBA pixels, at least one.
-fn check_raster(width: u32, height: u32, premultiplied: &[u8]) -> Result<(), String> {
+pub(crate) fn check_raster(width: u32, height: u32, premultiplied: &[u8]) -> Result<(), String> {
     if width == 0 || height == 0 {
         return Err(format!("a {width}×{height} raster has no pixels"));
     }

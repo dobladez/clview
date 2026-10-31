@@ -78,20 +78,30 @@ pub(crate) struct Session {
 }
 
 /// The terminal at the other end of the pseudo-terminal: whether it reads the temporary files
-/// `view` names, as kitty does (and deletes them), the temporary directory `view` gets, and the
-/// cell size it answers when asked (the device attributes alone when `None`).
+/// `view` names, as kitty does (and deletes them), the temporary directory `view` gets, the
+/// cell size it answers when asked (the device attributes alone when `None`), whether it says it
+/// speaks the clipboard protocol when asked and answers a write as kitty does (`None`: it never
+/// answers), and whether `view` runs over SSH.
 #[derive(Clone, Copy)]
 struct Terminal<'a> {
     takes_files: bool,
     tmpdir: Option<&'a Path>,
     cell: Option<(u16, u16)>,
+    clipboard: Option<bool>,
+    ssh: bool,
 }
 
 /// One that never reads files, as script(1) doesn't, and doesn't know its cell size.
-const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None };
+const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false };
 
 /// `view`'s question about the cell size, which a pseudo-terminal without pixels gets.
 const CELL_QUERY: &[u8] = b"\x1b[16t\x1b[c";
+
+/// `view`'s question whether the terminal speaks the clipboard protocol (DECRQM for mode 5522).
+const CLIPBOARD_QUERY: &[u8] = b"\x1b[?5522$p";
+
+/// How the last packet of a clipboard write starts: its id, then the end of the packet.
+const WRITE_END: &[u8] = b"\x1b]5522;type=wdata:id=";
 
 impl Session {
     pub(crate) fn start(pdf: &Path, args: &[&str], cols: u16, rows: u16) -> Self {
@@ -109,6 +119,9 @@ impl Session {
         for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
             script.env_remove(name);
         }
+        if terminal.ssh {
+            script.env("SSH_CONNECTION", "192.0.2.1 50000 192.0.2.2 22");
+        }
         let mut child = script.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let output = Arc::new(Mutex::new(Vec::new()));
         let taken = Arc::new(Mutex::new(Vec::new()));
@@ -117,7 +130,7 @@ impl Session {
         let (collected, took, answers) = (output.clone(), taken.clone(), keys.clone());
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
-            let (mut scanned, mut asked) = (0, 0);
+            let (mut scanned, mut asked, mut clip_asked, mut written) = (0, 0, 0, 0);
             while let Ok(n) = stdout.read(&mut buf) {
                 if n == 0 {
                     break;
@@ -134,6 +147,25 @@ impl Session {
                     if let Some(stdin) = answers.lock().unwrap().as_mut() {
                         let _ = stdin.write_all(format!("{cell}\x1b[?62;c").as_bytes()).and_then(|()| stdin.flush());
                     }
+                }
+                // Answer the clipboard question, and the end of each write, as kitty 0.49.2 does.
+                let Some(speaks) = terminal.clipboard else { continue };
+                let mut said = Vec::new();
+                while let Some(at) = output[clip_asked..].windows(CLIPBOARD_QUERY.len()).position(|w| w == CLIPBOARD_QUERY) {
+                    clip_asked += at + CLIPBOARD_QUERY.len();
+                    said.extend_from_slice(format!("\x1b[?5522;{}$y", if speaks { 2 } else { 0 }).as_bytes());
+                }
+                while let Some(at) = output[written..].windows(WRITE_END.len()).position(|w| w == WRITE_END) {
+                    let id_at = written + at + WRITE_END.len();
+                    let Some(end) = output[id_at..].windows(2).position(|w| w == b"\x1b\\") else { break };
+                    written = id_at + end;
+                    let id = String::from_utf8_lossy(&output[id_at..written]).into_owned();
+                    if speaks {
+                        said.extend_from_slice(format!("\x1b]5522;type=write:status=DONE:id={id}\x1b\\").as_bytes());
+                    }
+                }
+                if let (false, Some(stdin)) = (said.is_empty(), answers.lock().unwrap().as_mut()) {
+                    let _ = stdin.write_all(&said).and_then(|()| stdin.flush());
                 }
             }
         });
@@ -862,7 +894,7 @@ fn a_terminal_that_takes_files_gets_its_pages_through_them() {
     }
     let pdf = fixture("files", 3);
     let dir = tmpdir("files");
-    let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), cell: None };
+    let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), ..PLAIN };
     let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 80, 60);
     view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
     // The probe first: one pixel, its image deleted straight after.
@@ -895,7 +927,7 @@ fn a_terminal_that_leaves_files_gets_pngs_and_no_file_stays() {
     }
     let pdf = fixture("nofiles", 3);
     let dir = tmpdir("nofiles");
-    let terminal = Terminal { takes_files: false, tmpdir: Some(&dir), cell: None };
+    let terminal = Terminal { tmpdir: Some(&dir), ..PLAIN };
     let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 80, 60);
     view.wait_until("pages 1-3 sent as PNGs", |t| t.contains(" page 1/3 ") && transmitted(t) == 3);
     let text = view.text();
@@ -913,10 +945,99 @@ fn compression_by_name_sends_pngs_without_trying_files() {
     }
     let pdf = fixture("named", 3);
     let dir = tmpdir("named");
-    let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), cell: None };
+    let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), ..PLAIN };
     let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty", "--compression", "fast"], 80, 60);
     view.wait_until("pages 1-3 sent as PNGs", |t| t.contains(" page 1/3 ") && transmitted(t) == 3);
     view.press("q");
     assert!(view.finish().success());
     assert!(!view.text().contains("t=t"), "no file, not even the probe");
+}
+
+/// The PNG clipboard write `id` carried: its `image/png` packets' data, put together.
+fn copied_png(text: &str, id: u32) -> Vec<u8> {
+    use base64::Engine as _;
+    let start = format!("\x1b]5522;type=wdata:mime={}:id=clv-{id};", base64::engine::general_purpose::STANDARD.encode("image/png"));
+    let mut png = Vec::new();
+    for (at, _) in text.match_indices(&start) {
+        let data = &text[at + start.len()..];
+        png.extend(base64::engine::general_purpose::STANDARD.decode(&data[..data.find("\x1b\\").unwrap()]).unwrap());
+    }
+    png
+}
+
+/// A PNG's width and height, from its header.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "not a PNG: {} bytes", png.len());
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    (be(16), be(20))
+}
+
+/// `c` copies the page the reader is on to a terminal that speaks the clipboard protocol: it is
+/// asked once whether it does, and the page goes as a PNG of US Letter at 144 per inch. Its
+/// answers are never keys: as keys, their ESC would quit.
+#[test]
+fn c_copies_the_page_to_the_terminals_clipboard() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("copy", 3);
+    let terminal = Terminal { clipboard: Some(true), ..PLAIN };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
+    view.press("nc");
+    view.wait_until("page 2 copied", |t| t.contains("copied page 2, 1224 × 1584 pixels"));
+    let text = view.text();
+    assert_eq!(text.matches(std::str::from_utf8(CLIPBOARD_QUERY).unwrap()).count(), 1, "asked once");
+    assert_eq!(png_size(&copied_png(&text, 1)), (1224, 1584));
+    // Again, page 3: not asked again.
+    view.press("nc");
+    view.wait_until("page 3 copied", |t| t.contains("copied page 3, 1224 × 1584 pixels"));
+    assert_eq!(view.text().matches(std::str::from_utf8(CLIPBOARD_QUERY).unwrap()).count(), 1, "asked again");
+    assert_eq!(png_size(&copied_png(&view.text(), 2)), (1224, 1584));
+    assert!(view.child.try_wait().unwrap().is_none(), "an answer quit the pager");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A terminal that doesn't speak the clipboard protocol, over SSH, has no clipboard for a
+/// picture: the reader is told, and nothing is sent. (On this machine, the system's clipboard
+/// would take it, which a test mustn't touch.)
+#[test]
+fn over_ssh_a_terminal_without_the_clipboard_protocol_gets_no_copy() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("nocopy", 3);
+    let terminal = Terminal { clipboard: Some(false), ssh: true, ..PLAIN };
+    // Wide, for the whole of what it says: two pages side by side.
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 200, 60);
+    view.wait_until("pages 1-2 shown", |t| bar(t).contains(" pages 1–2/3 "));
+    view.press("c");
+    view.wait_until("told", |t| t.contains("can't copy page 1: this terminal has no clipboard for pictures, and the system's isn't yours over SSH"));
+    assert!(!view.text().contains("\x1b]5522;"), "a write went out");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In a list, `c` copies the tile chosen, a file's first page; a folder has no picture.
+#[test]
+fn in_a_list_c_copies_the_tile_chosen_and_a_folder_has_none() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-copy-list-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("more")).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("First", 2)).unwrap();
+    std::fs::write(dir.join("more/b.pdf"), crate::fixtures::letter("Second", 1)).unwrap();
+    let terminal = Terminal { clipboard: Some(true), ..PLAIN };
+    let mut view = Session::start_on(terminal, &dir, &["--protocol", "kitty"], 100, 48);
+    view.wait_until("the list", |t| bar(t).contains(" a.pdf ") && drawn(t, "1/2"));
+    view.press("lc");
+    view.wait_until("told", |t| t.contains("more/ is a folder: no picture to copy"));
+    view.press("hc");
+    view.wait_until("a copied", |t| t.contains("copied a.pdf, 1224 × 1584 pixels"));
+    assert_eq!(png_size(&copied_png(&view.text(), 1)), (1224, 1584));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -1,9 +1,11 @@
 //! Keys from a terminal in raw mode: bytes in, keys out. Pure, and total over any bytes.
 //!
 //! The terminal's answers arrive among the keys: to graphics commands as `ESC _ G … ESC \` (the
-//! kitty graphics protocol), and to `view`'s questions as CSI sequences (the cell size, device
-//! attributes), late ones included. They are never keys, even cut in two: one that says an image
-//! is missing is [`Key::Missing`], and the rest are dropped.
+//! kitty graphics protocol), to `view`'s questions as CSI sequences (the cell size, device
+//! attributes, whether it has a clipboard for pictures), late ones included, and to a clipboard
+//! write as an OSC sequence, `ESC ] 5522 ; … ESC \` (kitty's clipboard protocol). They are never
+//! keys, even cut in two: one that says an image is missing is [`Key::Missing`], the clipboard's
+//! are [`Key::Clipboard`] and [`Key::Copied`], and the rest are dropped.
 
 /// A key the pager knows. Anything else is dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +27,29 @@ pub(crate) enum Key {
     /// Not typed: the terminal's answer that image `id`, which it was asked to place, isn't there
     /// (it drops images to stay under its storage quota).
     Missing(u32),
+    /// Not typed: whether the terminal speaks the clipboard protocol (OSC 5522), as it answers
+    /// DECRQM for mode 5522: `CSI ? 5522 ; Ps $ y`, where 0 (unknown) and 4 say it doesn't.
+    Clipboard(bool),
+    /// Not typed: the terminal's answer to clipboard write `id` (`OSC 5522 ;
+    /// type=write:status=…:id=clv-<id> ST`): written, or why not.
+    Copied(u32, Result<(), ClipError>),
 }
+
+/// Why the terminal didn't write a clipboard, as the clipboard protocol names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClipError {
+    /// `EPERM`: the user or the system said no.
+    Denied,
+    /// `EBUSY`: for now (several clients of a multiplexer).
+    Busy,
+    /// `EFBIG`: more than the terminal takes.
+    TooLarge,
+    /// `EINVAL`, `ENOSYS`, `EIO` or a code the protocol doesn't name.
+    Failed,
+}
+
+/// The id clipboard writes carry, before their number: answers to anyone else's are dropped.
+pub(crate) const CLIP_ID: &str = "clv-";
 
 /// The longest escape sequence worth waiting for; longer ones are dropped.
 const MAX_SEQUENCE: usize = 16;
@@ -33,6 +57,8 @@ const MAX_SEQUENCE: usize = 16;
 pub(crate) const MAX_ANSWER: usize = 512;
 /// How a graphics answer starts.
 const ANSWER: &[u8] = b"\x1b_G";
+/// How an OSC sequence starts; a terminal's answers go on with their number.
+const OSC: &[u8] = b"\x1b]";
 
 /// Decode `bytes` into keys, and say how many bytes were used. An escape sequence cut off at the
 /// end is left for the next read, whole: past its ESC it is no key, however long the rest takes
@@ -50,6 +76,11 @@ pub(crate) fn decode(bytes: &[u8], flush: bool) -> (Vec<Key>, usize) {
             },
             // The start of what may be an answer waits too.
             0x1b if rest == b"\x1b_" => break,
+            0x1b if rest.starts_with(OSC) && rest.get(OSC.len()).is_some_and(u8::is_ascii_digit) => match osc(rest) {
+                Some(found) => found,
+                None => break,
+            },
+            0x1b if rest == OSC => break,
             0x1b => match escape(rest) {
                 Some(found) => found,
                 None if flush && rest.len() == 1 => (Some(Key::Escape), 1),
@@ -116,6 +147,7 @@ fn escape(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
                 (b"" | b"1", Some(b'F')) | (b"4" | b"8", Some(b'~')) => Some(Key::End),
                 (b"5", Some(b'~')) => Some(Key::PageUp),
                 (b"6", Some(b'~')) => Some(Key::PageDown),
+                (params, Some(b'y')) => clipboard_mode(params),
                 _ => None,
             };
             Some((key, end.saturating_add(3)))
@@ -154,6 +186,50 @@ fn answer(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
     let (control, message) = text.split_once(';').unwrap_or((text, ""));
     let id = control.split(',').find_map(|kv| kv.strip_prefix("i=")?.parse::<u32>().ok());
     Some((id.filter(|_| message.starts_with("ENOENT")).map(Key::Missing), used))
+}
+
+/// [`Key::Clipboard`] from the parameters of a DECRQM answer (`CSI ? 5522 ; Ps $ y`): the mode is
+/// known when Ps is 1, 2 or 3 (set, reset, always set). `None` for another mode's.
+fn clipboard_mode(params: &[u8]) -> Option<Key> {
+    let ps = params.strip_prefix(b"?5522;")?.strip_suffix(b"$")?;
+    Some(Key::Clipboard(matches!(ps, b"1" | b"2" | b"3")))
+}
+
+/// The OSC answer at the start of `bytes` (which starts with [`OSC`] and a digit) and its length,
+/// through its terminator, `ESC \` or BEL: [`Key::Copied`] when it answers a clipboard write of
+/// ours, nothing otherwise. An ESC that starts something else ends it, and is left for what it
+/// starts. `None` while it is cut off; one longer than [`MAX_ANSWER`] is dropped whole.
+fn osc(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
+    let body = bytes.get(OSC.len()..).unwrap_or_default();
+    let stop = body.iter().position(|b| *b == 0x1b || *b == 0x07);
+    let (end, used) = match stop.map(|at| (at, body.get(at), body.get(at.saturating_add(1)))) {
+        Some((at, Some(0x07), _)) => (at, at.saturating_add(1)),
+        Some((at, _, Some(b'\\'))) => (at, at.saturating_add(2)),
+        Some((at, _, Some(_))) => (at, at),
+        // Nothing yet to end it, or an ESC last, which may be the terminator's start.
+        _ => return (bytes.len() > MAX_ANSWER).then_some((None, bytes.len())),
+    };
+    let text = std::str::from_utf8(body.get(..end).unwrap_or_default()).unwrap_or_default();
+    Some((text.strip_prefix("5522;").and_then(copied), OSC.len().saturating_add(used)))
+}
+
+/// [`Key::Copied`] from a clipboard protocol answer's metadata and payload: `type=write`, its
+/// `status`, and an `id` of ours, keys and values separated by colons.
+fn copied(answer: &str) -> Option<Key> {
+    let metadata = answer.split(';').next().unwrap_or_default();
+    let value = |key: &str| metadata.split(':').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='));
+    if value("type")? != "write" {
+        return None;
+    }
+    let id = value("id")?.strip_prefix(CLIP_ID)?.parse::<u32>().ok()?;
+    let status = match value("status")? {
+        "DONE" => Ok(()),
+        "EPERM" => Err(ClipError::Denied),
+        "EBUSY" => Err(ClipError::Busy),
+        "EFBIG" => Err(ClipError::TooLarge),
+        _ => Err(ClipError::Failed),
+    };
+    Some(Key::Copied(id, status))
 }
 
 #[cfg(test)]
@@ -310,6 +386,69 @@ mod tests {
     }
 
     #[test]
+    fn whether_the_terminal_speaks_the_clipboard_protocol_is_its_decrqm_answer() {
+        // kitty 0.49.2 answers 2 (known, reset), Ghostty 1.3.1 answers 0 (unknown).
+        assert_eq!(keys(b"\x1b[?5522;2$y\x1b[?62;52;c"), [Key::Clipboard(true)]);
+        assert_eq!(keys(b"\x1b[?5522;1$y\x1b[?5522;3$y"), [Key::Clipboard(true); 2]);
+        assert_eq!(keys(b"\x1b[?5522;0$y\x1b[?5522;4$y"), [Key::Clipboard(false); 2]);
+        // Another mode's answer, or a malformed one, is no key.
+        assert_eq!(keys(b"\x1b[?2026;2$y\x1b[?5522;2y\x1b[?5522$y\x1b[5522;2$y"), []);
+    }
+
+    #[test]
+    fn clipboard_answers_are_never_keys() {
+        // kitty's answer to a write, between two keys, as kitty 0.49.2 sent it, directly and
+        // through tmux 3.5a.
+        let done = b"j\x1b]5522;type=write:status=DONE:id=clv-3\x1b\\k";
+        assert_eq!(keys(done), [Key::Char('j'), Key::Copied(3, Ok(())), Key::Char('k')]);
+        // Ended by BEL too; each error the protocol names.
+        for (status, error) in [
+            ("EPERM", ClipError::Denied),
+            ("EBUSY", ClipError::Busy),
+            ("EFBIG", ClipError::TooLarge),
+            ("EIO", ClipError::Failed),
+            ("EWHAT", ClipError::Failed),
+        ] {
+            let answer = format!("\x1b]5522;type=write:status={status}:id=clv-12\x07");
+            assert_eq!(keys(answer.as_bytes()), [Key::Copied(12, Err(error))], "{status}");
+        }
+        // The keys in any order, and a payload, change nothing.
+        assert_eq!(keys(b"\x1b]5522;id=clv-1:status=DONE:type=write;\x1b\\"), [Key::Copied(1, Ok(()))]);
+        // Not an answer to a write of ours: dropped, its letters no keys (`q` would quit).
+        for other in [
+            b"\x1b]5522;type=write:status=DONE:id=vim-3\x1b\\".as_slice(),
+            b"\x1b]5522;type=write:status=DONE\x1b\\",
+            b"\x1b]5522;type=read:status=DONE:id=clv-3\x1b\\",
+            b"\x1b]5522;type=write:id=clv-3\x1b\\",
+            b"\x1b]5522;type=write:status=DONE:id=clv-x\x1b\\",
+            b"\x1b]11;rgb:0000/0000/0000\x1b\\",
+            b"\x1b]52;c;cXVpdA==\x07",
+            b"\x1b]5522;\xff\xfeq\x1b\\",
+        ] {
+            assert_eq!(keys(other), [], "{:?}", String::from_utf8_lossy(other));
+        }
+        // Cut off anywhere past its ESC, it waits for the rest even when nothing more came yet,
+        // and then is the answer: never Esc, which quits, nor its letters keys. (Not cut just
+        // past its first ESC: an ESC alone with nothing after it is the Esc key, which is what
+        // the pager waits a while to tell. Its terminator's ESC alone waits.)
+        for cut in 3..done.len() - 1 {
+            let (first, used) = decode(&done[..cut], true);
+            let pending = [&done[used..cut], &done[cut..]].concat();
+            let (rest, all) = decode(&pending, true);
+            assert_eq!([first, rest].concat(), [Key::Char('j'), Key::Copied(3, Ok(())), Key::Char('k')], "cut at {cut}");
+            assert_eq!(all, pending.len(), "cut at {cut}");
+        }
+        assert_eq!(decode(b"j\x1b]", true), (vec![Key::Char('j')], 1));
+        // Too long to be an answer: dropped whole.
+        let long = [b"\x1b]5522;".as_slice(), &[b'q'; MAX_ANSWER]].concat();
+        assert_eq!(decode(&long, false), (vec![], long.len()));
+        // An ESC that starts something else cuts it short: it is dropped, and the rest decoded.
+        assert_eq!(keys(b"\x1b]5522;type=wri\x1b[Aq"), [Key::Up, Key::Char('q')]);
+        // Esc and ] typed together, then another key: Esc, and the keys.
+        assert_eq!(keys(b"\x1b]j"), [Key::Escape, Key::Char(']'), Key::Char('j')]);
+    }
+
+    #[test]
     fn an_endless_sequence_is_dropped() {
         let long = [b"\x1b[".as_slice(), &[b'1'; 40]].concat();
         assert_eq!(decode(&long, false), (vec![], long.len()));
@@ -322,12 +461,13 @@ mod tests {
             proptest::prop_assert!(used <= bytes.len());
             if flush {
                 // All of it, but for an escape sequence still arriving past its ESC: never a lone
-                // ESC, and short unless it is a graphics answer. Or a character cut off, right so
-                // far.
+                // ESC, and short unless it is a graphics or an OSC answer, which is no longer than
+                // an answer may be. Or a character cut off, right so far.
                 let rest = &bytes[used..];
+                let answer = rest.starts_with(ANSWER) || rest.starts_with(OSC);
                 let cut_off = rest.len() < 4 && std::str::from_utf8(rest).is_err_and(|e| e.valid_up_to() == 0 && e.error_len().is_none());
                 proptest::prop_assert!(
-                    rest.is_empty() || cut_off || (rest.len() > 1 && rest[0] == 0x1b && (rest.starts_with(ANSWER) || rest.len() < MAX_SEQUENCE + 2))
+                    rest.is_empty() || cut_off || (rest.len() > 1 && rest[0] == 0x1b && rest.len() <= MAX_ANSWER && (answer || rest.len() < MAX_SEQUENCE + 2))
                 );
             }
         }
@@ -349,6 +489,40 @@ mod tests {
             }
             proptest::prop_assert!(pending.is_empty());
             proptest::prop_assert_eq!(got, text.chars().map(Key::Char).collect::<Vec<_>>());
+        }
+
+        /// Keys and the clipboard's answers, in any order and cut into reads anywhere: the keys
+        /// come out, and the answers as answers, never as keys.
+        #[test]
+        fn answers_among_keys_cut_anywhere_are_never_keys(
+            parts in proptest::collection::vec(0usize..4, 0..12),
+            cuts in proptest::collection::vec(1usize..40, 0..12),
+        ) {
+            let mut bytes = Vec::new();
+            let mut expected = Vec::new();
+            for part in parts {
+                let (code, key): (&[u8], Option<Key>) = match part {
+                    0 => (b"j", Some(Key::Char('j'))),
+                    1 => (b"\x1b]5522;type=write:status=DONE:id=clv-7\x1b\\", Some(Key::Copied(7, Ok(())))),
+                    2 => (b"\x1b[?5522;2$y", Some(Key::Clipboard(true))),
+                    _ => (b"\x1b]5522;type=write:status=EPERM:id=clv-8\x07", Some(Key::Copied(8, Err(ClipError::Denied)))),
+                };
+                bytes.extend_from_slice(code);
+                expected.extend(key);
+            }
+            // Read in pieces, each decoded with what was left of the one before, as the pager does,
+            // then once more when nothing more comes.
+            let (mut got, mut pending, mut at) = (Vec::new(), Vec::new(), 0usize);
+            for (cut, flush) in cuts.into_iter().map(|cut| (cut, false)).chain([(usize::MAX, false), (0, true)]) {
+                let end = at.saturating_add(cut).min(bytes.len());
+                pending.extend_from_slice(&bytes[at..end]);
+                at = end;
+                let (keys, used) = decode(&pending, flush);
+                got.extend(keys);
+                pending.drain(..used);
+            }
+            proptest::prop_assert_eq!(got, expected);
+            proptest::prop_assert!(pending.is_empty());
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Pages drawn straight into the terminal through the kitty graphics protocol (kitty, Ghostty,
 //! WezTerm and others), from a [`Source`]. Usage and behaviour: `docs/cli-view.md`.
 
+mod clip;
 mod detect;
 mod encode;
 mod files;
@@ -48,7 +49,8 @@ Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics
 too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when the
 window is wide enough; - and + zoom out to rows of pages and in to the window's width. Several
 files, or a directory, are a list: a tile each, by its first page, and a folder for each
-subdirectory; Enter opens one, Esc goes back, / filters them by name. ? lists the keys.";
+subdirectory; Enter opens one, Esc goes back, / filters them by name. c copies the page, or the
+tile, to the clipboard. ? lists the keys.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -206,6 +208,9 @@ struct Terminal {
     /// Whether the pager may hand pages over through temporary files: the terminal may be on
     /// this machine.
     files: bool,
+    /// Whether the terminal runs on this machine, not over SSH: the system's clipboard is the
+    /// reader's then.
+    local: bool,
 }
 
 pub(super) fn run(args: &[String]) -> Result<(), CliError> {
@@ -340,10 +345,11 @@ fn view(args: &[String]) -> Result<(), CliError> {
     } else {
         check_terminal(protocol, tty.as_ref())?;
         let cell = tty.as_ref().and_then(ask_cell);
-        Terminal { output: Output::Direct, cell, effort: PngEffort::Fast, files: false }
+        Terminal { output: Output::Direct, cell, effort: PngEffort::Fast, files: false, local: true }
     };
-    let (effort, files) = compression.choose(|| over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten()));
-    let terminal = Terminal { effort, files, ..terminal };
+    let remote = over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten());
+    let (effort, files) = compression.choose(|| remote);
+    let terminal = Terminal { effort, files, local: !remote, ..terminal };
     // Inside tmux, what this run prints stays in the terminal after it, for tmux's placeholder
     // cells (`sweep.rs`): so it is recorded, and first the pictures no pane holds any more go.
     // Only when the output is this pane's, not a file `cat` shows later.
@@ -840,7 +846,7 @@ fn tmux_terminal(protocol: Protocol) -> Result<Terminal, CliError> {
         Err(e) => note(&format!("warning: couldn't check tmux's allow-passthrough ({e}); images may not show")),
     }
     let cell = client.ok().and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    Ok(Terminal { output: Output::Tmux(colour), cell, effort: PngEffort::Fast, files: false })
+    Ok(Terminal { output: Output::Tmux(colour), cell, effort: PngEffort::Fast, files: false, local: true })
 }
 
 /// The colour placeholder cells name images with, once the terminal outside tmux is known to

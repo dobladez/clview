@@ -92,6 +92,10 @@ sheet = ["dep:gridcraft-engine", "dep:zip", "dep:serde_json", "pdf"]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
 # files (`process`): safe calls, so no `unsafe` libc.
 rustix = { version = "1", features = ["process", "termios"] }
+# The system's clipboard, for the pager's `c` on a terminal on this machine that has no clipboard
+# of its own for pictures (Ghostty, WezTerm): the macOS pasteboard, X11 (XWayland too). Only
+# `image-data`: not Wayland's data-control protocol. ADR-0009 has why.
+arboard = { version = "3.7", default-features = false, features = ["image-data"] }
 
 [dev-dependencies]
 # Test images, made by the tests. pdfcraft-cos encrypts PDFs for the PDF backend's own tests

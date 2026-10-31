@@ -16,7 +16,7 @@ through tmux, the same answers, the 320 MB quota and the cell size.
 | `mod.rs` | Arguments, the checks before drawing, printing pages without the pager (`--no-pager`, a single page), in rows as zoomed, choosing PNG compression and whether to try temporary files |
 | `detect.rs` | Whether the terminal speaks the protocol, from the environment and its answer to a query, and the terminal's answer about its cell size. Pure |
 | `tty.rs` | `/dev/tty`: size, raw mode, and reads with a timeout through a reader thread (on macOS, `poll(2)` on `/dev/tty` answers `POLLNVAL` at once) |
-| `keys.rs` | Bytes from the terminal into keys, and the terminal's answers to graphics commands. Pure, total over any bytes |
+| `keys.rs` | Bytes from the terminal into keys, and the terminal's answers to graphics commands and about its clipboard. Pure, total over any bytes |
 | `fit.rs` | The render scale and the cells a page covers, the zoom, and how many pages share the window. Pure arithmetic |
 | `kitty.rs` | The protocol's escape codes, and the Unicode placeholders used inside tmux. Pure |
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
@@ -24,6 +24,7 @@ through tmux, the same answers, the 320 MB quota and the cell size.
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
+| `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
 
 `view` is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
 
@@ -306,7 +307,10 @@ keeps its records. The deletes go through the running pane, to the terminals sho
 [ADR-0001](../../docs/adr/0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) has
 the measurements and the alternatives.
 
-Any other answer is dropped. An answer must never be read as keys: its `ESC` would be the Esc
+The clipboard's answers are read the same way: whether the terminal speaks its protocol (a CSI
+sequence), and how a write went (an OSC sequence, `ESC ] 5522 ; … ESC \`, or ended by BEL), for
+the copy under way ([Copying to the clipboard](#copying-to-the-clipboard-cliprs)). Any other
+answer is dropped, OSC ones included. An answer must never be read as keys: its `ESC` would be the Esc
 key, which quits, and its letters keys. One cut off between reads waits for the rest, up to 512
 bytes and 1 s, and is dropped whole if the rest doesn't come. So does any escape sequence cut off
 past its `ESC`, a late cell size or a key over SSH alike. A rest that comes later than that is
@@ -340,6 +344,38 @@ A client is its `client_name` and `client_pid`, so attaching again from the same
 client. Temporary files start only inside a tmux that reports exactly one client showing the
 pane.
 
+## Copying to the clipboard (`clip.rs`)
+
+`c` copies the page the reader is on (`Nav::at`), or the tile chosen, as a picture. Where it goes
+is [ADR-0009](../../docs/adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md):
+the terminal's own clipboard through kitty's clipboard protocol (OSC 5522) when the terminal
+speaks it, otherwise the system's (arboard) when the terminal is on this machine, otherwise none.
+The first `c` asks with DECRQM for mode 5522 (wrapped for tmux); an answer of 0 or 4, or none in
+a second, is no. The pager never waits for any of it:
+
+- **The render.** A copy is a `Request` of its own (its own tag) on the level's pool, at the
+  page's own pixels for a picture and twice its unit otherwise, within `MAX_PIXELS` and
+  `MAX_AREA`. It goes first in every `set_queue` while it is wanted, as the pool's contract asks,
+  and its result is taken out of `try_recv` before the pages'. Leaving the level while it renders
+  stops it, and says so.
+- **The PNG** is made on a thread of its own (the pager's PNG effort: fast on this machine, small
+  over SSH); a PNG over 64 MiB, what the protocol has every terminal take, isn't sent.
+- **The write**: a packet to start, a packet for each 4096 bytes of the PNG (the protocol's most,
+  before base64), a packet to end, each its own escape code and, inside tmux, its own passthrough
+  sequence. They go 128 KiB a round of the pager's loop, which reads keys between rounds without
+  waiting, and stops while tmux hides the pane. The write carries an id (`clv-<n>`) that the
+  terminal echoes: its `status=DONE` says "copied", an error says why not, and an answer to an
+  older write or to someone else's is dropped. Without an answer for five seconds (inside tmux,
+  the answer goes to the pane tmux shows), the status line says so; a late one is still said.
+  When tmux reports output thrown away during a write, the copy is said to be lost.
+- **The system's clipboard** has a thread of its own for the pager's run, which opens it on the
+  first copy and keeps it: on X11, a picture is on the clipboard only while the program that put
+  it there is there to hand it over. At the end, once the terminal is put back, the pager waits up
+  to half a second for the thread to let it go.
+
+Quitting while an answer is due (the question, or a write's end) waits up to a second for it, so
+it doesn't land on the shell's command line.
+
 ## The terminal's state
 
 The pager runs on the alternate screen, in raw mode, with the cursor hidden and line wrap off.
@@ -358,15 +394,16 @@ only.
 
 ## Tests
 
-- **Unit tests** in each module, among them property tests for the key decoder, the fit and the
-  grid, and that the reader's page stays on screen.
+- **Unit tests** in each module, among them property tests for the key decoder (answers cut
+  anywhere among keys are never keys), the fit and the grid, and that the reader's page stays on
+  screen.
 - **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`. Its PDFs, and the
   other files', are written by hand (`tests/it/fixtures.rs`), so any PDF backend reads them.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
   XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
-  size, deletes it) or one that doesn't, and sends kitty's answers.
+  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
   pages printed from a shell, deleted once no pane holds them.

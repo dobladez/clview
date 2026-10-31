@@ -309,6 +309,7 @@ to a row, a tall window shows landscape pages two or three at a time, one under 
 | `-`, `_` | zoom out: one more page to a row |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
+| `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
@@ -325,6 +326,7 @@ In a list:
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
+| `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
@@ -380,6 +382,27 @@ long (20 seconds a try) and says so.
 
 The pages around the one on screen are prepared ahead, so turning to them is instant. Jumping
 further away waits for the page to render.
+
+### Copying a page
+
+`c` copies the page you are on to the clipboard as a picture, ready to paste into a document or a
+chat: with pages side by side, the first of them, or the one whose number you typed; in a list,
+the tile chosen. The status line says `copying page 3…`, then `copied page 3, 1224 × 1584
+pixels` (a picture, or a document of one page, by its name), or why not; the keys keep working
+meanwhile. A picture is copied at its own size, and anything else at twice the size of its unit:
+a PDF's page at 144 pixels per inch (US Letter is 1224 × 1584), an SVG drawing at twice its size.
+Either way, at most 8192 pixels a side and 16 megapixels, as a page on screen is, so a large
+photograph may be made smaller (`copied photo.jpg, 4899 × 3266 pixels of its 6000 × 4000`).
+
+Where it goes depends on the terminal ([ADR-0009](adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md)).
+The first `c` asks the terminal whether it has a clipboard for pictures
+([kitty's clipboard protocol](https://sw.kovidgoyal.net/kitty/clipboard/)). kitty does: the page
+goes to it as a PNG, over SSH and through tmux too, and kitty says when it has it; a terminal
+told not to let programs write its clipboard (kitty's `clipboard_control`) says so, and nothing is
+copied. Ghostty and WezTerm have only a clipboard for text, so the page goes to this machine's
+clipboard instead (the macOS pasteboard, X11), when the terminal runs on this machine; over SSH
+it can't reach yours, and the status line says so. On X11 the picture stays on the clipboard only
+while `clv` runs, unless a clipboard manager keeps it.
 
 Quitting always puts the terminal back as it was, including after an error. A pager killed by a
 signal (`kill`, a closed SSH session) can leave the terminal in raw mode; `reset` fixes that.

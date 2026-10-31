@@ -360,11 +360,16 @@ fn command(out: &mut Vec<u8>, control: &str, payload: &[u8], wrap: Wrap) {
         code.extend_from_slice(payload);
     }
     code.extend_from_slice(b"\x1b\\");
+    pass(out, &code, wrap);
+}
+
+/// One escape code, `code`, for the terminal: as it is, or inside tmux's passthrough sequence.
+pub(crate) fn pass(out: &mut Vec<u8>, code: &[u8], wrap: Wrap) {
     match wrap {
-        Wrap::None => out.extend_from_slice(&code),
+        Wrap::None => out.extend_from_slice(code),
         Wrap::Tmux => {
             out.extend_from_slice(b"\x1bPtmux;");
-            for b in code {
+            for &b in code {
                 if b == 0x1b {
                     out.push(0x1b);
                 }
