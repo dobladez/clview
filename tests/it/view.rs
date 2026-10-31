@@ -196,8 +196,7 @@ fn no_arguments_print_the_help() {
     let out = Command::new(BIN).output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), text(&help.stdout));
-    let from = format!("\n\nclview {}: https://github.com/dobladez/clview\n", env!("CARGO_PKG_VERSION"));
-    assert!(text(&out.stdout).ends_with(&from), "{}", text(&out.stdout));
+    assert!(text(&out.stdout).ends_with("\n\nReport issues and ideas to: https://github.com/dobladez/clview\n"), "{}", text(&out.stdout));
 }
 
 /// Run `view` as if in a tmux pane, with no `tmux` command on the PATH to ask.
@@ -361,8 +360,9 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
 fn help_and_version() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    let start = "Command-line Viewer: view graphic files without leaving your terminal\n\nclv <file>… [options]\nclv --help | --version\n";
-    assert!(out.status.success() && help.starts_with(start), "{help}");
+    let is = "Command-line Viewer: view graphic files without leaving your terminal";
+    let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CARGO_PKG_VERSION"));
+    assert!(out.status.success() && help.starts_with(&start), "{help}");
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
     // shows: the PDF one, and the documents' and spreadsheets' when they are built.

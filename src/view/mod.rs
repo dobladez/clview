@@ -45,12 +45,19 @@ const OPTIONS: &[OptionSpec] = &[
 
 /// What `--help` says before the options.
 const ABOUT: &str = "\
-Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics protocol), tmux
-too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when the
-window is wide enough; - and + zoom out to rows of pages and in to the window's width. Several
-files, or a directory, are a list: a tile each, by its first page, and a folder for each
-subdirectory; Enter opens one, Esc goes back, / filters them by name. c copies the page, or the
-tile, to the clipboard. ? lists the keys.";
+clv shows the pages of files in your terminal. It uses the kitty graphics protocol.
+  * Terminals: kitty, Ghostty and WezTerm. Also in tmux.
+  * Connections: on your computer, or through SSH.
+  * Systems: macOS, Linux and FreeBSD.
+
+If a file has more than one page, clv shows it in a pager. If the window is wide, the pager shows
+two pages side by side. If you give more than one file, a directory or an archive, clv shows a
+list. The list shows each file as a tile, and each subdirectory as a folder.
+  * - and +: show more or fewer pages in a row.
+  * Enter: open the tile. Esc: go back.
+  * /: filter the list by name.
+  * c: copy the page or the tile to the clipboard.
+  * ?: show all the keys.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -228,11 +235,11 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     })
 }
 
-/// What clview is, in a line: `--help`'s first.
-const IS: &str = env!("CARGO_PKG_DESCRIPTION");
+/// Which clview this is, then what it is, in a line each: `--help`'s first two.
+const IS: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), "\n", env!("CARGO_PKG_DESCRIPTION"));
 
-/// What clview is, and where it comes from: `--help`'s last line.
-const FROM: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_REPOSITORY"));
+/// Where to tell of a problem or an idea: `--help`'s last line.
+const REPORT: &str = concat!("Report issues and ideas to: ", env!("CARGO_PKG_REPOSITORY"));
 
 /// What `--help` says before the formats this build shows.
 const SHOWN: &str = "The files it shows, known by how they start or, where that can't tell, by the names in brackets:";
@@ -245,7 +252,7 @@ const HELP_WIDTH: usize = 100;
 /// each shows and the libraries it shows them through, and last where clview comes from.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
-    let mut out = format!("{IS}\n\n{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
+    let mut out = format!("{IS}\n\n{name} [options] <file>…\n{name} --help | --version\n\n{ABOUT}\n\n");
     let width = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).map(|o| o.shown().len()).max().unwrap_or(0);
     let list = |out: &mut String, options: &[OptionSpec]| {
         for option in options {
@@ -269,7 +276,7 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
             wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
         }
     }
-    out.push_str(&format!("\n{FROM}\n"));
+    out.push_str(&format!("\n{REPORT}\n"));
     out
 }
 
@@ -1323,8 +1330,8 @@ mod tests {
         const NONE: Lists = Lists("nothing", &["lib-c"], &[]);
         const OWN: Lists = Lists("drawings", &[], &[format("SVG", &[])]);
         let help = usage(&[&LOCKED, &PDF, &NONE, &OWN, &PICTURES, &MORE]);
-        let is = "Command-line Viewer: view graphic files without leaving your terminal";
-        assert!(help.starts_with(&format!("{is}\n\n{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
+        let is = format!("clview {}\nCommand-line Viewer: view graphic files without leaving your terminal", env!("CARGO_PKG_VERSION"));
+        assert!(help.starts_with(&format!("{is}\n\n{0} [options] <file>…\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
@@ -1341,7 +1348,7 @@ mod tests {
             "  Images, by lib-a and lib-b: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n{}another format with a long name (.one .two), WebP\n",
             " ".repeat(30)
         );
-        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}\n{FROM}\n"), "{help}");
+        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}\n{REPORT}\n"), "{help}");
         assert!(!help.contains("lib-c"), "{help}");
         assert_eq!([by(&[]), by(&["a"]), by(&["a", "b"]), by(&["a", "b", "c"])], ["", ", by a", ", by a and b", ", by a, b and c"]);
         assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
@@ -1351,9 +1358,9 @@ mod tests {
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
         assert!(nothing.contains(" first\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
-        // Last, where it comes from, whatever the build has.
+        // Last, where to report issues, whatever the build has.
         for help in [&help, &nothing] {
-            assert!(help.ends_with(&format!("\n\nclview {}: https://github.com/dobladez/clview\n", env!("CARGO_PKG_VERSION"))), "{help}");
+            assert!(help.ends_with("\n\nReport issues and ideas to: https://github.com/dobladez/clview\n"), "{help}");
         }
     }
 

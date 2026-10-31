@@ -6,11 +6,11 @@ and WezTerm speak it, among others. It works on macOS, Linux and FreeBSD, and in
 
 ```sh
 clv report.pdf               # page through it, like less
-clv report.pdf --pages 1,3-5 # page through just these
-clv report.pdf --zoom width  # as wide as the window
-clv report.pdf --zoom 4      # four pages to a row
-clv report.pdf --no-pager    # print every page and exit, like cat
-clv secret.pdf --password PW
+clv --pages 1,3-5 report.pdf # page through just these
+clv --zoom width report.pdf  # as wide as the window
+clv --zoom 4 report.pdf      # four pages to a row
+clv --no-pager report.pdf    # print every page and exit, like cat
+clv --password PW secret.pdf
 clv *.png                    # several files: a tile each, Enter opens one
 clv ~/Photos                 # a directory: each file by its first page
 clv -r ~/Photos              # its subdirectories' files too
@@ -56,8 +56,9 @@ when the window is wide enough, as the pager first shows them.
 `clv --help`, or `clv` alone, lists these, then the options a backend takes of its own
 (`--password`, for PDFs, documents and spreadsheets: see
 [Which files it shows](#which-files-it-shows)), each under what that backend shows, then the
-formats this build shows, with the libraries each shows them through, and last clview's version
-and its repository, <https://github.com/dobladez/clview>. It starts with what clview is, in a line.
+formats this build shows, with the libraries each shows them through. It starts with clview's
+version and what clview is, in a line each, and ends with where to report issues and ideas:
+<https://github.com/dobladez/clview>.
 
 ## Several files
 
@@ -68,7 +69,7 @@ been given alone. Esc, Backspace or `u` goes back to the list as you left it. `/
 list to the files whose names hold what you type ([Filtering a list](#filtering-a-list)).
 Printed, a list is its tiles, in rows, each row's names under it.
 
-`--pages` applies to what is shown, and a list's pages are its tiles: `clv *.pdf --pages 2-3`
+`--pages` applies to what is shown, and a list's pages are its tiles: `clv --pages 2-3 *.pdf`
 shows the second and third files, each still by its first page and opened to all its pages. The
 tiles given keep the list's numbers, as a document's pages given keep theirs: the status line
 says `3/12 · 2 of 2`, and a number typed is one of the list's. A number past the end of the list

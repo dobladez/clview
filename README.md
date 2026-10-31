@@ -6,8 +6,8 @@ WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 
 ```sh
 clv report.pdf             # page through it, like less
-clv report.pdf --zoom 4    # four pages to a row
-clv report.pdf --no-pager  # print every page and exit, like cat
+clv --zoom 4 report.pdf    # four pages to a row
+clv --no-pager report.pdf  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
 clv diagram.svg            # a drawing, as large as the window and sharp at that size
 clv letter.docx            # a Word document's pages, laid out as Word prints them (odt, rtf too)
