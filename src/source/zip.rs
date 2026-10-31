@@ -37,6 +37,10 @@ impl Backend for Zip {
         vec![Format { name: "zip", extensions: &[] }]
     }
 
+    fn credits(&self) -> &[&'static str] {
+        &["zip"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         &[]
     }

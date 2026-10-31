@@ -238,3 +238,11 @@ fn nothing_but_this_backend_names_gridcraft() {
     assert!(read >= 20, "read {read} files");
     assert!(named.is_empty(), "named outside the spreadsheet backend:\n{}", named.join("\n"));
 }
+
+/// `--help` lists the formats the backend shows by gridcraft.
+#[test]
+fn help_credits_gridcraft() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").output().unwrap();
+    let help = text(&out.stdout);
+    assert!(help.contains("\n  Spreadsheets, by gridcraft: Excel (.xlsx "), "{help}");
+}

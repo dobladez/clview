@@ -30,8 +30,8 @@ inside in [`src/view/README.md`](src/view/README.md), and why some choices were 
 [`docs/adr/`](docs/adr/README.md).
 
 What it shows comes from backends, one for each kind of file, each behind a cargo feature and
-none of them known to the viewer by name; `clv --help` lists the formats a build's backends show,
-and the options of those that take some:
+none of them known to the viewer by name; `clv --help` lists the formats a build's backends show
+and the libraries each shows them through, and the options of those that take some:
 
 | Feature | Shows | Rendered by |
 |---|---|---|

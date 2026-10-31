@@ -235,7 +235,8 @@ const SHOWN: &str = "The files it shows, known by how they start or, where that 
 const HELP_WIDTH: usize = 100;
 
 /// What `--help` prints: the viewer's options, then those of each of `backends` that takes some,
-/// and last the formats they show, under what each shows.
+/// under what it shows, and last the formats they show, under what each shows and the libraries it
+/// shows them through.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
     let mut out = format!("{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
@@ -247,7 +248,7 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     };
     list(&mut out, OPTIONS);
     for backend in backends.iter().filter(|b| !b.options().is_empty()) {
-        out.push_str(&format!("\n{}, by {}:\n", capitalized(backend.shows()), backend.name()));
+        out.push_str(&format!("\n{}:\n", capitalized(backend.shows())));
         list(&mut out, backend.options());
     }
     if backends.is_empty() {
@@ -255,38 +256,60 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
         return out;
     }
     out.push_str(&format!("\n{SHOWN}\n"));
-    for (shows, formats) in shown(backends) {
+    for Listed { shows, credits, formats } in shown(backends) {
         let named = formats.iter().map(|format| match format.extensions {
             [] => format.name.to_string(),
             extensions => format!("{} (.{})", format.name, extensions.join(" .")),
         });
-        wrapped(&mut out, &format!("{}:", capitalized(shows)), &named.collect::<Vec<_>>());
+        wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
     }
     out
 }
 
-/// What `backends` show, in their order, each with the formats it lists: those of backends that
-/// show the same together, each format once.
-fn shown(backends: &[&dyn Backend]) -> Vec<(&'static str, Vec<crate::source::Format>)> {
-    let mut shown: Vec<(&'static str, Vec<crate::source::Format>)> = Vec::new();
+/// What backends show, as `--help` lists it: the libraries they show it through, and in which
+/// formats.
+struct Listed {
+    shows: &'static str,
+    credits: Vec<&'static str>,
+    formats: Vec<crate::source::Format>,
+}
+
+/// What `backends` show, in their order, each with the libraries and the formats it lists: those
+/// of backends that show the same together, each library and each format once.
+fn shown(backends: &[&dyn Backend]) -> Vec<Listed> {
+    let mut shown: Vec<Listed> = Vec::new();
     for backend in backends {
-        let at = match shown.iter().position(|(shows, _)| *shows == backend.shows()) {
+        let at = match shown.iter().position(|listed| listed.shows == backend.shows()) {
             Some(at) => at,
             None => {
-                shown.push((backend.shows(), Vec::new()));
+                shown.push(Listed { shows: backend.shows(), credits: Vec::new(), formats: Vec::new() });
                 shown.len().saturating_sub(1)
             }
         };
         // Found in `shown`, or just pushed to it: there is one at `at`.
-        let Some((_, formats)) = shown.get_mut(at) else { continue };
+        let Some(Listed { credits, formats, .. }) = shown.get_mut(at) else { continue };
+        for &credit in backend.credits() {
+            if !credits.contains(&credit) {
+                credits.push(credit);
+            }
+        }
         for format in backend.formats() {
             if !formats.iter().any(|listed| listed.name == format.name) {
                 formats.push(format);
             }
         }
     }
-    shown.retain(|(_, formats)| !formats.is_empty());
+    shown.retain(|listed| !listed.formats.is_empty());
     shown
+}
+
+/// `, by a, b and c`, for the libraries `credits` names; nothing for none.
+fn by(credits: &[&str]) -> String {
+    match credits {
+        [] => String::new(),
+        [one] => format!(", by {one}"),
+        [rest @ .., last] => format!(", by {} and {last}", rest.join(", ")),
+    }
 }
 
 /// `items` after `label`, a comma between each two, wrapped between them at [`HELP_WIDTH`]
@@ -1246,11 +1269,12 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_the_options_each_backend_takes_then_the_formats_they_show() {
+    fn help_lists_the_options_each_backend_takes_then_the_formats_they_show_and_through_what() {
         use crate::source::Format;
         use crate::source::tests::{Fake, PDF};
-        /// A backend that shows `.0`, in the formats `.1`, and opens nothing.
-        struct Lists(&'static str, &'static [Format]);
+        /// A backend that shows `.0` through the libraries `.1`, in the formats `.2`, and opens
+        /// nothing.
+        struct Lists(&'static str, &'static [&'static str], &'static [Format]);
         impl Backend for Lists {
             fn name(&self) -> &'static str {
                 "lists"
@@ -1259,7 +1283,10 @@ mod tests {
                 self.0
             }
             fn formats(&self) -> Vec<Format> {
-                self.1.to_vec()
+                self.2.to_vec()
+            }
+            fn credits(&self) -> &[&'static str] {
+                self.1
             }
             fn options(&self) -> &'static [OptionSpec] {
                 &[]
@@ -1277,6 +1304,7 @@ mod tests {
         const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
         const PICTURES: Lists = Lists(
             "images",
+            &["lib-a"],
             &[
                 format("PNG", &[]),
                 format("TGA", &["tga", "icb", "vda", "vst"]),
@@ -1284,23 +1312,30 @@ mod tests {
                 format("another format with a long name", &["one", "two"]),
             ],
         );
-        const MORE: Lists = Lists("images", &[format("PNG", &[]), format("WebP", &[])]);
-        const NONE: Lists = Lists("nothing", &[]);
-        let help = usage(&[&LOCKED, &PDF, &NONE, &PICTURES, &MORE]);
+        const MORE: Lists = Lists("images", &["lib-a", "lib-b"], &[format("PNG", &[]), format("WebP", &[])]);
+        const NONE: Lists = Lists("nothing", &["lib-c"], &[]);
+        const OWN: Lists = Lists("drawings", &[], &[format("SVG", &[])]);
+        let help = usage(&[&LOCKED, &PDF, &NONE, &OWN, &PICTURES, &MORE]);
         assert!(help.starts_with(&format!("{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
         }
-        // A backend's options under it, and nothing for one that takes none.
-        assert!(help.contains(&format!("\n\nLocked PDFs, by locked:\n  {:29}  a password\n\n", "--password PW")), "{help}");
-        assert!(!help.contains(", by pdf-one") && !help.contains(", by lists") && !help.contains("no options"), "{help}");
-        // Last, the formats, under what their backend shows: those of backends that show the same
-        // together, each once, with the names a file of it goes by, wrapped at 100 columns.
+        // A backend's options under what it shows, and nothing for one that takes none.
+        assert!(help.contains(&format!("\n\nLocked PDFs:\n  {:29}  a password\n\n", "--password PW")), "{help}");
+        assert!(!help.contains("\nPDFs:\n") && !help.contains("\nImages:\n") && !help.contains("no options"), "{help}");
+        // Last, the formats, under what their backend shows and the libraries it credits: those of
+        // backends that show the same together, each once, with the names a file of it goes by,
+        // wrapped at 100 columns; no credit for a backend that credits none, and no row for one
+        // that lists no format.
         let shown = help.split_once(&format!("\n\n{SHOWN}\n")).map_or("", |(_, shown)| shown);
-        let images =
-            "  Images: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n          another format with a long name (.one .two), WebP\n";
-        assert_eq!(shown, format!("  Locked PDFs: locked\n  PDFs: pdf-one\n{images}"), "{help}");
+        let images = format!(
+            "  Images, by lib-a and lib-b: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n{}another format with a long name (.one .two), WebP\n",
+            " ".repeat(30)
+        );
+        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}"), "{help}");
+        assert!(!help.contains("lib-c"), "{help}");
+        assert_eq!([by(&[]), by(&["a"]), by(&["a", "b"]), by(&["a", "b", "c"])], ["", ", by a", ", by a and b", ", by a, b and c"]);
         assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
         // An item longer than a line has one to itself.
         let mut out = String::new();

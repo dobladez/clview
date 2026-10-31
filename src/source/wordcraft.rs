@@ -42,6 +42,10 @@ impl Backend for Wordcraft {
         vec![WORD, ODT, RTF]
     }
 
+    fn credits(&self) -> &[&'static str] {
+        &["wordcraft"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         OPTIONS
     }

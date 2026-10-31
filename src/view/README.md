@@ -68,7 +68,10 @@ formats written in the viewer. A backend takes them from the tables its `opens` 
 image backend's `DECODED`, the extensions a document's or a workbook's kind is told by, `Codec`'s
 compressions in tar's), so what `--help` lists and what opens can't disagree;
 `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks every backend
-built.
+built. A backend also names the libraries it reads and draws its files through
+(`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the
+names are written in the backend's own file, so the viewer still names none, and each library's
+own tests check its credit.
 
 The backends are `source/svg.rs` (feature `svg`), `source/tar.rs` (feature `tar`),
 `source/wordcraft.rs` (feature `word`), `source/gridcraft.rs` (feature `sheet`),

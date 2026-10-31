@@ -70,6 +70,11 @@ impl Backend for Tar {
         [Codec::None].into_iter().chain(Codec::COMPRESSED).map(Codec::format).collect()
     }
 
+    /// What unpacks the compressions; a tar it reads itself.
+    fn credits(&self) -> &[&'static str] {
+        &["flate2", "bzip2", "lzma-rust2"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         &[]
     }

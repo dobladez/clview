@@ -186,3 +186,11 @@ fn nothing_but_this_backend_names_its_decompressors() {
     assert!(read >= 20, "read {read} files");
     assert!(named.is_empty(), "named outside the tar backend:\n{}", named.join("\n"));
 }
+
+/// `--help` lists the formats the backend shows by the libraries that unpack the compressions.
+#[test]
+fn help_credits_what_unpacks_the_compressions() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").output().unwrap();
+    let help = text(&out.stdout);
+    assert!(help.contains("\n  Tar archives and compressed files, by flate2, bzip2 and lzma-rust2: tar, gzip, bzip2, xz"), "{help}");
+}

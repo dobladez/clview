@@ -64,7 +64,7 @@ const HEAD: u64 = 1024;
 
 /// A kind of file the viewer shows, and how it opens one.
 pub(crate) trait Backend {
-    /// Its name, as messages and `--help` give it.
+    /// Its name, as messages give it.
     fn name(&self) -> &'static str;
     /// What it shows, in a word or two, for `--help` and for a file no backend opens: "PDFs",
     /// "documents". Which formats, [`Backend::formats`] says.
@@ -72,6 +72,9 @@ pub(crate) trait Backend {
     /// The formats it shows, for `--help`: taken from the tables [`Backend::opens`] goes by, so
     /// that the two can't disagree.
     fn formats(&self) -> Vec<Format>;
+    /// The libraries it reads and draws its files through, by their crates' names, for `--help` to
+    /// credit. None for a backend that does it all itself.
+    fn credits(&self) -> &[&'static str];
     /// The options it takes, beyond the viewer's own.
     fn options(&self) -> &'static [OptionSpec];
     /// Whether it opens the file at `path`, going by `head`: its first [`HEAD`] bytes, or all of
@@ -435,7 +438,7 @@ pub(crate) mod tests {
 
     /// A backend that opens files starting with `magic`: to a page (a folder's), or if it
     /// `holds` files, to the directory beside the file, named as it is with `.d` after. It lists
-    /// one format, named as it is.
+    /// one format, and credits one library, named as it is.
     pub(crate) struct Fake {
         pub(crate) name: &'static str,
         pub(crate) shows: &'static str,
@@ -453,6 +456,9 @@ pub(crate) mod tests {
         }
         fn formats(&self) -> Vec<Format> {
             vec![Format { name: self.name, extensions: &[] }]
+        }
+        fn credits(&self) -> &[&'static str] {
+            std::slice::from_ref(&self.name)
         }
         fn options(&self) -> &'static [OptionSpec] {
             self.options

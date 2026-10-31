@@ -52,6 +52,10 @@ impl Backend for Svg {
         FORMATS.to_vec()
     }
 
+    fn credits(&self) -> &[&'static str] {
+        &["resvg"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         &[]
     }

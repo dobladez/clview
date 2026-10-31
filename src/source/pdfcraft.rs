@@ -28,6 +28,10 @@ impl Backend for Pdfcraft {
         vec![Format { name: "PDF", extensions: &[] }]
     }
 
+    fn credits(&self) -> &[&'static str] {
+        &["pdfcraft"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         OPTIONS
     }

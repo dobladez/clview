@@ -129,12 +129,13 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
     assert!(text(&out.stderr).contains(said), "{}", text(&out.stderr));
 }
 
-/// The backend's option is listed under it.
+/// The backend's option is listed under what it shows, and its formats by pdfcraft.
 #[test]
-fn help_lists_the_password_under_pdfcraft() {
+fn help_lists_the_password_and_the_formats_by_pdfcraft() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    assert!(help.contains("\n\nPDFs, by pdfcraft:\n  --password PW "), "{help}");
+    assert!(help.contains("\n\nPDFs:\n  --password PW "), "{help}");
+    assert!(help.contains("\n  PDFs, by pdfcraft: PDF\n"), "{help}");
 }
 
 /// Only this backend, its tests, the line that lists it among the backends and the lines that

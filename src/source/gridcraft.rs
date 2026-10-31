@@ -41,6 +41,10 @@ impl Backend for Gridcraft {
         vec![EXCEL, ODS, TEXT]
     }
 
+    fn credits(&self) -> &[&'static str] {
+        &["gridcraft"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         OPTIONS
     }

@@ -38,6 +38,11 @@ impl Backend for Images {
         decoded.chain([super::Format { name: JPEG_XL, extensions: &[] }]).collect()
     }
 
+    /// The `image` crate, and jxl-oxide for JPEG XL.
+    fn credits(&self) -> &[&'static str] {
+        &["image", "jxl-oxide"]
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         &[]
     }
