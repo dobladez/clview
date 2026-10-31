@@ -53,10 +53,11 @@ Printed without the pager, pages follow the zoom too, a row of them under anothe
 prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
 when the window is wide enough, as the pager first shows them.
 
-`clv --help` lists these, then the options a backend takes of its own (`--password`, for PDFs,
-documents and spreadsheets: see [Which files it shows](#which-files-it-shows)), each under what
-that backend shows, and last the formats this build shows, with the libraries each shows them
-through.
+`clv --help`, or `clv` alone, lists these, then the options a backend takes of its own
+(`--password`, for PDFs, documents and spreadsheets: see
+[Which files it shows](#which-files-it-shows)), each under what that backend shows, then the
+formats this build shows, with the libraries each shows them through, and last clview's version
+and its repository, <https://github.com/dobladez/clview>. It starts with what clview is, in a line.
 
 ## Several files
 

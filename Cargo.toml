@@ -1,10 +1,13 @@
 [package]
 name = "clview"
-description = "PDFs, images, SVG drawings and archives of them in the terminal, through the kitty graphics protocol"
+# `--help`'s first line.
+description = "Command-line Viewer: view graphic files without leaving your terminal"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
+# Where `--help` ends by sending the reader.
+repository = "https://github.com/dobladez/clview"
 # pdfcraft is a git dependency, which crates.io refuses.
 publish = false
 

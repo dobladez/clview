@@ -228,18 +228,24 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     })
 }
 
+/// What clview is, in a line: `--help`'s first.
+const IS: &str = env!("CARGO_PKG_DESCRIPTION");
+
+/// What clview is, and where it comes from: `--help`'s last line.
+const FROM: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), ": ", env!("CARGO_PKG_REPOSITORY"));
+
 /// What `--help` says before the formats this build shows.
 const SHOWN: &str = "The files it shows, known by how they start or, where that can't tell, by the names in brackets:";
 
 /// The columns `--help` wraps the formats it lists at.
 const HELP_WIDTH: usize = 100;
 
-/// What `--help` prints: the viewer's options, then those of each of `backends` that takes some,
-/// under what it shows, and last the formats they show, under what each shows and the libraries it
-/// shows them through.
+/// What `--help` prints: what clview is, how it is called, the viewer's options, then those of
+/// each of `backends` that takes some, under what it shows, then the formats they show, under what
+/// each shows and the libraries it shows them through, and last where clview comes from.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
-    let mut out = format!("{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
+    let mut out = format!("{IS}\n\n{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
     let width = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).map(|o| o.shown().len()).max().unwrap_or(0);
     let list = |out: &mut String, options: &[OptionSpec]| {
         for option in options {
@@ -253,16 +259,17 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     }
     if backends.is_empty() {
         out.push_str("\nThis build has no backends, so it shows nothing.\n");
-        return out;
+    } else {
+        out.push_str(&format!("\n{SHOWN}\n"));
+        for Listed { shows, credits, formats } in shown(backends) {
+            let named = formats.iter().map(|format| match format.extensions {
+                [] => format.name.to_string(),
+                extensions => format!("{} (.{})", format.name, extensions.join(" .")),
+            });
+            wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
+        }
     }
-    out.push_str(&format!("\n{SHOWN}\n"));
-    for Listed { shows, credits, formats } in shown(backends) {
-        let named = formats.iter().map(|format| match format.extensions {
-            [] => format.name.to_string(),
-            extensions => format!("{} (.{})", format.name, extensions.join(" .")),
-        });
-        wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
-    }
+    out.push_str(&format!("\n{FROM}\n"));
     out
 }
 
@@ -1316,7 +1323,8 @@ mod tests {
         const NONE: Lists = Lists("nothing", &["lib-c"], &[]);
         const OWN: Lists = Lists("drawings", &[], &[format("SVG", &[])]);
         let help = usage(&[&LOCKED, &PDF, &NONE, &OWN, &PICTURES, &MORE]);
-        assert!(help.starts_with(&format!("{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
+        let is = "Command-line Viewer: view graphic files without leaving your terminal";
+        assert!(help.starts_with(&format!("{is}\n\n{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
@@ -1333,7 +1341,7 @@ mod tests {
             "  Images, by lib-a and lib-b: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n{}another format with a long name (.one .two), WebP\n",
             " ".repeat(30)
         );
-        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}"), "{help}");
+        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}\n{FROM}\n"), "{help}");
         assert!(!help.contains("lib-c"), "{help}");
         assert_eq!([by(&[]), by(&["a"]), by(&["a", "b"]), by(&["a", "b", "c"])], ["", ", by a", ", by a and b", ", by a, b and c"]);
         assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
@@ -1342,7 +1350,11 @@ mod tests {
         wrapped(&mut out, "Long:", &["x".repeat(HELP_WIDTH), "y".into()]);
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
-        assert!(nothing.ends_with(" first\n\nThis build has no backends, so it shows nothing.\n") && !nothing.contains(SHOWN), "{nothing}");
+        assert!(nothing.contains(" first\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
+        // Last, where it comes from, whatever the build has.
+        for help in [&help, &nothing] {
+            assert!(help.ends_with(&format!("\n\nclview {}: https://github.com/dobladez/clview\n", env!("CARGO_PKG_VERSION"))), "{help}");
+        }
     }
 
     #[test]

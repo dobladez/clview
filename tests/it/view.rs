@@ -187,8 +187,17 @@ fn bad_arguments_say_what_is_allowed() {
         assert!(!out.status.success(), "{args:?}");
         assert!(text(&out.stderr).contains(expected), "{args:?}: {}", text(&out.stderr));
     }
+}
+
+/// Nothing given at all is a call for help: what `--help` prints, and no error.
+#[test]
+fn no_arguments_print_the_help() {
+    let help = Command::new(BIN).arg("--help").output().unwrap();
     let out = Command::new(BIN).output().unwrap();
-    assert!(text(&out.stderr).contains("missing file"));
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), text(&help.stdout));
+    let from = format!("\n\nclview {}: https://github.com/dobladez/clview\n", env!("CARGO_PKG_VERSION"));
+    assert!(text(&out.stdout).ends_with(&from), "{}", text(&out.stdout));
 }
 
 /// Run `view` as if in a tmux pane, with no `tmux` command on the PATH to ask.
@@ -352,7 +361,8 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
 fn help_and_version() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    assert!(out.status.success() && help.starts_with("clv <file>… [options]\nclv --help | --version\n"), "{help}");
+    let start = "Command-line Viewer: view graphic files without leaving your terminal\n\nclv <file>… [options]\nclv --help | --version\n";
+    assert!(out.status.success() && help.starts_with(start), "{help}");
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
     // shows: the PDF one, and the documents' and spreadsheets' when they are built.

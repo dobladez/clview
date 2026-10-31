@@ -63,8 +63,9 @@ fn main() -> ExitCode {
         }
     }
     let result = match args.first().map(String::as_str) {
+        // Nothing given at all: what to give.
         #[cfg(unix)]
-        Some("--help" | "-h") => stdout_line(format_args!("{}", view::usage(source::BACKENDS).trim_end())),
+        None | Some("--help" | "-h") => stdout_line(format_args!("{}", view::usage(source::BACKENDS).trim_end())),
         Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CARGO_PKG_VERSION"))),
         #[cfg(unix)]
         _ => view::run(&args),
