@@ -48,7 +48,7 @@ Shows files' pages in this terminal: kitty, Ghostty, WezTerm (the kitty graphics
 too; macOS, Linux and FreeBSD. More than a page opens a pager, two pages side by side when the
 window is wide enough; - and + zoom out to rows of pages and in to the window's width. Several
 files, or a directory, are a list: a tile each, by its first page, and a folder for each
-subdirectory; Enter opens one, Esc goes back. ? lists the keys.";
+subdirectory; Enter opens one, Esc goes back, / filters them by name. ? lists the keys.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].

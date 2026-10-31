@@ -62,8 +62,9 @@ that backend shows, and last the formats this build shows.
 `clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
 name under it, in the order given. The arrows choose a tile, its name highlighted and on the
 status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
-been given alone. Esc, Backspace or `u` goes back to the list as you left it. Printed, a list is its
-tiles, in rows, each row's names under it.
+been given alone. Esc, Backspace or `u` goes back to the list as you left it. `/` narrows the
+list to the files whose names hold what you type ([Filtering a list](#filtering-a-list)).
+Printed, a list is its tiles, in rows, each row's names under it.
 
 `--pages` applies to what is shown, and a list's pages are its tiles: `clv *.pdf --pages 2-3`
 shows the second and third files, each still by its first page and opened to all its pages. The
@@ -322,14 +323,46 @@ In a list:
 | `g`, `G`, `Home`, `End` | the first or the last tile |
 | a number, then `Enter` | that tile |
 | `Enter` | open it: a file to its pages, a folder to its own list |
+| `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
-| `Esc`, `Backspace`, `u` | back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
+| `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
 A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:
 up to four to a row until you zoom (fewer when there are fewer), as many rows as fit. The screen
 moves only when the tile you choose leaves it, and the tiles show as they render, as a gallery's
 do. `--zoom` sets the list's tiles to a row; a file opened from it starts at `auto`.
+
+### Filtering a list
+
+`/` filters a list by name: as you type, only the tiles whose names hold what you typed stay, in
+their order, upper and lower case alike. The name is the one under the tile: `beach` keeps
+`Beach.jpg` and the folder `beach/`, and with `-r`, `2024/` keeps that directory's files. The
+status line shows `/beach` as you type, and where you are among the tiles that match:
+`7/40 · 2 of 3`, the tile's number in the list, then its place among the matches; or
+`no match`. Every key that types a character is part of the filter, `q`, `j` and digits too
+(`Ctrl-C` still quits). `Backspace` takes the last one back, and the arrows, `PgUp`, `PgDn`,
+`Home` and `End` move among the matches.
+
+`Enter` keeps the filter, and the list's keys move among the matches as they do among all the
+tiles: `Enter` again opens the tile chosen, and `/` edits the filter. `Esc` while typing puts the
+list back as it was before `/`. With a filter kept, `Esc`, `Backspace` or `u` clears it before
+they go back or quit. With nothing typed, `Enter` or `Backspace` leaves no filter. The tile chosen
+stays chosen while it matches, and otherwise the first after it that matches is chosen; when the
+filter changes or is cleared, it stays in its row of the screen where the list allows. A number
+is still the list's: `12 Enter` chooses the 12th tile if it matches, and says it doesn't
+otherwise, as it says of a tile `--pages` left out.
+
+The tiles keep the size the whole list gives them, so the ones that match come together at once,
+from what is already in the terminal, and only they are rendered and sent ahead
+([ADR-0010](adr/0010-a-filtered-list-keeps-the-whole-lists-tile-size.md)); `+` makes them bigger.
+A filter belongs to its list: a folder gone into starts with all its files, and going back finds
+the list filtered as you left it. With `--pages`, the filter narrows the tiles given.
+
+Letters past ASCII (`café`) are typed as the terminal sends them, in UTF-8. Upper and lower case
+match letter by letter (`É` matches `é`), and that is all: `e` doesn't match `é`, nor does an `é`
+typed as one letter match a name that stores it as `e` and an accent, as macOS's HFS+ did. In a
+file's pages, `/` only says that it filters lists: there is no search in a document's text.
 
 The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
 `pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`

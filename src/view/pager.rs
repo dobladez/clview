@@ -1,7 +1,8 @@
 //! `view --pager`: pages on the alternate screen, like `less`. One at a time, or two side by side
 //! when the window is wide enough, turning two at a time like a book's; zoomed out, rows of
 //! them; zoomed in, one as wide as the window. Several files, or a directory, are a list of
-//! tiles, one chosen at a time, which Enter opens: a [`Level`] of its own, which Esc leaves.
+//! tiles, one chosen at a time, which Enter opens: a [`Level`] of its own, which Esc leaves; `/`
+//! filters the tiles by name ([`Filter`]).
 //!
 //! [`Nav`] is where the reader is and what each key does, with no IO. [`Pager`] renders and
 //! draws what `Nav` says, and [`Screen`] puts the terminal back however the pager ends.
@@ -52,6 +53,12 @@ const ESCAPE_WAIT: Duration = Duration::from_millis(50);
 const STEP: u16 = 3;
 /// The most digits a typed page number keeps.
 const MAX_TYPED: usize = 9;
+/// The most characters a list's filter keeps.
+const MAX_FILTER: usize = 256;
+/// What the status line says after a filter being typed, when there is room.
+const FILTER_KEYS: &str = "⏎ keep · esc cancel";
+/// What `/` says in a file's pages.
+const NO_SEARCH: &str = "no text search; / filters lists";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -110,6 +117,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("g G  Home End", "the first or the last"),
     ("12 Enter", "the 12th"),
     ("Enter", "open it: a file's pages, or a directory's files"),
+    ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
     ("+ -", "bigger, fewer to a row; smaller, more to a row"),
     ("r  Ctrl-L", "render again"),
 ];
@@ -334,6 +342,34 @@ struct Nav {
     help: bool,
     /// Render the pages again even if nothing changed (`r`, Ctrl-L).
     rerender: bool,
+    /// A list's tiles' names, by tile, as a filter matches them ([`fold`]); none for a file's
+    /// pages.
+    names: Vec<String>,
+    /// A list's filter by name (`/`), while it has one: `pages` are then the tiles that match.
+    filter: Option<Filter>,
+}
+
+/// A list narrowed to the tiles whose names hold some text, typed after `/`. The list is whole
+/// when it shows (a container's files are all opened first), so no tile arrives later.
+#[derive(Debug)]
+struct Filter {
+    /// What the names must hold, as typed: upper and lower case alike.
+    text: String,
+    /// Whether it is still being typed: then every key that types a character is part of it.
+    typing: bool,
+    /// The tiles it filters, in order: the list's, or those given (`--pages`).
+    given: Vec<usize>,
+    /// The tile chosen last, which while none matches is the one to come back near.
+    last: Option<usize>,
+    /// What Esc while typing puts back: the text kept before this `/`, if one was, and the tile
+    /// chosen then.
+    before: Option<String>,
+    chosen_before: Option<usize>,
+}
+
+/// A name as a filter matches it: in lower case, so that case doesn't matter.
+fn fold(name: &str) -> String {
+    name.to_lowercase()
 }
 
 impl Nav {
@@ -357,6 +393,8 @@ impl Nav {
             hint: true,
             help: false,
             rerender: false,
+            names: Vec::new(),
+            filter: None,
         }
     }
 
@@ -439,10 +477,17 @@ impl Nav {
         if std::mem::take(&mut self.help) && key != Key::Interrupt {
             return Step::Continue;
         }
+        // A filter being typed takes every key that types a character.
+        if self.filter.as_ref().is_some_and(|filter| filter.typing) {
+            return self.filter_key(key);
+        }
         let typing = !self.typed.is_empty();
         match key {
             Key::Char('?') => self.help = true,
             Key::Char('q') | Key::Interrupt => return Step::Quit,
+            // A filter kept goes before the list does.
+            Key::Escape | Key::Backspace if self.filter.is_some() && !typing => self.unfilter(self.chosen()),
+            Key::Char('u') if self.filter.is_some() => self.unfilter(self.chosen()),
             Key::Escape if !typing => return Step::Leave,
             Key::Escape => self.typed.clear(),
             // Past MAX_TYPED digits, more are ignored (no other arm takes a digit).
@@ -466,6 +511,7 @@ impl Nav {
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('/') => self.message = Some(NO_SEARCH.into()),
             _ => {}
         }
         Step::Continue
@@ -501,6 +547,7 @@ impl Nav {
             }
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('/') => self.start_filter(),
             _ => {}
         }
         Step::Continue
@@ -555,17 +602,128 @@ impl Nav {
     }
 
     /// To the page whose number was typed, if it is one being paged through; in a list, to that
-    /// tile.
+    /// tile, if it matches the filter.
     fn go_typed(&mut self) {
         let wanted = self.typed.parse::<usize>().ok().and_then(|n| n.checked_sub(1));
         let unit = self.unit();
         match wanted.map(|page| (page, self.pages.iter().position(|p| *p == page))) {
             Some((_, Some(index))) if self.list => self.select(index),
             Some((_, Some(index))) => self.go(index),
+            Some((page, None)) if self.unmatched(page).is_some() => {
+                self.message = self.unmatched(page).map(|filter| format!("{unit} {} doesn't match {filter}", self.typed));
+            }
             Some((page, None)) if page < self.count => self.message = Some(format!("{unit} {} isn't one of the {unit}s given", self.typed)),
             _ => self.message = Some(format!("no {unit} {} (1–{})", self.typed, self.count)),
         }
         self.typed.clear();
+    }
+
+    /// How many tiles there are to filter, matching or not: the list's, or those given. The
+    /// tiles keep the size these give them while filtered.
+    fn listed(&self) -> usize {
+        self.filter.as_ref().map_or(self.pages.len(), |filter| filter.given.len())
+    }
+
+    /// The filter, as the status line shows it, if `tile` is one of those given that it leaves out.
+    fn unmatched(&self, tile: usize) -> Option<String> {
+        let filter = self.filter.as_ref().filter(|filter| filter.given.contains(&tile) && !self.pages.contains(&tile))?;
+        Some(format!("/{}", filter.text))
+    }
+
+    /// The tile chosen; while none matches the filter, the one chosen last.
+    fn chosen(&self) -> Option<usize> {
+        self.pages.get(self.at).copied().or_else(|| self.filter.as_ref().and_then(|filter| filter.last))
+    }
+
+    /// `/` in a list: a filter to type, from the one kept if there is one.
+    fn start_filter(&mut self) {
+        self.typed.clear();
+        let chosen = self.chosen();
+        match self.filter.as_mut() {
+            Some(filter) => {
+                filter.before = Some(filter.text.clone());
+                filter.chosen_before = chosen;
+                filter.typing = true;
+            }
+            None => {
+                let given = self.pages.clone();
+                self.filter = Some(Filter { text: String::new(), typing: true, given, last: chosen, before: None, chosen_before: chosen });
+            }
+        }
+    }
+
+    /// What `key` does while a filter is typed: a character is part of it, as the tiles narrow to
+    /// those that match; Backspace takes the last one back; Enter keeps it; Esc puts back what was
+    /// there before `/`. With nothing typed, Backspace and Enter leave no filter. The keys that move
+    /// still move, among the tiles that match, and Ctrl-C still quits.
+    fn filter_key(&mut self, key: Key) -> Step {
+        let Some(filter) = self.filter.as_mut() else { return Step::Continue };
+        let empty = filter.text.is_empty();
+        match key {
+            Key::Interrupt => return Step::Quit,
+            // Past MAX_FILTER characters, more are ignored.
+            Key::Char(c) if !c.is_control() && filter.text.chars().count() < MAX_FILTER => filter.text.push(c),
+            Key::Char(c) if !c.is_control() => {}
+            Key::Backspace if !empty => {
+                filter.text.pop();
+            }
+            Key::Enter if !empty => filter.typing = false,
+            Key::Backspace | Key::Enter => self.unfilter(self.chosen()),
+            Key::Escape => self.cancel_filter(),
+            _ => return self.list_key(key),
+        }
+        self.refilter(self.chosen());
+        Step::Continue
+    }
+
+    /// Esc while a filter is typed: the list as it was before `/`, with the filter kept then, if
+    /// one was, and the tile chosen then.
+    fn cancel_filter(&mut self) {
+        let Some(filter) = self.filter.as_mut() else { return };
+        let chosen = filter.chosen_before;
+        match filter.before.take() {
+            Some(text) => {
+                filter.text = text;
+                filter.typing = false;
+                self.refilter(chosen);
+            }
+            None => self.unfilter(chosen),
+        }
+    }
+
+    /// No filter: all the tiles given again, `chosen` chosen.
+    fn unfilter(&mut self, chosen: Option<usize>) {
+        if let Some(filter) = self.filter.as_mut() {
+            filter.text.clear();
+        }
+        self.refilter(chosen);
+        self.filter = None;
+    }
+
+    /// The tiles given that match the filter, in their order, in place of those before (all of
+    /// them, with nothing typed): `chosen` stays chosen if it is one of them; otherwise the first
+    /// after it among the tiles given, or the last before it. Its row stays where it was on
+    /// screen, as far as the list allows.
+    fn refilter(&mut self, chosen: Option<usize>) {
+        let row = self.row();
+        let rows_down = (self.at / row).saturating_sub(self.first() / row);
+        let Some(filter) = self.filter.as_mut() else { return };
+        let needle = fold(&filter.text);
+        let from = chosen.and_then(|tile| filter.given.iter().position(|t| *t == tile)).unwrap_or(0);
+        let (mut pages, mut at) = (Vec::new(), None);
+        for (i, &tile) in filter.given.iter().enumerate() {
+            if self.names.get(tile).map_or("", String::as_str).contains(&needle) {
+                if at.is_none() && i >= from {
+                    at = Some(pages.len());
+                }
+                pages.push(tile);
+            }
+        }
+        filter.last = chosen;
+        self.pages = pages;
+        self.at = at.unwrap_or(usize::MAX).min(self.pages.len().saturating_sub(1));
+        self.top = (self.at / row).saturating_sub(rows_down).saturating_mul(row);
+        self.top = self.first();
     }
 
     /// For a draw: `per_row` pages to a row in `grid_rows` rows, of at most `most_per_row` to a
@@ -591,7 +749,9 @@ impl Nav {
     /// gets in this document, the zoom, and the key for the keys; `…` before them while pages
     /// render. A narrow window drops the zoom, then the key. On the left, the name, cut short in
     /// its middle to leave room for a message, which ends two spaces before the right side.
-    /// Until the first key, the message is the reminder of the keys, as much of it as fits.
+    /// Until the first key, the message is the reminder of the keys, as much of it as fits. A
+    /// list's filter takes the message's place: always while it is typed, otherwise when there is
+    /// no message.
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
         let width = usize::from(cols);
         let (place, widest) = self.place();
@@ -619,6 +779,17 @@ impl Nav {
             }
             (None, true) => String::new(),
         };
+        // A filter being typed is what the line says, with how to keep it or not when there is
+        // room; one kept, when there is nothing else to say.
+        let said = match &self.filter {
+            Some(filter) if filter.typing => {
+                let (typed, keys) = (format!("/{}", filter.text), format!("/{}  {FILTER_KEYS}", filter.text));
+                let fits = chars(&keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
+                if fits { keys } else { typed }
+            }
+            Some(filter) if said.is_empty() => format!("/{}", filter.text),
+            _ => said,
+        };
         // A space at the start; the message, then two spaces; and at least two spaces between the
         // name and the message, or one after the name alone.
         let said = cut(&said, room.saturating_sub(3));
@@ -631,7 +802,7 @@ impl Nav {
 
     /// Where the reader is, for the status line, and the most characters it takes in this
     /// document: the pages on screen, in a list the tile chosen, of how many; and where among the
-    /// pages given when they are not all.
+    /// pages given when they are not all, or among the tiles that match a filter (`no match`).
     fn place(&self) -> (String, usize) {
         let digits = |n: usize| n.to_string().len();
         let count = self.count;
@@ -649,9 +820,14 @@ impl Nav {
             (place, digits(count).saturating_mul(3).saturating_add(8), self.first())
         };
         let given = self.pages.len();
-        if given != count {
-            place.push_str(&format!(" · {} of {given}", at.saturating_add(1)));
-            widest = widest.saturating_add(digits(given).saturating_mul(2).saturating_add(7));
+        if given != count || self.filter.is_some() {
+            // Filtered, among the tiles that match, as wide as when they all do: the right side
+            // stays put while a filter is typed.
+            widest = widest.saturating_add(digits(self.listed()).saturating_mul(2).saturating_add(7));
+            match given {
+                0 if self.filter.is_some() => place = "no match".into(),
+                _ => place.push_str(&format!(" · {} of {given}", at.saturating_add(1))),
+            }
         }
         (place, widest)
     }
@@ -744,7 +920,8 @@ impl Level {
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool) -> Self {
         let list = shown.is_list();
         let Shown { pages: Pages { source, name, pages }, items } = shown;
-        let nav = Nav { list, nested, hint: !(list && nested), ..Nav::new(pages, source.pages(), zoom) };
+        let names = items.iter().map(|item| fold(item.name())).collect();
+        let nav = Nav { list, nested, hint: !(list && nested), names, ..Nav::new(pages, source.pages(), zoom) };
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
     }
 
@@ -935,7 +1112,9 @@ impl Pager<'_> {
     fn grid(&mut self, area: Area) -> Grid {
         let (nav, source) = (&self.level.nav, &*self.level.source);
         let grid = match nav.list {
-            true => fit::tiles(nav.zoom, nav.pages.len(), area),
+            // Filtered, the tiles keep the size the whole list gives them, so what is in the
+            // terminal shows at once (ADR-0010).
+            true => fit::tiles(nav.zoom, nav.listed(), area),
             false => fit::grid(nav.zoom, nav.pages.len(), nav.at, |i| nav.pages.get(i).and_then(|p| page_size(source, *p)), area),
         };
         self.level.nav.grid(grid.per_row, grid.rows, grid.most);
@@ -1976,6 +2155,367 @@ mod tests {
         assert_eq!((past.y, past.h), (2000, 0));
         let empty = Sent { rows: 0, height: 0, ..shown };
         assert_eq!(source_rows(&empty, 5, 5), Rect { x: 0, y: 0, w: 1000, h: 0 });
+    }
+
+    /// The names of a list's tiles, 1 to 8.
+    const PHOTOS: [&str; 8] = ["Beach.jpg", "city.png", "beach-2.jpg", "trip/", "Café.jpg", "notes.pdf", "BEACH/", "zoo.png"];
+
+    /// A list of tiles named `names`, all of them, four to a row in two rows, after a draw.
+    fn named<S: AsRef<str>>(names: &[S]) -> Nav {
+        let mut nav = Nav { names: names.iter().map(|name| fold(name.as_ref())).collect(), ..list(names.len()) };
+        nav.grid(4, 2, 8);
+        nav.shown(10, 10);
+        nav
+    }
+
+    /// `text` typed, a key a character: what the first key that asks more than a move asks.
+    fn type_in(nav: &mut Nav, text: &str) -> Step {
+        press(nav, &text.chars().map(Key::Char).collect::<Vec<_>>())
+    }
+
+    /// The tiles the reader moves among, and the one chosen.
+    fn matching(nav: &Nav) -> (Vec<usize>, Option<usize>) {
+        (nav.pages.clone(), nav.pages.get(nav.at).copied())
+    }
+
+    /// Whether a filter is being typed.
+    fn typing(nav: &Nav) -> bool {
+        nav.filter.as_ref().is_some_and(|filter| filter.typing)
+    }
+
+    /// The filter's text.
+    fn filter_text(nav: &Nav) -> Option<&str> {
+        nav.filter.as_ref().map(|filter| filter.text.as_str())
+    }
+
+    #[test]
+    fn slash_narrows_a_list_to_the_names_that_hold_what_is_typed_as_it_is_typed() {
+        let mut nav = named(&PHOTOS);
+        assert_eq!(press(&mut nav, &[Key::Char('/')]), Step::Continue);
+        // Nothing typed yet: every tile.
+        assert_eq!((typing(&nav), matching(&nav)), (true, ((0..8).collect(), Some(0))));
+        type_in(&mut nav, "b");
+        assert_eq!(matching(&nav), (vec![0, 2, 6], Some(0)));
+        // Upper and lower case alike, in the names and in what is typed. The tile chosen no longer
+        // matches: the next that does is chosen.
+        type_in(&mut nav, "EACH-");
+        assert_eq!(matching(&nav), (vec![2], Some(2)));
+        // It still matches: it stays chosen.
+        press(&mut nav, &[Key::Backspace]);
+        assert_eq!(matching(&nav), (vec![0, 2, 6], Some(2)));
+        // A folder's name ends with `/`.
+        type_in(&mut nav, "/");
+        assert_eq!((filter_text(&nav), matching(&nav)), (Some("bEACH/"), (vec![6], Some(6))));
+    }
+
+    #[test]
+    fn while_a_filter_is_typed_every_key_that_types_a_character_is_text() {
+        let mut nav = named(&PHOTOS);
+        let zoom = nav.zoom;
+        press(&mut nav, &[Key::Char('/')]);
+        // Keys that quit, move, zoom, go up, show the keys or type a number, elsewhere.
+        assert_eq!(type_in(&mut nav, "q j1?u gG+-/rc"), Step::Continue);
+        assert_eq!(filter_text(&nav), Some("q j1?u gG+-/rc"));
+        assert_eq!((nav.help, nav.zoom, nav.typed.as_str(), nav.rerender, typing(&nav)), (false, zoom, "", false, true));
+        // A control character isn't: Ctrl-L renders again, and Ctrl-C still quits.
+        press(&mut nav, &[Key::Char('\u{c}'), Key::Char('\u{1b}')]);
+        assert_eq!((nav.rerender, filter_text(&nav)), (true, Some("q j1?u gG+-/rc")));
+        assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
+    }
+
+    #[test]
+    fn while_a_filter_is_typed_the_keys_that_move_move_among_the_matches() {
+        let mut nav = named(&PHOTOS);
+        type_in(&mut nav, "/b");
+        for (key, chosen) in [(Key::Right, 2), (Key::End, 6), (Key::Left, 2), (Key::Home, 0), (Key::Down, 0), (Key::PageDown, 6), (Key::PageUp, 0)] {
+            assert_eq!(press(&mut nav, &[key]), Step::Continue, "{key:?}");
+            assert_eq!((matching(&nav).1, typing(&nav)), (Some(chosen), true), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn enter_keeps_the_filter_and_the_lists_keys_move_among_the_matches() {
+        let mut nav = named(&PHOTOS);
+        type_in(&mut nav, "/b");
+        assert_eq!(press(&mut nav, &[Key::Enter]), Step::Continue, "Enter keeps the filter, and opens nothing");
+        assert!(!typing(&nav) && nav.filter.is_some());
+        for (keys, chosen) in [(&[Key::Char('l')][..], 2), (&[Key::Char('G')], 6), (&[Key::Char('g')], 0), (&[Key::Char('l'); 3], 6)] {
+            press(&mut nav, keys);
+            assert_eq!(matching(&nav).1, Some(chosen), "{keys:?}");
+        }
+        assert_eq!(press(&mut nav, &[Key::Enter]), Step::Open(6));
+        // `/` again edits it, from what was kept.
+        type_in(&mut nav, "/e");
+        assert_eq!((filter_text(&nav), typing(&nav), matching(&nav).0), (Some("be"), true, vec![0, 2, 6]));
+    }
+
+    #[test]
+    fn with_a_filter_kept_esc_backspace_and_u_clear_it_before_they_go_back() {
+        for key in [Key::Escape, Key::Backspace, Key::Char('u')] {
+            let mut nav = named(&PHOTOS);
+            type_in(&mut nav, "/b");
+            press(&mut nav, &[Key::Enter, Key::Char('G')]);
+            assert_eq!(press(&mut nav, &[key]), Step::Continue, "{key:?}");
+            // Every tile again, the one chosen still chosen.
+            assert_eq!((nav.filter.is_none(), matching(&nav)), (true, ((0..8).collect(), Some(6))), "{key:?}");
+            let then = if key == Key::Escape { Step::Leave } else { Step::Back };
+            assert_eq!(press(&mut nav, &[key]), then, "{key:?}");
+        }
+        // A number being typed goes first, as without a filter.
+        let mut nav = named(&PHOTOS);
+        type_in(&mut nav, "/b");
+        press(&mut nav, &[Key::Enter, Key::Char('7'), Key::Escape]);
+        assert_eq!((nav.typed.as_str(), filter_text(&nav)), ("", Some("b")));
+    }
+
+    #[test]
+    fn esc_while_a_filter_is_typed_puts_back_what_was_there_before_the_slash() {
+        let mut nav = named(&PHOTOS);
+        press(&mut nav, &[Key::Char('l'); 5]);
+        type_in(&mut nav, "/be");
+        assert_eq!(matching(&nav), (vec![0, 2, 6], Some(6)));
+        assert_eq!(press(&mut nav, &[Key::Escape]), Step::Continue);
+        assert_eq!((nav.filter.is_none(), matching(&nav)), (true, ((0..8).collect(), Some(5))));
+        // With a filter kept: that filter, and the tile chosen then.
+        type_in(&mut nav, "/b");
+        press(&mut nav, &[Key::Enter, Key::Char('g')]);
+        type_in(&mut nav, "/each-");
+        assert_eq!(matching(&nav), (vec![2], Some(2)));
+        assert_eq!(press(&mut nav, &[Key::Escape]), Step::Continue);
+        assert_eq!((filter_text(&nav), typing(&nav), matching(&nav)), (Some("b"), false, (vec![0, 2, 6], Some(0))));
+    }
+
+    #[test]
+    fn backspace_or_enter_with_nothing_typed_leaves_no_filter() {
+        let mut nav = named(&PHOTOS);
+        assert_eq!(press(&mut nav, &[Key::Char('/'), Key::Backspace]), Step::Continue, "Backspace doesn't go back");
+        assert!(nav.filter.is_none());
+        assert_eq!(press(&mut nav, &[Key::Char('/'), Key::Enter]), Step::Continue, "Enter opens nothing");
+        assert!(nav.filter.is_none());
+        assert_eq!(press(&mut nav, &[Key::Enter]), Step::Open(0));
+        // Nor past what was typed, from a filter kept or not.
+        type_in(&mut nav, "/ab");
+        press(&mut nav, &[Key::Backspace, Key::Backspace]);
+        assert_eq!((typing(&nav), filter_text(&nav)), (true, Some("")));
+        press(&mut nav, &[Key::Backspace]);
+        assert!(nav.filter.is_none());
+        type_in(&mut nav, "/b");
+        press(&mut nav, &[Key::Enter, Key::Char('/'), Key::Backspace, Key::Enter]);
+        assert_eq!((nav.filter.is_none(), nav.pages.len()), (true, 8));
+    }
+
+    #[test]
+    fn a_filter_that_matches_nothing_says_so_and_every_key_still_works() {
+        let mut nav = named(&PHOTOS);
+        type_in(&mut nav, "/xyz");
+        assert_eq!(matching(&nav), (vec![], None));
+        assert!(squeezed(&nav.status("", 100, false)).contains(" /xyz ⏎ keep · esc cancel no match · 4 per row "));
+        press(&mut nav, &[Key::Enter]);
+        assert_eq!((nav.on_screen(), nav.around(AHEAD, BEHIND)), (vec![None; 8], vec![]));
+        assert!(squeezed(&nav.status("", 100, false)).ends_with(" /xyz no match · 4 per row · ? help "));
+        for key in [Key::Left, Key::Right, Key::Up, Key::Down, Key::PageDown, Key::PageUp, Key::Home, Key::End, Key::Enter]
+            .into_iter()
+            .chain([' ', 'b', 'n', 'p', 'j', 'k', 'g', 'G', '+', '-', '?', 'x'].map(Key::Char))
+        {
+            assert_eq!(press(&mut nav, &[key]), Step::Continue, "{key:?}");
+            assert_eq!(matching(&nav), (vec![], None), "{key:?}");
+            for cols in 0..=120 {
+                assert_eq!(chars(&nav.status("", cols, false)), usize::from(cols));
+            }
+        }
+        press(&mut nav, &[Key::Char('3'), Key::Enter]);
+        assert_eq!(nav.message.as_deref(), Some("tile 3 doesn't match /xyz"));
+        // Back to a filter that matches: near the tile chosen before none did.
+        let mut nav = named(&PHOTOS);
+        press(&mut nav, &[Key::Char('l'); 3]);
+        type_in(&mut nav, "/t");
+        assert_eq!(matching(&nav), (vec![1, 3, 5], Some(3)));
+        type_in(&mut nav, "x");
+        assert_eq!(matching(&nav), (vec![], None));
+        press(&mut nav, &[Key::Backspace]);
+        assert_eq!(matching(&nav), (vec![1, 3, 5], Some(3)));
+    }
+
+    /// A number is the list's, filtered or not, as with the tiles given: `12 Enter` chooses the
+    /// 12th tile if it matches.
+    #[test]
+    fn a_number_typed_in_a_filtered_list_is_still_the_lists() {
+        let mut nav = named(&PHOTOS);
+        type_in(&mut nav, "/b");
+        press(&mut nav, &[Key::Enter, Key::Char('7'), Key::Enter]);
+        assert_eq!((matching(&nav).1, nav.message.as_deref()), (Some(6), None));
+        press(&mut nav, &[Key::Char('2'), Key::Enter]);
+        assert_eq!((matching(&nav).1, nav.message.as_deref()), (Some(6), Some("tile 2 doesn't match /b")));
+        press(&mut nav, &[Key::Char('9'), Key::Char('9'), Key::Enter]);
+        assert_eq!(nav.message.as_deref(), Some("no tile 99 (1–8)"));
+    }
+
+    #[test]
+    fn a_filter_narrows_the_tiles_given_and_keeps_their_order() {
+        // `--pages 7,3,1,6`.
+        let mut nav = named(&PHOTOS);
+        nav.pages = vec![6, 2, 0, 5];
+        type_in(&mut nav, "/b");
+        assert_eq!(matching(&nav), (vec![6, 2, 0], Some(6)));
+        assert!(squeezed(&nav.status("", 120, false)).contains(" 7/8 · 1 of 3 · 4 per row "));
+        press(&mut nav, &[Key::Enter, Key::Char('6'), Key::Enter]);
+        assert_eq!(nav.message.as_deref(), Some("tile 6 doesn't match /b"));
+        press(&mut nav, &[Key::Char('2'), Key::Enter]);
+        assert_eq!(nav.message.as_deref(), Some("tile 2 isn't one of the tiles given"));
+        // Cleared, the tiles given, not the list's.
+        press(&mut nav, &[Key::Char('G'), Key::Escape]);
+        assert_eq!(matching(&nav), (vec![6, 2, 0, 5], Some(0)));
+        assert!(squeezed(&nav.status("", 120, false)).contains(" 1/8 · 3 of 4 · 4 per row "));
+    }
+
+    #[test]
+    fn the_status_line_shows_the_filter_and_where_the_reader_is_among_the_matches() {
+        let mut nav = named(&PHOTOS);
+        press(&mut nav, &[Key::Char('/')]);
+        let line = nav.status("Beach.jpg", 100, false);
+        assert!(squeezed(&line).contains(" Beach.jpg / ⏎ keep · esc cancel 1/8 · 1 of 8 · 4 per row · ? help "), "{line:?}");
+        let at = column(&line, "1/8");
+        type_in(&mut nav, "beach");
+        let line = nav.status("Beach.jpg", 100, false);
+        assert!(squeezed(&line).contains(" Beach.jpg /beach ⏎ keep · esc cancel 1/8 · 1 of 3 · 4 per row "), "{line:?}");
+        // Where the reader is stays where it was, whatever matches.
+        assert_eq!(column(&line, "1/8"), at);
+        type_in(&mut nav, "x");
+        assert_eq!(column(&nav.status("", 100, false), "no match"), at);
+        // A narrow window drops the keys first.
+        press(&mut nav, &[Key::Backspace]);
+        let narrow = nav.status("Beach.jpg", 60, false);
+        assert!(narrow.contains("  /beach  ") && !narrow.contains("keep"), "{narrow:?}");
+        // Kept, the filter, when there is nothing else to say.
+        press(&mut nav, &[Key::Enter]);
+        assert!(squeezed(&nav.status("Beach.jpg", 100, false)).contains(" Beach.jpg /beach 1/8 · 1 of 3 · "));
+        press(&mut nav, &[Key::Char('4')]);
+        assert!(nav.status("Beach.jpg", 100, false).contains("  go to tile 4  "));
+        // Whatever is typed, the line is exactly as wide as the window.
+        type_in(&mut nav, "/ünïcödé, 写真 and more");
+        for cols in 0..=200 {
+            let line = nav.status("Beach.jpg", cols, false);
+            assert_eq!(chars(&line), usize::from(cols), "{line:?}");
+            assert!(!line.chars().any(char::is_control), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn slash_in_a_files_pages_says_that_it_filters_lists() {
+        let mut nav = reader(2, 12, 40, 40);
+        assert_eq!(press(&mut nav, &[Key::Char('/')]), Step::Continue);
+        assert_eq!((nav.message.as_deref(), nav.filter.is_none(), page(&nav)), (Some(NO_SEARCH), true, 2));
+        // Whole in a window 80 columns wide.
+        assert!(nav.status("report.pdf", 80, false).contains(&format!("  {NO_SEARCH}  ")));
+        // The keys after it are the pager's.
+        assert_eq!(press(&mut nav, &[Key::Char('n'), Key::Char('q')]), Step::Quit);
+        assert_eq!(page(&nav), 3);
+    }
+
+    #[test]
+    fn a_filter_keeps_at_most_max_filter_characters() {
+        let mut nav = named(&PHOTOS);
+        press(&mut nav, &[Key::Char('/')]);
+        press(&mut nav, &[Key::Char('é'); MAX_FILTER + 10]);
+        assert_eq!(filter_text(&nav).map(|text| text.chars().count()), Some(MAX_FILTER));
+        assert_eq!(chars(&nav.status("a.png", 80, false)), 80);
+    }
+
+    #[test]
+    fn a_filter_matches_letters_past_ascii_in_any_case() {
+        let mut nav = named(&["Café.jpg", "CAFÉ-2.png", "cafe.png", "ÉTÉ/"]);
+        type_in(&mut nav, "/CAFÉ");
+        assert_eq!(matching(&nav).0, [0, 1]);
+        press(&mut nav, &[Key::Escape]);
+        type_in(&mut nav, "/été");
+        assert_eq!(matching(&nav).0, [3]);
+        press(&mut nav, &[Key::Escape]);
+        type_in(&mut nav, "/cafe");
+        assert_eq!(matching(&nav).0, [2], "é is not e");
+    }
+
+    /// The row of the screen the tile chosen is on.
+    fn screen_row(nav: &Nav) -> usize {
+        nav.at / nav.row() - nav.first() / nav.row()
+    }
+
+    #[test]
+    fn the_tile_chosen_keeps_its_row_on_screen_as_the_filter_changes() {
+        // Forty tiles, four to a row in three rows; every other one's name holds an x.
+        let names: Vec<String> = (0..40).map(|i| format!("{}{i}", if i % 2 == 1 { "x" } else { "f" })).collect();
+        let mut nav = named(&names);
+        nav.grid(4, 3, 8);
+        // A screen on, tile 14 on its top row.
+        press(&mut nav, &[Key::PageDown, Key::Right]);
+        assert_eq!((matching(&nav).1, screen_row(&nav), nav.first()), (Some(13), 0, 12));
+        // Filtered, cancelled, and filtered, kept and cleared: on the top row all along, where
+        // the screen moving as little as brings it on would show it lower.
+        for keys in [&[Key::Char('/'), Key::Char('x')][..], &[Key::Escape], &[Key::Char('/'), Key::Char('x'), Key::Enter], &[Key::Escape]] {
+            press(&mut nav, keys);
+            assert_eq!((matching(&nav).1, screen_row(&nav)), (Some(13), 0), "{keys:?}");
+        }
+        assert!(nav.filter.is_none());
+        // From the bottom row, the bottom row.
+        press(&mut nav, &[Key::Char('j'), Key::Char('j')]);
+        type_in(&mut nav, "/x");
+        assert_eq!((matching(&nav).1, screen_row(&nav)), (Some(21), 2));
+    }
+
+    /// What a list's screen shows, and what is rendered ahead, follows the filter: only the tiles
+    /// that match. They keep the size the whole list gives them.
+    #[test]
+    fn only_the_tiles_that_match_are_on_screen_or_worked_on_ahead() {
+        let names: Vec<String> = (0..40).map(|i| format!("{}{i}", if i % 3 == 0 { "beach" } else { "city" })).collect();
+        let mut nav = named(&names);
+        type_in(&mut nav, "/beach");
+        assert_eq!(nav.pages, (0..40).filter(|i| i % 3 == 0).collect::<Vec<_>>());
+        let wanted: Vec<usize> = nav.on_screen().into_iter().flatten().chain(nav.around(AHEAD, BEHIND)).collect();
+        assert_eq!(wanted, [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39]);
+        assert_eq!(nav.listed(), 40);
+        press(&mut nav, &[Key::Enter]);
+        assert_eq!(nav.listed(), 40);
+    }
+
+    proptest::proptest! {
+        /// Whatever is typed into a list's filter, and whatever else is pressed, the tiles moved
+        /// among are those given whose names hold the filter, in their order (all of them without
+        /// one), and the tile chosen is one of them, on screen.
+        #[test]
+        fn a_filter_keeps_the_tiles_that_match_in_order_and_the_one_chosen_on_screen(
+            names in proptest::collection::vec("[abAB/]{0,3}", 1..30),
+            given in proptest::option::of(proptest::collection::vec(0usize..30, 1..30)),
+            steps in proptest::collection::vec(
+                (proptest::sample::select(vec![
+                    Key::Char('/'), Key::Char('a'), Key::Char('B'), Key::Char('q'), Key::Char('2'), Key::Char('u'), Key::Char(' '),
+                    Key::Char('+'), Key::Char('-'), Key::Enter, Key::Escape, Key::Backspace, Key::Left, Key::Right, Key::Down,
+                    Key::Up, Key::End, Key::Home, Key::PageDown,
+                 ]),
+                 proptest::option::of((1u16..=8, 1u16..=6))),
+                0..80,
+            ),
+        ) {
+            let count = names.len();
+            let given: Vec<usize> = given.map_or_else(|| (0..count).collect(), |g| g.into_iter().map(|t| t % count).collect());
+            let mut nav = Nav { list: true, names: names.iter().map(|name| fold(name)).collect(), ..Nav::new(given.clone(), count, Zoom::Auto) };
+            for (key, draw) in steps {
+                if nav.key(key) == Step::Quit {
+                    break;
+                }
+                if let Some((most, rows)) = draw {
+                    let per_row = match nav.zoom { Zoom::PerRow(n) => n.min(most), _ => 4.min(most) };
+                    nav.grid(per_row, rows, most);
+                }
+                let text = nav.filter.as_ref().map(|filter| fold(&filter.text));
+                let expected: Vec<usize> = given.iter().copied().filter(|t| text.as_ref().is_none_or(|text| fold(&names[*t]).contains(text.as_str()))).collect();
+                proptest::prop_assert_eq!(&nav.pages, &expected);
+                if let Some(filter) = &nav.filter {
+                    proptest::prop_assert_eq!(&filter.given, &given);
+                }
+                let first = nav.first();
+                proptest::prop_assert!(nav.pages.is_empty() || (nav.at >= first && nav.at < first + nav.per_screen() && nav.at < nav.pages.len()), "{nav:?}");
+                proptest::prop_assert_eq!(first % nav.row(), 0);
+            }
+        }
     }
 
     proptest::proptest! {

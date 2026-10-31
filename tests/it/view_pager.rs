@@ -160,6 +160,14 @@ impl Session {
         stdin.flush().unwrap();
     }
 
+    /// `bytes` typed, whole characters or not.
+    fn press_bytes(&mut self, bytes: &[u8]) {
+        let mut stdin = self.keys.lock().unwrap();
+        let stdin = stdin.as_mut().unwrap();
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
     /// Wait for `view` to exit, all of its output collected.
     pub(crate) fn finish(&mut self) -> ExitStatus {
         let deadline = Instant::now() + PATIENCE;
@@ -638,6 +646,63 @@ fn a_directorys_subdirectories_are_folders_to_go_into() {
     flat.wait_until("the last", |t| bar(t).contains(" trip/c.png 3/3 "));
     flat.press("q");
     assert!(flat.finish().success());
+}
+
+/// What the last draw wrote: from its synchronized output on.
+fn last_draw(text: &str) -> &str {
+    text.rfind("\x1b[?2026h").map_or(text, |at| &text[at..])
+}
+
+/// `/` filters a list by name as you type, in upper or lower case: the tiles that match go on
+/// screen, keeping their size, so none is sent again. Every key that types is text meanwhile,
+/// `q` too, and a character past ASCII is one key, even cut across reads. Enter keeps the filter,
+/// and the keys move among the matches; Esc clears it, the tile chosen still chosen, or while
+/// typing puts the list back as it was; then Esc quits.
+#[test]
+fn a_list_filters_by_name_as_you_type() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-filter-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let names = ["alpha.pdf", "beta.pdf", "Alphabet.pdf", "café.pdf"];
+    let paths: Vec<PathBuf> = names.iter().map(|name| dir.join(name)).collect();
+    for (path, name) in paths.iter().zip(names) {
+        std::fs::write(path, crate::fixtures::letter(name, 1)).unwrap();
+    }
+    let rest: Vec<&str> = paths[1..].iter().map(|p| p.to_str().unwrap()).chain(["--protocol", "kitty"]).collect();
+    let mut view = Session::start(&paths[0], &rest, 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/4") && transmitted(t) == 4);
+    view.press("/ALP");
+    view.wait_until("the filter", |t| bar(t).contains(" alpha.pdf /ALP ⏎ keep · esc cancel 1/4 · 1 of 2 · 4 per row "));
+    // Only the two that match are placed, and their names under them.
+    let last = last_draw(&view.text()).to_owned();
+    assert_eq!(last.matches("a=p,q=1,").count(), 2, "{last:?}");
+    assert!(last.contains("Alphabet.pdf") && !last.contains("beta.pdf"), "{last:?}");
+    view.press("q");
+    view.wait_until("no match", |t| bar(t).contains(" /ALPq ⏎ keep · esc cancel no match · 4 per row "));
+    assert!(view.child.try_wait().unwrap().is_none(), "q quit while typing");
+    view.press("\x7f\r");
+    view.wait_until("kept", |t| bar(t).contains(" alpha.pdf /ALP 1/4 · 1 of 2 · "));
+    view.press("\x1b[C");
+    view.wait_until("the second match", |t| bar(t).contains(" Alphabet.pdf /ALP 3/4 · 2 of 2 ") && chosen(t).as_deref() == Some("Alphabet.pdf"));
+    view.press("\x1b");
+    view.wait_until("all of them again", |t| bar(t).contains(" Alphabet.pdf 3/4 · 4 per row ") && chosen(t).as_deref() == Some("Alphabet.pdf"));
+    // É cut in two, its second byte later than an Esc waits for.
+    view.press("/CAF");
+    view.wait_until("typing again", |t| bar(t).contains(" /CAF ⏎ keep"));
+    view.press_bytes(b"\xc3");
+    std::thread::sleep(Duration::from_millis(200));
+    view.press_bytes(b"\x89");
+    view.wait_until("café", |t| bar(t).contains(" café.pdf /CAFÉ ⏎ keep · esc cancel 4/4 · 1 of 1 "));
+    let before = view.text().len();
+    view.press("\x1b");
+    view.wait_until("as it was", |t| t.get(before..).is_some_and(|t| bar(t).contains(" Alphabet.pdf 3/4 · 4 per row ")));
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(transmitted(&view.text()), 4, "a tile was sent again");
+    view.press("\x1b");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// The `i=` value at the start of a transmission.

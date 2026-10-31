@@ -121,6 +121,16 @@ its part's pool, and only for the most urgent parts, as many at once as the pool
 a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools
 of the four parts wanted most recently, then lets them go, and an image's decoded pixels with them.
 
+`/` filters a list (`pager.rs`'s `Filter`): the tiles `Nav` moves among become those whose names
+(`Item::name`, in lower case) hold what is typed, in their order, so only they are on screen,
+rendered and sent ahead, and the parts of the others are let go of as an off-screen tile's are.
+The tiles keep the size the whole list gives them, so the matches are placements of what is in
+the terminal ([ADR-0010](../../docs/adr/0010-a-filtered-list-keeps-the-whole-lists-tile-size.md)).
+A list shows once all its files are opened, so no tile arrives under a filter later. For the
+filter, `keys.rs` decodes UTF-8: a character past ASCII is one key, one cut between reads waits
+for the rest as an escape sequence does, and bytes that aren't UTF-8, or a control character,
+are dropped.
+
 ## Getting pages to the terminal
 
 A rendered page is premultiplied RGBA. The protocol offers three ways to send it:

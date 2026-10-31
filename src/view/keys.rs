@@ -58,16 +58,41 @@ pub(crate) fn decode(bytes: &[u8], flush: bool) -> (Vec<Key>, usize) {
             b'\r' | b'\n' => (Some(Key::Enter), 1),
             0x7f | 0x08 => (Some(Key::Backspace), 1),
             0x03 => (Some(Key::Interrupt), 1),
-            // Printable ASCII; the pager's keys are all ASCII, so other bytes, UTF-8 included, are
-            // dropped one at a time.
+            // Printable ASCII.
             0x20..=0x7e => (Some(Key::Char(char::from(b))), 1),
             0x0c => (Some(Key::Char('\u{c}')), 1),
+            // A character past ASCII, typed into a list's filter (`é`); one cut off waits for the
+            // rest, as an escape sequence does.
+            0x80..=0xff => match utf8(rest) {
+                Some(found) => found,
+                None => break,
+            },
             _ => (None, 1),
         };
         keys.extend(key);
         i = i.saturating_add(used);
     }
     (keys, i)
+}
+
+/// The character UTF-8 encodes at the start of `bytes` (which starts past ASCII) and its length:
+/// [`Key::Char`], or nothing for a control character (C1). Bytes that aren't UTF-8 are dropped, as
+/// many as can't start a character. `None` while a character is cut off.
+fn utf8(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
+    // How long the character its first byte starts is; a byte that starts none is one alone.
+    let len = match bytes.first() {
+        Some(0xc2..=0xdf) => 2,
+        Some(0xe0..=0xef) => 3,
+        Some(0xf0..=0xf4) => 4,
+        _ => 1,
+    };
+    let start = bytes.get(..len).unwrap_or(bytes);
+    match std::str::from_utf8(start) {
+        Ok(text) => Some((text.chars().next().filter(|c| !c.is_control()).map(Key::Char), start.len())),
+        // Right so far, and the rest still to come.
+        Err(e) if e.error_len().is_none() => None,
+        Err(e) => Some((None, e.error_len().unwrap_or(1).max(1))),
+    }
 }
 
 /// The key an escape sequence at the start of `bytes` (which starts with ESC) stands for, and
@@ -159,8 +184,62 @@ mod tests {
 
     #[test]
     fn unknown_sequences_and_bytes_are_dropped() {
-        // F5, Shift+Up, a mouse report, UTF-8 "é", a NUL.
-        assert_eq!(keys(b"\x1b[15~\x1b[1;2A\x1b[<0;3;4M\xc3\xa9\0j"), [Key::Char('j')]);
+        // F5, Shift+Up, a mouse report, a C1 control in UTF-8 (CSI), a NUL.
+        assert_eq!(keys(b"\x1b[15~\x1b[1;2A\x1b[<0;3;4M\xc2\x9b\0j"), [Key::Char('j')]);
+    }
+
+    #[test]
+    fn a_character_past_ascii_is_one_key() {
+        // Two, three and four bytes, among ASCII keys.
+        assert_eq!(keys("jé€😀k".as_bytes()), [Key::Char('j'), Key::Char('é'), Key::Char('€'), Key::Char('😀'), Key::Char('k')]);
+        assert_eq!(keys("CAFÉ".as_bytes()), "CAFÉ".chars().map(Key::Char).collect::<Vec<_>>());
+        // Control characters are no keys, C1 ones included (NEL, CSI, OSC), as UTF-8 encodes them.
+        assert_eq!(keys(b"\xc2\x85\xc2\x9b\xc2\x9dq"), [Key::Char('q')]);
+    }
+
+    #[test]
+    fn a_character_cut_across_reads_waits_for_the_rest() {
+        for c in ['é', '€', '😀'] {
+            let bytes = c.to_string().into_bytes();
+            for cut in 1..bytes.len() {
+                // Even when nothing more came yet: it isn't the start of anything else.
+                for flush in [false, true] {
+                    let first = [b"j".as_slice(), &bytes[..cut]].concat();
+                    assert_eq!(decode(&first, flush), (vec![Key::Char('j')], 1), "{c} cut at {cut}");
+                }
+                let (first, used) = decode(&bytes[..cut], true);
+                let pending = [&bytes[used..cut], &bytes[cut..]].concat();
+                assert_eq!((first, keys(&pending)), (vec![], vec![Key::Char(c)]), "{c} cut at {cut}");
+            }
+        }
+        // The rest, then an escape sequence, in the next read.
+        let (first, used) = decode(b"\xe2\x82", true);
+        let pending = [&b"\xe2\x82"[used..], b"\xac\x1b[A"].concat();
+        assert_eq!((first, keys(&pending)), (vec![], vec![Key::Char('€'), Key::Up]));
+    }
+
+    #[test]
+    fn bytes_that_arent_utf8_are_dropped_and_what_follows_them_is_kept() {
+        for (bytes, expected) in [
+            // A byte that continues a character, alone; bytes that start none.
+            (b"\x80j".as_slice(), vec![Key::Char('j')]),
+            (b"\xbf\xc0\xc1\xf5\xffj", vec![Key::Char('j')]),
+            // A character cut off by another key: the key stays.
+            (b"\xc3j", vec![Key::Char('j')]),
+            (b"\xe2\x82j", vec![Key::Char('j')]),
+            (b"\xf0\x9f\x98q", vec![Key::Char('q')]),
+            (b"\xc3\x1b[B", vec![Key::Down]),
+            (b"\xe2\x82\r", vec![Key::Enter]),
+            // Too long for what it encodes, a surrogate, past U+10FFFF.
+            (b"\xc1\xbfj", vec![Key::Char('j')]),
+            (b"\xe0\x80\xafj", vec![Key::Char('j')]),
+            (b"\xed\xa0\x80j", vec![Key::Char('j')]),
+            (b"\xf4\x90\x80\x80j", vec![Key::Char('j')]),
+            // A character whole after them.
+            (b"\x80\xc3\xa9", vec![Key::Char('é')]),
+        ] {
+            assert_eq!(keys(bytes), expected, "{bytes:?}");
+        }
     }
 
     #[test]
@@ -243,12 +322,33 @@ mod tests {
             proptest::prop_assert!(used <= bytes.len());
             if flush {
                 // All of it, but for an escape sequence still arriving past its ESC: never a lone
-                // ESC, and short unless it is a graphics answer.
+                // ESC, and short unless it is a graphics answer. Or a character cut off, right so
+                // far.
                 let rest = &bytes[used..];
+                let cut_off = rest.len() < 4 && std::str::from_utf8(rest).is_err_and(|e| e.valid_up_to() == 0 && e.error_len().is_none());
                 proptest::prop_assert!(
-                    rest.is_empty() || (rest.len() > 1 && rest[0] == 0x1b && (rest.starts_with(ANSWER) || rest.len() < MAX_SEQUENCE + 2))
+                    rest.is_empty() || cut_off || (rest.len() > 1 && rest[0] == 0x1b && (rest.starts_with(ANSWER) || rest.len() < MAX_SEQUENCE + 2))
                 );
             }
+        }
+
+        /// Text typed, however the reads cut it, is its characters, one key each, as the pager
+        /// decodes what it reads: what is left of one read goes before the next.
+        #[test]
+        fn text_cut_anywhere_is_its_characters(text in "[^\\p{C}]{0,40}", cuts in proptest::collection::vec(0usize..200, 0..6)) {
+            let bytes = text.as_bytes();
+            let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c % (bytes.len() + 1)).chain([bytes.len()]).collect();
+            cuts.sort_unstable();
+            let (mut pending, mut got, mut from) = (Vec::new(), Vec::new(), 0);
+            for cut in cuts {
+                pending.extend_from_slice(&bytes[from..cut]);
+                from = cut;
+                let (keys, used) = decode(&pending, true);
+                got.extend(keys);
+                pending.drain(..used);
+            }
+            proptest::prop_assert!(pending.is_empty());
+            proptest::prop_assert_eq!(got, text.chars().map(Key::Char).collect::<Vec<_>>());
         }
     }
 }
