@@ -152,6 +152,7 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 | `resvg` (the `svg` feature, on by default) | SVG drawings: XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its `.svg` or `.svgz` name. Other XML is not one. Asked first: a PDF's header may be anywhere in those bytes, which a drawing's text may hold | none |
 | `wordcraft` (the `word` feature, on by default) | Word documents, OpenDocument text and RTF ([Documents](#documents)): an RTF by its first bytes (`{\rtf`), whatever its name; an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document, a compound file, by such a name only, since spreadsheets and slides are compound files too. Asked third, for the reason SVG is first (an RTF's text), and before zip | `--password PW`: the password of a protected Word document |
 | `gridcraft` (the `sheet` feature, on by default, which brings `pdf`) | Spreadsheets ([Spreadsheets](#spreadsheets)): an ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and text. Asked fourth, before zip | `--password PW`: the password of a protected workbook |
+| `vectorcraft` (the `vector` feature, on by default) | Drawings vectorcraft saved ([vectorcraft drawings](#vectorcraft-drawings)): JSON whose first key, after `{`, is `"format"`, saying `"vectorcraft"` or `"drawcraft"`, as vectorcraft writes it; other JSON is not one. One saved compressed is a gzip, which the tar backend unpacks and hands on. Asked fifth, for the reason SVG is first (a drawing's text) | none |
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
 | `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips the Word and spreadsheet backends don't take, as directories ([Archives](#archives)) | none |
@@ -256,10 +257,29 @@ Opening a workbook reads it, recalculates it and prints every page, then lets go
 kept is the PDF. On an M3 Max that took 6 ms for a styled workbook of four sheets, and 1.5 s for
 a 7.6 MB one of 37,000 rows that prints to 1,648 pages. A file larger than 64 MiB is refused, and
 so is an xlsx whose sheets unpack to more than 128 MiB together, which would take some 850 MB once
-read (one of 97 MiB took 649 MB). gridcraft
-prints at most 2,000 pages, down a sheet's rows before across its columns, so a very wide sheet
-loses its right-hand pages past that. Why spreadsheets are printed this way is in
+read (one of 97 MiB took 649 MB). gridcraft prints at most 2,000 pages, down a sheet's rows
+before across its columns, so a very wide sheet loses its right-hand pages past that. Why spreadsheets are printed this way is in
 [ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md).
+
+### vectorcraft drawings
+
+A drawing saved by [vectorcraft](https://github.com/storytold/vectorcraft) (`.vectorcraft`, or
+`.drawcraft` from before its rename, in any format version vectorcraft reads) shows each artboard
+as a page, its size its own in points, fitted to the window as a PDF's page is. It is drawn as
+vectorcraft exports it: guides and template layers left out, the artboard white where the
+document's background is white and see-through where it is transparent, text in the system's
+fonts (vectorcraft's own, which a document may name, are not built in: the system's stand in for
+them). A file vectorcraft saved compressed is shown too, unpacked by the tar backend.
+
+Opening a drawing parses it once, to know its artboards (a few milliseconds; 50 for 20,000
+shapes, on an M3 Max), and keeps only their sizes: shown, it is parsed again, and kept while it
+is, with what vectorcraft keeps between renders of it. A file larger than 256 MiB is refused, and
+an artboard drawn wider or taller than 16,384 pixels, or with more than 64 million, fails, as a
+document's page does. A page that takes more than 10 seconds to draw is stopped, and fails with
+why. The pictures a drawing embeds are decoded within vectorcraft's own limits (up to 2 GiB each),
+and kept, all drawings' together, within 64 MiB. What vectorcraft holds while it draws a page
+can come to a few hundred MB for a complex one at a large size. Why it is drawn this way is in
+[ADR-0007](adr/0007-vectorcraft-drawings-through-its-format-and-renderer.md).
 
 ## Paging through a document
 

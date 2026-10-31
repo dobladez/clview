@@ -8,6 +8,7 @@ mod pdfcraft;
 mod pdfcraft_pin;
 mod resvg;
 mod tar;
+mod vectorcraft;
 mod view;
 mod view_pager;
 mod view_tmux;

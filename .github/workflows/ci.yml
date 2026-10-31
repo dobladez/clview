@@ -74,3 +74,7 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features sheet --all-targets -- -D warnings
           cargo test --locked --no-default-features --features sheet
+      - name: vector alone
+        run: |
+          cargo clippy --locked --no-default-features --features vector --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features vector

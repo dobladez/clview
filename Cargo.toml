@@ -62,11 +62,19 @@ wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "5b58
 gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", optional = true }
 # The parameters of a gridcraft command (fitting a CSV's columns), already in its tree.
 serde_json = { version = "1", optional = true }
+# Vector drawings saved by vectorcraft (`.vectorcraft`, and `.drawcraft` from before its rename),
+# read and drawn in Rust by vectorcraft, a git dependency like pdfcraft and wordcraft, from one
+# pinned commit (every `rev` below moves together; tests/it/vectorcraft.rs checks it). Its format,
+# document and renderer crates only: not its engine or importers, which bring PDF export and the
+# [patch.crates-io] that needs. Text in the system's fonts: not its bundled ones.
+vectorcraft-format = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44", optional = true }
+vectorcraft-render = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44", optional = true }
+vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44", optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "svg", "zip", "tar", "word", "sheet"]
+default = ["pdf", "image", "svg", "zip", "tar", "word", "sheet", "vector"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
@@ -87,6 +95,9 @@ word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:
 # through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate
 # to see what an xlsx's sheets unpack to before gridcraft reads them.
 sheet = ["dep:gridcraft-engine", "dep:zip", "dep:serde_json", "pdf"]
+# Vector drawings saved by vectorcraft, each artboard a page: `source/vectorcraft.rs`, which draws
+# them through vectorcraft.
+vector = ["dep:vectorcraft-format", "dep:vectorcraft-render", "dep:vectorcraft-doc"]
 
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
@@ -109,6 +120,12 @@ wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810
 # Encrypted workbooks for the spreadsheet backend's own tests (tests/it/gridcraft.rs): its
 # `test-support` feature, never in a build of clv.
 gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", features = ["test-support"] }
+# Drawings for the vectorcraft backend's own tests (tests/it/vectorcraft.rs), made and saved by
+# vectorcraft itself.
+vectorcraft-format = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44" }
+vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44" }
+vectorcraft-geom = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44" }
+vectorcraft-color = { git = "https://github.com/storytold/vectorcraft", rev = "1660cd1b41be81a7d00cdf0d7ce889305ed63b44" }
 proptest = "1"
 serde_json = "1"
 toml = "0.9"

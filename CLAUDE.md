@@ -25,9 +25,11 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   needs patches), a git dependency pinned like pdfcraft (ADR-0005). `gridcraft.rs` (feature
   `sheet`, default, asked fourth, before zip) prints spreadsheets (xlsx, xls, xlsb, ods, csv) to a
   PDF through gridcraft's engine and opens that with whichever backend opens PDFs, found through
-  `BACKENDS`, never by name; `sheet` brings `pdf` (ADR-0006). `source/head.rs` reads a zip's
-  first files for both. `source/tree.rs` is the directories an archive's names make, for zip and
-  tar.
+  `BACKENDS`, never by name; `sheet` brings `pdf` (ADR-0006). `vectorcraft.rs` (feature `vector`,
+  default, asked fifth) draws vectorcraft's drawings, each artboard a page, through its format,
+  document and renderer crates, pinned the same way, a watchdog thread stopping a render past its
+  time (ADR-0007). `source/head.rs` reads a zip's first files for the Word and spreadsheet
+  backends. `source/tree.rs` is the directories an archive's names make, for zip and tar.
 - **A backend's library is its own.** pdfcraft is named only in `src/source/pdfcraft.rs`, its
   tests (`tests/it/pdfcraft*.rs`), `Cargo.toml`, the line listing it in `source::BACKENDS`, and
   the backend tables in the README and `docs/cli-view.md`; swapping the PDF renderer must touch
@@ -39,7 +41,8 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   there and in the SVG backend, for svgz); wordcraft only in `src/source/wordcraft.rs`,
   `tests/it/wordcraft.rs` (which checks it and the pin), `Cargo.toml` and the tables; gridcraft
   only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks it and the pin),
-  `Cargo.toml` and the tables.
+  `Cargo.toml` and the tables; vectorcraft only in `src/source/vectorcraft.rs`,
+  `tests/it/vectorcraft.rs` (which checks it and the pin), `Cargo.toml` and the tables.
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
   backend with nothing better (images, drawings) lends its render function to `source/threads.rs`.
@@ -67,7 +70,9 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   `[patch.crates-io]` ones included; `tests/it/pdfcraft_pin.rs` checks it. **The wordcraft pin:**
   every wordcraft `rev` moves together too, and no crate wordcraft patches may be built here, since
   its patches don't reach us; `tests/it/wordcraft.rs` checks both. Likewise gridcraft's, which
-  `tests/it/gridcraft.rs` checks.
+  `tests/it/gridcraft.rs` checks. **The vectorcraft pin:** the same, except that a crate
+  vectorcraft patches may be built here for another backend (hayro, for the PDF one), only not for
+  vectorcraft's crates; `tests/it/vectorcraft.rs` checks it.
 - **Record decisions in an ADR** (`docs/adr/`, its README says when and how): a choice between
   real alternatives that a later reader would otherwise undo or redo, above all one resting on a
   measurement or an observed terminal behaviour, or a fix measured and rejected. Write it in the
@@ -82,7 +87,7 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
 the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
 and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
-too (`--no-default-features --features image`, then `pdf`, then `svg`, then `zip`, then `tar`, then `word`, then `sheet`). Run them under a `timeout`. The PDF
+too (`--no-default-features --features image`, then `pdf`, then `svg`, then `zip`, then `tar`, then `word`, then `sheet`, then `vector`). Run them under a `timeout`. The PDF
 backend is a large build: keep `-j 2` unless the machine is free. CI
 (`.github/workflows/ci.yml`) runs them all on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 
