@@ -15,6 +15,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0001 | [Delete pages printed inside tmux once no pane holds them](0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) | Accepted |
 | 0002 | [Render SVG with resvg](0002-render-svg-with-resvg.md) | Accepted |
 | 0003 | [Bound what a drawing costs before usvg and resvg spend it](0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) | Accepted |
+| 0004 | [Read a compressed tar through once, into a file nothing names](0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md) | Accepted |
 
 ## When to write one
 

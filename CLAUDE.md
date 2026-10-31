@@ -16,14 +16,20 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   than pages (`Opened::Files`), its files read from it on demand, never unpacked to disk;
   `svg.rs` (feature `svg`, default, asked first) renders SVG drawings through resvg, within
   limits of its own on what a drawing costs to parse and render (ADR-0003), since resvg's are
-  few.
+  few; `tar.rs` (feature `tar`, default, asked second) opens tar archives, plain or compressed
+  with gzip (flate2), bzip2 or xz (lzma-rust2), to a `Container`, read through once on a thread of
+  its own (`Container::ready`) into a temporary file removed as soon as it is made (ADR-0004), and
+  a file compressed alone as what it unpacks to. `source/tree.rs` is the directories an archive's
+  names make, for zip and tar.
 - **A backend's library is its own.** pdfcraft is named only in `src/source/pdfcraft.rs`, its
   tests (`tests/it/pdfcraft*.rs`), `Cargo.toml`, the line listing it in `source::BACKENDS`, and
   the backend tables in the README and `docs/cli-view.md`; swapping the PDF renderer must touch
   nothing else. `tests/it/pdfcraft.rs` checks the code. The generic tests write their PDFs by hand
   (`tests/it/fixtures.rs`), so any PDF backend reads them. Likewise resvg and what it renders
   with (usvg, tiny-skia, roxmltree, fontdb): only in `src/source/svg.rs`, `tests/it/resvg.rs`
-  (which checks it), `Cargo.toml` and those tables.
+  (which checks it), `Cargo.toml` and those tables; bzip2 and lzma-rust2 only in
+  `src/source/tar.rs`, `tests/it/tar.rs` (which checks it), `Cargo.toml` and the tables (flate2
+  there and in the SVG backend, for svgz).
 - A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
   backend with nothing better (images, drawings) lends its render function to `source/threads.rs`.
@@ -63,7 +69,7 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
 the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
 and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
-too (`--no-default-features --features image`, then `pdf`, then `svg`, then `zip`). Run them under a `timeout`. The PDF
+too (`--no-default-features --features image`, then `pdf`, then `svg`, then `zip`, then `tar`). Run them under a `timeout`. The PDF
 backend is a large build: keep `-j 2` unless the machine is free. CI
 (`.github/workflows/ci.yml`) runs them all on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 

@@ -84,7 +84,9 @@ at once hold little more than their sizes.
 
 A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
 its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
-which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. They come in the order
+which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. A folder with
+many files says how far opening them has got (`opening photos/… 120 of 500`), and Esc stops
+it. They come in the order
 of their names, numbers by their value (`img2` before `img10`), letters regardless of case,
 subdirectories among the files. Hidden files are left out, and so, without a word, are files no
 backend opens, since a directory holds all sorts. A file a backend opens and can't show (a broken
@@ -112,12 +114,31 @@ when the archive is given; an archive in a directory stays a folder even then, s
 through directories, not into every archive (a jar, a document that is a zip inside). An archive
 in an archive is a folder too.
 
-Nothing is unpacked to disk: a file in an archive is read from it to choose its backend and again,
-whole, when it is drawn, so an archive open holds its list of names, not its files. Hidden names
-are left out, as on disk, and so is macOS's `__MACOSX` directory. A file larger than 512 MiB
-unpacked, an encrypted one, or one packed in a way this build doesn't read (zstd) is left out
-with a warning, as a broken file in a directory is. At most 100,000 entries are read from an
+From a zip, nothing is unpacked to disk: a file in it is read from it to choose its backend and
+again, whole, when it is drawn, so an archive open holds its list of names, not its files. Hidden
+names are left out, as on disk, and so is macOS's `__MACOSX` directory. A file larger than
+512 MiB unpacked, an encrypted one, or one packed in a way this build doesn't read (zstd) is left
+out with a warning, as a broken file in a directory is. At most 100,000 entries are read from an
 archive, 4,096 files listed from a directory in it, and names 32 directories deep.
+
+A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
+`.tar.xz`, `.cbt`…), is shown the same way, with the same limits. A compressed tar has no list of
+its files and can't be read from the middle, so its files are found by reading it through, once,
+when it is given or gone into: the status line says how far (`reading photos.tar.xz/… 40%`), then
+how many of its files are opened, and Esc stops it (`q` still quits). Given on the command line,
+it says so on stderr instead, where Ctrl-C stops it. That reading takes as long as unpacking the
+archive does: here, gzip unpacks some 2,500 MB a second, xz 260 to 420, and bzip2 only 30 to 110.
+It unpacks the archive into a temporary file that nothing names, removed as soon as it is made,
+which goes when you leave the archive, and in any case with clv, however clv ends; files are read
+from there, in any order. At most 4 GiB go there: a file past them is unpacked again from the
+start each time it is read, which is slow, and so is every file when there is no temporary
+directory to write to. At most 32 GiB of an archive are read through. A plain tar is read where
+it is, with nothing unpacked. Links, devices and GNU's sparse files are left out.
+
+A file compressed alone with gzip, bzip2 or xz, not a tar, is shown as the file it unpacks to:
+`paper.pdf.gz` as the PDF, at most 512 MiB unpacked. A file compressed twice is not shown, and
+neither is one that unpacks to what nothing shows. An option only the unpacked file's backend
+takes (`--password` for a `.pdf.gz`) is refused, as an option no backend takes is.
 
 ## Which files it shows
 
@@ -132,6 +153,7 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
 | `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and documents that are zips inside too, as directories ([Archives](#archives)) | none |
+| `tar` (the `tar` feature, on by default) | Tar archives, by a POSIX or GNU header first (`ustar`, its checksum right), as directories; and files compressed with gzip, bzip2 or xz, by their signature: a compressed tar as an archive, anything else as the file it unpacks to ([Archives](#archives)). Asked second, for the reason SVG is first: a tar's first file starts 512 bytes in | none |
 
 PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
 `pdfcraft-cli render` draw them: comments without an appearance of their own are drawn too, and a
@@ -241,7 +263,7 @@ In a list:
 | a number, then `Enter` | that tile |
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
-| `Esc`, `Backspace`, `u` | back (up), in a folder gone into; at the first list, `Esc` quits, the others do nothing |
+| `Esc`, `Backspace`, `u` | back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
 A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:

@@ -62,3 +62,7 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features zip --all-targets -- -D warnings
           cargo test --locked --no-default-features --features zip
+      - name: tar alone
+        run: |
+          cargo clippy --locked --no-default-features --features tar --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features tar

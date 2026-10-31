@@ -3,7 +3,6 @@
 //! its first bytes only to choose a backend, and read again, whole, when it renders. Nothing is
 //! written out: a name in the archive is only ever a name.
 
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::rc::Rc;
@@ -11,21 +10,16 @@ use std::sync::Arc;
 
 use ::zip::ZipArchive;
 
-use super::{Again, Backend, Badge, Container, HEAD, Input, Listed, Listing, Opened, Reopenable};
+use super::tree::Tree;
+use super::{Again, Backend, Badge, Container, HEAD, Input, Listing, Opened, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive is read to: a picture larger than that is more than the
 /// image backend opens, and it bounds what an entry that unpacks without end (a zip bomb) costs.
 const MAX_BYTES: u64 = 512 << 20;
 
-/// The most files and directories listed from a directory in an archive, as from one on disk.
-const MAX_FILES: usize = 4096;
-
 /// The most entries read from an archive's central directory, shown or not.
 const MAX_ENTRIES: usize = 100_000;
-
-/// The most directories down a name in an archive goes.
-const MAX_DEPTH: usize = 32;
 
 /// The zip backend.
 pub(crate) struct Zip;
@@ -86,17 +80,9 @@ impl Archive {
         let cut = zip.len() > MAX_ENTRIES;
         for index in 0..zip.len().min(MAX_ENTRIES) {
             let Some(Ok(name)) = zip.name_for_index(index) else { continue };
-            let parts: Vec<&str> = name.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
-            // Hidden, as on disk (`..` too, which is only a name here), and macOS's copies of
-            // what a file system of its own keeps beside a file.
-            if parts.is_empty() || parts.iter().any(|part| part.starts_with('.') || *part == "__MACOSX") {
-                continue;
+            if let Err(why) = tree.add(&name, false, index) {
+                unread.push((name.to_string(), format!("{path}/{name}: {why}")));
             }
-            if parts.len() > MAX_DEPTH {
-                unread.push((name.to_string(), format!("{path}/{name}: more than {MAX_DEPTH} directories down")));
-                continue;
-            }
-            tree.insert(&parts, name.ends_with('/'), index);
         }
         Ok(Self { path, zip, tree, unread, cut })
     }
@@ -138,52 +124,6 @@ fn caught<T>(read: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| Err("the archive reader failed on it".into()))
 }
 
-/// A directory in an archive, by the names in it.
-#[derive(Default)]
-struct Tree {
-    /// By name: each file's index in the archive.
-    files: BTreeMap<String, usize>,
-    directories: BTreeMap<String, Tree>,
-}
-
-impl Tree {
-    /// The entry at `index`, named by `parts`: a file, or a directory when `directory`.
-    fn insert(&mut self, parts: &[&str], directory: bool, index: usize) {
-        let Some((last, above)) = parts.split_last() else { return };
-        let mut tree = self;
-        for part in above {
-            tree = tree.directories.entry((*part).to_owned()).or_default();
-        }
-        if directory {
-            tree.directories.entry((*last).to_owned()).or_default();
-        } else {
-            // The first of two entries of the same name.
-            tree.files.entry((*last).to_owned()).or_insert(index);
-        }
-    }
-
-    /// The directory `at` down from this one.
-    fn find(&self, at: &[String]) -> Option<&Tree> {
-        at.iter().try_fold(self, |tree, part| tree.directories.get(part))
-    }
-
-    /// Its files and directories, in the order a directory on disk lists them.
-    fn entries(&self) -> Vec<(&str, Entry<'_>)> {
-        let files = self.files.keys().map(|name| (name.as_str(), Entry::File));
-        let directories = self.directories.iter().map(|(name, tree)| (name.as_str(), Entry::Directory(tree)));
-        let mut entries: Vec<_> = files.chain(directories).collect();
-        entries.sort_by(|(a, _), (b, _)| super::dir::natural(a, b));
-        entries
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Entry<'a> {
-    /// Opened by its name ([`Directory::open`]).
-    File,
-    Directory(&'a Tree),
-}
-
 /// A directory in an archive, the archive's top or one in it, as a container.
 struct Directory {
     archive: Arc<Archive>,
@@ -199,44 +139,19 @@ impl Container for Directory {
     }
 
     fn list(&self, recurse: bool) -> Result<Listing, String> {
-        let tree = self.archive.tree.find(&self.at).ok_or_else(|| format!("{}: not in the archive", self.path))?;
-        let mut listing = Listing::default();
+        let inner =
+            |at, name: &str| -> Rc<dyn Container> { Rc::new(Directory { archive: self.archive.clone(), at, path: format!("{}/{name}", self.path) }) };
+        let mut listing = self.archive.tree.list(&self.at, recurse, inner).ok_or_else(|| format!("{}: not in the archive", self.path))?;
         if self.at.is_empty() {
             listing.unread.clone_from(&self.archive.unread);
-            listing.cut = self.archive.cut;
-        }
-        // Each directory being listed, from this one down: the prefix of its names, and the
-        // entries left. Directories in an archive go at most `MAX_DEPTH` down.
-        let mut open = vec![(String::new(), tree.entries().into_iter())];
-        while let Some((prefix, mut left)) = open.pop() {
-            let Some((name, entry)) = left.next() else { continue };
-            open.push((prefix.clone(), left));
-            if listing.entries.len() >= MAX_FILES {
-                listing.cut = true;
-                break;
-            }
-            let name = format!("{prefix}{name}");
-            match entry {
-                Entry::File => listing.entries.push(Listed { name, container: None }),
-                Entry::Directory(tree) if recurse => open.push((format!("{name}/"), tree.entries().into_iter())),
-                Entry::Directory(_) => {
-                    let at = self.at.iter().cloned().chain(name.split('/').map(String::from)).collect();
-                    let inner = Directory { archive: self.archive.clone(), at, path: format!("{}/{name}", self.path) };
-                    listing.entries.push(Listed { name, container: Some(Rc::new(inner)) });
-                }
-            }
+            listing.cut |= self.archive.cut;
         }
         Ok(listing)
     }
 
     fn open(&self, name: &str) -> Result<Input, String> {
         let path = format!("{}/{name}", self.path);
-        let parts: Vec<&str> = name.split('/').collect();
-        let index = parts.split_last().and_then(|(file, above)| {
-            let at: Vec<String> = self.at.iter().cloned().chain(above.iter().map(|part| (*part).to_owned())).collect();
-            self.archive.tree.find(&at)?.files.get(*file).copied()
-        });
-        let index = index.ok_or_else(|| format!("{path}: not in the archive"))?;
+        let index = self.archive.tree.file(&self.at, name).ok_or_else(|| format!("{path}: not in the archive"))?;
         let head = self.archive.head(index).map_err(|e| format!("{path}: {e}"))?;
         let archive = self.archive.clone();
         let again: Again = Arc::new(move || archive.whole(index, MAX_BYTES));
@@ -312,6 +227,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::source::tree::{MAX_DEPTH, MAX_FILES};
 
     /// An archive of `files`, by name and contents: a name ending in `/` is a directory, and the
     /// contents are deflated.
@@ -464,7 +380,7 @@ mod tests {
         }
         // Larger unpacked than read: by what the archive says, before reading it.
         let archive = Archive::read(path.clone(), Reader::Disk { path: Arc::from(path.as_str()), file: None, at: 0 }).unwrap();
-        let index = archive.tree.files["open.txt"];
+        let index = archive.tree.file(&[], "open.txt").unwrap();
         assert!(archive.whole(index, 99).is_err_and(|e| e.contains("unpacks to more than")));
         assert_eq!(archive.whole(index, 100).unwrap(), [7; 100]);
         // Not an archive after all.

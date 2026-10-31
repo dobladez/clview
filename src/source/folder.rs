@@ -29,7 +29,7 @@ pub(crate) enum Badge {
     #[default]
     None,
     /// Tied up as a parcel, tape down and across it and a bow where they cross: an archive.
-    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives are parcels"))]
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives are parcels"))]
     Parcel,
 }
 

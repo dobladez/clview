@@ -29,7 +29,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::encode::PngEffort;
-use crate::source::{Container, Frame, Pool, Source};
+use crate::source::{Container, Frame, Pool, Ready, Source};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -37,8 +37,8 @@ use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
-    Contents, FALLBACK_SIZE, Item, Output, Pages, QUIET, Shown, Terminal, chars, checked, cut, label, left_out_note, page_layout, page_size, png,
-    printable, request, tmux,
+    FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, chars, checked, cut, label,
+    left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -120,8 +120,9 @@ const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 
 /// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
 /// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A container gone into
-/// from a list is listed by `open_container`. Returns what the reader should know once the screen
-/// is back: why the files those containers left out were.
+/// from a list is listed by `opener`, a few files at a time, saying how far it has got. Returns
+/// what the reader should know once the screen is back: why the files those containers left out
+/// were.
 pub(super) fn run(
     tty: &Tty,
     shown: Shown,
@@ -129,7 +130,7 @@ pub(super) fn run(
     terminal: &Terminal,
     zoom: Zoom,
     first_id: u64,
-    open_container: &dyn Fn(&dyn Container) -> Contents,
+    opener: &Opener<'_, '_>,
 ) -> Result<Vec<String>, String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
@@ -148,6 +149,7 @@ pub(super) fn run(
         tty,
         level,
         parents: Vec::new(),
+        reading: None,
         levels: 1,
         later: Vec::new(),
         output: terminal.output,
@@ -191,6 +193,11 @@ pub(super) fn run(
     loop {
         let wait = if !pending.is_empty() {
             ESCAPE_WAIT
+        } else if pager.reading.as_ref().is_some_and(|r| r.opening.is_some()) {
+            // Opening a container's files: only a look for keys between them.
+            Duration::ZERO
+        } else if pager.reading.is_some() {
+            PROGRESS_EVERY.min(TICK)
         } else if !pager.wanted.is_empty() && !pager.hidden {
             POLL
         } else {
@@ -223,19 +230,33 @@ pub(super) fn run(
                     continue;
                 }
                 redraw = true;
+                // Reading a container gone into: Esc (or the others that go back) stops it, and
+                // the keys that quit, quit. Nothing else moves meanwhile.
+                if pager.reading.is_some() {
+                    match key {
+                        Key::Char('q') | Key::Interrupt => quit = true,
+                        Key::Escape | Key::Backspace | Key::Char('u') => pager.stop_reading(),
+                        _ => {}
+                    }
+                    if quit {
+                        break;
+                    }
+                    continue;
+                }
                 match pager.level.nav.key(key) {
                     Step::Continue => {}
                     // Esc at the top, where there is nothing to go back to, quits.
                     Step::Quit => quit = true,
                     Step::Leave if pager.parents.is_empty() => quit = true,
                     Step::Leave | Step::Back => pager.back()?,
-                    Step::Open(at) => pager.open(at, open_container)?,
+                    Step::Open(at) => pager.open(at, opener)?,
                 }
                 if quit {
                     break;
                 }
             }
             if quit {
+                pager.stop_reading();
                 pager.await_answers();
                 break;
             }
@@ -244,6 +265,9 @@ pub(super) fn run(
             let now = tty.size();
             redraw = now != size;
             size = now;
+        }
+        if pager.reading.is_some() {
+            redraw |= pager.read_on(opener)?;
         }
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
@@ -710,6 +734,8 @@ struct Level {
     /// A file's name; for a list, what its items' names follow: the directories gone into from
     /// the first list.
     name: String,
+    /// The container it lists, gone into from a list: told when the reader leaves it.
+    from: Option<Rc<dyn Container>>,
 }
 
 impl Level {
@@ -719,7 +745,7 @@ impl Level {
         let list = shown.is_list();
         let Shown { pages: Pages { source, name, pages }, items } = shown;
         let nav = Nav { list, nested, hint: !(list && nested), ..Nav::new(pages, source.pages(), zoom) };
-        Self { id, pool: source.pool(THREADS), source, nav, items, name }
+        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
@@ -738,6 +764,8 @@ struct Pager<'a> {
     /// What is on screen, and what it was opened from, the first list first.
     level: Level,
     parents: Vec<Level>,
+    /// A container gone into, being read or its files opened before it shows.
+    reading: Option<Reading>,
     /// Levels made so far, for their ids.
     levels: u64,
     /// What the reader should know once the screen is back.
@@ -782,6 +810,15 @@ struct Pager<'a> {
     stalled_files: Option<Files>,
     /// When the last placements went out: their errors are answered.
     placed_at: Option<Instant>,
+}
+
+/// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
+/// name from the first list, and since when.
+struct Reading {
+    name: String,
+    container: Rc<dyn Container>,
+    opening: Option<Opening>,
+    since: Instant,
 }
 
 /// A page ready to send.
@@ -905,33 +942,99 @@ impl Pager<'_> {
         grid
     }
 
-    /// Open the list's item at `at`: a file to its pages, a container, listed by `open_container`,
-    /// to a list of its own. What was on screen stops rendering, and waits to be gone back to.
-    fn open(&mut self, at: usize, open_container: &dyn Fn(&dyn Container) -> Contents) -> Result<(), String> {
-        let id = self.levels;
+    /// Open the list's item at `at`: a file to its pages, or a container, listed by `opener`, to a
+    /// list of its own, once read ([`Pager::read_on`]). What was on screen stops rendering, and
+    /// waits to be gone back to.
+    fn open(&mut self, at: usize, opener: &Opener<'_, '_>) -> Result<(), String> {
         let level = match self.level.items.get(at) {
             Some(Item::File(pages)) => {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
-                Level::new(id, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
+                Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
             }
             Some(Item::Container { name, container }) => {
-                // Its files are opened now, which takes a while for large ones: said first.
+                // Read, and its files opened, which takes a while for large ones: said first.
                 let (name, container) = (format!("{}{name}", self.level.name), container.clone());
                 self.level.nav.message = Some(format!("opening {name}…"));
                 self.draw()?;
-                self.level.nav.message = None;
-                let Contents { items, left_out, warnings } = open_container(&*container);
-                self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
-                if items.is_empty() {
-                    self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
-                    return Ok(());
-                }
-                let mut level = Level::new(id, Shown::list(items, name), self.level.nav.zoom, true);
-                level.nav.message = left_out_note(&left_out);
-                level
+                self.reading = Some(Reading { name, container, opening: None, since: Instant::now() });
+                self.read_on(opener)?;
+                return Ok(());
             }
             None => return Ok(()),
         };
+        self.enter(level);
+        Ok(())
+    }
+
+    /// Read on the container gone into: how far it has got on the status line, until its files are
+    /// opened and it shows, as a level of its own. Whether it does now.
+    fn read_on(&mut self, opener: &Opener<'_, '_>) -> Result<bool, String> {
+        let Some(gone_into) = self.reading.as_mut() else { return Ok(false) };
+        let opening = match gone_into.opening.as_mut() {
+            Some(opening) => opening,
+            None => match gone_into.container.ready() {
+                Ready::Reading { read, of } => {
+                    let said = reading(&gone_into.name, read, of);
+                    return self.say(said).map(|()| false);
+                }
+                Ready::Now => match opener.begin(gone_into.container.clone(), "", false) {
+                    Ok(opening) => gone_into.opening.insert(opening),
+                    Err(why) => {
+                        let Some(Reading { name, .. }) = self.reading.take() else { return Ok(false) };
+                        self.later.push(why.1);
+                        self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
+                        return Ok(true);
+                    }
+                },
+            },
+        };
+        if !opener.step(opening, Some(Instant::now() + PROGRESS_EVERY)) {
+            let said = match gone_into.since.elapsed() >= PROGRESS_AFTER {
+                true => opened(&gone_into.name, opening.done()),
+                false => format!("opening {}…", gone_into.name),
+            };
+            return self.say(said).map(|()| false);
+        }
+        let Some(Reading { name, container, opening: Some(opening), .. }) = self.reading.take() else { return Ok(false) };
+        let mut found = Found::default();
+        opener.finish(&mut found, opening);
+        let Found { items, left_out, warnings, .. } = found;
+        self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
+        if items.is_empty() {
+            self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
+            return Ok(true);
+        }
+        self.level.nav.message = None;
+        let mut level = Level::new(self.levels, Shown::list(items, name), self.level.nav.zoom, true);
+        level.nav.message = left_out_note(&left_out);
+        level.from = Some(container);
+        self.enter(level);
+        Ok(true)
+    }
+
+    /// Stop reading the container gone into, if one is: it lets go of what it read.
+    fn stop_reading(&mut self) {
+        if let Some(Reading { name, container, .. }) = self.reading.take() {
+            container.release();
+            self.level.nav.message = Some(format!("stopped opening {name}"));
+        }
+    }
+
+    /// `said` on the status line, the rest of the screen as it is.
+    fn say(&mut self, said: String) -> Result<(), String> {
+        let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
+        self.level.nav.message = Some(said);
+        let mut out = Vec::new();
+        cursor(&mut out, size.rows.saturating_sub(1), 0);
+        out.extend_from_slice(b"\x1b[2K\x1b[7m");
+        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, true).as_bytes());
+        out.extend_from_slice(b"\x1b[0m");
+        self.wrote(0);
+        self.tty.write_all(&out)
+    }
+
+    /// Show `level`, opened from this one, which waits to be gone back to.
+    fn enter(&mut self, level: Level) {
         self.levels = self.levels.wrapping_add(1);
         // A fresh pool, holding nothing: the old one lets go of what its files rendered with,
         // which for a PDF is the document parsed again.
@@ -939,14 +1042,19 @@ impl Pager<'_> {
         self.wanted.clear();
         let parent = std::mem::replace(&mut self.level, level);
         self.parents.push(parent);
-        Ok(())
     }
 
     /// Back to what the reader opened this from, as they left it. What this showed goes from the
     /// terminal: going back to it opens it anew.
     fn back(&mut self) -> Result<(), String> {
         let Some(parent) = self.parents.pop() else { return Ok(()) };
-        let gone = std::mem::replace(&mut self.level, parent).id;
+        let left = std::mem::replace(&mut self.level, parent);
+        // What it read its files with goes; what they render with, with its pool.
+        if let Some(container) = &left.from {
+            container.release();
+        }
+        let gone = left.id;
+        drop(left);
         let mut out = Vec::new();
         let wrap = self.output.wrap();
         for sent in self.sent.iter().filter(|s| s.view.level == gone) {

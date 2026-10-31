@@ -21,7 +21,7 @@ use encode::PngEffort;
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Opened, Part, Request, Source};
+use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Listing, Opened, Part, Ready, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -298,7 +298,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let said = left_out_note(&left_out);
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
-        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &|container: &dyn Container| opener.contents(container))?;
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener)?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());
@@ -396,12 +396,29 @@ fn tiles(items: &[Item]) -> Joined {
     Joined::new(items.iter().map(part).collect())
 }
 
-/// What a container gone into shows: its files and the containers in it, what of them couldn't be
-/// shown, and why, and what else the reader should know.
-pub(super) struct Contents {
-    pub(super) items: Vec<Item>,
-    pub(super) left_out: Vec<(String, String)>,
-    pub(super) warnings: Vec<String>,
+/// A container's files being opened, a few at a time ([`Opener::step`]), so that the pager can say
+/// how far it has got and the reader can stop it.
+pub(super) struct Opening {
+    container: Rc<dyn Container>,
+    prefix: String,
+    listing: Listing,
+    /// The order its entries are opened in: the container's quickest, or as listed.
+    order: Vec<usize>,
+    /// How many of `order` are opened.
+    next: usize,
+    /// Each entry's file, by its place in the listing, once opened.
+    opened: Vec<Option<Chosen>>,
+}
+
+/// A file as [`Opener::file`] opens it: with the backend that opened it, a tile; `None` for a file
+/// no backend opens; or why it can't be shown.
+type Chosen = Result<Option<(&'static dyn Backend, Item)>, String>;
+
+impl Opening {
+    /// How many of its entries are opened, and of how many.
+    pub(super) fn done(&self) -> (usize, usize) {
+        (self.next, self.order.len())
+    }
 }
 
 /// The file arguments: the arguments that are neither an option nor an option's value.
@@ -413,7 +430,7 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
 }
 
 /// Opens files for the viewer: with the first of `backends` that opens each, with `options`.
-struct Opener<'o, 'a> {
+pub(super) struct Opener<'o, 'a> {
     backends: &'o [&'static dyn Backend],
     options: &'o Parsed<'a>,
 }
@@ -458,9 +475,9 @@ impl Opener<'_, '_> {
             };
             match (paths.len(), recurse) {
                 // Alone, its contents, named from it.
-                (1, _) => self.list(&mut found, &*container, "", recurse),
+                (1, _) => self.list(&mut found, container, "", recurse),
                 // Among others, recursing: its files, named from its own name.
-                (_, true) => self.list(&mut found, &*container, &format!("{name}/"), true),
+                (_, true) => self.list(&mut found, container, &format!("{name}/"), true),
                 (_, false) => found.items.push(Item::Container { name: format!("{name}/"), container }),
             }
         }
@@ -482,32 +499,74 @@ impl Opener<'_, '_> {
         Ok(Given { shown: Shown::list(items, String::new()), left_out, warnings })
     }
 
-    /// What `container` shows, gone into from a list: its files and the containers in it, named
-    /// from it.
-    fn contents(&self, container: &dyn Container) -> Contents {
-        let mut found = Found::default();
-        self.list(&mut found, container, "", false);
-        Contents { items: found.items, left_out: found.left_out, warnings: found.warnings }
+    /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
+    /// otherwise), each named `prefix` and its name in the container: read, listed and opened at
+    /// once, saying how far it has got on stderr while that takes a while.
+    fn list(&self, found: &mut Found, container: Rc<dyn Container>, prefix: &str, recurse: bool) {
+        let mut progress = Progress::new();
+        let name = file_name(container.path());
+        while let Ready::Reading { read, of } = container.ready() {
+            progress.say(&reading(&name, read, of));
+            std::thread::sleep(PROGRESS_EVERY);
+        }
+        match self.begin(container, prefix, recurse) {
+            Ok(mut opening) => {
+                while !self.step(&mut opening, Some(Instant::now() + PROGRESS_EVERY)) {
+                    progress.say(&opened(&name, opening.done()));
+                }
+                self.finish(found, opening);
+            }
+            Err(left) => found.left_out.push(left),
+        }
+        progress.done();
     }
 
-    /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
-    /// otherwise), each named `prefix` and its name in the container.
-    fn list(&self, found: &mut Found, container: &dyn Container, prefix: &str, recurse: bool) {
-        let path = container.path();
-        let listing = match container.list(recurse) {
-            Ok(listing) => listing,
-            Err(why) => return found.left_out.push((file_name(path), why)),
+    /// `container` listed, to open its files (its containers' too if `recurse`; its containers
+    /// otherwise), each named `prefix` and its name in it; or the container's name and why it
+    /// can't be listed.
+    pub(super) fn begin(&self, container: Rc<dyn Container>, prefix: &str, recurse: bool) -> Result<Opening, (String, String)> {
+        let listing = container.list(recurse).map_err(|why| (file_name(container.path()), why))?;
+        let count = listing.entries.len();
+        // The container's order, if it is one: each entry once.
+        let mut sorted = listing.quickest.clone();
+        sorted.sort_unstable();
+        let order = match sorted.into_iter().eq(0..count) {
+            true => listing.quickest.clone(),
+            false => (0..count).collect(),
         };
+        Ok(Opening { container, prefix: prefix.to_owned(), opened: (0..count).map(|_| None).collect(), order, next: 0, listing })
+    }
+
+    /// Open `opening`'s files until `until`, or all of them: whether all are.
+    pub(super) fn step(&self, opening: &mut Opening, until: Option<Instant>) -> bool {
+        while let Some(&at) = opening.order.get(opening.next) {
+            if until.is_some_and(|until| Instant::now() >= until) {
+                return false;
+            }
+            opening.next = opening.next.saturating_add(1);
+            let (Some(entry), Some(slot)) = (opening.listing.entries.get(at), opening.opened.get_mut(at)) else { continue };
+            // A file that nothing shows is passed over: a directory holds all sorts.
+            if entry.container.is_none() {
+                let name = format!("{}{}", opening.prefix, entry.name);
+                let shown = opening.container.open(&entry.name).map(|input| crate::source::shown_by(input, self.backends));
+                *slot = Some(shown.and_then(|chosen| self.file(chosen, &name)));
+            }
+        }
+        true
+    }
+
+    /// Into `found`, in the order listed, the files `opening` opened and the containers in it,
+    /// and what it left out.
+    pub(super) fn finish(&self, found: &mut Found, opening: Opening) {
+        let Opening { container, prefix, listing, opened, .. } = opening;
+        let path = container.path();
         let (before, listed) = (found.items.len(), listing.entries.len());
-        for entry in listing.entries {
+        for (entry, opened) in listing.entries.into_iter().zip(opened) {
             let name = format!("{prefix}{}", entry.name);
-            match entry.container {
-                Some(inner) => found.items.push(Item::Container { name: format!("{name}/"), container: inner }),
-                // A file that nothing shows is passed over: a directory holds all sorts.
-                None => {
-                    let shown = container.open(&entry.name).map(|input| crate::source::shown_by(input, self.backends));
-                    found.file(shown.and_then(|chosen| self.file(chosen, &name)), name);
-                }
+            match (entry.container, opened) {
+                (Some(inner), _) => found.items.push(Item::Container { name: format!("{name}/"), container: inner }),
+                (None, Some(opened)) => found.file(opened, name),
+                (None, None) => {}
             }
         }
         found.left_out.extend(listing.unread);
@@ -522,7 +581,7 @@ impl Opener<'_, '_> {
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
     /// its pages, or for a file that holds files, to a container of them. A file no backend
     /// opens, `None`, is none.
-    fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str) -> Result<Option<(&'static dyn Backend, Item)>, String> {
+    fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str) -> Chosen {
         let Some((backend, input)) = chosen else { return Ok(None) };
         let path = input.path.clone();
         let item = match backend.open(input, self.options)? {
@@ -539,19 +598,64 @@ fn counted(count: usize, unit: &str) -> String {
     format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
 }
 
+/// How often a container being read or opened says how far it has got.
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+
+/// How long listing a container takes before it says how far it has got.
+const PROGRESS_AFTER: Duration = Duration::from_millis(300);
+
+/// What a container still reading itself has got to: `reading photos.tar.gz… 40%`.
+pub(super) fn reading(name: &str, read: u64, of: Option<u64>) -> String {
+    match of.filter(|of| *of > 0) {
+        Some(of) => format!("reading {name}… {}%", read.saturating_mul(100).checked_div(of).unwrap_or(0).min(100)),
+        None => format!("reading {name}… {} MB", read >> 20),
+    }
+}
+
+/// What opening a container's files has got to: `opening photos.tar.gz… 120 of 500`.
+pub(super) fn opened(name: &str, (done, of): (usize, usize)) -> String {
+    format!("opening {name}… {done} of {of}")
+}
+
+/// Says on stderr, over and over on one line, how far listing a container has got: once it has
+/// taken [`PROGRESS_AFTER`], when stderr is a terminal. Gone once done.
+struct Progress {
+    since: Instant,
+    said: bool,
+}
+
+impl Progress {
+    fn new() -> Self {
+        Self { since: Instant::now(), said: false }
+    }
+
+    fn say(&mut self, what: &str) {
+        if self.since.elapsed() >= PROGRESS_AFTER && std::io::stderr().is_terminal() {
+            let _ = write!(std::io::stderr().lock(), "\r\x1b[K{}: {}", crate::NAME, printable(what));
+            self.said = true;
+        }
+    }
+
+    fn done(&self) {
+        if self.said {
+            let _ = write!(std::io::stderr().lock(), "\r\x1b[K");
+        }
+    }
+}
+
 /// What [`Opener::open`] has found so far: the tiles, the backends that opened their files, the
 /// files left out, with why, and what else to say.
 #[derive(Default)]
-struct Found {
-    items: Vec<Item>,
+pub(super) struct Found {
+    pub(super) items: Vec<Item>,
     used: Vec<&'static dyn Backend>,
-    left_out: Vec<(String, String)>,
-    warnings: Vec<String>,
+    pub(super) left_out: Vec<(String, String)>,
+    pub(super) warnings: Vec<String>,
 }
 
 impl Found {
     /// The file called `name`, as [`Opener::file`] opened it.
-    fn file(&mut self, opened: Result<Option<(&'static dyn Backend, Item)>, String>, name: String) {
+    fn file(&mut self, opened: Chosen, name: String) {
         match opened {
             Ok(Some((backend, item))) => {
                 if !self.used.iter().any(|b| b.name() == backend.name()) {
@@ -1027,6 +1131,51 @@ mod tests {
         std::fs::remove_dir_all(dir.join("book.arc.d/ch")).unwrap();
         let top = dir.to_str().unwrap();
         assert_eq!(names(&[top], true), ["book.arc/", "book.arc.d/a.pdf", "c.pdf"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A container's files are opened in the order it says is quickest (a compressed tar's, as they
+    /// come in it), and shown in the order listed; an order that isn't each entry once is passed
+    /// over.
+    #[test]
+    fn a_containers_files_are_opened_in_its_quickest_order() {
+        use std::cell::RefCell;
+
+        use crate::source::tests::PDF;
+        use crate::source::{Listed, Listing};
+
+        struct Ordered {
+            dir: std::path::PathBuf,
+            quickest: Vec<usize>,
+            opened: RefCell<Vec<String>>,
+        }
+        impl Container for Ordered {
+            fn path(&self) -> &str {
+                "ordered"
+            }
+            fn list(&self, _recurse: bool) -> Result<Listing, String> {
+                let entries = ["a.pdf", "b.pdf", "c.pdf"].map(|name| Listed { name: name.into(), container: None }).into();
+                Ok(Listing { entries, quickest: self.quickest.clone(), ..Listing::default() })
+            }
+            fn open(&self, name: &str) -> Result<Input, String> {
+                self.opened.borrow_mut().push(name.to_owned());
+                crate::source::choose(self.dir.join(name).to_str().unwrap(), &[&PDF]).map(|(_, input)| input)
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("clview-quickest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            std::fs::write(dir.join(name), b"%PDF-").unwrap();
+        }
+        let given = args(&[]);
+        let opener = Opener { backends: &[&PDF], options: &parsed(&given) };
+        for (quickest, opened) in [(vec![2, 0, 1], ["c.pdf", "a.pdf", "b.pdf"]), (vec![0, 0, 1], ["a.pdf", "b.pdf", "c.pdf"])] {
+            let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: RefCell::default() });
+            let mut found = Found::default();
+            opener.list(&mut found, container.clone(), "", false);
+            assert_eq!(*container.opened.borrow(), opened);
+            assert_eq!(found.items.iter().map(Item::name).collect::<Vec<_>>(), ["a.pdf", "b.pdf", "c.pdf"]);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

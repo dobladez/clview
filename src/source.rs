@@ -11,7 +11,11 @@ mod joined;
 mod pdfcraft;
 #[cfg(feature = "svg")]
 mod svg;
+#[cfg(feature = "tar")]
+mod tar;
 mod threads;
+#[cfg(any(feature = "zip", feature = "tar"))]
+mod tree;
 #[cfg(feature = "zip")]
 mod zip;
 
@@ -28,10 +32,13 @@ pub(crate) use joined::{Joined, Part};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
-/// 1024 bytes, which a drawing's text may hold.
+/// 1024 bytes, which a drawing's text may hold. Tar next, for the same reason: a tar's first file
+/// starts 512 bytes in.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
+    #[cfg(feature = "tar")]
+    &tar::Tar,
     #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
@@ -67,7 +74,7 @@ pub(crate) enum Opened {
         expect(dead_code, reason = "only PDFs, images and drawings have pages")
     )]
     Pages(Box<dyn Source>),
-    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives hold files"))]
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives hold files"))]
     Files(Rc<dyn Container>),
 }
 
@@ -102,7 +109,7 @@ impl Input {
 
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
-    #[cfg_attr(not(any(feature = "zip", test)), expect(dead_code, reason = "only archives hold files"))]
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives hold files"))]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
         Self { path, head, rest: Rest::Held(again) }
     }
@@ -123,7 +130,7 @@ impl Input {
     /// needs meanwhile: on disk, from its start; held in another, how to read it from there;
     /// otherwise the whole of it, read now.
     #[cfg_attr(
-        all(not(feature = "image"), not(feature = "svg"), not(feature = "zip"), not(test)),
+        all(not(feature = "image"), not(feature = "svg"), not(feature = "zip"), not(feature = "tar"), not(test)),
         expect(dead_code, reason = "only images, drawings and archives read their file again")
     )]
     pub(crate) fn reopenable(self) -> Result<Reopenable, String> {
@@ -141,7 +148,7 @@ impl Input {
 
 /// A file as [`Input::reopenable`] gives it.
 #[cfg_attr(
-    not(any(feature = "image", feature = "svg", feature = "zip")),
+    not(any(feature = "image", feature = "svg", feature = "zip", feature = "tar")),
     expect(dead_code, reason = "only images, drawings and archives read their file again")
 )]
 pub(crate) enum Reopenable {
@@ -183,6 +190,26 @@ pub(crate) trait Container {
     fn badge(&self) -> Badge {
         Badge::None
     }
+    /// Whether it lists without waiting, or how far it has got reading itself first: a compressed
+    /// tar is read through, start to end, to find its files. The first call starts that, on a
+    /// thread of its own; [`Container::release`] stops it, and [`Container::list`] waits for it.
+    fn ready(&self) -> Ready {
+        Ready::Now
+    }
+    /// Let go of all that reading it keeps (a compressed tar's unpacked copy and decompressor), a
+    /// reading of itself under way stopped: the reader left it, or stopped going into it. Asked
+    /// again, it reads itself again.
+    fn release(&self) {}
+}
+
+/// How far a container has got reading itself before it lists ([`Container::ready`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ready {
+    /// It lists without waiting.
+    Now,
+    /// Still reading: `read` bytes of `of`, when it knows how many it has.
+    #[cfg_attr(not(feature = "tar"), expect(dead_code, reason = "only compressed tars read themselves first"))]
+    Reading { read: u64, of: Option<u64> },
 }
 
 impl std::fmt::Debug for dyn Container + '_ {
@@ -201,6 +228,9 @@ pub(crate) struct Listing {
     pub(crate) unread: Vec<(String, String)>,
     /// Whether the listing stopped at one of the container's limits before the end.
     pub(crate) cut: bool,
+    /// The order its entries are quickest opened in, by their place in `entries`, when that isn't
+    /// the order they are listed in: a compressed tar's, as its files come in it. Empty otherwise.
+    pub(crate) quickest: Vec<usize>,
 }
 
 /// A file or a container listed.
@@ -462,7 +492,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip")))]
+        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip", feature = "tar")))]
         assert!(BACKENDS.is_empty());
     }
 }

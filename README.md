@@ -14,6 +14,8 @@ clv *.pdf                  # several files: a tile each, Enter opens one
 clv ~/Photos               # a directory: its files, and its subdirectories as folders
 clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
 clv comics.zip             # an archive: its files and directories, as a directory's
+clv photos.tar.xz          # a tar too, plain or compressed, read through once with progress
+clv paper.pdf.gz           # a file compressed alone: the PDF it unpacks to
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
@@ -34,6 +36,7 @@ none of them known to the viewer by name:
 | `image` | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide), in Rust |
 | `svg` | SVG drawings and svgz, drawn at the size shown: text in the system's fonts, embedded pictures, filters; nothing they link to outside the file | [resvg](https://github.com/linebender/resvg), in Rust, within limits of clv's own on what a drawing may cost ([ADR-0002](docs/adr/0002-render-svg-with-resvg.md), [ADR-0003](docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)) |
 | `zip` | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: the files in one that another backend opens, and its directories as folders | the [`zip`](https://crates.io/crates/zip) crate, in Rust: deflate, deflate64, bzip2, LZMA and XZ, not zstd or encrypted entries |
+| `tar` | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories, read through once on a thread of their own while the pager says how far it has got; and a file compressed alone (`paper.pdf.gz`) as the file it unpacks to | in Rust: [flate2](https://crates.io/crates/flate2) (gzip), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2) (xz), and a tar reader of clv's own; unpacked into a temporary file that nothing names ([ADR-0004](docs/adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). Not zstd |
 
 This began as `view` in pdfcraft's command line.
 

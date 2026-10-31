@@ -90,7 +90,14 @@ first, or a folder (`source::Folder`, drawn in code, with the badge its containe
 its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
 pages opened from it, each with its own source and pool; going back drops the level and its
 images in the terminal, and the list's are still there. A container is listed when it is gone
-into, through a function `mod.rs` hands the pager. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
+into, by the `Opener` `mod.rs` hands the pager, without stopping the pager: first
+`Container::ready`, for a container that has to read itself before it lists (a compressed tar,
+read through on a thread of its own), then its files opened a few at a time (`Opening`), in the
+order the container says is quickest (`Listing::quickest`: a tar's, as its files come in it),
+the status line saying how far each has got, and Esc stopping it. Stopping, or leaving the level,
+tells the container (`Container::release`), which lets go of what it read its files with.
+Given on the command line, a container is listed the same way before anything shows, the
+progress on stderr. ADR-0004 has why a compressed tar is read this way. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
 only the last part's renderer, as pages print in order. The pager's pool hands each request to
 its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so
 a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools
