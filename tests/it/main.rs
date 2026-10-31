@@ -3,6 +3,7 @@
 #![cfg(feature = "pdf")]
 
 mod fixtures;
+mod gridcraft;
 mod pdfcraft;
 mod pdfcraft_pin;
 mod resvg;

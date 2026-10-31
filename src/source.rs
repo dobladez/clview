@@ -4,6 +4,10 @@
 
 mod dir;
 mod folder;
+#[cfg(feature = "sheet")]
+mod gridcraft;
+#[cfg(any(feature = "word", feature = "sheet"))]
+mod head;
 #[cfg(feature = "image")]
 mod image;
 mod joined;
@@ -35,8 +39,8 @@ pub(crate) use joined::{Joined, Part};
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
 /// 1024 bytes, which a drawing's text may hold. Tar next, for the same reason: a tar's first file
-/// starts 512 bytes in. Then documents, for the same reason (an RTF's text), and before zip, since
-/// a docx is a zip.
+/// starts 512 bytes in. Then documents, for the same reason (an RTF's text), and spreadsheets,
+/// both before zip, since a docx and an xlsx are zips.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -44,6 +48,8 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &tar::Tar,
     #[cfg(feature = "word")]
     &wordcraft::Wordcraft,
+    #[cfg(feature = "sheet")]
+    &gridcraft::Gridcraft,
     #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
@@ -75,8 +81,8 @@ pub(crate) trait Backend {
 /// What a backend opened a file to.
 pub(crate) enum Opened {
     #[cfg_attr(
-        not(any(feature = "pdf", feature = "image", feature = "svg", feature = "word", test)),
-        expect(dead_code, reason = "only PDFs, images, drawings and documents have pages")
+        not(any(feature = "pdf", feature = "image", feature = "svg", feature = "word", feature = "sheet", test)),
+        expect(dead_code, reason = "only PDFs, images, drawings, documents and spreadsheets have pages")
     )]
     Pages(Box<dyn Source>),
     #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives hold files"))]
@@ -114,7 +120,10 @@ impl Input {
 
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
-    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives hold files"))]
+    #[cfg_attr(
+        not(any(feature = "zip", feature = "tar", feature = "sheet", test)),
+        expect(dead_code, reason = "only archives hold files, and spreadsheets print to them")
+    )]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
         Self { path, head, rest: Rest::Held(again) }
     }
@@ -135,7 +144,15 @@ impl Input {
     /// needs meanwhile: on disk, from its start; held in another, how to read it from there;
     /// otherwise the whole of it, read now.
     #[cfg_attr(
-        all(not(feature = "image"), not(feature = "svg"), not(feature = "zip"), not(feature = "tar"), not(feature = "word"), not(test)),
+        all(
+            not(feature = "image"),
+            not(feature = "svg"),
+            not(feature = "zip"),
+            not(feature = "tar"),
+            not(feature = "word"),
+            not(feature = "sheet"),
+            not(test)
+        ),
         expect(dead_code, reason = "only images, drawings, documents and archives read their file again")
     )]
     pub(crate) fn reopenable(self) -> Result<Reopenable, String> {
@@ -153,7 +170,7 @@ impl Input {
 
 /// A file as [`Input::reopenable`] gives it.
 #[cfg_attr(
-    not(any(feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word")),
+    not(any(feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet")),
     expect(dead_code, reason = "only images, drawings, documents and archives read their file again")
 )]
 pub(crate) enum Reopenable {
@@ -497,7 +514,7 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word")))]
+        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet")))]
         assert!(BACKENDS.is_empty());
     }
 }

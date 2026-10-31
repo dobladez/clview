@@ -18,6 +18,7 @@ use std::sync::{Arc, OnceLock};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
 use wordcraft_render::RenderOptions;
 
+use super::head::{COMPOUND, Names, ZIP, mimetype, named};
 use super::threads::Threads;
 use super::{Again, Backend, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
@@ -78,11 +79,6 @@ const MAX_FILE: u64 = 256 << 20;
 /// The most pixels a page is drawn with: 64 million, 256 MiB.
 const MAX_PIXELS: u64 = 64_000_000;
 
-const ZIP: &[u8] = b"PK\x03\x04";
-
-/// A compound file's signature: a Word 97-2003 document's, or a protected docx's.
-const COMPOUND: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
 /// What a Word document is named: a document, a template, with macros or without, in either
 /// format, since Word opens each by what it holds.
 const WORD_NAMES: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot"];
@@ -112,51 +108,13 @@ impl Kind {
             return Some(Self::Rtf);
         }
         if head.starts_with(ZIP) {
-            if odt(head) || named(path, &["odt", "ott"]) {
+            if mimetype(head).is_some_and(|m| m.starts_with(ODT_TYPE)) || named(path, &["odt", "ott"]) {
                 return Some(Self::Odt);
             }
             let word = Names(head).any(|name| name.starts_with(b"word/"));
             return (word || named(path, WORD_NAMES)).then_some(Self::Package);
         }
         (head.starts_with(COMPOUND) && named(path, WORD_NAMES)).then_some(Self::Compound)
-    }
-}
-
-/// Whether `path` ends in one of `extensions`, in any case.
-fn named(path: &str, extensions: &[&str]) -> bool {
-    Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
-}
-
-/// Whether the zip starting with `head` is OpenDocument text: its first file, `mimetype`, stored
-/// as it is, says so (OpenDocument 1.3 part 2, §3.3).
-fn odt(head: &[u8]) -> bool {
-    let header = |at: usize| head.get(at..at.saturating_add(2)).map_or(0, |b| usize::from(u16::from_le_bytes([b[0], b[1]])));
-    let data = 30usize.saturating_add(header(26)).saturating_add(header(28));
-    head.get(30..38) == Some(b"mimetype") && head.get(data..).is_some_and(|d| d.starts_with(ODT_TYPE))
-}
-
-/// The names of the files a zip starts with, as far as its first bytes go: each local header's,
-/// until one whose size comes after its data, which can't be stepped over.
-struct Names<'a>(&'a [u8]);
-
-impl<'a> Iterator for Names<'a> {
-    type Item = &'a [u8];
-
-    fn next(&mut self) -> Option<&'a [u8]> {
-        let at = self.0;
-        if !at.starts_with(ZIP) {
-            return None;
-        }
-        let u16_at = |i: usize| at.get(i..i + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
-        let u32_at = |i: usize| at.get(i..i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-        let (flags, size, name, extra) = (u16_at(6)?, u32_at(18)?, u16_at(26)?, u16_at(28)?);
-        let name_end = 30usize.checked_add(name)?;
-        let found = at.get(30..name_end)?;
-        // With a data descriptor (bit 3 of the flags), the size in the header may be 0: the next
-        // header isn't where it says.
-        let next = if flags & 0x8 != 0 { None } else { name_end.checked_add(extra)?.checked_add(usize::try_from(size).ok()?) };
-        self.0 = next.and_then(|n| at.get(n..)).unwrap_or_default();
-        Some(found)
     }
 }
 
@@ -329,26 +287,10 @@ fn within(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Write};
-
-    use ::zip::write::SimpleFileOptions;
-    use ::zip::{CompressionMethod, ZipWriter};
     use proptest::prelude::*;
 
+    use super::super::head::zip_head;
     use super::*;
-
-    /// The first [`super::super::HEAD`] bytes of a zip of `files`, by name and contents, in order,
-    /// stored as they are.
-    fn zip_head(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, data) in files {
-            zip.start_file(*name, SimpleFileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
-            zip.write_all(data).unwrap();
-        }
-        let mut bytes = zip.finish().unwrap().into_inner();
-        bytes.truncate(1024);
-        bytes
-    }
 
     const COMPOUND_HEAD: [u8; 16] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -399,19 +341,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zips_names_are_read_as_far_as_its_first_bytes_go() {
-        let head = zip_head(&[("one", b"1"), ("two", &[b'2'; 1000]), ("three", b"3")]);
-        assert_eq!(Names(&head).collect::<Vec<_>>(), [&b"one"[..], b"two"], "the third starts past the head");
-        // A size given after the data (bit 3 of the flags): the next header can't be found.
-        let mut described = zip_head(&[("first", b"data"), ("second", b"more")]);
-        described[6] |= 0x8;
-        assert_eq!(Names(&described).collect::<Vec<_>>(), [&b"first"[..]]);
-        let cut = zip_head(&[("a-long-name", b"x")]);
-        assert_eq!(Names(&cut[..35]).count(), 0, "a name cut short");
-        assert_eq!(Names(b"PK\x03\x04").count(), 0);
-    }
-
-    #[test]
     fn a_page_is_drawn_with_its_size_at_the_scale_rounded_up() {
         assert_eq!(pixels(612.0, 1.0), Ok(612));
         assert_eq!(pixels(200.0, 1.005), Ok(201));
@@ -423,13 +352,11 @@ mod tests {
     }
 
     proptest! {
-        /// Whatever a file starts with, and whatever its name, choosing reads no further than its
-        /// first bytes and never panics.
+        /// Whatever a file starts with, and whatever its name, choosing never panics.
         #[test]
         fn any_first_bytes_are_safe(head in proptest::collection::vec(any::<u8>(), 0..1024), zip in any::<bool>(), name in "[a-z.]{0,8}") {
             let head = if zip { [ZIP, &head].concat() } else { head };
             let _ = Kind::of(&name, &head);
-            prop_assert!(Names(&head).count() <= head.len() / 30 + 1);
         }
     }
 }

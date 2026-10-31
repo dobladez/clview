@@ -70,3 +70,7 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features word --all-targets -- -D warnings
           cargo test --locked --no-default-features --features word
+      - name: sheet alone
+        run: |
+          cargo clippy --locked --no-default-features --features sheet --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features sheet

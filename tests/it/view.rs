@@ -576,6 +576,7 @@ fn shows() -> String {
         ("SVG drawings", cfg!(feature = "svg")),
         ("tar archives and compressed files", cfg!(feature = "tar")),
         ("documents (Word, OpenDocument, RTF)", cfg!(feature = "word")),
+        ("spreadsheets (Excel, OpenDocument, CSV)", cfg!(feature = "sheet")),
         ("PDFs", true),
         ("images", cfg!(feature = "image")),
         ("zip archives", cfg!(feature = "zip")),

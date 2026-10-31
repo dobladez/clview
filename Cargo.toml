@@ -56,11 +56,17 @@ wordcraft-docbin = { git = "https://github.com/storytold/wordcraft", rev = "5b58
 wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
 wordcraft-layout = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
 wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
+# Spreadsheets, read, recalculated and printed to a PDF in Rust by gridcraft's engine, a git
+# dependency like pdfcraft, pinned to one commit of its `main` (tests/it/gridcraft.rs checks it).
+# The engine because its print layout is there; it needs none of the crates gridcraft patches.
+gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", optional = true }
+# The parameters of a gridcraft command (fitting a CSV's columns), already in its tree.
+serde_json = { version = "1", optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "svg", "zip", "tar", "word"]
+default = ["pdf", "image", "svg", "zip", "tar", "word", "sheet"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
@@ -77,6 +83,10 @@ tar = ["dep:flate2", "dep:bzip2", "dep:lzma-rust2"]
 # Word documents (docx, doc), OpenDocument text and RTF: `source/wordcraft.rs`, which lays them
 # out and draws them through wordcraft.
 word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:wordcraft-formats", "dep:wordcraft-layout", "dep:wordcraft-render"]
+# Spreadsheets (xlsx, xls, xlsb, ods, csv): `source/gridcraft.rs`, which prints them to a PDF
+# through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate
+# to see what an xlsx's sheets unpack to before gridcraft reads them.
+sheet = ["dep:gridcraft-engine", "dep:zip", "dep:serde_json", "pdf"]
 
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
@@ -96,6 +106,9 @@ lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "x
 pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
 # Encrypted Word documents for the Word backend's own tests (tests/it/wordcraft.rs).
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615" }
+# Encrypted workbooks for the spreadsheet backend's own tests (tests/it/gridcraft.rs): its
+# `test-support` feature, never in a build of clv.
+gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", features = ["test-support"] }
 proptest = "1"
 serde_json = "1"
 toml = "0.9"

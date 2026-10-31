@@ -143,7 +143,7 @@ takes (`--password` for a `.pdf.gz`) is refused, as an option no backend takes i
 ## Which files it shows
 
 A file is shown by the first backend that opens it, going by the file's first bytes, and by its
-name only where they can't tell (a TGA, a Word document in a compound file). This build's backends, and the options each takes besides the ones above, are listed at the
+name only where they can't tell (a TGA, a Word document or a workbook in a compound file, a CSV). This build's backends, and the options each takes besides the ones above, are listed at the
 end of `clv --help`. An option that only another backend takes is refused, since it would do
 nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
@@ -151,9 +151,10 @@ nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin
 |---|---|---|
 | `resvg` (the `svg` feature, on by default) | SVG drawings: XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its `.svg` or `.svgz` name. Other XML is not one. Asked first: a PDF's header may be anywhere in those bytes, which a drawing's text may hold | none |
 | `wordcraft` (the `word` feature, on by default) | Word documents, OpenDocument text and RTF ([Documents](#documents)): an RTF by its first bytes (`{\rtf`), whatever its name; an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document, a compound file, by such a name only, since spreadsheets and slides are compound files too. Asked third, for the reason SVG is first (an RTF's text), and before zip | `--password PW`: the password of a protected Word document |
+| `gridcraft` (the `sheet` feature, on by default, which brings `pdf`) | Spreadsheets ([Spreadsheets](#spreadsheets)): an ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and text. Asked fourth, before zip | `--password PW`: the password of a protected workbook |
 | `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
-| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips the Word backend doesn't take, as directories ([Archives](#archives)) | none |
+| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips the Word and spreadsheet backends don't take, as directories ([Archives](#archives)) | none |
 | `tar` (the `tar` feature, on by default) | Tar archives, by a POSIX or GNU header first (`ustar`, its checksum right), as directories; and files compressed with gzip, bzip2 or xz, by their signature: a compressed tar as an archive, anything else as the file it unpacks to ([Archives](#archives)). Asked second, for the reason SVG is first: a tar's first file starts 512 bytes in | none |
 
 PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
@@ -230,6 +231,35 @@ document may cost is bounded by wordcraft's own limits (how much a docx unpacks 
 nests), not by clv's: one slow to lay out holds up its opening. Why it is read this way, and
 not through wordcraft's engine, is in
 [ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md).
+
+### Spreadsheets
+
+A workbook (xlsx, xlsm, xlsb or xls), an OpenDocument spreadsheet (ods) or a file of values
+separated by commas or tabs (csv, tsv) is shown as [gridcraft](https://github.com/storytold/gridcraft)
+prints it: each visible sheet's pages, laid out by its print area, page setup, title rows,
+headers and footers, gridlines and charts, in the order of its sheets; a hidden sheet prints
+none. Its formulas are recalculated first, as gridcraft's app does when it opens a workbook, so a
+formula saved without its value shows one. gridcraft prints the pages to a PDF, which the PDF
+backend shows like any other, fitted to the window. A CSV's columns are made as wide as what they
+hold, as gridcraft's app makes them on importing one. A protected workbook opens with
+`--password`; without it, clv says it needs one.
+
+What gridcraft says on reading a workbook comes as a warning with its first page: a sheet cut
+short at one of its limits (it reads at most a million XML elements of a sheet, about 37,000
+rows of twelve columns), and that an ods or an xlsb is shown by its values alone (gridcraft
+reads their formatting, charts and pictures from neither). So does text in letters other than
+Western European ones (Greek, Cyrillic, Chinese…, and symbols such as `≤`): the PDF gridcraft
+prints to sets it in a font it doesn't carry, and the PDF backend has none to put in its place,
+so that text is blank.
+
+Opening a workbook reads it, recalculates it and prints every page, then lets go of it: what is
+kept is the PDF. On an M3 Max that took 6 ms for a styled workbook of four sheets, and 1.5 s for
+a 7.6 MB one of 37,000 rows that prints to 1,648 pages. A file larger than 64 MiB is refused, and
+so is an xlsx whose sheets unpack to more than 128 MiB together, which would take some 850 MB once
+read (one of 97 MiB took 649 MB). gridcraft
+prints at most 2,000 pages, down a sheet's rows before across its columns, so a very wide sheet
+loses its right-hand pages past that. Why spreadsheets are printed this way is in
+[ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md).
 
 ## Paging through a document
 

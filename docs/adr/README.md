@@ -17,6 +17,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0003 | [Bound what a drawing costs before usvg and resvg spend it](0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) | Accepted |
 | 0004 | [Read a compressed tar through once, into a file nothing names](0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md) | Accepted |
 | 0005 | [Word documents through wordcraft's readers, layout and renderer](0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md) | Accepted |
+| 0006 | [Spreadsheets printed by gridcraft to a PDF the PDF backend shows](0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md) | Accepted |
 
 ## When to write one
 

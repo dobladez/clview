@@ -20,6 +20,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "aligned-vec"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -578,6 +587,8 @@ dependencies = [
  "base64 0.23.1",
  "bzip2",
  "flate2",
+ "gridcraft-engine",
+ "gridcraft-xlsx",
  "image",
  "imagesize",
  "jxl-oxide",
@@ -1593,6 +1604,125 @@ dependencies = [
  "skrifa 0.44.0",
  "smallvec",
  "vello_common 0.2.0",
+]
+
+[[package]]
+name = "gridcraft-calc"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-core",
+ "gridcraft-formula",
+ "gridcraft-functions",
+ "gridcraft-model",
+ "gridcraft-numfmt",
+ "log",
+]
+
+[[package]]
+name = "gridcraft-chart"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-calc",
+ "gridcraft-core",
+ "gridcraft-model",
+ "gridcraft-numfmt",
+ "serde",
+]
+
+[[package]]
+name = "gridcraft-core"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "chrono",
+ "js-sys",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "gridcraft-engine"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-calc",
+ "gridcraft-chart",
+ "gridcraft-core",
+ "gridcraft-formula",
+ "gridcraft-functions",
+ "gridcraft-model",
+ "gridcraft-numfmt",
+ "gridcraft-pdf",
+ "gridcraft-xlsx",
+ "image",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "web-time",
+]
+
+[[package]]
+name = "gridcraft-formula"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-core",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "gridcraft-functions"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-core",
+ "regex",
+]
+
+[[package]]
+name = "gridcraft-model"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-core",
+ "gridcraft-formula",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+]
+
+[[package]]
+name = "gridcraft-numfmt"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "gridcraft-core",
+]
+
+[[package]]
+name = "gridcraft-pdf"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+
+[[package]]
+name = "gridcraft-xlsx"
+version = "0.13.0"
+source = "git+https://github.com/storytold/gridcraft?rev=1f4c67ef0a0200e48d832c7cbbb5570b743b7837#1f4c67ef0a0200e48d832c7cbbb5570b743b7837"
+dependencies = [
+ "aes",
+ "gridcraft-core",
+ "gridcraft-formula",
+ "gridcraft-model",
+ "quick-xml",
+ "sha1 0.11.0",
+ "sha2 0.11.1",
+ "thiserror",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -3793,6 +3923,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "regex"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
 ]
 
 [[package]]
