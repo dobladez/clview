@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -29,11 +29,15 @@ use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{self, fontdb, roxmltree};
 
 use super::threads::Threads;
-use super::{Again, Backend, Frame, HEAD, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Format, Frame, HEAD, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// SVG drawings, rendered by resvg.
 pub(super) struct Svg;
+
+/// What it shows: a drawing, and one gzipped, each named so when its first bytes end before its
+/// root element ([`named_svg`]).
+const FORMATS: &[Format] = &[Format { name: "SVG", extensions: &["svg"] }, Format { name: "svgz", extensions: &["svgz"] }];
 
 impl Backend for Svg {
     fn name(&self) -> &'static str {
@@ -42,6 +46,10 @@ impl Backend for Svg {
 
     fn shows(&self) -> &'static str {
         "SVG drawings"
+    }
+
+    fn formats(&self) -> Vec<Format> {
+        FORMATS.to_vec()
     }
 
     fn options(&self) -> &'static [OptionSpec] {
@@ -239,9 +247,9 @@ fn after_doctype(s: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// Whether `path` is named as an SVG is.
+/// Whether `path` is named as an SVG is, or an svgz: either name goes for either.
 fn named_svg(path: &str) -> bool {
-    Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
+    FORMATS.iter().any(|format| format.named(path))
 }
 
 /// The start of what the gzipped `head` unpacks to: as much as its bytes give, up to 8 KiB.

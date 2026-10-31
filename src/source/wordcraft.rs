@@ -18,9 +18,9 @@ use std::sync::{Arc, OnceLock};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
 use wordcraft_render::RenderOptions;
 
-use super::head::{COMPOUND, Names, ZIP, mimetype, named};
+use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::threads::Threads;
-use super::{Again, Backend, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Format, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Word documents, OpenDocument text and RTF, laid out and drawn by wordcraft.
@@ -35,7 +35,11 @@ impl Backend for Wordcraft {
     }
 
     fn shows(&self) -> &'static str {
-        "documents (Word, OpenDocument, RTF)"
+        "documents"
+    }
+
+    fn formats(&self) -> Vec<Format> {
+        vec![WORD, ODT, RTF]
     }
 
     fn options(&self) -> &'static [OptionSpec] {
@@ -79,9 +83,15 @@ const MAX_FILE: u64 = 256 << 20;
 /// The most pixels a page is drawn with: 64 million, 256 MiB.
 const MAX_PIXELS: u64 = 64_000_000;
 
-/// What a Word document is named: a document, a template, with macros or without, in either
-/// format, since Word opens each by what it holds.
-const WORD_NAMES: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot"];
+/// A Word document, by what it is named where its first bytes can't tell: a document, a
+/// template, with macros or without, in either format, since Word opens each by what it holds.
+const WORD: Format = Format { name: "Word", extensions: &["docx", "docm", "dotx", "dotm", "doc", "dot"] };
+
+/// OpenDocument text, by its name where its first file doesn't say: a document or a template.
+const ODT: Format = Format { name: "OpenDocument text", extensions: &["odt", "ott"] };
+
+/// RTF, by its first bytes alone.
+const RTF: Format = Format { name: "RTF", extensions: &[] };
 
 /// What an OpenDocument text says it is, in its first file: a document or a template.
 const ODT_TYPE: &[u8] = b"application/vnd.oasis.opendocument.text";
@@ -108,13 +118,13 @@ impl Kind {
             return Some(Self::Rtf);
         }
         if head.starts_with(ZIP) {
-            if mimetype(head).is_some_and(|m| m.starts_with(ODT_TYPE)) || named(path, &["odt", "ott"]) {
+            if mimetype(head).is_some_and(|m| m.starts_with(ODT_TYPE)) || ODT.named(path) {
                 return Some(Self::Odt);
             }
             let word = Names(head).any(|name| name.starts_with(b"word/"));
-            return (word || named(path, WORD_NAMES)).then_some(Self::Package);
+            return (word || WORD.named(path)).then_some(Self::Package);
         }
-        (head.starts_with(COMPOUND) && named(path, WORD_NAMES)).then_some(Self::Compound)
+        (head.starts_with(COMPOUND) && WORD.named(path)).then_some(Self::Compound)
     }
 }
 

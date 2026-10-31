@@ -1,8 +1,7 @@
-//! What a file's first bytes and its name say, for the backends whose files are zips or compound
-//! files of a kind of their own (documents, spreadsheets), which the zip backend would otherwise
-//! show as archives: the files a zip starts with, what its first says it is, and an extension.
-
-use std::path::Path;
+//! What a file's first bytes say, for the backends whose files are zips or compound files of a
+//! kind of their own (documents, spreadsheets), which the zip backend would otherwise show as
+//! archives: the files a zip starts with, and what its first says it is. Where they can't tell,
+//! a [`Format`](super::Format)'s extensions do.
 
 /// A zip's first local header.
 pub(super) const ZIP: &[u8] = b"PK\x03\x04";
@@ -10,11 +9,6 @@ pub(super) const ZIP: &[u8] = b"PK\x03\x04";
 /// A compound file's signature: Word 97-2003 documents', Excel 97-2003 workbooks', and protected
 /// Office packages'.
 pub(super) const COMPOUND: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
-/// Whether `path` ends in one of `extensions`, in any case.
-pub(super) fn named(path: &str, extensions: &[&str]) -> bool {
-    Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
-}
 
 /// What the zip starting with `head` says it is in its first file, `mimetype`, stored as it is, as
 /// OpenDocument has it (OpenDocument 1.3 part 2, §3.3): as much of it as `head` holds.
@@ -95,12 +89,6 @@ mod tests {
         assert_eq!(mimetype(&zip_head(&[("content.xml", b"<content/>"), ("mimetype", b"x")])), None, "first only");
         assert_eq!(mimetype(&head[..40]), Some(&b"ap"[..]), "as far as the head goes");
         assert_eq!(mimetype(b"mimetype application/x-kind"), None, "not a zip");
-    }
-
-    #[test]
-    fn a_name_is_matched_by_its_extension_in_any_case() {
-        assert!(named("a/b.DocX", &["docx"]) && named("b.tar.xlsx", &["csv", "xlsx"]));
-        assert!(!named("docx", &["docx"]) && !named("a.docx.gz", &["docx"]) && !named("a.docx", &[]));
     }
 
     proptest! {

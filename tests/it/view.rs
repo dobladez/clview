@@ -354,10 +354,21 @@ fn help_and_version() {
     let help = text(&out.stdout);
     assert!(out.status.success() && help.starts_with("clv <file>… [options]\nclv --help | --version\n"), "{help}");
     assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
-    // Each backend under a heading of its own.
-    assert!(help.contains("\n\nPDFs, by "), "{help}");
-    #[cfg(feature = "image")]
-    assert!(help.contains("\n\nImages, by image:\n  no options of its own\n"), "{help}");
+    // A backend that takes options of its own lists them under a heading of its own: the PDF one,
+    // and the documents' and spreadsheets' when they are built.
+    let heading = |line: &str| line.strip_suffix(':').and_then(|line| line.rsplit_once(", by ")).is_some_and(|(_, name)| !name.contains(' '));
+    let headings = help.lines().filter(|line| heading(line)).count();
+    assert_eq!(headings, 1 + usize::from(cfg!(feature = "word")) + usize::from(cfg!(feature = "sheet")), "{help}");
+    assert!(help.contains("\n\nPDFs, by ") && !help.contains("no options"), "{help}");
+    // Then the formats shown: a backend's only when it is built.
+    let shown = |row: &str| help.contains(&format!("\n  {row}"));
+    assert!(shown("PDFs: PDF\n"), "{help}");
+    assert_eq!(shown("Images: PNG, JPEG, "), cfg!(feature = "image"), "{help}");
+    assert_eq!(shown("SVG drawings: SVG (.svg), svgz (.svgz)\n"), cfg!(feature = "svg"), "{help}");
+    assert_eq!(shown("Zip archives: zip\n"), cfg!(feature = "zip"), "{help}");
+    assert_eq!(shown("Tar archives and compressed files: tar, gzip, "), cfg!(feature = "tar"), "{help}");
+    assert_eq!(shown("Documents: Word (.docx "), cfg!(feature = "word"), "{help}");
+    assert_eq!(shown("Spreadsheets: Excel (.xlsx "), cfg!(feature = "sheet"), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CARGO_PKG_VERSION")));
 }
@@ -575,8 +586,8 @@ fn shows() -> String {
     let backends = [
         ("SVG drawings", cfg!(feature = "svg")),
         ("tar archives and compressed files", cfg!(feature = "tar")),
-        ("documents (Word, OpenDocument, RTF)", cfg!(feature = "word")),
-        ("spreadsheets (Excel, OpenDocument, CSV)", cfg!(feature = "sheet")),
+        ("documents", cfg!(feature = "word")),
+        ("spreadsheets", cfg!(feature = "sheet")),
         ("PDFs", true),
         ("images", cfg!(feature = "image")),
         ("zip archives", cfg!(feature = "zip")),

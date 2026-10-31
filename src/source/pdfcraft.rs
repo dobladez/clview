@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
 
-use super::{Backend, Frame, Input, Opened, Pixels, Request, Source};
+use super::{Backend, Format, Frame, Input, Opened, Pixels, Request, Source};
 use crate::args::{OptionSpec, Parsed};
 
 /// PDFs, rendered by pdfcraft.
@@ -22,6 +22,10 @@ impl Backend for Pdfcraft {
 
     fn shows(&self) -> &'static str {
         "PDFs"
+    }
+
+    fn formats(&self) -> Vec<Format> {
+        vec![Format { name: "PDF", extensions: &[] }]
     }
 
     fn options(&self) -> &'static [OptionSpec] {

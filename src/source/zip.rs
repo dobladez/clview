@@ -11,7 +11,7 @@ use std::sync::Arc;
 use ::zip::ZipArchive;
 
 use super::tree::Tree;
-use super::{Again, Backend, Badge, Container, HEAD, Input, Listing, Opened, Reopenable};
+use super::{Again, Backend, Badge, Container, Format, HEAD, Input, Listing, Opened, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive is read to: a picture larger than that is more than the
@@ -31,6 +31,10 @@ impl Backend for Zip {
 
     fn shows(&self) -> &'static str {
         "zip archives"
+    }
+
+    fn formats(&self) -> Vec<Format> {
+        vec![Format { name: "zip", extensions: &[] }]
     }
 
     fn options(&self) -> &'static [OptionSpec] {

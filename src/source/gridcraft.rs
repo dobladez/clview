@@ -19,8 +19,8 @@ use gridcraft_engine::core::{RangeRef, Value};
 use gridcraft_engine::model::Workbook;
 use gridcraft_engine::{DocState, Session, Trust};
 
-use super::head::{COMPOUND, Names, ZIP, mimetype, named};
-use super::{Again, BACKENDS, Backend, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source};
+use super::head::{COMPOUND, Names, ZIP, mimetype};
+use super::{Again, BACKENDS, Backend, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source};
 use crate::args::{OptionSpec, Parsed};
 
 /// Spreadsheets, printed by gridcraft.
@@ -34,7 +34,11 @@ impl Backend for Gridcraft {
     }
 
     fn shows(&self) -> &'static str {
-        "spreadsheets (Excel, OpenDocument, CSV)"
+        "spreadsheets"
+    }
+
+    fn formats(&self) -> Vec<Format> {
+        vec![EXCEL, ODS, TEXT]
     }
 
     fn options(&self) -> &'static [OptionSpec] {
@@ -86,12 +90,17 @@ const MAX_SHEETS: u64 = 128 << 20;
 /// What an OpenDocument spreadsheet says it is, in its first file: a spreadsheet or a template.
 const ODS_TYPE: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
 
-/// What an Excel workbook is named: a workbook, a template, with macros or without, in the
-/// format of 2007 on, its binary kind, and that of 97-2003.
-const EXCEL_NAMES: &[&str] = &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "xls", "xlt"];
+/// An Excel workbook, by what it is named where its first bytes can't tell: a workbook, a
+/// template, with macros or without, in the format of 2007 on, its binary kind, and that of
+/// 97-2003.
+const EXCEL: Format = Format { name: "Excel", extensions: &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "xls", "xlt"] };
 
-/// What a file of values separated by commas or tabs is named.
-const TEXT_NAMES: &[&str] = &["csv", "tsv", "tab"];
+/// An OpenDocument spreadsheet, by its name where its first file doesn't say: a spreadsheet or a
+/// template.
+const ODS: Format = Format { name: "OpenDocument spreadsheet", extensions: &["ods", "ots"] };
+
+/// Values separated by commas or tabs, by their name alone.
+const TEXT: Format = Format { name: "CSV", extensions: &["csv", "tsv", "tab"] };
 
 /// What kind of spreadsheet a file is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,18 +122,18 @@ impl Kind {
     /// too; and values separated by commas or tabs only when named so, and text.
     fn of(path: &str, head: &[u8]) -> Option<Self> {
         if head.starts_with(ZIP) {
-            if mimetype(head).is_some_and(|m| m.starts_with(ODS_TYPE)) || named(path, &["ods", "ots"]) {
+            if mimetype(head).is_some_and(|m| m.starts_with(ODS_TYPE)) || ODS.named(path) {
                 return Some(Self::Ods);
             }
             let excel = Names(head).any(|name| name.starts_with(b"xl/"));
-            return (excel || named(path, EXCEL_NAMES)).then_some(Self::Package);
+            return (excel || EXCEL.named(path)).then_some(Self::Package);
         }
         if head.starts_with(COMPOUND) {
-            return named(path, EXCEL_NAMES).then_some(Self::Compound);
+            return EXCEL.named(path).then_some(Self::Compound);
         }
         // UTF-16 text has a NUL in every other byte, after its byte order mark.
         let text = head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]) || !head.contains(&0);
-        (text && named(path, TEXT_NAMES)).then_some(Self::Text)
+        (text && TEXT.named(path)).then_some(Self::Text)
     }
 }
 

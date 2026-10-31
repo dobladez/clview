@@ -170,11 +170,12 @@ fn a_broken_drawing_is_refused_with_why() {
     assert!(text(&out.stderr).contains("isn't <svg> in the SVG namespace"), "{}", text(&out.stderr));
 }
 
+/// The backend takes no options, so `--help` has no heading for it: only the formats it shows.
 #[test]
-fn help_lists_the_backend_with_no_options_of_its_own() {
+fn help_lists_the_formats_and_no_heading_for_a_backend_without_options() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    assert!(help.contains("\n\nSVG drawings, by resvg:\n  no options of its own\n"), "{help}");
+    assert!(help.contains("\n  SVG drawings: SVG (.svg), svgz (.svgz)\n") && !help.contains("by resvg"), "{help}");
 }
 
 /// The libraries that parse and render SVG.

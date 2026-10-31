@@ -31,6 +31,13 @@ impl Backend for Images {
         "images"
     }
 
+    /// Those it decodes, by their signature, or by their names where they have none.
+    fn formats(&self) -> Vec<super::Format> {
+        let named = |format: ImageFormat| if NAMED.contains(&format) { format.extensions_str() } else { &[] };
+        let decoded = DECODED.iter().map(|&(format, name)| super::Format { name, extensions: named(format) });
+        decoded.chain([super::Format { name: JPEG_XL, extensions: &[] }]).collect()
+    }
+
     fn options(&self) -> &'static [OptionSpec] {
         &[]
     }
@@ -62,33 +69,40 @@ enum Format {
     Jxl,
 }
 
-/// The `image` crate's formats this build decodes: the ones `Cargo.toml` enables. Kept here
-/// rather than asked of `ImageFormat::reading_enabled`, which in image 0.25.10 goes by AVIF's
-/// encoder, not its decoder. A picture in another format it knows (AVIF, DDS) is refused with
-/// its name.
-const DECODED: &[ImageFormat] = &[
-    ImageFormat::Png,
-    ImageFormat::Jpeg,
-    ImageFormat::Gif,
-    ImageFormat::WebP,
-    ImageFormat::Tiff,
-    ImageFormat::Bmp,
-    ImageFormat::Ico,
-    ImageFormat::Qoi,
-    ImageFormat::Tga,
-    ImageFormat::Pnm,
-    ImageFormat::Hdr,
-    ImageFormat::OpenExr,
-    ImageFormat::Farbfeld,
+/// The `image` crate's formats this build decodes, each with its name in `--help`: the ones
+/// `Cargo.toml` enables. Kept here rather than asked of `ImageFormat::reading_enabled`, which in
+/// image 0.25.10 goes by AVIF's encoder, not its decoder. A picture in another format it knows
+/// (AVIF, DDS) is refused with its name.
+const DECODED: &[(ImageFormat, &str)] = &[
+    (ImageFormat::Png, "PNG"),
+    (ImageFormat::Jpeg, "JPEG"),
+    (ImageFormat::Gif, "GIF"),
+    (ImageFormat::WebP, "WebP"),
+    (ImageFormat::Tiff, "TIFF"),
+    (ImageFormat::Bmp, "BMP"),
+    (ImageFormat::Ico, "ICO"),
+    (ImageFormat::Qoi, "QOI"),
+    (ImageFormat::Tga, "TGA"),
+    (ImageFormat::Pnm, "PNM"),
+    (ImageFormat::Hdr, "Radiance HDR"),
+    (ImageFormat::OpenExr, "OpenEXR"),
+    (ImageFormat::Farbfeld, "farbfeld"),
 ];
 
-/// The format of the picture at `path` that starts with `head`: by its signature, or for TGA,
-/// which has none, by its name.
+/// The formats a picture has no signature in, known by their names alone, as the `image` crate
+/// tells them: TGA.
+const NAMED: &[ImageFormat] = &[ImageFormat::Tga];
+
+/// JPEG XL's name in `--help`: decoded by jxl-oxide, not the `image` crate.
+const JPEG_XL: &str = "JPEG XL";
+
+/// The format of the picture at `path` that starts with `head`: by its signature, or for one
+/// that has none ([`NAMED`]), by its name.
 fn format(path: &str, head: &[u8]) -> Option<Format> {
     if is_jxl(head) {
         return Some(Format::Jxl);
     }
-    let format = ::image::guess_format(head).ok().or_else(|| ImageFormat::from_path(path).ok().filter(|f| *f == ImageFormat::Tga))?;
+    let format = ::image::guess_format(head).ok().or_else(|| ImageFormat::from_path(path).ok().filter(|f| NAMED.contains(f)))?;
     Some(Format::Image(format))
 }
 
@@ -147,7 +161,7 @@ impl Image {
 /// a format this build decodes and to fit [`MAX_BYTES`].
 fn header(reader: impl BufRead + Seek, format: Format) -> Result<(u32, u32), String> {
     if let Format::Image(format) = format
-        && !DECODED.contains(&format)
+        && !DECODED.iter().any(|&(decoded, _)| decoded == format)
     {
         let name = format.extensions_str().first().map_or_else(|| format!("{format:?}"), |e| e.to_uppercase());
         return Err(format!("{name} pictures aren't decoded by this build of {}", crate::NAME));
@@ -421,6 +435,38 @@ mod tests {
     fn a_picture_in_a_format_not_decoded_is_refused_by_name() {
         assert_eq!(format("a.avif", AVIF), Some(Format::Image(ImageFormat::Avif)));
         assert_eq!(open("a.avif", AVIF.to_vec()).err(), Some(format!("AVIF pictures aren't decoded by this build of {}", crate::NAME)));
+    }
+
+    /// `--help` lists what this build decodes: each format the `image` crate says it is built to
+    /// read (asked of all but AVIF, whose answer goes by its encoder), a picture of it as the crate
+    /// writes one decoding, and JPEG XL.
+    #[test]
+    fn the_formats_listed_are_those_this_build_decodes() {
+        let asked = |format: &ImageFormat| *format != ImageFormat::Avif;
+        let built: Vec<ImageFormat> = ImageFormat::all().filter(|f| asked(f) && f.reading_enabled()).collect();
+        let listed: Vec<ImageFormat> = DECODED.iter().map(|&(format, _)| format).collect();
+        for format in &built {
+            assert!(listed.contains(format), "{format:?} decodes in this build, but isn't listed");
+        }
+        for format in listed.iter().filter(|f| asked(f)) {
+            assert!(built.contains(format), "{format:?} is listed, but this build doesn't decode it");
+        }
+        let pixels = DynamicImage::ImageRgba8(RgbaImage::from_pixel(3, 2, ::image::Rgba([10, 20, 30, 255])));
+        let kinds = [pixels.clone(), pixels.to_rgb8().into(), pixels.to_rgb32f().into(), pixels.to_rgba16().into()];
+        for &(format, name) in DECODED {
+            // The first kind of pixels the crate writes the format in.
+            let picture = kinds.iter().find_map(|kind| {
+                let mut out = Cursor::new(Vec::new());
+                kind.write_to(&mut out, format).ok().map(|()| out.into_inner())
+            });
+            let picture = picture.unwrap_or_else(|| panic!("{name}: not written by this build"));
+            let image = open(&format!("a.{}", format.extensions_str()[0]), picture).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(render(&image, 1.0).error, None, "{name}");
+        }
+        let names: Vec<&str> = Images.formats().iter().map(|f| f.name).collect();
+        assert_eq!(names.len(), DECODED.len() + 1);
+        assert_eq!(names.last(), Some(&"JPEG XL"));
+        assert_eq!(open("a.jxl", JXL.to_vec()).map(|image| image.size(0)), Ok(Some((3.0, 2.0))));
     }
 
     #[test]

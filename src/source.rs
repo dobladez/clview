@@ -66,8 +66,12 @@ const HEAD: u64 = 1024;
 pub(crate) trait Backend {
     /// Its name, as messages and `--help` give it.
     fn name(&self) -> &'static str;
-    /// What it shows, for `--help` and for a file no backend opens: "PDFs".
+    /// What it shows, in a word or two, for `--help` and for a file no backend opens: "PDFs",
+    /// "documents". Which formats, [`Backend::formats`] says.
     fn shows(&self) -> &'static str;
+    /// The formats it shows, for `--help`: taken from the tables [`Backend::opens`] goes by, so
+    /// that the two can't disagree.
+    fn formats(&self) -> Vec<Format>;
     /// The options it takes, beyond the viewer's own.
     fn options(&self) -> &'static [OptionSpec];
     /// Whether it opens the file at `path`, going by `head`: its first [`HEAD`] bytes, or all of
@@ -76,6 +80,29 @@ pub(crate) trait Backend {
     /// `input` opened, with the values `options` gives its own options: its pages, or for a file
     /// that holds files (an archive), a container of them.
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String>;
+}
+
+/// A format a backend shows, as `--help` lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Format {
+    /// What it is called: "PDF", "Word".
+    pub(crate) name: &'static str,
+    /// The extensions that tell a file of it where its first bytes can't (a TGA has no
+    /// signature; a compound file may as well be a workbook), in lowercase, without the dot.
+    /// Empty for a format known by how a file starts alone.
+    pub(crate) extensions: &'static [&'static str],
+}
+
+impl Format {
+    /// Whether `path` ends in one of its [`extensions`](Format::extensions), in any case.
+    #[cfg_attr(
+        not(any(feature = "svg", feature = "word", feature = "sheet", test)),
+        expect(dead_code, reason = "only drawings, documents and spreadsheets go by a name")
+    )]
+    pub(crate) fn named(&self, path: &str) -> bool {
+        let extension = std::path::Path::new(path).extension().and_then(|e| e.to_str());
+        extension.is_some_and(|e| self.extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+    }
 }
 
 /// What a backend opened a file to.
@@ -407,7 +434,8 @@ pub(crate) mod tests {
     }
 
     /// A backend that opens files starting with `magic`: to a page (a folder's), or if it
-    /// `holds` files, to the directory beside the file, named as it is with `.d` after.
+    /// `holds` files, to the directory beside the file, named as it is with `.d` after. It lists
+    /// one format, named as it is.
     pub(crate) struct Fake {
         pub(crate) name: &'static str,
         pub(crate) shows: &'static str,
@@ -422,6 +450,9 @@ pub(crate) mod tests {
         }
         fn shows(&self) -> &'static str {
             self.shows
+        }
+        fn formats(&self) -> Vec<Format> {
+            vec![Format { name: self.name, extensions: &[] }]
         }
         fn options(&self) -> &'static [OptionSpec] {
             self.options
@@ -509,6 +540,45 @@ pub(crate) mod tests {
         assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 2, "read when asked, not before");
         let failing: Again = Arc::new(|| Err("gone".into()));
         assert_eq!(Input::held("a.zip/c.pdf".into(), Vec::new(), failing).bytes().err().as_deref(), Some("a.zip/c.pdf: gone"));
+    }
+
+    #[test]
+    fn a_name_is_matched_by_its_extension_in_any_case() {
+        let format = |extensions| Format { name: "a format", extensions };
+        assert!(format(&["docx"]).named("a/b.DocX") && format(&["csv", "xlsx"]).named("b.tar.xlsx"));
+        assert!(!format(&["docx"]).named("docx") && !format(&["docx"]).named("a.docx.gz") && !format(&[]).named("a.docx"));
+    }
+
+    /// The extensions a backend lists are the names it opens a file by: each opens one whose first
+    /// bytes leave it unsaid, in any case, and no other name does, of those listed by any backend
+    /// and others files are often named with. Tried on the first bytes of each kind of file that
+    /// goes by its name: none (a TGA, an SVG whose root element comes later), text (a CSV), a zip
+    /// of nothing it knows, a compound file.
+    #[test]
+    fn the_extensions_a_backend_lists_are_the_names_it_opens_by() {
+        let header = [&b"PK\x03\x04\x14\0"[..], &[0; 12], &4u32.to_le_bytes(), &4u32.to_le_bytes(), &9u16.to_le_bytes(), &[0, 0]].concat();
+        let zip = [&header[..], b"notes.txt", b"text"].concat();
+        let compound = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0];
+        let heads: [&[u8]; 4] = [b"", b"date,item\n2026-03-01,widget\n", &zip, &compound];
+        let extensions = |backend: &dyn Backend| -> Vec<&str> { backend.formats().iter().flat_map(|f| f.extensions.iter().copied()).collect() };
+        let listed: Vec<&str> = BACKENDS.iter().flat_map(|b| extensions(*b)).collect();
+        let others = [
+            "pdf", "ps", "eps", "xps", "djvu", "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "ico", "tga", "icb", "vda", "vst", "dds",
+            "pcx", "avif", "heic", "jxl", "exr", "hdr", "ppm", "qoi", "ff", "psd", "svg", "svgz", "txt", "md", "xml", "html", "json", "rtf", "doc",
+            "docx", "odt", "fodt", "xls", "xlsx", "ods", "fods", "csv", "tsv", "ppt", "pptx", "odp", "pages", "numbers", "key", "zip", "jar", "cbz",
+            "epub", "tar", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar",
+        ];
+        for backend in BACKENDS {
+            let own = extensions(*backend);
+            assert!(!backend.formats().is_empty(), "{} lists no format", backend.name());
+            let tells = |name: &str| heads.iter().any(|head| backend.opens(&format!("a.{name}"), head) != backend.opens("a", head));
+            for name in listed.iter().chain(&others) {
+                assert_eq!(tells(name), own.contains(name), "{}: .{name}", backend.name());
+            }
+            for name in own {
+                assert!(tells(&name.to_uppercase()), "{}: .{}", backend.name(), name.to_uppercase());
+            }
+        }
     }
 
     #[test]

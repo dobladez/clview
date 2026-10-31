@@ -223,7 +223,14 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
     })
 }
 
-/// What `--help` prints: the viewer's options, then those of each of `backends`.
+/// What `--help` says before the formats this build shows.
+const SHOWN: &str = "The files it shows, known by how they start or, where that can't tell, by the names in brackets:";
+
+/// The columns `--help` wraps the formats it lists at.
+const HELP_WIDTH: usize = 100;
+
+/// What `--help` prints: the viewer's options, then those of each of `backends` that takes some,
+/// and last the formats they show, under what each shows.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
     let mut out = format!("{name} <file>… [options]\n{name} --help | --version\n\n{ABOUT}\n\n");
@@ -234,19 +241,72 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
         }
     };
     list(&mut out, OPTIONS);
-    for backend in backends {
-        let mut shows = backend.shows().chars();
-        let shows: String = shows.next().map(|first| first.to_uppercase().chain(shows).collect()).unwrap_or_default();
-        out.push_str(&format!("\n{shows}, by {}:\n", backend.name()));
-        match backend.options() {
-            [] => out.push_str("  no options of its own\n"),
-            options => list(&mut out, options),
-        }
+    for backend in backends.iter().filter(|b| !b.options().is_empty()) {
+        out.push_str(&format!("\n{}, by {}:\n", capitalized(backend.shows()), backend.name()));
+        list(&mut out, backend.options());
     }
     if backends.is_empty() {
         out.push_str("\nThis build has no backends, so it shows nothing.\n");
+        return out;
+    }
+    out.push_str(&format!("\n{SHOWN}\n"));
+    for (shows, formats) in shown(backends) {
+        let named = formats.iter().map(|format| match format.extensions {
+            [] => format.name.to_string(),
+            extensions => format!("{} (.{})", format.name, extensions.join(" .")),
+        });
+        wrapped(&mut out, &format!("{}:", capitalized(shows)), &named.collect::<Vec<_>>());
     }
     out
+}
+
+/// What `backends` show, in their order, each with the formats it lists: those of backends that
+/// show the same together, each format once.
+fn shown(backends: &[&dyn Backend]) -> Vec<(&'static str, Vec<crate::source::Format>)> {
+    let mut shown: Vec<(&'static str, Vec<crate::source::Format>)> = Vec::new();
+    for backend in backends {
+        let at = match shown.iter().position(|(shows, _)| *shows == backend.shows()) {
+            Some(at) => at,
+            None => {
+                shown.push((backend.shows(), Vec::new()));
+                shown.len().saturating_sub(1)
+            }
+        };
+        // Found in `shown`, or just pushed to it: there is one at `at`.
+        let Some((_, formats)) = shown.get_mut(at) else { continue };
+        for format in backend.formats() {
+            if !formats.iter().any(|listed| listed.name == format.name) {
+                formats.push(format);
+            }
+        }
+    }
+    shown.retain(|(_, formats)| !formats.is_empty());
+    shown
+}
+
+/// `items` after `label`, a comma between each two, wrapped between them at [`HELP_WIDTH`]
+/// columns: the lines after the first start under the first item.
+fn wrapped(out: &mut String, label: &str, items: &[String]) {
+    let indent = " ".repeat(label.chars().count().saturating_add(2));
+    let mut line = format!("  {label}");
+    for (at, item) in items.iter().enumerate() {
+        let item = if at.saturating_add(1) < items.len() { format!("{item},") } else { item.clone() };
+        if at > 0 && line.chars().count().saturating_add(1).saturating_add(item.chars().count()) > HELP_WIDTH {
+            out.push_str(&line);
+            out.push('\n');
+            line.clone_from(&indent);
+        }
+        line.push(' ');
+        line.push_str(&item);
+    }
+    out.push_str(&line);
+    out.push('\n');
+}
+
+/// `text`, its first letter a capital.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 fn view(args: &[String]) -> Result<(), CliError> {
@@ -1180,18 +1240,68 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_the_viewers_options_then_each_backends() {
+    fn help_lists_the_options_each_backend_takes_then_the_formats_they_show() {
+        use crate::source::Format;
         use crate::source::tests::{Fake, PDF};
+        /// A backend that shows `.0`, in the formats `.1`, and opens nothing.
+        struct Lists(&'static str, &'static [Format]);
+        impl Backend for Lists {
+            fn name(&self) -> &'static str {
+                "lists"
+            }
+            fn shows(&self) -> &'static str {
+                self.0
+            }
+            fn formats(&self) -> Vec<Format> {
+                self.1.to_vec()
+            }
+            fn options(&self) -> &'static [OptionSpec] {
+                &[]
+            }
+            fn opens(&self, _path: &str, _head: &[u8]) -> bool {
+                false
+            }
+            fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
+                Err(input.path)
+            }
+        }
+        const fn format(name: &'static str, extensions: &'static [&'static str]) -> Format {
+            Format { name, extensions }
+        }
         const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
-        let help = usage(&[&LOCKED, &PDF]);
+        const PICTURES: Lists = Lists(
+            "images",
+            &[
+                format("PNG", &[]),
+                format("TGA", &["tga", "icb", "vda", "vst"]),
+                format("a format with a long name", &[]),
+                format("another format with a long name", &["one", "two"]),
+            ],
+        );
+        const MORE: Lists = Lists("images", &[format("PNG", &[]), format("WebP", &[])]);
+        const NONE: Lists = Lists("nothing", &[]);
+        let help = usage(&[&LOCKED, &PDF, &NONE, &PICTURES, &MORE]);
         assert!(help.starts_with(&format!("{0} <file>… [options]\n{0} --help | --version\n", crate::NAME)), "{help}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
         }
-        assert!(help.contains(&format!("\n\nLocked PDFs, by locked:\n  {:29}  a password\n", "--password PW")), "{help}");
-        assert!(help.ends_with("\nPDFs, by pdf-one:\n  no options of its own\n"), "{help}");
-        assert!(usage(&[]).ends_with("\nThis build has no backends, so it shows nothing.\n"));
+        // A backend's options under it, and nothing for one that takes none.
+        assert!(help.contains(&format!("\n\nLocked PDFs, by locked:\n  {:29}  a password\n\n", "--password PW")), "{help}");
+        assert!(!help.contains(", by pdf-one") && !help.contains(", by lists") && !help.contains("no options"), "{help}");
+        // Last, the formats, under what their backend shows: those of backends that show the same
+        // together, each once, with the names a file of it goes by, wrapped at 100 columns.
+        let shown = help.split_once(&format!("\n\n{SHOWN}\n")).map_or("", |(_, shown)| shown);
+        let images =
+            "  Images: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n          another format with a long name (.one .two), WebP\n";
+        assert_eq!(shown, format!("  Locked PDFs: locked\n  PDFs: pdf-one\n{images}"), "{help}");
+        assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
+        // An item longer than a line has one to itself.
+        let mut out = String::new();
+        wrapped(&mut out, "Long:", &["x".repeat(HELP_WIDTH), "y".into()]);
+        assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
+        let nothing = usage(&[]);
+        assert!(nothing.ends_with(" first\n\nThis build has no backends, so it shows nothing.\n") && !nothing.contains(SHOWN), "{nothing}");
     }
 
     #[test]

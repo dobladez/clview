@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use super::tree::Tree;
-use super::{Again, BACKENDS, Backend, Badge, Container, HEAD, Input, Listing, Opened, Ready, Reopenable};
+use super::{Again, BACKENDS, Backend, Badge, Container, Format, HEAD, Input, Listing, Opened, Ready, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive, or a file compressed alone, is read to, as for zip: it
@@ -63,6 +63,11 @@ impl Backend for Tar {
 
     fn shows(&self) -> &'static str {
         "tar archives and compressed files"
+    }
+
+    /// A plain tar, by its header, and each compression it opens, by its magic number.
+    fn formats(&self) -> Vec<Format> {
+        [Codec::None].into_iter().chain(Codec::COMPRESSED).map(Codec::format).collect()
     }
 
     fn options(&self) -> &'static [OptionSpec] {
@@ -133,17 +138,33 @@ enum Codec {
 }
 
 impl Codec {
+    /// The compressions a file is known to have, each by its magic number ([`Codec::starts`]).
+    const COMPRESSED: [Self; 3] = [Self::Gzip, Self::Bzip2, Self::Xz];
+
     /// The compression a file starting with `head` has, by its magic number.
     fn of(head: &[u8]) -> Option<Self> {
-        if head.starts_with(&[0x1f, 0x8b, 0x08]) {
-            Some(Self::Gzip)
-        } else if head.starts_with(b"BZh") && head.get(3).is_some_and(|level| (b'1'..=b'9').contains(level)) {
-            Some(Self::Bzip2)
-        } else if head.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0x00]) {
-            Some(Self::Xz)
-        } else {
-            None
+        Self::COMPRESSED.into_iter().find(|codec| codec.starts(head))
+    }
+
+    /// Whether `head` starts with this compression's magic number.
+    fn starts(self, head: &[u8]) -> bool {
+        match self {
+            Self::None => false,
+            Self::Gzip => head.starts_with(&[0x1f, 0x8b, 0x08]),
+            Self::Bzip2 => head.starts_with(b"BZh") && head.get(3).is_some_and(|level| (b'1'..=b'9').contains(level)),
+            Self::Xz => head.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0x00]),
         }
+    }
+
+    /// The format it is, as `--help` lists it: uncompressed, a plain tar.
+    fn format(self) -> Format {
+        let name = match self {
+            Self::None => "tar",
+            Self::Gzip => "gzip",
+            Self::Bzip2 => "bzip2",
+            Self::Xz => "xz",
+        };
+        Format { name, extensions: &[] }
     }
 
     /// `raw`, unpacked as it reads. Several compressed streams one after another (`pigz`, `pbzip2`,
@@ -962,6 +983,21 @@ mod tests {
 
     fn read(container: &dyn Container, name: &str) -> Vec<u8> {
         container.open(name).unwrap().bytes().unwrap()
+    }
+
+    /// The formats `--help` lists are those a file opens in: a plain tar, and each compression,
+    /// which a file in it is known to have.
+    #[test]
+    fn the_formats_listed_are_those_a_file_opens_in() {
+        let plain = tar(&[("a.png", b"a")]);
+        let listed = Tar.formats();
+        assert_eq!(listed.iter().map(|f| f.name).collect::<Vec<_>>(), ["tar", "gzip", "bzip2", "xz"]);
+        for codec in [Codec::None, Codec::Gzip, Codec::Bzip2, Codec::Xz] {
+            let file = compress(&plain, codec);
+            let head = file.get(..HEAD as usize).unwrap_or(&file);
+            assert!(Tar.opens("x", head) && Codec::of(head).unwrap_or(Codec::None) == codec, "{codec:?}");
+            assert!(listed.contains(&codec.format()), "{codec:?} opens, but isn't listed");
+        }
     }
 
     /// Plain, gzip, bzip2 or xz, an archive lists as a directory on disk does, its directories

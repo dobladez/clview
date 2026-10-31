@@ -53,6 +53,10 @@ Printed without the pager, pages follow the zoom too, a row of them under anothe
 prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
 when the window is wide enough, as the pager first shows them.
 
+`clv --help` lists these, then the options a backend takes of its own (`--password`, for PDFs,
+documents and spreadsheets: see [Which files it shows](#which-files-it-shows)), each under what
+that backend shows, and last the formats this build shows.
+
 ## Several files
 
 `clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
@@ -143,9 +147,13 @@ takes (`--password` for a `.pdf.gz`) is refused, as an option no backend takes i
 ## Which files it shows
 
 A file is shown by the first backend that opens it, going by the file's first bytes, and by its
-name only where they can't tell (a TGA, a Word document or a workbook in a compound file, a CSV). This build's backends, and the options each takes besides the ones above, are listed at the
-end of `clv --help`. An option that only another backend takes is refused, since it would do
-nothing for the file. The file is read once, so `cat report.pdf | clv /dev/stdin` works too.
+name only where they can't tell (a TGA, a Word document or a workbook in a compound file, a CSV).
+`clv --help` ends with the formats this build shows, under what each backend shows, and the
+extensions of those that go by their name: each backend lists them from the same tables it opens
+files by, so a build without a backend lists none of its formats. Before them come the options a
+backend takes besides the ones above, under it; a backend that takes none has no heading. An
+option that only another backend takes is refused, since it would do nothing for the file. The
+file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
 | Backend | Shows | Its options |
 |---|---|---|

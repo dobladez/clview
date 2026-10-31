@@ -57,9 +57,17 @@ A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goe
 that says it opens it, going by the file's first 1024 bytes (`Backend::opens`). Those bytes are
 read once and handed on with the rest of the file (`Input`), so a pipe opens as well as a file.
 Each backend declares its own options (`Backend::options`): the viewer parses the command line
-against its own and every backend's, lists them in `--help` under their backend, and refuses one
-the chosen backend doesn't take. The backend's `open` gets the parsed command line and reads
-its own options from it.
+against its own and every backend's, lists them in `--help` under the backends that take some,
+and refuses one the chosen backend doesn't take. The backend's `open` gets the parsed command line
+and reads its own options from it. A backend says what it shows in a word or two
+(`Backend::shows`: "PDFs", "documents"), which messages and `--help` give, and which formats
+(`Backend::formats`): each a `Format`, its name and the extensions that tell a file of it where
+its first bytes can't. `--help` lists them last, under what their backend shows, nothing about
+formats written in the viewer. A backend takes them from the tables its `opens` goes by (the
+image backend's `DECODED`, the extensions a document's or a workbook's kind is told by, `Codec`'s
+compressions in tar's), so what `--help` lists and what opens can't disagree;
+`the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks every backend
+built.
 
 The backends are `source/svg.rs` (feature `svg`), `source/tar.rs` (feature `tar`),
 `source/wordcraft.rs` (feature `word`), `source/gridcraft.rs` (feature `sheet`),
