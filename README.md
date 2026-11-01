@@ -27,24 +27,24 @@ More than a page opens a pager: one page at a time, two side by side when the wi
 enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Several files,
 a directory or an archive, are a list: a tile for each, by its first page, its name under it. The arrows
 choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc or `u` goes back. `c`
-copies the page, or the tile, to the clipboard as a picture. `?` lists the keys. Everything else
-(the options, the keys, tmux, SSH) is in [`docs/usage.md`](docs/usage.md), and how it works
-inside in [`docs/architecture.md`](docs/architecture.md), and why some choices were made in
-[`docs/adr/`](docs/adr/README.md).
+copies the page, or the tile, to the clipboard as a picture. `?` lists the keys.
 
-What it shows comes from backends, one for each kind of file, each behind a cargo feature and
-none of them known to the viewer by name; `clv --help` lists the formats a build's backends show
-and the libraries each shows them through, and the options of those that take some:
+**Everything else is in the manual, [`docs/usage.md`](docs/usage.md)**: the options, the keys, lists
+and archives, what each format shows, tmux, SSH and the limits.
 
-| Feature | Shows | Rendered by |
-|---|---|---|
-| `pdf` | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws them: comments without an appearance of their own are drawn, dynamic XFA forms are laid out, and either password opens a protected file |
-| `image` | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more, the right way up by their EXIF orientation | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide), in Rust |
-| `svg` | SVG drawings and svgz, drawn at the size shown: text in the system's fonts, embedded pictures, filters; nothing they link to outside the file | [resvg](https://github.com/linebender/resvg), in Rust, within limits of clv's own on what a drawing may cost ([ADR-0002](docs/adr/0002-render-svg-with-resvg.md), [ADR-0003](docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)) |
-| `zip` | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: the files in one that another backend opens, and its directories as folders | the [`zip`](https://crates.io/crates/zip) crate, in Rust: deflate, deflate64, bzip2, LZMA and XZ, not zstd or encrypted entries |
-| `word` | Word documents (docx, doc), OpenDocument text (odt) and RTF, laid out into pages as their app prints them: headers and footers, tables, pictures, text in the system's fonts or bundled ones; a password opens a protected Word document | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, in Rust (not its editing engine), with fonts of its own under the SIL Open Font License |
-| `sheet` | Spreadsheets: Excel workbooks (xlsx, xlsm, xlsb, xls), OpenDocument spreadsheets (ods) and values separated by commas or tabs (csv, tsv), each visible sheet as the pages it prints to, its formulas recalculated; a password opens a protected workbook. Text outside Western European letters prints blank, with a warning | [gridcraft](https://github.com/storytold/gridcraft)'s engine, in Rust, which prints a workbook to a PDF that the `pdf` backend then shows, so `sheet` brings `pdf` too |
-| `tar` | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories, read through once on a thread of their own while the pager says how far it has got; and a file compressed alone (`paper.pdf.gz`) as the file it unpacks to | in Rust: [flate2](https://crates.io/crates/flate2) (gzip), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2) (xz), and a tar reader of clv's own; unpacked into a temporary file that nothing names ([ADR-0004](docs/adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). Not zstd |
+## What it shows
+
+`clv --help` lists the formats your build shows and the options of those that take some.
+
+| Shows | Through |
+|---|---|
+| PDFs | [pdfcraft](https://github.com/storytold/pdfcraft) |
+| PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide) |
+| SVG drawings and svgz | [resvg](https://github.com/linebender/resvg) |
+| Word documents (docx, doc), OpenDocument text (odt) and RTF | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, with fonts of its own under the SIL Open Font License |
+| Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |
+| Zip archives (and what is a zip inside: jar, cbz, epub…), as directories | the [`zip`](https://crates.io/crates/zip) crate |
+| Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories; and a file compressed alone (`paper.pdf.gz`) | [flate2](https://crates.io/crates/flate2), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2), and a tar reader of clv's own |
 
 This began as `view` in pdfcraft's command line.
 
@@ -59,38 +59,7 @@ later:
 cargo install --locked --git https://github.com/dobladez/clview    # installs `clv`
 ```
 
-## Building
-
-```sh
-cargo install --path .      # installs `clv`
-```
-
-All seven features are on by default; `cargo build --no-default-features --features image`
-builds the viewer with images alone, and `--no-default-features` alone without any backend.
-
-The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
-`main` in [`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
-`[patch.crates-io]` ones included (they are pdfcraft's patched hayro and lopdf), then run the
-tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
-instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
-renderer would replace that file and the dependencies, and nothing else.
-
-The Word backend's wordcraft comes from git the same way, every `rev` of its crates at one commit;
-it needs no patches, since clv builds its readers, layout and renderer but not its engine, whose
-PDF export does. `tests/it/wordcraft.rs` fails if the crates disagree, or if a crate wordcraft
-patches comes to be built here. Only `src/source/wordcraft.rs` and its tests name wordcraft.
-The spreadsheet backend's gridcraft likewise, from `tests/it/gridcraft.rs` and
-`src/source/gridcraft.rs`; it reaches the PDF backend only by asking which backend opens the PDF
-it prints, never by name.
-
 ## Plans
-
-The pager shows sources (`src/source.rs`): anything with pages of a known size that a backend
-renders. A file goes to the first backend that opens it, going by its first bytes, and each
-backend brings its own options (`--password` is the PDF, Word and spreadsheet backends'). A backend may open a file to
-files instead of pages, as an archive holds them, which the viewer lists as it lists a directory.
-There are seven so far: PDFs, images, SVG drawings, Word documents, spreadsheets, and zip and tar
-archives.
 
 - Open a list's files only when their tiles come on screen, and let go of them after: today
   every file is opened before anything shows, which for a directory of large PDFs takes a while.
@@ -98,6 +67,13 @@ archives.
 - AVIF, colour profiles, and an animation's frames as its pages.
 - More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
   its pages.
+- Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
+
+## Working on clview
+
+How to build and test it, and the rules its code keeps, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+How it works inside is in [`docs/architecture.md`](docs/architecture.md), and why some choices were
+made in [`docs/adr/`](docs/adr/README.md).
 
 ## License
 

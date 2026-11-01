@@ -56,8 +56,10 @@ jobs:
           # The x86_64 macOS binary is built on an arm64 runner, which can't be relied on to run it.
           if [[ "$TARGET" != x86_64-apple-darwin ]]; then "$bin" --version; fi
           name="clv-$version-$TARGET"
-          mkdir "$name"
+          mkdir -p "$name/docs"
           cp "$bin" README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          # The manual, where the README's link finds it.
+          cp docs/usage.md "$name/docs/"
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
 
