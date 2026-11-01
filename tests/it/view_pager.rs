@@ -1,8 +1,8 @@
-//! `view` on a terminal, end to end: on a pseudo-terminal of its own that script(1) provides, so
+//! `clv` on a terminal, end to end: on a pseudo-terminal of its own that script(1) provides, so
 //! the terminal running the tests is never touched. Keys go in through script's stdin; what
-//! `view` draws comes out of its stdout. The window's size is set with stty; no pixel size is
+//! `clv` draws comes out of its stdout. The window's size is set with stty; no pixel size is
 //! reported, and the terminal these tests play doesn't know its cell size unless a test says so,
-//! so cells are the 10 × 20 px `view` assumes.
+//! so cells are the 10 × 20 px `clv` assumes.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -39,7 +39,7 @@ fn script(line: &str) -> Command {
 
 /// Whether script(1) gives a command a pseudo-terminal of the size asked for, which every test
 /// here stands on. Where it can't (no script, or one that can't open a terminal), the tests skip
-/// with a warning instead of failing over something that isn't `view`'s.
+/// with a warning instead of failing over something that isn't `clv`'s.
 pub(crate) fn pty_works() -> bool {
     static WORKS: OnceLock<bool> = OnceLock::new();
     *WORKS.get_or_init(|| {
@@ -70,7 +70,7 @@ pub(crate) fn pty_works() -> bool {
 /// `view pdf args…` running on a `cols` × `rows` pseudo-terminal.
 pub(crate) struct Session {
     child: Child,
-    /// script's stdin: keys, and the terminal's answers to `view`'s questions.
+    /// script's stdin: keys, and the terminal's answers to `clv`'s questions.
     keys: Arc<Mutex<Option<ChildStdin>>>,
     output: Arc<Mutex<Vec<u8>>>,
     /// The files taken, as a terminal on this machine takes them, or what was wrong with one.
@@ -78,10 +78,10 @@ pub(crate) struct Session {
 }
 
 /// The terminal at the other end of the pseudo-terminal: whether it reads the temporary files
-/// `view` names, as kitty does (and deletes them), the temporary directory `view` gets, the
+/// `clv` names, as kitty does (and deletes them), the temporary directory `clv` gets, the
 /// cell size it answers when asked (the device attributes alone when `None`), whether it says it
 /// speaks the clipboard protocol when asked and answers a write as kitty does (`None`: it never
-/// answers), and whether `view` runs over SSH.
+/// answers), and whether `clv` runs over SSH.
 #[derive(Clone, Copy)]
 struct Terminal<'a> {
     takes_files: bool,
@@ -94,10 +94,10 @@ struct Terminal<'a> {
 /// One that never reads files, as script(1) doesn't, and doesn't know its cell size.
 const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false };
 
-/// `view`'s question about the cell size, which a pseudo-terminal without pixels gets.
+/// `clv`'s question about the cell size, which a pseudo-terminal without pixels gets.
 const CELL_QUERY: &[u8] = b"\x1b[16t\x1b[c";
 
-/// `view`'s question whether the terminal speaks the clipboard protocol (DECRQM for mode 5522).
+/// `clv`'s question whether the terminal speaks the clipboard protocol (DECRQM for mode 5522).
 const CLIPBOARD_QUERY: &[u8] = b"\x1b[?5522$p";
 
 /// How the last packet of a clipboard write starts: its id, then the end of the packet.
@@ -200,7 +200,7 @@ impl Session {
         stdin.flush().unwrap();
     }
 
-    /// Wait for `view` to exit, all of its output collected.
+    /// Wait for `clv` to exit, all of its output collected.
     pub(crate) fn finish(&mut self) -> ExitStatus {
         let deadline = Instant::now() + PATIENCE;
         let status = loop {
@@ -861,8 +861,8 @@ fn pager_shows_even_one_page() {
     assert!(view.finish().success());
 }
 
-/// A directory of the test's own, empty, for `view`'s temporary files. Owner-only whatever the
-/// umask: `view` rightly refuses a parent that others can write to without the sticky bit, which
+/// A directory of the test's own, empty, for `clv`'s temporary files. Owner-only whatever the
+/// umask: `clv` rightly refuses a parent that others can write to without the sticky bit, which
 /// a umask of 0002 (common on Linux) would make it.
 fn tmpdir(test: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -873,7 +873,7 @@ fn tmpdir(test: &str) -> PathBuf {
     dir
 }
 
-/// The files `view` left in the temporary directory `dir`: in its own directory there.
+/// The files `clv` left in the temporary directory `dir`: in its own directory there.
 fn files_in(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {

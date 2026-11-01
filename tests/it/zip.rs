@@ -38,7 +38,7 @@ fn archive(path: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
     path.to_owned()
 }
 
-/// What `view` drew for `path` with `args`: each image's size, and the names under the tiles.
+/// What `clv` drew for `path` with `args`: each image's size, and the names under the tiles.
 fn shown(path: &Path, args: &[&str]) -> (Vec<(u32, u32)>, Vec<String>) {
     let out = view(path, &[&["--protocol", "kitty"], args].concat());
     assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));

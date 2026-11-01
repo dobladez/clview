@@ -15,7 +15,7 @@ use std::time::Duration;
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
 
 /// Reads the reader thread may queue before it waits for them to be taken: a bound on what a
-/// terminal flooding its input can make `view` hold.
+/// terminal flooding its input can make `clv` hold.
 const QUEUED_READS: usize = 64;
 
 pub(crate) struct Tty {
@@ -83,7 +83,7 @@ impl Tty {
         }
         let file = self.file.try_clone().map_err(|e| format!("reading the terminal: {e}"))?;
         let (sender, receiver) = sync_channel(QUEUED_READS);
-        // A thread still blocked in a read when `view` finishes ends with the process.
+        // A thread still blocked in a read when `clv` finishes ends with the process.
         std::thread::Builder::new()
             .name("view-terminal-input".into())
             .spawn(move || read_until_closed(file, &sender))

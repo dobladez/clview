@@ -1,7 +1,7 @@
 //! Keys from a terminal in raw mode: bytes in, keys out. Pure, and total over any bytes.
 //!
 //! The terminal's answers arrive among the keys: to graphics commands as `ESC _ G … ESC \` (the
-//! kitty graphics protocol), to `view`'s questions as CSI sequences (the cell size, device
+//! kitty graphics protocol), to `clv`'s questions as CSI sequences (the cell size, device
 //! attributes, whether it has a clipboard for pictures), late ones included, and to a clipboard
 //! write as an OSC sequence, `ESC ] 5522 ; … ESC \` (kitty's clipboard protocol). They are never
 //! keys, even cut in two: one that says an image is missing is [`Key::Missing`], the clipboard's
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn a_reply_cut_anywhere_past_its_esc_is_never_keys() {
-        // A late cell size and device attributes, as the terminal answers `view`'s question, and
+        // A late cell size and device attributes, as the terminal answers `clv`'s question, and
         // both together; each cut in two, the first part read alone with nothing more to come.
         // (Not cut just past an ESC: an ESC alone with nothing after it is the Esc key, which is
         // what the pager waits a while to tell.)

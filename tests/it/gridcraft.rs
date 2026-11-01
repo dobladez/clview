@@ -107,7 +107,7 @@ fn write(path: PathBuf, bytes: &[u8]) -> PathBuf {
     path
 }
 
-/// The size of each page `view` drew of `path`, given `args`.
+/// The size of each page `clv` drew of `path`, given `args`.
 fn drawn(path: &Path, args: &[&str]) -> Vec<(u32, u32)> {
     let out = view(path, &[&["--protocol", "kitty"], args].concat());
     assert!(out.status.success() && out.stderr.is_empty(), "{}: {}", path.display(), text(&out.stderr));

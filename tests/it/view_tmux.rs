@@ -1,14 +1,14 @@
-//! `view` inside tmux, end to end: every page on screen must reach the terminal, and the pane's
+//! `clv` inside tmux, end to end: every page on screen must reach the terminal, and the pane's
 //! `allow-passthrough` is left as it was.
 //!
 //! tmux throws output away when it decides its terminal can't keep up, and images sent through
 //! its passthrough go with it for good (it redraws its text, not what passed through). A screen
 //! of fully marked placeholder cells was enough to make it do so, so pages went black after a few
-//! flips. This runs `view` in a private tmux server (its own socket, killed at the end) whose
+//! flips. This runs `clv` in a private tmux server (its own socket, killed at the end) whose
 //! client sits on a pseudo-terminal from script(1); what tmux writes there is what a terminal
 //! would get. Skipped, with a warning, where tmux or a pseudo-terminal from script(1) isn't
 //! available, or tmux can't start: CI machines without them pass instead of failing over
-//! something that isn't `view`'s.
+//! something that isn't `clv`'s.
 #![cfg(unix)]
 
 use std::collections::HashSet;
@@ -98,7 +98,7 @@ impl Server {
     /// A client on a new pseudo-terminal, running `line` (a tmux command); what tmux writes to its
     /// terminal collects in the buffer returned.
     fn client(&mut self, line: &str) -> Arc<Mutex<Vec<u8>>> {
-        // Any terminal type tmux knows will do: `view` is told the protocol, and tmux passes the
+        // Any terminal type tmux knows will do: `clv` is told the protocol, and tmux passes the
         // escape codes through whatever it thinks the terminal is. xterm-256color is in every
         // terminfo database; kitty's own entry isn't.
         let line = format!("stty rows 58 cols 200 && exec tmux -L {} -f '{}' {line}", self.socket, self.config.display());
@@ -146,7 +146,7 @@ impl Drop for Server {
     }
 }
 
-/// `view` on a 12-page document in a private tmux server, in session `view`, with one client: the
+/// `clv` on a 12-page document in a private tmux server, in session `view`, with one client: the
 /// server, and what that client's terminal gets. `None`, with a warning, where tmux or script(1)
 /// can't run.
 fn start(test: &str) -> Option<(Server, Arc<Mutex<Vec<u8>>>)> {
@@ -155,14 +155,14 @@ fn start(test: &str) -> Option<(Server, Arc<Mutex<Vec<u8>>>)> {
         return None;
     }
     let pdf = fixture(test, 12);
-    // Passthrough on, as `view` needs and leaves to the user.
+    // Passthrough on, as `clv` needs and leaves to the user.
     let config = pdf.with_file_name("tmux.conf");
     std::fs::write(&config, "set -g allow-passthrough on\n").unwrap();
     let view = format!("'{BIN}' '{}' --protocol kitty", pdf.display());
     let mut server = Server::new(test, config);
     // A wide window: two pages side by side, and a screenful of placeholder cells per flip.
     let output = server.client(&format!("new-session -s view \"{view}\""));
-    // A tmux that can't start here (say, a terminal type it doesn't know) isn't `view`'s failure.
+    // A tmux that can't start here (say, a terminal type it doesn't know) isn't `clv`'s failure.
     let deadline = Instant::now() + Duration::from_secs(20);
     while server.run(&["has-session"]).is_none() {
         if Instant::now() > deadline {
@@ -286,7 +286,7 @@ fn an_off_allow_passthrough_is_left_as_it_was() {
     }
     let pdf = fixture("passthrough", 2);
     let dir = pdf.parent().unwrap().to_path_buf();
-    // tmux's own defaults, under which `allow-passthrough` is off. No client: `view` runs in
+    // tmux's own defaults, under which `allow-passthrough` is off. No client: `clv` runs in
     // panes of a detached session, and is told the protocol.
     let mut server = Server::new("passthrough", PathBuf::from("/dev/null"));
     if server.run(&["-f", "/dev/null", "new-session", "-d", "-s", "pt", "sleep 600"]).is_none() {
@@ -299,7 +299,7 @@ fn an_off_allow_passthrough_is_left_as_it_was() {
         eprintln!("warning: skipped: this tmux has no allow-passthrough (before 3.3, it passes everything)");
         return;
     }
-    // The pane's own setting, if any, and whether stdout goes to a file: `view` stops where
+    // The pane's own setting, if any, and whether stdout goes to a file: `clv` stops where
     // nothing would show, and goes on otherwise; never does the pane's setting change.
     let cases = [
         ("inherited off", None, false),
@@ -310,7 +310,7 @@ fn an_off_allow_passthrough_is_left_as_it_was() {
     for (n, (what, own, to_file)) in cases.into_iter().enumerate() {
         let file = |name: &str| dir.join(format!("{name}-{n}")).display().to_string();
         let out = if to_file { format!(" >'{}'", file("out")) } else { String::new() };
-        // The pane waits for its setting before `view` runs.
+        // The pane waits for its setting before `clv` runs.
         let line = format!(
             "while [ ! -e '{go}' ]; do sleep 0.1; done; '{BIN}' '{pdf}' --protocol kitty --no-pager 2>'{err}'{out}; \
              echo $? >'{status}.tmp'; mv '{status}.tmp' '{status}'; exec sleep 600",

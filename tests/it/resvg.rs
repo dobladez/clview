@@ -34,7 +34,7 @@ fn written(test: &str, name: &str, bytes: impl AsRef<[u8]>) -> PathBuf {
     path
 }
 
-/// What `view` printed for `path` with `args`, which must succeed without a word: each image.
+/// What `clv` printed for `path` with `args`, which must succeed without a word: each image.
 fn printed(path: &Path, args: &[&str]) -> Vec<image::RgbaImage> {
     let out = view(path, &[&["--protocol", "kitty"], args].concat());
     assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));

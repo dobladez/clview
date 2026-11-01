@@ -1,5 +1,5 @@
 //! Drawing from inside tmux. tmux keeps its own copy of the screen and knows nothing of images,
-//! so `view` sends its escape codes through tmux's passthrough (`allow-passthrough`, `man tmux`)
+//! so `clv` sends its escape codes through tmux's passthrough (`allow-passthrough`, `man tmux`)
 //! and draws Unicode placeholders that tmux keeps as text (see `kitty.rs`). Inside tmux, `TERM`
 //! names tmux, not the terminal, so tmux is asked which terminal its client is.
 
@@ -8,7 +8,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// How long a `tmux` command may take before `view` gives up on it.
+/// How long a `tmux` command may take before `clv` gives up on it.
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Whether this process runs inside tmux: tmux sets `TMUX` in its panes.
@@ -46,7 +46,7 @@ fn parse_client(out: &str) -> Client {
 }
 
 /// Whether tmux passes this pane's escape codes through: `allow-passthrough` must be `on` or
-/// `all` (tmux 3.3 and later drop them otherwise). `view` only asks. The setting lets any program
+/// `all` (tmux 3.3 and later drop them otherwise). `clv` only asks. The setting lets any program
 /// in the pane write to the terminal past tmux, so it is the user's to change
 /// ([`passthrough_off`]).
 pub(crate) fn passthrough() -> Result<bool, String> {
@@ -72,7 +72,7 @@ fn passthrough_off_for(pane: Option<&str>) -> String {
     )
 }
 
-/// The pane `view` runs in, as tmux names it in `TMUX_PANE`.
+/// The pane `clv` runs in, as tmux names it in `TMUX_PANE`.
 fn this_pane() -> Option<String> {
     std::env::var("TMUX_PANE").ok().filter(|pane| !pane.is_empty())
 }
@@ -91,7 +91,7 @@ fn passthrough_allowed(show: &str) -> bool {
 /// The most clients looked at, and remembered.
 const MAX_CLIENTS: usize = 64;
 
-/// What tmux says about the pane `view` runs in and the clients attached.
+/// What tmux says about the pane `clv` runs in and the clients attached.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Report {
     /// The pane's window, as `@3`.
@@ -231,7 +231,7 @@ fn parse_ssh(out: &str) -> Option<bool> {
     }
 }
 
-/// The pane `view` runs in, by its id (`%3`), when tmux says so.
+/// The pane `clv` runs in, by its id (`%3`), when tmux says so.
 pub(crate) fn pane() -> Option<String> {
     this_pane().filter(|pane| is_pane_id(pane))
 }

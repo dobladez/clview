@@ -1,7 +1,7 @@
 //! Pictures printed inside tmux, deleted from the terminal once no pane holds them.
 //!
 //! Printed inside tmux, a page is an image in the terminal and placeholder cells in the pane
-//! (`kitty.rs`), which tmux keeps as text. `view` exits with the image still in the terminal, so
+//! (`kitty.rs`), which tmux keeps as text. `clv` exits with the image still in the terminal, so
 //! that the cells show it again when they scroll back or their window comes back, and nothing
 //! ever tells the terminal when tmux lets go of them: `clear-history`, a closed pane, the history
 //! past its `history-limit`. kitty keeps such an image until its storage quota pushes it out

@@ -1,4 +1,4 @@
-//! `view` draws pages through the kitty graphics protocol. Test output is a pipe, not a terminal,
+//! `clv` draws pages through the kitty graphics protocol. Test output is a pipe, not a terminal,
 //! so these tests pass `--protocol kitty` and read the escape codes back from stdout.
 #![cfg(unix)]
 
@@ -22,7 +22,7 @@ fn fixture(test: &str, pages: usize) -> PathBuf {
     pdf
 }
 
-/// Run `view`, kept away from the terminal, the tmux and the SSH login the tests may run in.
+/// Run `clv`, kept away from the terminal, the tmux and the SSH login the tests may run in.
 pub(crate) fn view(pdf: &Path, args: &[&str]) -> Output {
     view_with(pdf, args, &[])
 }
@@ -41,7 +41,7 @@ pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// One image drawn by `view`: its first control keys and its decoded payload.
+/// One image drawn by `clv`: its first control keys and its decoded payload.
 pub(crate) struct Drawn {
     pub(crate) keys: String,
     pub(crate) png: Vec<u8>,
@@ -201,7 +201,7 @@ fn no_arguments_print_the_help() {
     assert!(text(&out.stdout).ends_with(end), "{}", text(&out.stdout));
 }
 
-/// Run `view` as if in a tmux pane, with no `tmux` command on the PATH to ask.
+/// Run `clv` as if in a tmux pane, with no `tmux` command on the PATH to ask.
 fn view_in_tmux(test: &str, pdf: &Path, args: &[&str]) -> Output {
     let empty = tmp(test, "empty-bin");
     std::fs::create_dir_all(&empty).unwrap();
@@ -252,7 +252,7 @@ fn inside_tmux_pages_go_through_passthrough_and_placeholders_draw_them() {
     let pdf = fixture("tmux", 1);
     let out = view_in_tmux("tmux", &pdf, &["--protocol", "kitty"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
-    // With no tmux to ask, `view` says it couldn't check passthrough, and goes on.
+    // With no tmux to ask, `clv` says it couldn't check passthrough, and goes on.
     assert!(text(&out.stderr).contains("allow-passthrough"), "{}", text(&out.stderr));
 
     // The image is transmitted, then placed virtually, all through passthrough.

@@ -193,7 +193,7 @@ impl Compression {
     }
 }
 
-/// Whether the terminal is at the other end of an SSH connection, so the bytes `view` sends
+/// Whether the terminal is at the other end of an SSH connection, so the bytes `clv` sends
 /// cross a network. Inside tmux, the session knows how its client attached (`tmux_says`); the
 /// pane's own environment may date from another attach.
 fn over_ssh(env_ssh: bool, tmux_says: Option<bool>) -> bool {
@@ -205,7 +205,7 @@ fn env_ssh() -> bool {
     ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"].iter().any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
 }
 
-/// The terminal `view` draws on.
+/// The terminal `clv` draws on.
 struct Terminal {
     output: Output,
     /// The cell size tmux or the terminal reports, for a tty that reports no pixel size.
@@ -870,7 +870,7 @@ fn ask(tty: &Tty, query: &[u8], done: impl Fn(&[u8]) -> bool) -> Result<Vec<u8>,
 }
 
 /// Inside tmux: ask tmux which terminal its client runs in (`TERM` names tmux itself), and
-/// whether the pane passes escape codes through. When it doesn't, `view` stops, and leaves the
+/// whether the pane passes escape codes through. When it doesn't, `clv` stops, and leaves the
 /// setting as it is ([`tmux::passthrough`]).
 fn tmux_terminal(protocol: Protocol) -> Result<Terminal, CliError> {
     let to_terminal = std::io::stdout().is_terminal();
@@ -922,7 +922,7 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// A line on stderr that doesn't stop `view`, made safe for the terminal.
+/// A line on stderr that doesn't stop `clv`, made safe for the terminal.
 fn note(line: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{}", printable(line));
 }
