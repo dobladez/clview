@@ -2,7 +2,7 @@
 
 `clv` draws the pages of a source (a PDF's, or an image as one page) in the terminal through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), directly or from
-inside tmux. Usage and behaviour are in [`docs/cli-view.md`](../../docs/cli-view.md); this
+inside tmux. Usage and behaviour are in [`docs/usage.md`](usage.md); this
 page is for working on the code: how pages get to the terminal, what is kept there, what can go
 wrong on the way, and why each choice was made. The numbers were measured on the macOS laptop it
 was developed on (kitty 0.45, tmux 3.5a), by black-box observation. The same probes, run again
@@ -82,14 +82,14 @@ and spreadsheet ones before zip, since a docx and an xlsx are zips (`source/head
 zip's first files say). A drawing parses once
 to open and keeps only where its bytes are; its renderer or pool parses it again on its first
 render and keeps the tree for renders at other sizes, each of which is estimated before it starts
-([ADR-0003](../../docs/adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)).
+([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)).
 A document is read and laid out to open, and keeps only where its bytes are and its pages' sizes;
 its renderer or pool reads and lays it out again on its first render, and keeps that
-([ADR-0005](../../docs/adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
+([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
 A spreadsheet is printed to a PDF when it opens, and opened as that PDF by the backend that
 opens it, found the way any file's backend is, not by name; what gridcraft said on reading the
 workbook rides with the first page's warnings
-([ADR-0006](../../docs/adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)). An image opens by its header alone and
+([ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)). An image opens by its header alone and
 decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
 large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
 it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive
@@ -129,7 +129,7 @@ of the four parts wanted most recently, then lets them go, and an image's decode
 (`Item::name`, in lower case) hold what is typed, in their order, so only they are on screen,
 rendered and sent ahead, and the parts of the others are let go of as an off-screen tile's are.
 The tiles keep the size the whole list gives them, so the matches are placements of what is in
-the terminal ([ADR-0010](../../docs/adr/0010-a-filtered-list-keeps-the-whole-lists-tile-size.md)).
+the terminal ([ADR-0010](adr/0010-a-filtered-list-keeps-the-whole-lists-tile-size.md)).
 A list shows once all its files are opened, so no tile arrives under a filter later. For the
 filter, `keys.rs` decodes UTF-8: a character past ASCII is one key, one cut between reads waits
 for the rest as an escape sequence does, and bytes that aren't UTF-8, or a control character,
@@ -307,7 +307,7 @@ inside tmux, before it draws, reads each recorded pane (`capture-pane -e` of its
 screen, and with `-a` the screen saved behind a full-screen program) and deletes the images
 whose cells are gone, or whose pane is. A pane it can't read, or one holding more than 32 MiB,
 keeps its records. The deletes go through the running pane, to the terminals showing it then.
-[ADR-0001](../../docs/adr/0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) has
+[ADR-0001](adr/0001-delete-pages-printed-inside-tmux-once-no-pane-holds-them.md) has
 the measurements and the alternatives.
 
 The clipboard's answers are read the same way: whether the terminal speaks its protocol (a CSI
@@ -350,7 +350,7 @@ pane.
 ## Copying to the clipboard (`clip.rs`)
 
 `c` copies the page the reader is on (`Nav::at`), or the tile chosen, as a picture. Where it goes
-is [ADR-0009](../../docs/adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md):
+is [ADR-0009](adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md):
 the terminal's own clipboard through kitty's clipboard protocol (OSC 5522) when the terminal
 speaks it, otherwise the system's (arboard) when the terminal is on this machine, otherwise none.
 The first `c` asks with DECRQM for mode 5522 (wrapped for tmux); an answer of 0 or 4, or none in

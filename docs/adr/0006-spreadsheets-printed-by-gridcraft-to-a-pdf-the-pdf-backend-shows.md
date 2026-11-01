@@ -6,7 +6,7 @@
 ## Context
 
 Spreadsheets were wanted beside documents: xlsx and its kin, the older xls, ods, and CSV
-([Spreadsheets](../cli-view.md#spreadsheets)). A sheet has no pages of its own; on paper it is cut
+([Spreadsheets](../usage.md#spreadsheets)). A sheet has no pages of its own; on paper it is cut
 into pages by its print area, page setup, title rows, and the order its app prints them in.
 [gridcraft](https://github.com/storytold/gridcraft), from the same authors as pdfcraft and
 wordcraft, is a spreadsheet in Rust (MIT or Apache-2.0): readers, a formula engine, and an

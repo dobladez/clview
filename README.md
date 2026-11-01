@@ -28,8 +28,8 @@ enough; `-` and `+` zoom out to rows of pages and back in to the window's width.
 a directory or an archive, are a list: a tile for each, by its first page, its name under it. The arrows
 choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc or `u` goes back. `c`
 copies the page, or the tile, to the clipboard as a picture. `?` lists the keys. Everything else
-(the options, the keys, tmux, SSH) is in [`docs/cli-view.md`](docs/cli-view.md), and how it works
-inside in [`src/view/README.md`](src/view/README.md), and why some choices were made in
+(the options, the keys, tmux, SSH) is in [`docs/usage.md`](docs/usage.md), and how it works
+inside in [`docs/architecture.md`](docs/architecture.md), and why some choices were made in
 [`docs/adr/`](docs/adr/README.md).
 
 What it shows comes from backends, one for each kind of file, each behind a cargo feature and

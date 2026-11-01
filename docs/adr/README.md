@@ -2,8 +2,8 @@
 
 An ADR records why clv does something one way and not another, as it stood when it was decided:
 the forces, the options, what was measured, and what would make it worth deciding again. How
-clv works today is in [`src/view/README.md`](../../src/view/README.md) and
-[`docs/cli-view.md`](../cli-view.md); an ADR doesn't repeat them, it links to them, and they link
+clv works today is in [`docs/architecture.md`](../architecture.md) and
+[`docs/usage.md`](../usage.md); an ADR doesn't repeat them, it links to them, and they link
 back to it where the choice shows.
 
 Use [`template.md`](template.md) as the starting point.
@@ -56,6 +56,6 @@ Don't write one for:
   new need.
 - Accepted ADRs aren't rewritten. A later finding goes in a dated `Update` at the end; a changed
   decision is a new ADR, and the old one's status line says `Superseded by ADR-NNNN`. Never
-  delete one.
+  delete one. Correcting a link whose target has moved isn't rewriting.
 - Dates are absolute (`2026-10-30`).
 - Add each new ADR to the index above.

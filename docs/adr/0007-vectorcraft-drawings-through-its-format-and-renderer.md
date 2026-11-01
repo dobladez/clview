@@ -9,7 +9,7 @@
 Apache-2.0), from the same authors as pdfcraft and wordcraft. It saves drawings as JSON
 (`.vectorcraft`, `.drawcraft` before its rename), gzipped when the app's Use Compression is on, its
 pictures after the JSON. A drawing has artboards, each a rectangle in points that an export
-draws, as a PDF has pages ([vectorcraft drawings](../cli-view.md#vectorcraft-drawings)).
+draws, as a PDF has pages ([vectorcraft drawings](https://github.com/dobladez/clview/blob/07d371915bd540be654ba09257b4437d81ded9c0/docs/cli-view.md#vectorcraft-drawings)).
 
 Its workspace splits the file format, the document model and the renderer (vello_cpu, as
 wordcraft's) from an engine (the app's commands, importers for SVG, PDF, EPS and others, PDF

@@ -6,7 +6,7 @@
 ## Context
 
 `/` filters a list (several files, a directory, an archive) to the tiles whose names hold what is
-typed, as it is typed ([Filtering a list](../cli-view.md#filtering-a-list); `Nav` and `Filter` in
+typed, as it is typed ([Filtering a list](../usage.md#filtering-a-list); `Nav` and `Filter` in
 `src/view/pager.rs`). How big a list's tiles are depends on how many there are: until the reader
 zooms, up to four to a row, fewer when there are fewer, and one alone as wide as the window
 (`fit::tiles`). A filter changes how many show at every key, so it decides whether the tiles

@@ -8,7 +8,7 @@
 After days of trying clv on directories of photos, kitty used 2 GB in Activity Monitor, and
 10 GB the day before. clv was run inside tmux. There it prints a page as an image in the
 terminal, under an id, plus Unicode placeholder cells that tmux keeps as text
-([Directly, or inside tmux](../../src/view/README.md#directly-or-inside-tmux)). `view` exits with
+([Directly, or inside tmux](../architecture.md#directly-or-inside-tmux)). `view` exits with
 the image still in the terminal, so the cells can show it again when they scroll back. Nothing
 tells the terminal when tmux lets go of them. tmux never sees the image, and the protocol leaves
 deleting to whoever sent it.

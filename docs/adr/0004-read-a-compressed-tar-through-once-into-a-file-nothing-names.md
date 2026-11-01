@@ -6,7 +6,7 @@
 ## Context
 
 A zip has a central directory: its files are listed from it and each is read on its own, so
-nothing of it is unpacked ahead ([Archives](../cli-view.md#archives)). A compressed tar
+nothing of it is unpacked ahead ([Archives](../usage.md#archives)). A compressed tar
 (`.tar.gz`, `.tar.bz2`, `.tar.xz`) has neither: its files are found only by unpacking it from the
 start, and a file in the middle only by unpacking everything before it. And the viewer reads each
 file of a list more than once, in name order: whole, to open it (an image's backend for its

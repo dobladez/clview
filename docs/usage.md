@@ -30,7 +30,7 @@ same as text that `cat` prints. `--pages` takes single pages and ranges, in
 the order given. Without it, `view` shows the whole document.
 
 How `view` works inside (the transports, what the terminal keeps, what tmux loses and the numbers
-behind each choice) is in [`src/view/README.md`](../src/view/README.md).
+behind each choice) is in [`docs/architecture.md`](architecture.md).
 
 ## Options
 

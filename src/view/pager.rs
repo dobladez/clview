@@ -22,7 +22,7 @@
 //! throws away what it can't deliver. The pages kept stay well under the quota ([`BUDGET`]); a
 //! placement of an image the terminal no longer has is answered, and the page is sent again; and
 //! inside tmux, the pager asks tmux after writing whether everything reached the terminal.
-//! `README.md` beside this file has the details.
+//! `docs/architecture.md` has the details.
 
 use std::path::PathBuf;
 use std::rc::Rc;

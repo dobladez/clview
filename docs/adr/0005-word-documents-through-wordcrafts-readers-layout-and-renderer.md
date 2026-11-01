@@ -6,7 +6,7 @@
 ## Context
 
 Word documents were wanted beside PDFs: docx, the older binary doc, and the OpenDocument text and
-RTF that word processors also save ([Documents](../cli-view.md#documents)). A document has no
+RTF that word processors also save ([Documents](../usage.md#documents)). A document has no
 pages until it is laid out: fonts, line breaks, tables, floating pictures, headers and footers,
 all of which a word processor does. [wordcraft](https://github.com/storytold/wordcraft), from the
 same authors as pdfcraft, is one in Rust (MIT or Apache-2.0), split into crates: a document
@@ -15,7 +15,7 @@ vello_cpu, an engine (the app's session, commands and file dispatch, with PDF ex
 app.
 
 A list shows many files at once, so a source must hold little while idle
-([`src/view/README.md`](../../src/view/README.md)), and a docx and an odt are zips, which the zip
+([`docs/architecture.md`](../architecture.md)), and a docx and an odt are zips, which the zip
 backend would show as folders.
 
 ## Decision

@@ -1,5 +1,5 @@
 //! Pages drawn straight into the terminal through the kitty graphics protocol (kitty, Ghostty,
-//! WezTerm and others), from a [`Source`]. Usage and behaviour: `docs/cli-view.md`.
+//! WezTerm and others), from a [`Source`]. Usage and behaviour: `docs/usage.md`.
 
 mod clip;
 mod detect;

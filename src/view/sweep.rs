@@ -12,7 +12,7 @@
 //! whose cells it no longer holds, or whose pane is gone, is deleted (`a=d,d=I`), and its record
 //! goes. A pane that can't be read keeps its records. Only recorded ids are deleted, never
 //! another program's images; and a delete reaches the terminals showing this pane at the time,
-//! so an image in a terminal attached to another session stays (`src/view/README.md`).
+//! so an image in a terminal attached to another session stays (`docs/architecture.md`).
 
 use std::collections::{HashMap, HashSet};
 

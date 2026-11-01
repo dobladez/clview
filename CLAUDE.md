@@ -1,7 +1,7 @@
 # clview — instructions for agents
 
 A terminal viewer: pages drawn through the kitty graphics protocol, a pager over them.
-`src/view/`'s README explains how it works.
+`docs/architecture.md` explains how it works.
 
 ## Layout
 - `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
@@ -30,7 +30,7 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
   tar.
 - **A backend's library is its own.** pdfcraft is named only in `src/source/pdfcraft.rs`, its
   tests (`tests/it/pdfcraft*.rs`), `Cargo.toml`, the line listing it in `source::BACKENDS`, and
-  the backend tables in the README and `docs/cli-view.md`; swapping the PDF renderer must touch
+  the backend tables in the README and `docs/usage.md`; swapping the PDF renderer must touch
   nothing else. `tests/it/pdfcraft.rs` checks the code. The generic tests write their PDFs by hand
   (`tests/it/fixtures.rs`), so any PDF backend reads them. Likewise resvg and what it renders
   with (usvg, tiny-skia, roxmltree, fontdb): only in `src/source/svg.rs`, `tests/it/resvg.rs`

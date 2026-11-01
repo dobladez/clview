@@ -6,7 +6,7 @@
 ## Context
 
 clv shows PDFs, images and zip archives; SVG drawings were wanted too, one page each, rendered at
-the size shown so they stay sharp ([Which files it shows](../cli-view.md#which-files-it-shows)).
+the size shown so they stay sharp ([Which files it shows](../usage.md#which-files-it-shows)).
 The project's rules constrain the library: Rust only, MIT or Apache-2.0 compatible, a backend's
 library named only in its own files, nothing read but the file shown, and a source holding
 little while idle, since a list of hundreds of files keeps them all open
