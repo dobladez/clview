@@ -121,6 +121,9 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
   else names its decompressors.
 
+- **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
+  heading. A binary of its own, so it runs without backends too.
+
 The terminal tests skip with a warning where tmux or script(1) can't run, so CI machines without
 them pass.
 
