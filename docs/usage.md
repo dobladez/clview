@@ -1,42 +1,36 @@
-# Showing pages in the terminal
+# Using clv
 
-`clv` draws PDF pages, images and SVG drawings straight into the terminal, through the
-[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). kitty, Ghostty
-and WezTerm speak it, among others. It works on macOS, Linux and FreeBSD, and inside tmux.
+Everything `clv` does that you can see, and how to control it. What it is and how to install it
+are in the [README](../README.md). `clv --help`, or `clv` alone, lists the options and the formats
+of the build you have. How it works inside is in [`docs/architecture.md`](architecture.md).
 
-```sh
-clv report.pdf               # page through it, like less
-clv --pages 1,3-5 report.pdf # page through just these
-clv --zoom width report.pdf  # as wide as the window
-clv --zoom 4 report.pdf      # four pages to a row
-clv --no-pager report.pdf    # print every page and exit, like cat
-clv --password PW secret.pdf
-clv *.png                    # several files: a tile each, Enter opens one
-clv ~/Photos                 # a directory: each file by its first page
-clv -r ~/Photos              # its subdirectories' files too
-clv comics.zip               # an archive, as a directory
-```
+## Paged or printed
 
-On a terminal, more than one page opens the pager: one page at a time, two side by side when
-the window is wide enough, or zoomed out, rows of them. A single page (a one-page document, or `--pages 3`) is printed
-at the cursor instead, and `view` exits, the way `less -F` prints text that fits.
+On a terminal, more than one page opens the pager: one page at a time, two side by side when the
+window is wide enough, or zoomed out, rows of them. A single page (a one-page document, or
+`--pages 3`) is printed at the cursor instead, and `clv` exits, the way `less -F` prints text that
+fits.
 
-Output to a file or a pipe takes `--protocol kitty` (without it, `view` stops with an error).
-Then `view` doesn't page: it writes every page's escape codes one after another, and `cat` shows
-them later in a terminal that speaks the protocol.
+Printed pages are drawn in rows one under another and stay in the terminal's scrollback, the same
+as text that `cat` prints.
 
-Printed pages are drawn in rows one under another and stay in the terminal's scrollback, the
-same as text that `cat` prints. `--pages` takes single pages and ranges, in
-the order given. Without it, `view` shows the whole document.
+Output to a file or a pipe takes `--protocol kitty` (without it, `clv` stops with an error). Then
+`clv` doesn't page: it writes every page's escape codes one after another, and `cat` shows them
+later in a terminal that speaks the protocol.
 
-How `view` works inside (the transports, what the terminal keeps, what tmux loses and the numbers
-behind each choice) is in [`docs/architecture.md`](architecture.md).
+A file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
 ## Options
 
+```sh
+clv --pages 1,3-5 report.pdf # page through just these
+clv --zoom width report.pdf  # as wide as the window
+clv --password PW secret.pdf
+```
+
 | Option | Meaning |
 |---|---|
-| `--pages 1,3-5` | the pages to show, in order (default: all of them); in a list, the tiles |
+| `--pages 1,3-5` | the pages to show, single pages and ranges, in the order given (default: all of them); in a list, the tiles |
 | `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
 | `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
@@ -60,244 +54,11 @@ formats this build shows, with the libraries each shows them through. It starts 
 version and what clview is, in a line each, and ends with where to report issues and ideas:
 <https://github.com/dobladez/clview>.
 
-## Several files
+## Keys
 
-`clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
-name under it, in the order given. The arrows choose a tile, its name highlighted and on the
-status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
-been given alone. Esc, Backspace or `u` goes back to the list as you left it. `/` narrows the
-list to the files whose names hold what you type ([Filtering a list](#filtering-a-list)).
-Printed, a list is its tiles, in rows, each row's names under it.
+`?` lists them in the pager too.
 
-`--pages` applies to what is shown, and a list's pages are its tiles: `clv --pages 2-3 *.pdf`
-shows the second and third files, each still by its first page and opened to all its pages. The
-tiles given keep the list's numbers, as a document's pages given keep theirs: the status line
-says `3/12 · 2 of 2`, and a number typed is one of the list's. A number past the end of the list
-is an error, as a page past the end of a file is. A pattern that matches a single file gives
-that file's pages, as naming it alone does.
-
-A file that can't be shown, among others, is left out: why is said on stderr before anything is
-shown, the pager's status line names it at first, and printed pages end with an error that says
-how many were left out. With none left, nothing is shown. An option goes to the files that take
-it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
-
-Opening a file reads what its backend needs to know its pages: an image's header, a PDF's whole
-file. Every file given is opened before anything shows, which for many large PDFs takes a while
-(20 of an 11 MB, 3,000-page manual take 16 seconds and half a gigabyte); opening only the files
-on screen is planned. Files are rendered when their tiles are wanted, two at a time in the pager,
-and what a file renders with is let go once the reader is elsewhere, so hundreds of photos open
-at once hold little more than their sizes.
-
-## Directories
-
-A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
-its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
-which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. A folder with
-many files says how far opening them has got (`opening photos/… 120 of 500`), and Esc stops
-it. They come in the order
-of their names, numbers by their value (`img2` before `img10`), letters regardless of case,
-subdirectories among the files. Hidden files are left out, and so, without a word, are files no
-backend opens, since a directory holds all sorts. A file a backend opens and can't show (a broken
-picture, a PDF that needs a password) is left out as one given by name is, with a warning: before
-anything shows for the directory given, and once the screen is back for one gone into. The status
-line names each file from the directory given (`2024/beach.jpg`).
-
-With `-r` (`--recurse`), each subdirectory's files are tiles in the list instead of a folder,
-at its place among the names, depth first, down to 32 directories. A link to a file is followed; a link to
-a directory is not, so links can't make a loop. At most 4,096 files are listed from a directory,
-and at most 100,000 entries read, so `clv -r ~` stops in time; a warning says when the listing
-stopped early.
-
-A directory and files can be given together, and so can several directories: each directory is a
-folder at its place among the arguments (with `-r`, its files, named from it: `photos/a.jpg`).
-
-## Archives
-
-A zip archive is shown as a directory is: a list of the files in it that a backend opens, read
-from the archive, and a folder for each directory in it. Given alone it is that list; among other
-files, or in a directory, it is a folder, tied up as a parcel (tape down and across it, and a bow)
-where a directory's is plain, which Enter goes into, and the status line names its files from it
-(`trip.zip/2024/beach.jpg`). `-r` lists its directories' files instead of folders
-when the archive is given; an archive in a directory stays a folder even then, since `-r` goes
-through directories, not into every archive (a jar, a document that is a zip inside). An archive
-in an archive is a folder too.
-
-From a zip, nothing is unpacked to disk: a file in it is read from it to choose its backend and
-again, whole, when it is drawn, so an archive open holds its list of names, not its files. Hidden
-names are left out, as on disk, and so is macOS's `__MACOSX` directory. A file larger than
-512 MiB unpacked, an encrypted one, or one packed in a way this build doesn't read (zstd) is left
-out with a warning, as a broken file in a directory is. At most 100,000 entries are read from an
-archive, 4,096 files listed from a directory in it, and names 32 directories deep.
-
-A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
-`.tar.xz`, `.cbt`…), is shown the same way, with the same limits. A compressed tar has no list of
-its files and can't be read from the middle, so its files are found by reading it through, once,
-when it is given or gone into: the status line says how far (`reading photos.tar.xz/… 40%`), then
-how many of its files are opened, and Esc stops it (`q` still quits). Given on the command line,
-it says so on stderr instead, where Ctrl-C stops it. That reading takes as long as unpacking the
-archive does: here, gzip unpacks some 2,500 MB a second, xz 260 to 420, and bzip2 only 30 to 110.
-It unpacks the archive into a temporary file that nothing names, removed as soon as it is made,
-which goes when you leave the archive, and in any case with clv, however clv ends; files are read
-from there, in any order. At most 4 GiB go there: a file past them is unpacked again from the
-start each time it is read, which is slow, and so is every file when there is no temporary
-directory to write to. At most 32 GiB of an archive are read through. A plain tar is read where
-it is, with nothing unpacked. Links, devices and GNU's sparse files are left out.
-
-A file compressed alone with gzip, bzip2 or xz, not a tar, is shown as the file it unpacks to:
-`paper.pdf.gz` as the PDF, at most 512 MiB unpacked. A file compressed twice is not shown, and
-neither is one that unpacks to what nothing shows. An option only the unpacked file's backend
-takes (`--password` for a `.pdf.gz`) is refused, as an option no backend takes is.
-
-## Which files it shows
-
-A file is shown by the first backend that opens it, going by the file's first bytes, and by its
-name only where they can't tell (a TGA, a Word document or a workbook in a compound file, a CSV).
-`clv --help` ends with the formats this build shows, under what each backend shows and the
-libraries it shows them through, and the extensions of those that go by their name: each backend
-lists them from the same tables it opens files by, so a build without a backend lists none of its
-formats. Before them come the options a
-backend takes besides the ones above, under it; a backend that takes none has no heading. An
-option that only another backend takes is refused, since it would do nothing for the file. The
-file is read once, so `cat report.pdf | clv /dev/stdin` works too.
-
-| Backend | Shows | Its options |
-|---|---|---|
-| `resvg` (the `svg` feature, on by default) | SVG drawings: XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its `.svg` or `.svgz` name. Other XML is not one. Asked first: a PDF's header may be anywhere in those bytes, which a drawing's text may hold | none |
-| `wordcraft` (the `word` feature, on by default) | Word documents, OpenDocument text and RTF ([Documents](#documents)): an RTF by its first bytes (`{\rtf`), whatever its name; an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document, a compound file, by such a name only, since spreadsheets and slides are compound files too. Asked third, for the reason SVG is first (an RTF's text), and before zip | `--password PW`: the password of a protected Word document |
-| `gridcraft` (the `sheet` feature, on by default, which brings `pdf`) | Spreadsheets ([Spreadsheets](#spreadsheets)): an ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and text. Asked fourth, before zip | `--password PW`: the password of a protected workbook |
-| `pdfcraft` (the `pdf` feature, on by default) | PDFs: a file with `%PDF-` in its first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
-| `image` (the `image` feature, on by default) | Images, known by their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld, and TGA, which has no signature, by its `.tga` name | none |
-| `zip` (the `zip` feature, on by default) | Zip archives, known by their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips the Word and spreadsheet backends don't take, as directories ([Archives](#archives)) | none |
-| `tar` (the `tar` feature, on by default) | Tar archives, by a POSIX or GNU header first (`ustar`, its checksum right), as directories; and files compressed with gzip, bzip2 or xz, by their signature: a compressed tar as an archive, anything else as the file it unpacks to ([Archives](#archives)). Asked second, for the reason SVG is first: a tar's first file starts 512 bytes in | none |
-
-PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app and
-`pdfcraft-cli render` draw them: comments without an appearance of their own are drawn too, and a
-dynamic XFA form shows the pages its template lays out into, not the placeholder page the file
-carries for viewers that can't. A page whose content runs past pdfcraft's safety budget is drawn
-without the rest of it, and a colour it can't compute (a colour space it can't read, a tint
-transform it can't evaluate) is painted in a fallback colour, each with a warning. To write an
-image file instead, use `pdfcraft-cli render report.pdf --page 1 --out page.png`.
-
-An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
-photo taken with the phone on its side shows upright). It is fitted to the window like a page,
-but never made larger than it is: a pixel of the picture to a pixel of the screen at most, so an
-icon shows as small as it is. `--zoom width` (and `+` to the width) still makes it as wide as the
-window. The first frame of an animation is shown. Colour profiles are not
-applied yet: a picture in a wide-gamut space (Display P3, Adobe RGB) shows a little duller than
-it should. AVIF and DDS files are recognised and refused with their format's name: the `image`
-crate's AVIF decoder gets most AVIFs' colours wrong in 0.25.10, and it has no DDS decoder. A
-picture whose pixels would take more than 512 MiB (about 134 megapixels) is refused when it is
-opened.
-
-An SVG drawing is one page, rendered by [resvg](https://github.com/linebender/resvg) at the size
-it is shown, so it stays sharp however far it is zoomed. Its size is its own (`width` and
-`height`, in CSS pixels at 96 per inch), or its `viewBox`'s; one that says neither is as large as
-what it draws reaches from its origin, as resvg sizes it, and 100 × 100 if it draws nothing.
-Unlike a picture, it is fitted to the window as a PDF's page is, made larger as well as smaller:
-a 24-pixel icon fills the window. Text is drawn with the system's fonts, which are looked for
-only once a drawing has text (about 15 ms on macOS); a `font-family` the system lacks falls back
-to its serif font, and a drawing with no fonts to draw its text with is drawn
-without it, with a warning. Pictures embedded in it (JPEG, PNG, GIF and WebP `data:` URLs) are
-drawn, and so are SVGs embedded in it, down to four deep.
-
-A drawing reads nothing but itself: a picture, a stylesheet, a font or another drawing it links
-to by a path or a URL is left out, and a warning on the page says how many links weren't
-followed. An entity declared outside it (`SYSTEM`) is never read. What a drawing costs is
-bounded before it is spent ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)):
-
-- A drawing larger than 64 MiB, or an svgz that unpacks to more, is refused.
-- Before it is parsed, what it repeats is counted: its entities expanded, each `use` copied, a
-  marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to
-  for each shape. More than 128 MiB of content that way, more than a million elements, more than
-  1024 levels deep, or stylesheets whose rules times its elements are more than 50 million, and
-  it is refused.
-- More than 200,000 characters of text (its `use`s counted) are left out, with a warning, and
-  the rest is drawn; so is text that would take more than about three seconds to lay out (a
-  `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s). So is an embedded picture
-  of more than 64 MiB decoded, and an embedded drawing that is broken or nested too deep.
-- Before a page renders, what resvg will hold at once (a layer for each group with opacity, a
-  clip path, a mask or a filter, a filter's buffers, a pattern's tile) and how many pixels it
-  will paint are estimated. A page that would hold more than 1 GiB, or paint more than 4,000
-  million pixels (about seven seconds), fails with why; the same drawing smaller, its tile in a
-  list, still renders. resvg itself bounds a layer only to 25 times the window.
-
-A render once begun can't be stopped: a page within the limits but slow still takes its time on
-a render thread, while the keys work.
-
-### Documents
-
-A Word document (docx, or a Word 97-2003 doc), an OpenDocument text (odt) or an RTF is laid out
-into pages by [wordcraft](https://github.com/storytold/wordcraft), as its app prints them: each
-page its own size, in points, fitted to the window as a PDF's is; headers and footers, tables,
-lists, pictures and shapes; tracked changes marked up, as Word prints them unless told not to
-(what was deleted struck through, what was inserted underlined, a bar beside each changed line);
-no comment balloons, no proofing marks. Text is set in the fonts it names when the system has
-them, and otherwise in the ones wordcraft substitutes, its own included (Source Serif, Source
-Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens with `--password`;
-without it, clv says it needs one.
-
-Opening a document reads and lays it out whole, to know its pages (a quarter of a second for 500
-pages, on an M3 Max), and keeps only their sizes: shown, it is read and laid out again, and kept
-while it is (about 200 MB for those 500 pages). A file larger than 256 MiB is refused, and a
-page that would take more than 64 million pixels fails, as a drawing's does. Beyond those, what a
-document may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it
-nests), not by clv's: one slow to lay out holds up its opening. Why it is read this way, and
-not through wordcraft's engine, is in
-[ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md).
-
-### Spreadsheets
-
-A workbook (xlsx, xlsm, xlsb or xls), an OpenDocument spreadsheet (ods) or a file of values
-separated by commas or tabs (csv, tsv) is shown as [gridcraft](https://github.com/storytold/gridcraft)
-prints it: each visible sheet's pages, laid out by its print area, page setup, title rows,
-headers and footers, gridlines and charts, in the order of its sheets; a hidden sheet prints
-none. Its formulas are recalculated first, as gridcraft's app does when it opens a workbook, so a
-formula saved without its value shows one. gridcraft prints the pages to a PDF, which the PDF
-backend shows like any other, fitted to the window. A CSV's columns are made as wide as what they
-hold, as gridcraft's app makes them on importing one. A protected workbook opens with
-`--password`; without it, clv says it needs one.
-
-What gridcraft says on reading a workbook comes as a warning with its first page: a sheet cut
-short at one of its limits (it reads at most a million XML elements of a sheet, about 37,000
-rows of twelve columns), and that an ods or an xlsb is shown by its values alone (gridcraft
-reads their formatting, charts and pictures from neither). So does text in letters other than
-Western European ones (Greek, Cyrillic, Chinese…, and symbols such as `≤`): the PDF gridcraft
-prints to sets it in a font it doesn't carry, and the PDF backend has none to put in its place,
-so that text is blank.
-
-Opening a workbook reads it, recalculates it and prints every page, then lets go of it: what is
-kept is the PDF. On an M3 Max that took 6 ms for a styled workbook of four sheets, and 1.5 s for
-a 7.6 MB one of 37,000 rows that prints to 1,648 pages. A file larger than 64 MiB is refused, and
-so is an xlsx whose sheets unpack to more than 128 MiB together, which would take some 850 MB once
-read (one of 97 MiB took 649 MB). gridcraft
-prints at most 2,000 pages, down a sheet's rows before across its columns, so a very wide sheet
-loses its right-hand pages past that. Why spreadsheets are printed this way is in
-[ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md).
-
-## Paging through a document
-
-The pager shows pages on the alternate screen, like `less`. The shell's scrollback is left as it
-was, and quitting returns to it. With `--pages`, the pager goes through those pages only, in
-their order.
-
-When the window is wide enough, two pages share it side by side, like an open book: pages 1–2,
-then 3–4, and the keys that turn a page turn both. Two pages go side by side when each keeps at
-least 80% of the size it would have alone, as portrait pages in a wide window do. Until you zoom,
-the pager decides this again whenever the window changes size.
-
-`-` zooms out: one more page to a row each time, in as many rows as fit the window, so zoomed
-far out the screen is an overview of the document. It stops at 8 pages to a row, or before a page
-would be narrower than 8 columns. The zoom is a size, whatever the number of pages: at four to a
-row, a single page takes a quarter of the width, and fewer pages than a row takes sit in the middle
-of the screen. `+` zooms in: one page fewer
-to a row, and from one page, the page as wide as the window, which scrolls; that is as far in as
-it goes. `=` and `_` work too: the same keys, with Shift or without.
-
-Rows start the way a book's spreads do: at three to a row, pages 1–3, 4–6 and so on. The page
-you are on stays on screen as you zoom, and the last row of the document stops at the bottom of
-the screen, the way `less` stops at the last line. The page at the start of your row sets the
-size of every page on screen, and a page is never made smaller to fit another row: at one page
-to a row, a tall window shows landscape pages two or three at a time, one under another.
+In a file's pages:
 
 | Keys | Action |
 |---|---|
@@ -334,12 +95,164 @@ In a list:
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
+## Paging through a document
+
+The pager shows pages on the alternate screen, like `less`. The shell's scrollback is left as it
+was, and quitting returns to it. With `--pages`, the pager goes through those pages only, in
+their order.
+
+When the window is wide enough, two pages share it side by side, like an open book: pages 1–2,
+then 3–4, and the keys that turn a page turn both. Two pages go side by side when each keeps at
+least 80% of the size it would have alone, as portrait pages in a wide window do. Until you zoom,
+the pager decides this again whenever the window changes size.
+
+`-` zooms out: one more page to a row each time, in as many rows as fit the window, so zoomed
+far out the screen is an overview of the document. It stops at 8 pages to a row, or before a page
+would be narrower than 8 columns. The zoom is a size, whatever the number of pages: at four to a
+row, a single page takes a quarter of the width, and fewer pages than a row takes sit in the middle
+of the screen. `+` zooms in: one page fewer to a row, and from one page, the page as wide as the
+window, which scrolls; that is as far in as it goes. `=` and `_` work too: the same keys, with
+Shift or without.
+
+Rows start the way a book's spreads do: at three to a row, pages 1–3, 4–6 and so on. The page
+you are on stays on screen as you zoom, and the last row of the document stops at the bottom of
+the screen, the way `less` stops at the last line. The page at the start of your row sets the
+size of every page on screen, and a page is never made smaller to fit another row: at one page
+to a row, a tall window shows landscape pages two or three at a time, one under another.
+
+The pager follows the window: after a resize, the pages are drawn again for the new size, as many
+to a row as you zoomed to, or as the new size allows. Pages are rendered when they are shown, on a
+thread of their own: the keys keep working while a slow page renders (the status line's `…` says it
+is rendering), moving on cancels it, and the renderer's watchdog gives up on a page that takes too
+long (20 seconds a try) and says so.
+
+The pages around the one on screen are prepared ahead, so turning to them is instant. Jumping
+further away waits for the page to render.
+
+Quitting always puts the terminal back as it was, including after an error. A pager killed by a
+signal (`kill`, a closed SSH session) can leave the terminal in raw mode; `reset` fixes that.
+
+### The status line
+
+The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
+`pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`
+before them while the pages on screen render. A narrow window drops the zoom, then `? help`. The
+name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
+at the end still differ), and a message (a page that failed, `fully zoomed in`, a page number
+being typed) sits just left of the right side, cutting the name shorter while it is there. Until
+the first key, the message is a reminder of the main keys.
+
+### Copying a page
+
+`c` copies the page you are on to the clipboard as a picture, ready to paste into a document or a
+chat: with pages side by side, the first of them, or the one whose number you typed; in a list,
+the tile chosen. The status line says `copying page 3…`, then `copied page 3, 1224 × 1584
+pixels` (a picture, or a document of one page, by its name), or why not; the keys keep working
+meanwhile. A picture is copied at its own size, and anything else at twice the size of its unit:
+a PDF's page at 144 pixels per inch (US Letter is 1224 × 1584), an SVG drawing at twice its size.
+Either way, at most 8192 pixels a side and 16 megapixels, as a page on screen is, so a large
+photograph may be made smaller (`copied photo.jpg, 4899 × 3266 pixels of its 6000 × 4000`).
+
+Where it goes depends on the terminal ([ADR-0009](adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md)).
+The first `c` asks the terminal whether it has a clipboard for pictures
+([kitty's clipboard protocol](https://sw.kovidgoyal.net/kitty/clipboard/)). kitty does: the page
+goes to it as a PNG, over SSH and through tmux too, and kitty says when it has it; a terminal
+told not to let programs write its clipboard (kitty's `clipboard_control`) says so, and nothing is
+copied. Ghostty and WezTerm have only a clipboard for text, so the page goes to this machine's
+clipboard instead (the macOS pasteboard, X11), when the terminal runs on this machine; over SSH
+it can't reach yours, and the status line says so. On X11 the picture stays on the clipboard only
+while `clv` runs, unless a clipboard manager keeps it.
+
+## Several files
+
+`clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
+name under it, in the order given. The arrows choose a tile, its name highlighted and on the
+status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
+been given alone. Esc, Backspace or `u` goes back to the list as you left it. `/` narrows the
+list to the files whose names hold what you type ([Filtering a list](#filtering-a-list)).
+Printed, a list is its tiles, in rows, each row's names under it.
+
 A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:
 up to four to a row until you zoom (fewer when there are fewer), as many rows as fit. The screen
 moves only when the tile you choose leaves it, and the tiles show as they render, as a gallery's
 do. `--zoom` sets the list's tiles to a row; a file opened from it starts at `auto`.
 
-### Filtering a list
+`--pages` applies to what is shown, and a list's pages are its tiles: `clv --pages 2-3 *.pdf`
+shows the second and third files, each still by its first page and opened to all its pages. The
+tiles given keep the list's numbers, as a document's pages given keep theirs: the status line
+says `3/12 · 2 of 2`, and a number typed is one of the list's. A number past the end of the list
+is an error, as a page past the end of a file is. A pattern that matches a single file gives
+that file's pages, as naming it alone does.
+
+A file that can't be shown, among others, is left out: why is said on stderr before anything is
+shown, the pager's status line names it at first, and printed pages end with an error that says
+how many were left out. With none left, nothing is shown. An option goes to the files that take
+it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
+
+Opening a file reads what its backend needs to know its pages: an image's header, a PDF's whole
+file. Every file given is opened before anything shows, which for many large PDFs takes a while
+(20 of an 11 MB, 3,000-page manual take 16 seconds and half a gigabyte); opening only the files
+on screen is planned. Files are rendered only when their tiles are wanted, and let go of once
+you are elsewhere, so hundreds of photos open at once hold little more than their sizes.
+
+## Directories
+
+A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
+its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
+which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. A folder with
+many files says how far opening them has got (`opening photos/… 120 of 500`), and Esc stops
+it. They come in the order of their names, numbers by their value (`img2` before `img10`), letters
+regardless of case, subdirectories among the files. Hidden files are left out, and so, without a
+word, are files no backend opens, since a directory holds all sorts. A file a backend opens and
+can't show (a broken picture, a PDF that needs a password) is left out as one given by name is,
+with a warning: before anything shows for the directory given, and once the screen is back for one
+gone into. The status line names each file from the directory given (`2024/beach.jpg`).
+
+With `-r` (`--recurse`), each subdirectory's files are tiles in the list instead of a folder, at
+its place among the names, depth first. A link to a file is followed; a link to a directory is
+not, so links can't make a loop. A listing stops at its [limits](#limits), so `clv -r ~` stops in
+time, and a warning says when it stopped early.
+
+A directory and files can be given together, and so can several directories: each directory is a
+folder at its place among the arguments (with `-r`, its files, named from it: `photos/a.jpg`).
+
+## Archives
+
+A zip archive is shown as a directory is: a list of the files in it that a backend opens, read
+from the archive, and a folder for each directory in it. Given alone it is that list; among other
+files, or in a directory, it is a folder, tied up as a parcel (tape down and across it, and a bow)
+where a directory's is plain, which Enter goes into, and the status line names its files from it
+(`trip.zip/2024/beach.jpg`). `-r` lists its directories' files instead of folders when the archive
+is given; an archive in a directory stays a folder even then, since `-r` goes through directories,
+not into every archive (a jar, a document that is a zip inside). An archive in an archive is a
+folder too.
+
+From a zip, nothing is unpacked to disk: a file in it is read from it when it is drawn, so an
+archive open holds its list of names, not its files. Hidden names are left out, as on disk, and so
+is macOS's `__MACOSX` directory. It reads deflate, deflate64, bzip2, LZMA and XZ. A file past the
+[limits](#limits), an encrypted one, or one packed in a way this build doesn't read (zstd) is left
+out with a warning, as a broken file in a directory is.
+
+A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
+`.tar.xz`, `.cbt`…), is shown the same way. A compressed tar has no list of its files and can't be
+read from the middle, so its files are found by reading it through, once, when it is given or gone
+into: the status line says how far (`reading photos.tar.xz/… 40%`), then how many of its files are
+opened, and Esc stops it (`q` still quits). Given on the command line, it says so on stderr
+instead, where Ctrl-C stops it. That reading takes as long as unpacking the archive does: on an M3
+Max, gzip unpacks some 2,500 MB a second, xz 260 to 420, and bzip2 only 30 to 110. It unpacks the
+archive into a temporary file that nothing names, removed as soon as it is made, which goes when
+you leave the archive, and in any case with clv, however clv ends; files are read from there, in
+any order. A file past what that holds is unpacked again from the start each time it is read, which
+is slow, and so is every file when there is no temporary directory to write to. A plain tar is read
+where it is, with nothing unpacked. Links, devices and GNU's sparse files are left out. Zstd isn't
+read.
+
+A file compressed alone with gzip, bzip2 or xz, not a tar, is shown as the file it unpacks to:
+`paper.pdf.gz` as the PDF. A file compressed twice is not shown, and neither is one that unpacks
+to what nothing shows. An option only the unpacked file's backend takes (`--password` for a
+`.pdf.gz`) is refused, as an option no backend takes is.
+
+## Filtering a list
 
 `/` filters a list by name: as you type, only the tiles whose names hold what you typed stay, in
 their order, upper and lower case alike. The name is the one under the tile: `beach` keeps
@@ -370,46 +283,121 @@ match letter by letter (`É` matches `é`), and that is all: `e` doesn't match `
 typed as one letter match a name that stores it as `e` and an accent, as macOS's HFS+ did. In a
 file's pages, `/` only says that it filters lists: there is no search in a document's text.
 
-The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
-`pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`
-before them while the pages on screen render. A narrow window drops the zoom, then `? help`. The
-name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
-at the end still differ), and a message (a page that failed, `fully zoomed in`, a page number
-being typed) sits just left of the right side, cutting the name shorter while it is there. Until
-the first key, the message is a reminder of the main keys.
+## Which files it shows
 
-The pager follows the window: after a resize, the pages are drawn again for the new size, as many
-to a row as you zoomed to, or as the new size allows. Pages are rendered when they are shown, on a thread
-of their own: the keys keep working while a slow page renders (the status line's `…` says it
-is rendering), moving on cancels it, and the renderer's watchdog gives up on a page that takes too
-long (20 seconds a try) and says so.
+A file is shown by the first backend that opens it, going by how the file starts, and by its name
+only where that can't tell. `clv --help` ends with the formats this build shows, under what each
+backend shows and the libraries it shows them through, and the extensions of those that go by their
+name, so a build without a backend lists none of its formats. Before them come the options a
+backend takes besides the ones above, under it; a backend that takes none has no heading. An option
+that only another backend takes is refused, since it would do nothing for the file.
 
-The pages around the one on screen are prepared ahead, so turning to them is instant. Jumping
-further away waits for the page to render.
+| Files | Known by | Their options |
+|---|---|---|
+| [SVG drawings](#svg-drawings), and svgz, gzipped | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz by what it unpacks to; a `.svg` or `.svgz` name when the first 1024 bytes end before the root element. Other XML is not one | none |
+| [Word documents, OpenDocument text and RTF](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too | `--password PW`: the password of a protected Word document |
+| [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
+| [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
+| [Images](#images) | Their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld; and TGA, which has no signature, by its `.tga` name | none |
+| [Zip archives](#archives) | Their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips that aren't documents or workbooks, as directories | none |
+| [Tar archives and compressed files](#archives) | A POSIX or GNU tar header, as directories; files compressed with gzip, bzip2 or xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | none |
 
-### Copying a page
+### PDFs
 
-`c` copies the page you are on to the clipboard as a picture, ready to paste into a document or a
-chat: with pages side by side, the first of them, or the one whose number you typed; in a list,
-the tile chosen. The status line says `copying page 3…`, then `copied page 3, 1224 × 1584
-pixels` (a picture, or a document of one page, by its name), or why not; the keys keep working
-meanwhile. A picture is copied at its own size, and anything else at twice the size of its unit:
-a PDF's page at 144 pixels per inch (US Letter is 1224 × 1584), an SVG drawing at twice its size.
-Either way, at most 8192 pixels a side and 16 megapixels, as a page on screen is, so a large
-photograph may be made smaller (`copied photo.jpg, 4899 × 3266 pixels of its 6000 × 4000`).
+PDFs are rendered by [pdfcraft](https://github.com/storytold/pdfcraft), the way its app draws them:
+comments without an appearance of their own are drawn too, and a dynamic XFA form shows the pages
+its template lays out into, not the placeholder page the file carries for viewers that can't. A
+page whose content runs past pdfcraft's safety budget is drawn without the rest of it, and a colour
+it can't compute (a colour space it can't read, a tint transform it can't evaluate) is painted in a
+fallback colour, each with a warning.
 
-Where it goes depends on the terminal ([ADR-0009](adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md)).
-The first `c` asks the terminal whether it has a clipboard for pictures
-([kitty's clipboard protocol](https://sw.kovidgoyal.net/kitty/clipboard/)). kitty does: the page
-goes to it as a PNG, over SSH and through tmux too, and kitty says when it has it; a terminal
-told not to let programs write its clipboard (kitty's `clipboard_control`) says so, and nothing is
-copied. Ghostty and WezTerm have only a clipboard for text, so the page goes to this machine's
-clipboard instead (the macOS pasteboard, X11), when the terminal runs on this machine; over SSH
-it can't reach yours, and the status line says so. On X11 the picture stays on the clipboard only
-while `clv` runs, unless a clipboard manager keeps it.
+### Images
 
-Quitting always puts the terminal back as it was, including after an error. A pager killed by a
-signal (`kill`, a closed SSH session) can leave the terminal in raw mode; `reset` fixes that.
+An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
+photo taken with the phone on its side shows upright). It is fitted to the window like a page,
+but never made larger than it is: a pixel of the picture to a pixel of the screen at most, so an
+icon shows as small as it is. `--zoom width` (and `+` to the width) still makes it as wide as the
+window. The first frame of an animation is shown. Colour profiles are not applied yet: a picture
+in a wide-gamut space (Display P3, Adobe RGB) shows a little duller than it should. AVIF and DDS
+files are recognised and refused with their format's name: the `image` crate's AVIF decoder gets
+most AVIFs' colours wrong in 0.25.10, and it has no DDS decoder.
+
+### SVG drawings
+
+An SVG drawing is one page, rendered by [resvg](https://github.com/linebender/resvg) at the size
+it is shown, so it stays sharp however far it is zoomed. Its size is its own (`width` and
+`height`, in CSS pixels at 96 per inch), or its `viewBox`'s; one that says neither is as large as
+what it draws reaches from its origin, as resvg sizes it, and 100 × 100 if it draws nothing.
+Unlike a picture, it is fitted to the window as a PDF's page is, made larger as well as smaller:
+a 24-pixel icon fills the window. Text is drawn with the system's fonts; a `font-family` the system
+lacks falls back to its serif font, and a drawing with no fonts to draw its text with is drawn
+without it, with a warning. Pictures embedded in it (JPEG, PNG, GIF and WebP `data:` URLs) are
+drawn, and so are SVGs embedded in it.
+
+A drawing reads nothing but itself: a picture, a stylesheet, a font or another drawing it links
+to by a path or a URL is left out, and a warning on the page says how many links weren't
+followed. An entity declared outside it (`SYSTEM`) is never read.
+
+What a drawing costs is bounded before it is spent
+([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)): past its
+[limits](#limits), it is refused, what is too much of it is left out with a warning, or a page
+fails with why. A render once begun can't be stopped: a page within the limits but slow still takes
+its time on a render thread, while the keys work.
+
+### Documents
+
+A Word document (docx, or a Word 97-2003 doc), an OpenDocument text (odt) or an RTF is laid out
+into pages by [wordcraft](https://github.com/storytold/wordcraft), as its app prints them: each
+page its own size, in points, fitted to the window as a PDF's is; headers and footers, tables,
+lists, pictures and shapes; tracked changes marked up, as Word prints them unless told not to
+(what was deleted struck through, what was inserted underlined, a bar beside each changed line);
+no comment balloons, no proofing marks. Text is set in the fonts it names when the system has
+them, and otherwise in the ones wordcraft substitutes, its own included (Source Serif, Source
+Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens
+with `--password`; without it, clv says it needs one.
+
+Opening a document reads and lays it out whole, to know its pages: a quarter of a second for 500
+pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 500 pages hold about
+200 MB. Why it is read this way, and not through wordcraft's engine, is in
+[ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md).
+
+### Spreadsheets
+
+A workbook (xlsx, xlsm, xlsb or xls), an OpenDocument spreadsheet (ods) or a file of values
+separated by commas or tabs (csv, tsv) is shown as [gridcraft](https://github.com/storytold/gridcraft)
+prints it: each visible sheet's pages, laid out by its print area, page setup, title rows,
+headers and footers, gridlines and charts, in the order of its sheets; a hidden sheet prints
+none. Its formulas are recalculated first, as gridcraft's app does when it opens a workbook, so a
+formula saved without its value shows one. gridcraft prints the pages to a PDF, which the PDF
+backend shows like any other, fitted to the window. A CSV's columns are made as wide as what they
+hold, as gridcraft's app makes them on importing one. A protected workbook opens with
+`--password`; without it, clv says it needs one.
+
+What gridcraft says on reading a workbook comes as a warning with its first page: a sheet cut
+short at one of its [limits](#limits), and that an ods or an xlsb is shown by its values alone
+(gridcraft reads their formatting, charts and pictures from neither). So does text in letters other
+than Western European ones (Greek, Cyrillic, Chinese…, and symbols such as `≤`): the PDF gridcraft
+prints to sets it in a font it doesn't carry, and the PDF backend has none to put in its place, so
+that text is blank.
+
+Opening a workbook reads it, recalculates it and prints every page, then lets go of it: what is
+kept is the PDF. On an M3 Max that took 6 ms for a styled workbook of four sheets, and 1.5 s for
+a 7.6 MB one of 37,000 rows that prints to 1,648 pages. Why spreadsheets are printed this way is in
+[ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md).
+
+## Which terminals work
+
+kitty, Ghostty and WezTerm speak the
+[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), among others. It
+works on macOS, Linux and FreeBSD, and [inside tmux](#inside-tmux).
+
+`--protocol auto` trusts the environment for kitty (`TERM=xterm-kitty` or `KITTY_WINDOW_ID`) and
+Ghostty (`TERM=xterm-ghostty` or `TERM_PROGRAM=ghostty`). Any other terminal is asked with the
+query the protocol recommends, and has half a second to answer. A terminal that doesn't speak the
+protocol gets an error that says so, and nothing is drawn.
+
+Windows isn't supported yet: Windows Terminal speaks sixel, not the kitty protocol. Sixel may come
+later, which would also bring the terminals that speak only sixel.
 
 ## Size and sharpness
 
@@ -419,86 +407,94 @@ rendered larger than 8192 pixels on a side or 16 megapixels in all (more than a 
 which bounds the memory one page can take, however its document shapes it.
 
 The size in pixels usually comes with the window's size, as it does over SSH. Some ways in pass
-on only rows and columns, such as `docker exec` and `kubectl exec`; then `view` asks the terminal
+on only rows and columns, such as `docker exec` and `kubectl exec`; then `clv` asks the terminal
 how big its cells are, once, when it starts, and assumes 10 × 20 pixel cells if the terminal
 doesn't say. Inside tmux, tmux says. When there is no terminal to ask (output to a file with
-`--protocol kitty`, no controlling terminal), `view` assumes an 80 × 24 window.
+`--protocol kitty`, no controlling terminal), `clv` assumes an 80 × 24 window.
 
 ## On this machine or over SSH
 
 When the terminal runs on the same machine, the pager hands it pages through temporary files, as
-the protocol allows: kitty takes a page this way much faster than as a PNG inside the escape
-codes. Each page's pixels go into a new file that only you can read, which the terminal
-deletes as soon as it has read it. The files are in a directory of your own,
-`tty-graphics-protocol-clv-<uid>`, inside `TMPDIR`, else `/dev/shm`, else `/tmp`. Any the
-terminal leaves are removed when the pager ends, or, if it was killed, by the next one.
+the protocol allows, which kitty takes much faster than PNGs. They are new files that only you can read, in a directory of your own,
+`tty-graphics-protocol-clv-<uid>`, inside `TMPDIR`, else `/dev/shm`, else `/tmp`; the terminal
+deletes each as soon as it has read it, and any it leaves are removed when the pager ends, or, if
+it was killed, by the next one. Whether the terminal reads files from this machine is found out by
+trying, at the start. Until it does, and for good when it doesn't, pages travel as PNGs inside the
+escape codes, as they do when printing, so saved or piped output still works.
 
-Whether the terminal reads files from this machine is found out by trying, at the start. Until it
-does, and for good when it doesn't (a terminal without temporary files, or one on another
-machine), pages travel as PNGs inside the escape codes. They also do when the temporary directory
-isn't safe from other users, and when printing without the pager, so saved or piped output still
-works.
-
-A small PNG takes longer to make, and a fast one takes more bytes; the pixels are the same either
-way. On the same machine, bytes are cheap and the time is what shows, so `view` compresses fast.
-Over SSH, the bytes cross the network, so it compresses small and doesn't try temporary files. It
-goes by `SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY`, and inside tmux by how the tmux client
-attached. `--compression fast` or `--compression small` overrides the guess, and sends PNGs even
-on this machine.
-
-## Which terminals work
-
-`--protocol auto` trusts the environment for kitty (`TERM=xterm-kitty` or `KITTY_WINDOW_ID`) and
-Ghostty (`TERM=xterm-ghostty` or `TERM_PROGRAM=ghostty`). Any other terminal is asked with the
-query the protocol recommends, and has half a second to answer. A terminal that doesn't speak the
-protocol gets an error that says so, and nothing is drawn.
-
-Over SSH, the image is sent inside the escape codes themselves, so `view` works there too.
-
-`view` fails when stdout isn't a terminal, unless `--protocol kitty` is given. Windows isn't
-supported yet: Windows Terminal speaks sixel, not the kitty protocol. Sixel may come later, which
-would also bring the terminals that speak only sixel.
+Over SSH the image travels inside the escape codes too, so `clv` works there as well: the bytes
+cross the network, so it compresses small and doesn't try temporary files. It goes by
+`SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY`, and inside tmux by how the tmux client attached.
+`--compression fast` or `--compression small` overrides the guess, and sends PNGs even on this
+machine. A small PNG takes longer to make and a fast one takes more bytes; the pixels are the same
+either way.
 
 ## Inside tmux
 
-`view` works inside tmux 3.3 and later when tmux runs in a terminal that speaks the protocol:
+`clv` works inside tmux 3.3 and later when tmux runs in a terminal that speaks the protocol:
 
 - tmux doesn't know about images, so the escape codes go through tmux's passthrough. tmux only
   lets them through when the pane's `allow-passthrough` option is `on` or `all`. The option lets
-  any program in the pane send escape codes past tmux, so `view` never changes it. If it is off,
-  `view` stops and says how to turn it on: for every pane, add `set -g allow-passthrough on` to
+  any program in the pane send escape codes past tmux, so `clv` never changes it. If it is off,
+  `clv` stops and says how to turn it on: for every pane, add `set -g allow-passthrough on` to
   `~/.tmux.conf`; for one pane, run the `tmux set -p -t <pane> allow-passthrough on` it shows.
 - Pages are drawn with the protocol's *Unicode placeholders*: special characters that tmux stores
   as text, which the terminal draws as the image. The page scrolls with the pane, and survives
   switching windows and panes. Placeholders number at most 297 rows and columns, so inside tmux a
   page is never drawn larger than that.
-- Inside tmux, `TERM` describes tmux, not the terminal, so `view` asks tmux which terminal it runs
-  in. `xterm-kitty` and `xterm-ghostty` are trusted. For anything else, `view` refuses unless
+- Inside tmux, `TERM` describes tmux, not the terminal, so `clv` asks tmux which terminal it runs
+  in. `xterm-kitty` and `xterm-ghostty` are trusted. For anything else, `clv` refuses unless
   `--protocol kitty` is given.
 - Pages turned while the pane is hidden (another window in front, or the window zoomed on another
-  pane) arrive when it shows again: tmux throws away images sent to a hidden pane. A terminal that
-  attaches to the session later gets the pages too.
-- With more than one terminal showing the pane, pages go as PNGs, not temporary files: the first
-  terminal to read a file deletes it before the others can.
-- tmux throws output away when it decides the terminal can't keep up, images with it. `view`
+  pane) arrive when it shows again. A terminal that attaches to the session later gets the pages
+  too.
+- With more than one terminal showing the pane, pages go as PNGs, not temporary files.
+- tmux throws output away when it decides the terminal can't keep up, images with it. `clv`
   notices and sends the pages again. If tmux keeps dropping them, the status line says so, and
   `r` sends them again.
-- A printed page stays in the terminal after `view` exits, so its placeholders show it again when
-  they scroll back, and the terminal holds its pixels until something deletes it. `view` records
-  each page it prints in the tmux server's `@clv-printed` option, and each later run deletes the
-  pages no pane holds any more: after `clear-history`, a closed pane, or the history past
-  `history-limit`. Until the next run they stay. The deletes reach the terminals showing the pane
-  that run is in, so a terminal attached only to another session keeps its copies. Closing the
-  terminal's tab frees them all.
+- A printed page stays in the terminal after `clv` exits, so its placeholders show it again when
+  they scroll back, and the terminal holds its pixels until something deletes it. Each later run
+  inside tmux deletes the pages no pane holds any more: after `clear-history`, a closed pane, or
+  the history past `history-limit`. Until the next run they stay. The deletes reach the terminals
+  showing the pane that run is in, so a terminal attached only to another session keeps its copies.
+  Closing the terminal's tab frees them all.
 
 The terminal itself must support Unicode placeholders. kitty does. Other terminals may draw nothing
 inside tmux even though they draw pages outside it.
+
+## Limits
+
+Any file may be large, or made to cost a lot, so what `clv` reads and holds is bounded. Past a
+limit, it does as the last column says. How large a page is drawn is under
+[Size and sharpness](#size-and-sharpness).
+
+| What | Limit | Past it |
+|---|---|---|
+| A directory, or a directory in an archive | 4,096 files listed | the listing stops, with a warning |
+| A directory's entries read, or an archive's | 100,000 | the listing stops, with a warning |
+| Directories down, with `-r` or in an archive | 32 | what is deeper is left out, with a warning |
+| A file in an archive, unpacked | 512 MiB | left out, with a warning |
+| What a compressed tar unpacks into its temporary file | 4 GiB | a file past that is unpacked again each time it is read |
+| A compressed tar, read through | 32 GiB | the listing stops, with a warning |
+| A file compressed alone, unpacked | 512 MiB | refused |
+| An image's pixels | 512 MiB (about 134 megapixels) | refused when it is opened |
+| An SVG file, or what an svgz unpacks to | 64 MiB | refused |
+| An SVG's content, what it repeats counted: its entities expanded, each `use` copied, a marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to for each shape | 128 MiB, a million elements, 1024 levels deep, or stylesheet rules times elements past 50 million | refused before it is parsed |
+| An SVG's text, its `use`s counted | 200,000 characters, or about three seconds to lay out (a `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s) | that text is left out, with a warning, and the rest drawn |
+| What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
+| What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
+| A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
+| A document's page | 64 million pixels | the page fails with why |
+| A spreadsheet's file | 64 MiB | refused |
+| An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |
+| A sheet's XML, as gridcraft reads it | a million elements (about 37,000 rows of twelve columns) | the sheet is cut short, with a warning |
+| A workbook's pages, as gridcraft prints them | 2,000, down a sheet's rows before across its columns | a very wide sheet loses its right-hand pages |
 
 ## Errors
 
 - A page number past the end of the document fails before anything is drawn.
 - A page that can't be rendered is reported at the end. The other pages are still drawn, and
-  `view` exits with an error.
+  `clv` exits with an error.
 - What a backend warns about on a page (content it left out, a colour it had to guess) is said
   with the page's number: on stderr when printed, on the status line in the pager.
 - File names and messages are written with their control characters replaced, so neither a file

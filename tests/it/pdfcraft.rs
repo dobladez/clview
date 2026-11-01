@@ -107,7 +107,7 @@ fn a_dynamic_xfa_form_shows_its_laid_out_pages() {
 }
 
 /// A colour pdfcraft can't compute is painted in a fallback colour (pdfcraft#4260): the backend
-/// warns, in the words `pdfcraft-cli render` uses, and the viewer says it.
+/// warns, and the viewer says it.
 #[test]
 fn a_colour_painted_in_a_fallback_colour_is_said() {
     // A Separation colour whose tint transform is of no known function type.

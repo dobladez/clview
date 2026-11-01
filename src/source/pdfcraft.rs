@@ -129,7 +129,7 @@ fn pdfcraft_request(r: Request) -> RenderRequest {
     RenderRequest { page: r.page, kind: RequestKind::Pixels, tile: None, scale: r.scale, tag: r.tag, preview: false }
 }
 
-/// A page pdfcraft rendered, its warnings in the words `pdfcraft-cli render` uses.
+/// A page pdfcraft rendered, its warnings put into words.
 fn frame(p: RenderedPage) -> Frame {
     let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag };
     let warnings = p
