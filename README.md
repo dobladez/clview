@@ -4,6 +4,9 @@
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
 WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
 
+https://github.com/user-attachments/assets/1d3d8132-5dd3-40d7-bf62-e6b25327dbaa
+
+
 ```sh
 clv report.pdf             # page through it, like less
 clv --zoom 4 report.pdf    # four pages to a row
