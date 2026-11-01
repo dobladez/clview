@@ -134,7 +134,7 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
 fn help_lists_the_password_and_the_formats_by_pdfcraft() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
-    assert!(help.contains("\n\nPDFs:\n  --password PW "), "{help}");
+    assert!(help.contains("\n\n   for PDFs:\n     --password PW "), "{help}");
     assert!(help.contains("\n  PDFs, by pdfcraft: PDF\n"), "{help}");
 }
 

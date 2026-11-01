@@ -72,11 +72,13 @@ struct Server {
     config: PathBuf,
     path: Option<PathBuf>,
     clients: Vec<Child>,
+    /// A terminfo database with `xterm-kitty`, for a client that says it is kitty.
+    kitty_terminfo: Option<PathBuf>,
 }
 
 impl Server {
     fn new(test: &str, config: PathBuf) -> Self {
-        Server { socket: format!("clview-test-{test}-{}", std::process::id()), config, path: None, clients: Vec::new() }
+        Server { socket: format!("clview-test-{test}-{}", std::process::id()), config, path: None, clients: Vec::new(), kitty_terminfo: None }
     }
 
     /// A tmux command, outside any tmux the tests run in: its output when it succeeds.
@@ -102,15 +104,12 @@ impl Server {
         // escape codes through whatever it thinks the terminal is. xterm-256color is in every
         // terminfo database; kitty's own entry isn't.
         let line = format!("stty rows 58 cols 200 && exec tmux -L {} -f '{}' {line}", self.socket, self.config.display());
-        let mut client = script(&line)
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
-            .env("TERM", "xterm-256color")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut client = script(&line);
+        client.env_remove("TMUX").env_remove("TMUX_PANE").env("TERM", "xterm-256color");
+        if let Some(terminfo) = &self.kitty_terminfo {
+            client.env("TERM", "xterm-kitty").env("TERMINFO", terminfo);
+        }
+        let mut client = client.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let mut stdout = client.stdout.take().unwrap();
         self.clients.push(client);
         let output = Arc::new(Mutex::new(Vec::new()));
@@ -129,7 +128,12 @@ impl Server {
 
     /// The image ids the pane's placeholder cells name.
     fn on_screen(&self) -> HashSet<u32> {
-        on_screen(&self.tmux(&["capture-pane", "-p", "-e", "-t", "view:0"]))
+        self.on_screen_of("view:0")
+    }
+
+    /// The image ids the placeholder cells of `pane` name.
+    fn on_screen_of(&self, pane: &str) -> HashSet<u32> {
+        on_screen(&self.tmux(&["capture-pane", "-p", "-e", "-t", pane]))
     }
 }
 
@@ -356,6 +360,12 @@ fn an_off_allow_passthrough_is_left_as_it_was() {
 /// shell's pane, what the client's terminal gets, and a one-page document to print. `None`, with
 /// a warning, where tmux or script(1) can't run.
 fn shell(test: &str) -> Option<Shell> {
+    shell_on(test, false)
+}
+
+/// [`shell`], its client saying it is kitty when `kitty` is set: tmux then says so too, as it does
+/// for the real thing. `None`, with a warning, where no terminfo entry can be made for that.
+fn shell_on(test: &str, kitty: bool) -> Option<Shell> {
     if let Some(what) = missing() {
         eprintln!("warning: skipped: {what} here");
         return None;
@@ -364,6 +374,14 @@ fn shell(test: &str) -> Option<Shell> {
     let config = pdf.with_file_name("tmux.conf");
     std::fs::write(&config, "set -g allow-passthrough on\n").unwrap();
     let mut server = Server::new(test, config);
+    if kitty {
+        let terminfo = pdf.with_file_name("terminfo");
+        if !make_kitty_terminfo(&terminfo) {
+            eprintln!("warning: skipped: infocmp and tic can't make a terminfo entry here");
+            return None;
+        }
+        server.kitty_terminfo = Some(terminfo);
+    }
     let output = server.client("new-session -s print sh");
     let deadline = Instant::now() + Duration::from_secs(20);
     while server.run(&["has-session"]).is_none() {
@@ -466,4 +484,78 @@ fn a_page_behind_a_full_screen_program_stays_until_its_pane_closes() {
     let (got, _) = print(&server, &other, &output, &pdf);
     assert_eq!(ids_of(&got, "d"), [a]);
     assert!(recorded(&server).contains(&format!("{other}:{b}")));
+}
+
+/// An `xterm-kitty` entry in the terminfo database `dir`, a copy of xterm-256color's under that
+/// name: kitty's own isn't in every database, and tmux won't start on a terminal it can't look up.
+fn make_kitty_terminfo(dir: &std::path::Path) -> bool {
+    let Ok(entry) = Command::new("infocmp").args(["-x", "xterm-256color"]).env_remove("TERMINFO").output() else { return false };
+    if !entry.status.success() {
+        return false;
+    }
+    let source = dir.with_file_name("xterm-kitty.terminfo");
+    let named: Vec<String> = String::from_utf8_lossy(&entry.stdout)
+        .lines()
+        .map(|line| if line.starts_with("xterm-256color|") { "xterm-kitty|a copy of xterm-256color,".to_string() } else { line.to_string() })
+        .collect();
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(&source, named.join("\n") + "\n").unwrap();
+    Command::new("tic").args(["-x", "-o"]).arg(dir).arg(&source).output().is_ok_and(|out| out.status.success())
+}
+
+/// `--help` inside tmux: the image reaches the terminal, its placeholder cells sit to the right of
+/// the first lines with those lines intact, and the cursor comes back for the rest. Run again, it
+/// replaces the same image rather than adding one, and nothing is recorded to delete later.
+#[test]
+fn inside_tmux_help_shows_the_icon_beside_its_first_lines_and_keeps_one_image() {
+    let Some(Shell { server, pane, output, pdf }) = shell_on("help", true) else { return };
+    let plain = String::from_utf8(Command::new(BIN).arg("--help").output().unwrap().stdout).unwrap();
+    let plain: Vec<&str> = plain.lines().collect();
+    // What the terminal got from this run, once its image is in: the ids it was sent as.
+    let help = |done: &str| {
+        let from = output.lock().unwrap().len();
+        in_pane(&server, &pane, &format!("'{BIN}' --help"), &pdf.with_file_name(done));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let got = output.lock().unwrap()[from..].to_vec();
+            if !ids_of(&got, "t").is_empty() {
+                return got;
+            }
+            assert!(Instant::now() < deadline, "the icon never reached the terminal");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let first = help("first");
+    let [id] = ids_of(&first, "t")[..] else { panic!("sent more than one image: {:?}", ids_of(&first, "t")) };
+    assert_eq!(ids_of(&first, "p"), [id], "one virtual placement");
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let screen = loop {
+        let screen = String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-S", "-", "-t", &pane])).into_owned();
+        if screen.lines().filter(|line| line.contains('\u{10EEEE}')).count() == 5 && screen.contains(plain[plain.len() - 1]) {
+            break screen;
+        }
+        assert!(Instant::now() < deadline, "the icon's five rows never filled: {screen}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = lines.iter().position(|line| line.starts_with(plain[0])).unwrap();
+    for row in 0..5 {
+        let line = lines[at + row];
+        assert!(line.starts_with(plain[row]), "row {row} lost its text: {line:?}");
+        let cells = line.chars().filter(|c| *c == '\u{10EEEE}').count();
+        let before = line.chars().position(|c| c == '\u{10EEEE}').unwrap();
+        assert!(before >= plain[row].chars().count() + 2, "row {row} too close to its text: {line:?}");
+        // Diacritics on the row's first cell take no cell of their own, so these count cells.
+        assert_eq!(before + cells, 100, "row {row} doesn't end at the help's width: {line:?}");
+    }
+    for row in 5..plain.len() {
+        assert_eq!(lines[at + row].trim_end(), plain[row], "the text after the icon moved");
+    }
+    assert!(server.on_screen_of(&pane).is_subset(&arrived(&first)), "cells for an image that never arrived");
+
+    let second = help("second");
+    assert_eq!(ids_of(&second, "t"), [id], "a second image in the terminal");
+    assert_eq!(ids_of(&second, "d"), [0u32; 0]);
+    assert_eq!(recorded(&server), "", "the icon needs no record: it replaces itself");
 }

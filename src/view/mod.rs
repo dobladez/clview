@@ -6,6 +6,7 @@ mod detect;
 mod encode;
 mod files;
 mod fit;
+mod icon;
 mod keys;
 mod kitty;
 mod pager;
@@ -52,12 +53,7 @@ clv shows the pages of files in your terminal. It uses the kitty graphics protoc
 
 If a file has more than one page, clv shows it in a pager. If the window is wide, the pager shows
 two pages side by side. If you give more than one file, a directory or an archive, clv shows a
-list. The list shows each file as a tile, and each subdirectory as a folder.
-  * - and +: show more or fewer pages in a row.
-  * Enter: open the tile. Esc: go back.
-  * /: filter the list by name.
-  * c: copy the page or the tile to the clipboard.
-  * ?: show all the keys.";
+list. The list shows each file as a tile, and each subdirectory as a folder.";
 
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
@@ -250,23 +246,35 @@ const SHOWN: &str = "The files it shows, known by how they start or, where that 
 /// The columns `--help` wraps the formats it lists at.
 const HELP_WIDTH: usize = 100;
 
+/// Prints [`usage`], with the icon beside its first lines where this terminal shows it.
+pub(crate) fn print_help(backends: &[&dyn Backend]) -> Result<(), CliError> {
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&icon::with_icon(&usage(backends))).and_then(|()| stdout.flush()).map_err(CliError::Stdout)
+}
+
 /// What `--help` prints: what clview is, how it is called, the viewer's options, then those of
 /// each of `backends` that takes some, under what it shows, then the formats they show, under what
 /// each shows and the libraries it shows them through, and last its manual and where clview comes
 /// from.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
-    let mut out = format!("{IS}\n\n{name} [options] <file>…\n{name} --help | --version\n\n{ABOUT}\n\n");
-    let width = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).map(|o| o.shown().len()).max().unwrap_or(0);
-    let list = |out: &mut String, options: &[OptionSpec]| {
+    let mut out = format!("{IS}\n\n{name} [options] <file>…\n{name} --help | --version\n\n{ABOUT}\n\nGeneral Options:\n");
+    // A backend's options sit further in, under its heading, and every option's help starts at one
+    // column, so the column counts the indent.
+    const VIEWERS: &str = "  ";
+    const BACKENDS: &str = "     ";
+    let left = |indent: &str, option: &OptionSpec| format!("{indent}{}", option.shown());
+    let viewers = OPTIONS.iter().map(|o| left(VIEWERS, o));
+    let width = viewers.chain(backends.iter().flat_map(|b| b.options()).map(|o| left(BACKENDS, o))).map(|o| o.len()).max().unwrap_or(0);
+    let list = |out: &mut String, indent: &str, options: &[OptionSpec]| {
         for option in options {
-            out.push_str(&format!("  {:width$}  {}\n", option.shown(), option.help));
+            out.push_str(&format!("{:width$}  {}\n", left(indent, option), option.help));
         }
     };
-    list(&mut out, OPTIONS);
+    list(&mut out, VIEWERS, OPTIONS);
     for backend in backends.iter().filter(|b| !b.options().is_empty()) {
-        out.push_str(&format!("\n{}:\n", capitalized(backend.shows())));
-        list(&mut out, backend.options());
+        out.push_str(&format!("\n   for {}:\n", backend.shows()));
+        list(&mut out, BACKENDS, backend.options());
     }
     if backends.is_empty() {
         out.push_str("\nThis build has no backends, so it shows nothing.\n");
@@ -1336,13 +1344,23 @@ mod tests {
         let help = usage(&[&LOCKED, &PDF, &NONE, &OWN, &PICTURES, &MORE]);
         let is = format!("clview {}\nCommand-line Viewer: view graphic files without leaving your terminal", env!("CARGO_PKG_VERSION"));
         assert!(help.starts_with(&format!("{is}\n\n{0} [options] <file>…\n{0} --help | --version\n", crate::NAME)), "{help}");
+        // Under their heading, right after the words about clv, which say nothing of the keys.
+        assert!(help.contains(&format!("\n\n{ABOUT}\n\nGeneral Options:\n  --pages ")), "{help}");
+        assert!(!ABOUT.contains("Enter") && !ABOUT.contains("?:"), "{ABOUT}");
         // Aligned under the longest, `--compression auto|fast|small`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
         }
-        // A backend's options under what it shows, and nothing for one that takes none.
-        assert!(help.contains(&format!("\n\nLocked PDFs:\n  {:29}  a password\n\n", "--password PW")), "{help}");
-        assert!(!help.contains("\nPDFs:\n") && !help.contains("\nImages:\n") && !help.contains("no options"), "{help}");
+        // A backend's options further in, under what it shows, their help in the same column, and
+        // nothing for one that takes none.
+        assert!(help.contains(&format!("\n\n   for locked PDFs:\n     {:26}  a password\n\n", "--password PW")), "{help}");
+        assert!(!help.contains("for PDFs:") && !help.contains("for images:") && !help.contains("no options"), "{help}");
+        // An option that needs it widens the column, its indent counted.
+        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option", short: None, value: Some("VALUE"), help: "long" };
+        const TAKES_IT: Fake = Fake { name: "long", shows: "long things", magic: b"%PDF-", options: &[LONG], holds: false };
+        let wide = usage(&[&TAKES_IT]);
+        assert!(wide.contains("\n     --a-rather-long-option VALUE  long\n"), "{wide}");
+        assert!(wide.contains(&format!("\n  {:31}  {}\n", OPTIONS[0].shown(), OPTIONS[0].help)), "{wide}");
         // Last, the formats, under what their backend shows and the libraries it credits: those of
         // backends that show the same together, each once, with the names a file of it goes by,
         // wrapped at 100 columns; no credit for a backend that credits none, and no row for one

@@ -365,13 +365,13 @@ fn help_and_version() {
     let is = "Command-line Viewer: view graphic files without leaving your terminal";
     let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CARGO_PKG_VERSION"));
     assert!(out.status.success() && help.starts_with(&start), "{help}");
-    assert!(help.contains("\n  --zoom auto|width|N "), "{help}");
+    assert!(help.contains("\n\nGeneral Options:\n  --pages ") && help.contains("\n  --zoom auto|width|N "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
     // shows: the PDF one, and the documents' and spreadsheets' when they are built.
-    let heading = |(line, next): &(&str, &str)| !line.starts_with(' ') && line.ends_with(':') && next.starts_with("  --");
+    let heading = |(line, next): &(&str, &str)| line.starts_with("   for ") && line.ends_with(':') && next.starts_with("     --");
     let headings = help.lines().zip(help.lines().skip(1)).filter(heading).count();
     assert_eq!(headings, 1 + usize::from(cfg!(feature = "word")) + usize::from(cfg!(feature = "sheet")), "{help}");
-    assert!(help.contains("\n\nPDFs:\n  --password PW ") && !help.contains("no options"), "{help}");
+    assert!(help.contains("\n\n   for PDFs:\n     --password PW ") && !help.contains("no options"), "{help}");
     // Then the formats shown, by the libraries each backend credits: a backend's only when it is
     // built. Which libraries, each backend's own tests say.
     let shown = |what: &str, formats: &str| {

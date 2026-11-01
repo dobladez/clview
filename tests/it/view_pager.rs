@@ -81,7 +81,7 @@ pub(crate) struct Session {
 /// `clv` names, as kitty does (and deletes them), the temporary directory `clv` gets, the
 /// cell size it answers when asked (the device attributes alone when `None`), whether it says it
 /// speaks the clipboard protocol when asked and answers a write as kitty does (`None`: it never
-/// answers), and whether `clv` runs over SSH.
+/// answers), whether `clv` runs over SSH, and the `TERM` it names (`None`: whatever the tests got).
 #[derive(Clone, Copy)]
 struct Terminal<'a> {
     takes_files: bool,
@@ -89,10 +89,11 @@ struct Terminal<'a> {
     cell: Option<(u16, u16)>,
     clipboard: Option<bool>,
     ssh: bool,
+    term: Option<&'a str>,
 }
 
 /// One that never reads files, as script(1) doesn't, and doesn't know its cell size.
-const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false };
+const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false, term: None };
 
 /// `clv`'s question about the cell size, which a pseudo-terminal without pixels gets.
 const CELL_QUERY: &[u8] = b"\x1b[16t\x1b[c";
@@ -116,8 +117,11 @@ impl Session {
             script.env("TMPDIR", dir);
         }
         // On this machine, whatever machine the tests run from: an SSH login would turn the files off.
-        for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
+        for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "KITTY_WINDOW_ID", "TERM_PROGRAM"] {
             script.env_remove(name);
+        }
+        if let Some(term) = terminal.term {
+            script.env("TERM", term);
         }
         if terminal.ssh {
             script.env("SSH_CONNECTION", "192.0.2.1 50000 192.0.2.2 22");
@@ -1040,4 +1044,75 @@ fn in_a_list_c_copies_the_tile_chosen_and_a_folder_has_none() {
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `clv --help` on a `cols` × `rows` pseudo-terminal of type `term`, as it arrives there with the
+/// newlines put back: the pseudo-terminal writes each as `\r\n`.
+fn help_on(term: &str, cols: u16, rows: u16) -> String {
+    let terminal = Terminal { term: Some(term), ..PLAIN };
+    let mut help = Session::start_on(terminal, Path::new("--help"), &[], cols, rows);
+    assert!(help.finish().success());
+    help.text().replace("\r\n", "\n")
+}
+
+/// `clv --help` through a pipe: the text alone.
+fn help_text() -> String {
+    String::from_utf8(Command::new(BIN).arg("--help").output().unwrap().stdout).unwrap()
+}
+
+/// Where the icon can show, it goes up beside the first lines, nothing is asked of the terminal,
+/// and the cursor comes back for the rest of the text, which is the same.
+#[test]
+fn help_shows_the_icon_beside_its_first_lines_where_the_terminal_is_known_to_show_it() {
+    if !pty_works() {
+        return;
+    }
+    let plain = help_text();
+    let (end, _) = plain.match_indices('\n').nth(4).unwrap();
+    let (top, rest) = plain.split_at(end + 1);
+    for term in ["xterm-kitty", "xterm-ghostty"] {
+        let shown = help_on(term, 120, 40);
+        // 10 × 20 cells, as no pixel size is reported: 5 rows are 10 columns, ending at column 100.
+        let up = format!("{top}\x1b[5A\r\x1b[90C\x1b_Ga=T,f=100,t=d,q=2,C=1,c=10,r=5,");
+        assert!(shown.starts_with(&up), "{term}: {:?}", &shown[..up.len().min(shown.len())]);
+        assert!(shown.ends_with(&format!("\x1b\\\x1b[5B\r{rest}")), "{term}: {:?}", &shown[shown.len().saturating_sub(rest.len() + 20)..]);
+        assert_eq!(printed(&shown), 1, "{term}");
+        assert!(!shown.contains("\x1b[c") && !shown.contains("a=q"), "{term}: the terminal was asked something");
+    }
+}
+
+/// Where the icon can't show, the help is the same text, and the terminal is asked nothing.
+#[test]
+fn help_is_the_same_text_where_the_icon_cant_show() {
+    if !pty_works() {
+        return;
+    }
+    let plain = help_text();
+    assert_eq!(help_on("xterm-256color", 120, 40), plain, "a terminal not known to show it");
+    assert_eq!(help_on("xterm-kitty", 70, 40), plain, "no room beside the lines");
+    assert_eq!(help_on("xterm-kitty", 120, 3), plain, "too few rows");
+}
+
+/// Through a pipe, on a terminal that shows images, `--help` is the text alone: what reads it isn't
+/// the terminal. Run on a pseudo-terminal, since without one there is no window to fit an icon to,
+/// and nothing would be left for this to catch.
+#[test]
+fn help_through_a_pipe_has_no_escape_codes_on_a_terminal_that_shows_images() {
+    if !pty_works() {
+        return;
+    }
+    let mut child = script(&format!("stty rows 40 cols 120 && '{BIN}' --help | cat"))
+        .env("TERM", "xterm-kitty")
+        .env("KITTY_WINDOW_ID", "1")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+    assert_eq!(String::from_utf8(out).unwrap().replace("\r\n", "\n"), help_text());
 }

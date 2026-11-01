@@ -54,6 +54,11 @@ formats this build shows, with the libraries each shows them through. It starts 
 version and what clview is, in a line each, and ends with a link to this manual and where to report
 issues and ideas: <https://github.com/dobladez/clview>.
 
+In kitty and Ghostty, [inside tmux](#inside-tmux) too, clv's icon sits to the right of the help's
+first lines, smaller or not at all when the window is narrow. Everywhere else, and through a pipe
+or into a file, the help is the same text without it. `clv` asks the terminal nothing for it, so a
+terminal the environment doesn't name gets no icon, WezTerm among them, though it shows pages.
+
 ## Keys
 
 `?` lists them in the pager too.

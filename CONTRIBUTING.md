@@ -107,10 +107,12 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 - **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
-  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too.
+  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. `--help`'s
+  icon is tested here as well, since it depends on stdout being a terminal.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
-  pages printed from a shell, deleted once no pane holds them.
+  pages printed from a shell, deleted once no pane holds them, and `--help`'s icon, on a client
+  whose terminfo entry says it is kitty.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
   XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/resvg.rs`**: the SVG backend through the viewer: what it draws, the limits a drawing is

@@ -35,6 +35,7 @@ A file, named on the command line, found in a directory or read from an archive,
 | `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
 | `src/view/` | The viewer, below |
+| `assets/` | The icon `--help` shows: its drawing, and the PNG built into the binary |
 
 ## The viewer (`src/view/`)
 
@@ -51,6 +52,7 @@ A file, named on the command line, found in a directory or read from an archive,
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
+| `icon.rs` | The icon beside `--help`'s first lines: whether it can show, where it goes, and its escape codes ([The icon in `--help`](#the-icon-in---help-iconrs)) |
 | `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
 
 The viewer is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
@@ -286,6 +288,29 @@ Inside tmux, tmux keeps its own copy of the screen and knows nothing of images:
   pages inside tmux are never bigger.
 - **The terminal.** `TERM` names tmux, so `clv` asks tmux for its client's terminal
   (`#{client_termname}`) and cell size (`#{client_cell_width}`, `#{client_cell_height}`).
+
+## The icon in `--help` (`icon.rs`)
+
+The help has to work in any terminal and through any pipe, and the icon is a decoration, so it may
+cost the help nothing:
+
+- **Nothing is asked of the terminal.** Stdout must be a terminal, and `detect::env_says_kitty`
+  must say so from the environment; inside tmux, `#{client_termname}` and `allow-passthrough` say.
+  The query pages get would mean waiting up to `QUERY_TIMEOUT` on a terminal that never answers,
+  and showing the query on one that prints what it doesn't know, for every `--help` there. So
+  WezTerm, known only by its answer, gets no icon.
+- **The lines go first.** They are written, so any scrolling is done; the cursor goes back up, the
+  icon is drawn, and the cursor comes back for the rest. Directly it is shown with `C=1`; inside
+  tmux it is a virtual placement and placeholder cells, written over the blanks to the right of the
+  lines, which tmux keeps along with them.
+- **Its size.** Its right edge is at `HELP_WIDTH`, where the text ends, or at the window's edge. It
+  covers 5 rows, the help's lines down to its usage, or 4 or 3 when that doesn't leave 2 columns
+  free beside the longest of them; below that, none. The PNG is square and the columns are rounded
+  from the cell's shape, so it is at most half a column off square, at the terminal's stretching.
+- **One image inside tmux.** `sweep.rs` deletes what it recorded once no pane holds it, but that
+  reads every recorded pane, too much for `--help`. The icon has a fixed id instead (`ID_INDEX`):
+  sending it again replaces it, so the terminal keeps one, recorded nowhere. Outside tmux it has no
+  id, as a printed page has none, and goes when its lines do.
 
 ## Zoom and the grid (`fit.rs`, `pager.rs`)
 
