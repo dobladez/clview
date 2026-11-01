@@ -1,7 +1,8 @@
 # clview — instructions for agents
 
 A terminal viewer: pages drawn through the kitty graphics protocol, a pager over them.
-`docs/architecture.md` explains how it works.
+`docs/usage.md` says what it does, and `docs/architecture.md` how it works. When a change needs
+documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs in.
 
 ## Layout
 - `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
@@ -9,91 +10,11 @@ A terminal viewer: pages drawn through the kitty graphics protocol, a pager over
 - `src/source/<backend>.rs`: one backend each, behind a cargo feature, listed in
   `source::BACKENDS`. A backend says whether it opens a file (from its first bytes) and which
   options it takes; the first that opens a file opens it. Options that belong to one kind of file
-  (a PDF's `--password`) are the backend's, never the viewer's. `pdfcraft.rs` (feature `pdf`,
-  default) renders PDFs through pdfcraft, a git dependency pinned in `Cargo.toml`; `image.rs`
-  (feature `image`, default) decodes images through the `image` crate and jxl-oxide; `zip.rs`
-  (feature `zip`, default) opens zip archives through the `zip` crate, to a `Container` rather
-  than pages (`Opened::Files`), its files read from it on demand, never unpacked to disk;
-  `svg.rs` (feature `svg`, default, asked first) renders SVG drawings through resvg, within
-  limits of its own on what a drawing costs to parse and render (ADR-0003), since resvg's are
-  few; `tar.rs` (feature `tar`, default, asked second) opens tar archives, plain or compressed
-  with gzip (flate2), bzip2 or xz (lzma-rust2), to a `Container`, read through once on a thread of
-  its own (`Container::ready`) into a temporary file removed as soon as it is made (ADR-0004), and
-  a file compressed alone as what it unpacks to. `wordcraft.rs` (feature `word`, default, asked
-  third, before zip since a docx is a zip) lays out Word documents, OpenDocument text and RTF
-  into pages through wordcraft's readers, layout and renderer (not its engine, whose PDF export
-  needs patches), a git dependency pinned like pdfcraft (ADR-0005). `gridcraft.rs` (feature
-  `sheet`, default, asked fourth, before zip) prints spreadsheets (xlsx, xls, xlsb, ods, csv) to a
-  PDF through gridcraft's engine and opens that with whichever backend opens PDFs, found through
-  `BACKENDS`, never by name; `sheet` brings `pdf` (ADR-0006). `source/head.rs` reads a zip's
-  first files for both. `source/tree.rs` is the directories an archive's names make, for zip and
-  tar.
-- **A backend's library is its own.** pdfcraft is named only in `src/source/pdfcraft.rs`, its
-  tests (`tests/it/pdfcraft*.rs`), `Cargo.toml`, the line listing it in `source::BACKENDS`, and
-  the backend tables in the README and `docs/usage.md`; swapping the PDF renderer must touch
-  nothing else. `tests/it/pdfcraft.rs` checks the code. The generic tests write their PDFs by hand
-  (`tests/it/fixtures.rs`), so any PDF backend reads them. Likewise resvg and what it renders
-  with (usvg, tiny-skia, roxmltree, fontdb): only in `src/source/svg.rs`, `tests/it/resvg.rs`
-  (which checks it), `Cargo.toml` and those tables; bzip2 and lzma-rust2 only in
-  `src/source/tar.rs`, `tests/it/tar.rs` (which checks it), `Cargo.toml` and the tables (flate2
-  there and in the SVG backend, for svgz); wordcraft only in `src/source/wordcraft.rs`,
-  `tests/it/wordcraft.rs` (which checks it and the pin), `Cargo.toml` and the tables; gridcraft
-  only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks it and the pin),
-  `Cargo.toml` and the tables.
-- A backend brings its own render threads, honouring `Pool`'s contract: `set_queue` replaces the
-  work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A
-  backend with nothing better (images, drawings) lends its render function to `source/threads.rs`.
-- `source/dir.rs`: a directory as a `Container`, which lists files and the containers in it and
-  opens each file as an `Input`: its files and subdirectories, in name order (`-r` for its
-  subdirectories' files instead). Several files, or a container, are a list (`view/mod.rs`'s
-  `Item`): a tile each, its first page, or a folder (`source/folder.rs`) to go into, and Enter
-  opens one as a level of its own in the pager. `source/joined.rs`: the tiles as one source. It
-  renders a few files at a time and lets go of what the others render with, so a source must hold
-  little while idle: an image holds its header, not its pixels.
-- Test pictures are made by the tests, or kept in `tests/data/`, synthetic, with how each was
-  made in its README.
+  (a PDF's `--password`) are the backend's, never the viewer's. `docs/architecture.md` has their
+  table: the order they are asked in and why, how each tells its files, and what each keeps.
+- `src/source/`'s other files serve them: `dir.rs` (a directory as a `Container`), `joined.rs` and
+  `folder.rs` (a list's tiles, and its folders), `threads.rs` (render threads for a backend with
+  nothing better), `head.rs` and `tree.rs` (what a zip's first files say, and the directories an
+  archive's names make).
 
-## Rules
-- **Never panic.** Every file, every byte the terminal sends back and every argument is untrusted
-  input. In non-test code: no `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!` unless provably
-  infallible with a comment saying why; `get()` rather than indexing with input-derived positions,
-  and string slicing only at char boundaries; checked or saturating arithmetic on input-derived
-  numbers; allocations sized by input are capped. `unsafe_code = "forbid"`.
-- **Nothing raw reaches the terminal.** File names, messages and anything a document can shape go
-  through `printable` first.
-- **Prove a test fails before the fix** by actually reverting the fix.
-- **Rust only.**
-- **The pdfcraft pin:** every pdfcraft `rev` in `Cargo.toml` moves together, the
-  `[patch.crates-io]` ones included; `tests/it/pdfcraft_pin.rs` checks it. **The wordcraft pin:**
-  every wordcraft `rev` moves together too, and no crate wordcraft patches may be built here, since
-  its patches don't reach us; `tests/it/wordcraft.rs` checks both. Likewise gridcraft's, which
-  `tests/it/gridcraft.rs` checks.
-- **Record decisions in an ADR** (`docs/adr/`, its README says when and how): a choice between
-  real alternatives that a later reader would otherwise undo or redo, above all one resting on a
-  measurement or an observed terminal behaviour, or a fix measured and rejected. Write it in the
-  commit that makes the choice, with the versions, setup and commands that get the evidence
-  again, and link it from the doc that describes the behaviour.
-- **Clean room.** Behaviour comes from specifications (the kitty graphics protocol, the tmux
-  manual) and black-box observation. Never read the source of another terminal-graphics program
-  or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF…): most are GPL or AGPL, and this is MIT or
-  Apache-2.0.
-
-## Quality gates before every commit
-`cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2`, and
-the viewer without backends: `cargo clippy --no-default-features --all-targets -j 2 -- -D warnings`
-and `cargo test --no-default-features -j 2`. After touching `cfg` attributes, each backend alone
-too (`--no-default-features --features image`, then `pdf`, then `svg`, then `zip`, then `tar`, then `word`, then `sheet`). Run them under a `timeout`. The PDF
-backend is a large build: keep `-j 2` unless the machine is free. CI
-(`.github/workflows/ci.yml`) runs them all on Linux and macOS, with Rust 1.95.0, the `rust-version`.
-
-## Releases
-Bump `version` in `Cargo.toml`, commit, tag `v<version>` and push the tag:
-`.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
-as a GitHub release. It refuses a tag that disagrees with `Cargo.toml`. Run by hand, it only builds.
-
-## Looking at it
-Output is images in a terminal, so look at the result in kitty, Ghostty or WezTerm. Without a
-terminal, `--protocol kitty` writes the escape codes to stdout (the integration tests read them
-back), and `script(1)` gives a test a pseudo-terminal (`tests/it/view_pager.rs`). A hidden kitty
-(`--start-as=hidden`) answers as a visible one does, but measure memory in a visible window: a
-hidden one keeps images a visible one frees.
+@CONTRIBUTING.md

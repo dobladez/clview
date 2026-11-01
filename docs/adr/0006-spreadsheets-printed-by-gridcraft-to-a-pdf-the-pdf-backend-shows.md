@@ -14,7 +14,7 @@ engine crate holding the print layout (`cmd::print`) and a PDF writer of its own
 renderer of cells to pixels outside its egui interface.
 
 The project's rules: a backend's library is named only in its own file, and swapping the PDF
-renderer must touch nothing else ([`CLAUDE.md`](../../CLAUDE.md)).
+renderer must touch nothing else ([`CONTRIBUTING.md`](../../CONTRIBUTING.md)).
 
 ## Decision
 

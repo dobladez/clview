@@ -6,7 +6,7 @@
 ## Context
 
 An SVG is untrusted input, and clv's rules say an allocation sized by input is capped
-([`CLAUDE.md`](../../CLAUDE.md)). The SVG backend renders through resvg
+([`CONTRIBUTING.md`](../../CONTRIBUTING.md)). The SVG backend renders through resvg
 ([ADR-0002](0002-render-svg-with-resvg.md)), and resvg, usvg and their XML parser bound only
 some of what a drawing can make them spend. Read in their source, at the versions locked
 (resvg and usvg 0.49.0, tiny-skia 0.12.0, roxmltree 0.21.2):
