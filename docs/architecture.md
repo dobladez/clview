@@ -1,15 +1,42 @@
 # How clv works
 
-`clv` draws the pages of a source (a PDF's, or an image as one page) in the terminal through the
-[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), directly or from
-inside tmux. Usage and behaviour are in [`docs/usage.md`](usage.md); this
-page is for working on the code: how pages get to the terminal, what is kept there, what can go
-wrong on the way, and why each choice was made. The numbers were measured on the macOS laptop it
-was developed on (kitty 0.45, tmux 3.5a), by black-box observation. The same probes, run again
-against kitty 0.49.2, found the same behaviour: temporary files read and deleted, directly and
-through tmux, the same answers, the 320 MB quota and the cell size.
+This page is for working on the code: how a file becomes pages, how pages get to the terminal, what
+is kept there, what can go wrong on the way, and why each choice was made. What clv does, as someone
+using it sees it, is in [`docs/usage.md`](usage.md). How to build and test it, and the rules its code
+keeps, are in [`CONTRIBUTING.md`](../CONTRIBUTING.md). The alternatives rejected, with their
+evidence, are in [`docs/adr/`](adr/README.md).
 
-## Modules
+The numbers were measured on the macOS laptop it was developed on (kitty 0.45, tmux 3.5a), by
+black-box observation. The same probes, run again against kitty 0.49.2, found the same behaviour:
+temporary files read and deleted, directly and through tmux, the same answers, the 320 MB quota and
+the cell size.
+
+## The crate
+
+A file, named on the command line, found in a directory or read from an archive, goes three steps:
+
+1. **A backend opens it.** `source::BACKENDS` lists this build's, and the first that says it opens
+   the file, from its first bytes, gives a `Source` of pages or, for an archive, a `Container` of
+   files.
+2. **The viewer asks for pages.** The pager or the printer asks the source for a page at a scale, and
+   gets a `Frame` of pixels back. It knows what it shows only through the traits in `src/source.rs`.
+3. **The pages reach the terminal**, as PNGs in the stream or raw pixels in a temporary file,
+   directly or through tmux, and the pager keeps track of what the terminal still holds.
+
+| Where | What it does |
+|---|---|
+| `src/main.rs`, `src/args.rs` | The entry point; command-line options and page lists |
+| `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`) and `BACKENDS` |
+| `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
+| `src/source/threads.rs` | Render threads for a backend with nothing better |
+| `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
+| `src/source/joined.rs` | Several sources as one: a list's tiles |
+| `src/source/folder.rs` | A container as a list shows it, to be opened: one page, a folder drawn in code |
+| `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
+| `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
+| `src/view/` | The viewer, below |
+
+## The viewer (`src/view/`)
 
 | File | What it does |
 |---|---|
@@ -26,17 +53,9 @@ through tmux, the same answers, the 320 MB quota and the cell size.
 | `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
 | `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
 
-`view` is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
+The viewer is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
 
-Sixel isn't supported yet, and is a possible later addition. It is DEC's older image format, the
-one Windows Terminal speaks (as do xterm, foot, WezTerm and others), so it is the way to bring
-`view` to Windows and to more terminals. It would be a second output beside `kitty.rs` more than a
-change to it: sixel keeps no images in the terminal by id, and has no temporary files and no
-Unicode placeholders, so every page turn sends the page's pixels again, and pictures go through a
-palette (commonly 256 colours). On Windows, `tty.rs` would also need the console's own API for raw
-mode and the window size, through a crate, since the crate forbids `unsafe`.
-
-## Sources (`../source.rs`)
+## Sources (`src/source.rs`)
 
 The pager and the printer never see a PDF. They see a `Source`: how many pages it has, each
 page's size in the source's own unit (points, for a PDF), a renderer on this thread for printing,
@@ -50,80 +69,118 @@ page that had only waited behind another page's decode, and bounds the threads i
 pool in the viewer could only abandon the thread. What the pager relies on is that pool's contract:
 `set_queue` replaces the renders wanted, most urgent first; a result is delivered only while its
 request is still listed; `try_recv` never blocks. A backend that has no better way, such as
-images and drawings, gets plain threads from `source/threads.rs`: a render once begun runs to its end, and
-one no longer wanted is dropped when it is done; a render that panics comes back as a failed
-page.
+images and drawings, gets plain threads from `source/threads.rs`: a render once begun runs to its
+end, and one no longer wanted is dropped when it is done; a render that panics comes back as a
+failed page.
+
+## Backends
 
 A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goes to the first
 that says it opens it, going by the file's first 1024 bytes (`Backend::opens`). Those bytes are
-read once and handed on with the rest of the file (`Input`), so a pipe opens as well as a file.
+read once and handed on with the rest of the file (`Input`), so a pipe opens as well as a file. A
+backend opens a file to pages (`Opened::Pages`) or, for an archive, to the files it holds
+(`Opened::Files`, a `Container`).
+
+All are on by default, and asked in this order, the ones that go by how a file starts before the
+PDF one, since a PDF's header may come anywhere in its first 1024 bytes:
+
+| Asked | File | Feature | How it tells its files | Why asked there |
+|---|---|---|---|---|
+| 1 | `svg.rs` | `svg` | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Those bytes may hold a PDF's header, in a drawing's text |
+| 2 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
+| 3 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only | As for SVG (an RTF's text), and before zip, since a docx is a zip |
+| 4 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
+| 5 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
+| 6 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
+| 7 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word and spreadsheet backends don't take |
+
+`source/head.rs` reads what a zip's first files say, for the Word and spreadsheet backends.
+
+### What a backend says of itself
+
 Each backend declares its own options (`Backend::options`): the viewer parses the command line
 against its own and every backend's, lists them in `--help` under the backends that take some,
 and refuses one the chosen backend doesn't take. The backend's `open` gets the parsed command line
-and reads its own options from it. A backend says what it shows in a word or two
-(`Backend::shows`: "PDFs", "documents"), which messages and `--help` give, and which formats
-(`Backend::formats`): each a `Format`, its name and the extensions that tell a file of it where
-its first bytes can't. `--help` lists them last, under what their backend shows, nothing about
-formats written in the viewer. A backend takes them from the tables its `opens` goes by (the
-image backend's `DECODED`, the extensions a document's or a workbook's kind is told by, `Codec`'s
-compressions in tar's), so what `--help` lists and what opens can't disagree;
-`the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks every backend
-built. A backend also names the libraries it reads and draws its files through
-(`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the
-names are written in the backend's own file, so the viewer still names none, and each library's
-own tests check its credit.
+and reads its own options from it, so an option that belongs to one kind of file (a PDF's
+`--password`) is the backend's, never the viewer's.
 
-The backends are `source/svg.rs` (feature `svg`), `source/tar.rs` (feature `tar`),
-`source/wordcraft.rs` (feature `word`), `source/gridcraft.rs` (feature `sheet`),
-`source/pdfcraft.rs` (feature `pdf`), `source/image.rs` (feature `image`) and `source/zip.rs`
-(feature `zip`), all on by default and asked in that order: the ones that go by how a file starts
-before the PDF one, since a PDF's header may come anywhere in its first 1024 bytes, and the Word
-and spreadsheet ones before zip, since a docx and an xlsx are zips (`source/head.rs` reads what a
-zip's first files say). A drawing parses once
-to open and keeps only where its bytes are; its renderer or pool parses it again on its first
-render and keeps the tree for renders at other sizes, each of which is estimated before it starts
-([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)).
-A document is read and laid out to open, and keeps only where its bytes are and its pages' sizes;
-its renderer or pool reads and lays it out again on its first render, and keeps that
-([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
-A spreadsheet is printed to a PDF when it opens, and opened as that PDF by the backend that
-opens it, found the way any file's backend is, not by name; what gridcraft said on reading the
-workbook rides with the first page's warnings
-([ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)). An image opens by its header alone and
-decodes on its renderer's or pool's first render (on a render thread, so the keys work while a
-large photo decodes), which keeps the pixels for its renders at other sizes and lets them go with
-it; a picture on disk is read again to decode, one from a pipe kept as it came, one in an archive
-read from it again. A backend opens a file to pages (`Opened::Pages`) or, for an archive, to the
-files it holds (`Opened::Files`, a `Container`). The zip backend parses the central directory
-once and reads a file from it on demand: the first bytes, for `Input`, and the whole file through
-the `Input`'s `Again`, on a render thread. It holds no open file while idle, so a directory of
-archives doesn't run out of file descriptors. Nothing in
-`src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the files, and
-`cargo clippy --no-default-features` builds the viewer with no backend at all.
+A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
+messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name and
+the extensions that tell a file of it where its first bytes can't. `--help` lists them last, under
+what their backend shows, nothing about formats written in the viewer. A backend takes them from
+the tables its `opens` goes by (the image backend's `DECODED`, the extensions a document's or a
+workbook's kind is told by, `Codec`'s compressions in tar's), so what `--help` lists and what opens
+can't disagree; `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks
+every backend built. A backend also names the libraries it reads and draws its files through
+(`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the names
+are written in the backend's own file, so the viewer still names none, and each library's own tests
+check its credit.
+
+Nothing in `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the
+files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.
+
+### How each opens, and what it keeps
+
+- **A PDF** renders through pdfcraft, the way its app draws it, a git dependency pinned in
+  `Cargo.toml`.
+- **A drawing** renders through resvg
+  ([ADR-0002](adr/0002-render-svg-with-resvg.md)), within limits of clv's own on what it costs to
+  parse and render, since resvg's are few. It parses once to open and keeps only where its bytes are; its
+  renderer or pool parses it again on its first render and keeps the tree for renders at other
+  sizes, each of which is estimated before it starts
+  ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)). The system's
+  fonts are looked for only once a drawing has text (about 15 ms on macOS).
+- **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
+  export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
+  pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps
+  that ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
+- **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
+  PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
+  said on reading the workbook rides with the first page's warnings
+  ([ADR-0006](adr/0006-spreadsheets-printed-by-gridcraft-to-a-pdf-the-pdf-backend-shows.md)).
+- **An image** opens by its header alone and decodes on its renderer's or pool's first render (on a
+  render thread, so the keys work while a large photo decodes), which keeps the pixels for its
+  renders at other sizes and lets them go with it; a picture on disk is read again to decode, one
+  from a pipe kept as it came, one in an archive read from it again.
+- **A zip** has its central directory parsed once, and a file read from it on demand: the first
+  bytes, for `Input`, and the whole file through the `Input`'s `Again`, on a render thread. It holds
+  no open file while idle, so a directory of archives doesn't run out of file descriptors.
+- **A tar** is listed through `Container::ready`: a compressed one is read through once, on a thread
+  of its own, into a temporary file removed as soon as it is made
+  ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file
+  compressed alone is opened as what it unpacks to.
+
+## Lists and levels
 
 Several files, or a container's files and the containers in it, are a list: each an `Item`
 (`mod.rs`), a file's pages or a container. A `source::Container` lists what it holds and opens
 each file as an `Input`, which goes to the first backend that opens it, as a file named on the
 command line does; the viewer knows a container only through the trait. A directory is one
 (`source::Directory`, in `source/dir.rs`: in name order, subdirectories' files instead with
-`-r`). The list's tiles are one source, `source::Joined`: one page from each item, a file's
-first, or a folder (`source::Folder`, drawn in code, with the badge its container gives it:
-`Container::badge`, a parcel for an archive, none for a directory) for a container, each part with a name for
-its errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's
-pages opened from it, each with its own source and pool; going back drops the level and its
-images in the terminal, and the list's are still there. A container is listed when it is gone
-into, by the `Opener` `mod.rs` hands the pager, without stopping the pager: first
-`Container::ready`, for a container that has to read itself before it lists (a compressed tar,
-read through on a thread of its own), then its files opened a few at a time (`Opening`), in the
-order the container says is quickest (`Listing::quickest`: a tar's, as its files come in it),
-the status line saying how far each has got, and Esc stopping it. Stopping, or leaving the level,
-tells the container (`Container::release`), which lets go of what it read its files with.
-Given on the command line, a container is listed the same way before anything shows, the
-progress on stderr. ADR-0004 has why a compressed tar is read this way. A part's renderer or pool is made when one of its pages is first wanted. Printing keeps
-only the last part's renderer, as pages print in order. The pager's pool hands each request to
-its part's pool, and only for the most urgent parts, as many at once as the pool has threads, so
-a screen of 48 tiles from 48 files renders two files at a time, not 48 at once. It keeps the pools
-of the four parts wanted most recently, then lets them go, and an image's decoded pixels with them.
+`-r`).
+
+The list's tiles are one source, `source::Joined`: one page from each item, a file's first, or a
+folder (`source::Folder`, drawn in code, with the badge its container gives it: `Container::badge`,
+a parcel for an archive, none for a directory) for a container, each part with a name for its
+errors. The pager shows one level at a time (`pager.rs`'s `Level`): a list, or a file's pages opened
+from it, each with its own source and pool; going back drops the level and its images in the
+terminal, and the list's are still there.
+
+A container is listed when it is gone into, by the `Opener` `mod.rs` hands the pager, without
+stopping the pager: first `Container::ready`, for a container that has to read itself before it
+lists (a compressed tar, read through on a thread of its own), then its files opened a few at a time
+(`Opening`), in the order the container says is quickest (`Listing::quickest`: a tar's, as its files
+come in it), the status line saying how far each has got, and Esc stopping it. Stopping, or leaving
+the level, tells the container (`Container::release`), which lets go of what it read its files with.
+Given on the command line, a container is listed the same way before anything shows, the progress
+on stderr.
+
+A part's renderer or pool is made when one of its pages is first wanted. Printing keeps only the last
+part's renderer, as pages print in order. The pager's pool hands each request to its part's pool, and
+only for the most urgent parts, as many at once as the pool has threads, so a screen of 48 tiles from
+48 files renders two files at a time, not 48 at once. It keeps the pools of the four parts wanted
+most recently, then lets them go, and an image's decoded pixels with them. So a source must hold
+little while idle: an image holds its header, not its pixels.
 
 `/` filters a list (`pager.rs`'s `Filter`): the tiles `Nav` moves among become those whose names
 (`Item::name`, in lower case) hold what is typed, in their order, so only they are on screen,
@@ -143,13 +200,13 @@ A rendered page is premultiplied RGBA. The protocol offers three ways to send it
 |---|---|---|
 | PNG in the stream | `a=t,f=100,t=d`: base64 in 4096-byte chunks | Over SSH, when printing, and until the terminal takes a temporary file |
 | Raw pixels in a temporary file | `a=t,f=32,t=t`: only the file's path, base64 | The pager, on a terminal on this machine that takes files |
-| Shared memory | `t=s` | Never: it needs `mmap`, and the workspace forbids `unsafe` |
+| Shared memory | `t=s` | Never: it needs `mmap`, and the crate forbids `unsafe` |
 
 Temporary files are much faster for the terminal. kitty takes a full-window page in about 10 ms
 from a file, against 52 ms as a PNG in the stream (64–66 ms through tmux). Nine pages sent back to
 back through tmux took 495 ms as PNGs and 55–90 ms as files. A PNG also has to be made first: on
 the same laptop, 35 ms for a text page and 110 ms for a full-screen page of pictures at the
-smaller compression. Without that, everything `view` does between a key and the escape codes
+smaller compression. Without that, everything `clv` does between a key and the escape codes
 takes under a millisecond; the render takes about 50 ms for a text page.
 
 `--compression auto` (the default) picks the way (`Compression::choose` in `mod.rs`):
@@ -190,11 +247,11 @@ takes under a millisecond; the render takes about 50 ms for a text page.
 
 ## The size of a cell
 
-Pages are rendered for the pixels they cover, so `view` needs the cell size in pixels. The tty
+Pages are rendered for the pixels they cover, so `clv` needs the cell size in pixels. The tty
 gives it with the window's size (`TIOCGWINSZ`), and SSH carries it. `docker exec` and
 `kubectl exec` carry only rows and columns, so the pixels read 0. Taking 10 × 20 px cells then
 rendered a page for a kitty with 18 × 46 px cells at under half its resolution, upscaled, and
-22% too narrow. So, with no pixels, `view` asks the terminal once at the start (`ask_cell` in
+22% too narrow. So, with no pixels, `clv` asks the terminal once at the start (`ask_cell` in
 `mod.rs`): `ESC [ 16 t`, which xterm's control sequences define, and kitty answers with
 `ESC [ 6 ; <height> ; <width> t` in about 3 ms. The query is followed by the device attributes
 query, which every terminal answers, so one that doesn't know the first ends the wait at once;
@@ -215,9 +272,9 @@ a placement.
 Inside tmux, tmux keeps its own copy of the screen and knows nothing of images:
 
 - **Passthrough.** Every escape code goes inside `ESC P tmux; … ESC \`, with each ESC doubled.
-  tmux passes it on only when the pane's `allow-passthrough` is `on` or `all`. `view` only asks
+  tmux passes it on only when the pane's `allow-passthrough` is `on` or `all`. `clv` only asks
   (`show-options -Ap`): the option lets any program in the pane write to the terminal past tmux,
-  so it is the user's. When it is off, `view` stops with the command that turns it on, naming the
+  so it is the user's. When it is off, `clv` stops with the command that turns it on, naming the
   pane: run from the shell without `-t`, tmux sets it on the session's active pane, which may be
   another. Output to a file only gets a warning, since it may be shown where it is on.
 - **Unicode placeholders.** A page is a virtual placement (`U=1`) plus rows of U+10EEEE cells that
@@ -227,7 +284,7 @@ Inside tmux, tmux keeps its own copy of the screen and knows nothing of images:
   carries the row and column diacritics, as the protocol allows; full marks made a screenful big
   enough for tmux to throw output away. Placeholders number at most 297 rows and columns, so
   pages inside tmux are never bigger.
-- **The terminal.** `TERM` names tmux, so `view` asks tmux for its client's terminal
+- **The terminal.** `TERM` names tmux, so `clv` asks tmux for its client's terminal
   (`#{client_termname}`) and cell size (`#{client_cell_width}`, `#{client_cell_height}`).
 
 ## Zoom and the grid (`fit.rs`, `pager.rs`)
@@ -298,7 +355,7 @@ kitty takes a temporary file before it reads the next escape code, so a placemen
 one never gets this answer by mistake.
 
 What the pager deletes, kitty frees, and so are pictures printed at the cursor, PNG or raw, once
-they leave the scrollback. Inside tmux, a printed page has to outlive `view`, its placeholder
+they leave the scrollback. Inside tmux, a printed page has to outlive `clv`, its placeholder
 cells being tmux's text, and nothing tells kitty when tmux lets go of them, so kitty keeps it
 until its quota pushes it out: about 400 MB of GPU memory a window, through `clear-history` and
 the tmux server's exit alike. `sweep.rs` deletes them instead: each page printed inside tmux is
@@ -388,42 +445,19 @@ that, and the temporary files removed after it, so a slow filesystem can't hold 
 in raw mode. File names, error messages and warnings are written with their control characters
 replaced (`printable`), so a document can't send escape sequences through them.
 
-When it will page, `view` takes raw mode before it asks the terminal anything (whether it speaks
+When it will page, `clv` takes raw mode before it asks the terminal anything (whether it speaks
 the protocol, its cell size), and keeps it until the pager ends, never back in canonical mode
 between the two. On FreeBSD a read begun in canonical mode stays a line read after raw mode
 returns: had the reader thread begun its next read in such a gap, no key would reach the pager
 until Enter. Found by CI on FreeBSD, where two pager tests hung after `q`; the race shows there
 only.
 
-## Tests
+## What sixel would take
 
-- **Unit tests** in each module, among them property tests for the key decoder (answers cut
-  anywhere among keys are never keys), the fit and the grid, and that the reader's page stays on
-  screen.
-- **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`. Its PDFs, and the
-  other files', are written by hand (`tests/it/fixtures.rs`), so any PDF backend reads them.
-- **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
-  XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
-- **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
-  stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
-  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too.
-- **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
-  clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
-  pages printed from a shell, deleted once no pane holds them.
-
-The terminal tests skip with a warning where tmux or script(1) can't run, so CI machines without
-them pass.
-
-To try a real kitty without touching your own, run `kitty --start-as=hidden --config NONE` with
-`TMUX` and `TMUX_PANE` unset (an inherited `TMUX` makes `view` think it is inside your tmux: it
-asks your tmux server about your pane, and wraps its escape codes for a tmux that isn't there),
-and use a private `tmux -L <name>` server for tmux. A hidden kitty answers as a visible one does,
-but doesn't free images the same way: there, cleared PNGs stayed while raw pixels went, which a
-visible window doesn't do. Measure memory in a visible window.
-
-## Clean room
-
-Behaviour comes from the kitty graphics protocol specification, the tmux manual and black-box
-observation of terminals and of other programs' output. Never read the source of another
-terminal-graphics program or PDF viewer (kitty, tdf, timg, chafa, viu, MuPDF and so on): most are
-GPL or AGPL, and this code is MIT or Apache-2.0.
+Sixel isn't supported yet, and is a possible later addition. It is DEC's older image format, the
+one Windows Terminal speaks (as do xterm, foot, WezTerm and others), so it is the way to bring
+`clv` to Windows and to more terminals. It would be a second output beside `kitty.rs` more than a
+change to it: sixel keeps no images in the terminal by id, and has no temporary files and no
+Unicode placeholders, so every page turn sends the page's pixels again, and pictures go through a
+palette (commonly 256 colours). On Windows, `tty.rs` would also need the console's own API for raw
+mode and the window size, through a crate, since the crate forbids `unsafe`.
