@@ -51,8 +51,8 @@ when the window is wide enough, as the pager first shows them.
 (`--password`, for PDFs, documents and spreadsheets: see
 [Which files it shows](#which-files-it-shows)), each under what that backend shows, then the
 formats this build shows, with the libraries each shows them through. It starts with clview's
-version and what clview is, in a line each, and ends with where to report issues and ideas:
-<https://github.com/dobladez/clview>.
+version and what clview is, in a line each, and ends with a link to this manual and where to report
+issues and ideas: <https://github.com/dobladez/clview>.
 
 ## Keys
 

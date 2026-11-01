@@ -238,6 +238,9 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
 /// Which clview this is, then what it is, in a line each: `--help`'s first two.
 const IS: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), "\n", env!("CARGO_PKG_DESCRIPTION"));
 
+/// Where the manual is, for someone with only the binary: `--help`'s line before the last.
+const MANUAL: &str = concat!("Manual: ", env!("CARGO_PKG_REPOSITORY"), "/blob/main/docs/usage.md");
+
 /// Where to tell of a problem or an idea: `--help`'s last line.
 const REPORT: &str = concat!("Report issues and ideas to: ", env!("CARGO_PKG_REPOSITORY"));
 
@@ -249,7 +252,8 @@ const HELP_WIDTH: usize = 100;
 
 /// What `--help` prints: what clview is, how it is called, the viewer's options, then those of
 /// each of `backends` that takes some, under what it shows, then the formats they show, under what
-/// each shows and the libraries it shows them through, and last where clview comes from.
+/// each shows and the libraries it shows them through, and last its manual and where clview comes
+/// from.
 pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     let name = crate::NAME;
     let mut out = format!("{IS}\n\n{name} [options] <file>…\n{name} --help | --version\n\n{ABOUT}\n\n");
@@ -276,7 +280,7 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
             wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
         }
     }
-    out.push_str(&format!("\n{REPORT}\n"));
+    out.push_str(&format!("\n{MANUAL}\n{REPORT}\n"));
     out
 }
 
@@ -1348,7 +1352,11 @@ mod tests {
             "  Images, by lib-a and lib-b: PNG, TGA (.tga .icb .vda .vst), a format with a long name,\n{}another format with a long name (.one .two), WebP\n",
             " ".repeat(30)
         );
-        assert_eq!(shown, format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}\n{REPORT}\n"), "{help}");
+        assert_eq!(
+            shown,
+            format!("  Locked PDFs, by locked: locked\n  PDFs, by pdf-one: pdf-one\n  Drawings: SVG\n{images}\n{MANUAL}\n{REPORT}\n"),
+            "{help}"
+        );
         assert!(!help.contains("lib-c"), "{help}");
         assert_eq!([by(&[]), by(&["a"]), by(&["a", "b"]), by(&["a", "b", "c"])], ["", ", by a", ", by a and b", ", by a, b and c"]);
         assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
@@ -1358,9 +1366,10 @@ mod tests {
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
         assert!(nothing.contains(" first\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
-        // Last, where to report issues, whatever the build has.
+        // Last, the manual and where to report issues, whatever the build has.
         for help in [&help, &nothing] {
-            assert!(help.ends_with("\n\nReport issues and ideas to: https://github.com/dobladez/clview\n"), "{help}");
+            let end = "\n\nManual: https://github.com/dobladez/clview/blob/main/docs/usage.md\nReport issues and ideas to: https://github.com/dobladez/clview\n";
+            assert!(help.ends_with(end), "{help}");
         }
     }
 

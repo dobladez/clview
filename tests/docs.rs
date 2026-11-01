@@ -1,6 +1,7 @@
 //! The docs' links: every relative link in the repository's Markdown leads to a file that exists,
-//! and its anchor, if it has one, to a heading there, as GitHub makes them. A test binary of its
-//! own, since this needs no backend, and `tests/it` needs one.
+//! and its anchor, if it has one, to a heading there, as GitHub makes them; and `--help`'s link to
+//! the manual leads to a file here. A test binary of its own, since this needs no backend, and
+//! `tests/it` needs one.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -116,6 +117,17 @@ fn every_relative_link_in_the_docs_leads_somewhere() {
     }
     assert!(read >= 50, "read {read} links, in {} files", files.len());
     assert!(bad.is_empty(), "links that lead nowhere:\n{}", bad.join("\n"));
+}
+
+/// `--help` is where someone with only the binary looks, so it must lead to the manual however a
+/// build is made, and the file must be there on the branch it names.
+#[test]
+fn help_links_to_the_manual_where_it_is() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").output().unwrap();
+    let help = String::from_utf8(out.stdout).unwrap();
+    let start = concat!("Manual: ", env!("CARGO_PKG_REPOSITORY"), "/blob/main/");
+    let path = help.lines().find_map(|line| line.strip_prefix(start)).unwrap_or_else(|| panic!("no link to the manual in:\n{help}"));
+    assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file(), "--help links to {path}, which isn't there");
 }
 
 #[test]

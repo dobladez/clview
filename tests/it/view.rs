@@ -196,7 +196,9 @@ fn no_arguments_print_the_help() {
     let out = Command::new(BIN).output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), text(&help.stdout));
-    assert!(text(&out.stdout).ends_with("\n\nReport issues and ideas to: https://github.com/dobladez/clview\n"), "{}", text(&out.stdout));
+    let end =
+        "\n\nManual: https://github.com/dobladez/clview/blob/main/docs/usage.md\nReport issues and ideas to: https://github.com/dobladez/clview\n";
+    assert!(text(&out.stdout).ends_with(end), "{}", text(&out.stdout));
 }
 
 /// Run `view` as if in a tmux pane, with no `tmux` command on the PATH to ask.
