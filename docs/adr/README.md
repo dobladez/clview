@@ -28,6 +28,8 @@ Use [`template.md`](template.md) as the starting point.
 | 0014 | [Markdown through pulldown-cmark into wordcraft's HTML importer](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) | Accepted |
 | 0015 | [Markdown and HTML on dark paper, the terminal's own colour](0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) | Accepted |
 | 0016 | [How Markdown and HTML look](0016-how-markdown-and-html-look.md) | Accepted |
+| 0017 | [HTML's style rules apply, as far as wordcraft reads them](0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md) | Accepted |
+| 0018 | [wordcraft stays before its proofing needs a checkout to build](0018-wordcraft-stays-before-its-proofing-needs-a-checkout-to-build.md) | Accepted |
 
 ## When to write one
 

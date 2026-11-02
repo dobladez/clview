@@ -55,12 +55,12 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # wordcraft, a git dependency like pdfcraft, from one pinned commit of its `main` (every `rev` below
 # moves together; tests/it/wordcraft.rs checks it). Its reading, layout and drawing crates only: not
 # its engine, which brings PDF export and the [patch.crates-io] that needs.
-wordcraft-doc = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
-wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
-wordcraft-docbin = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
-wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
-wordcraft-layout = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
-wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
+wordcraft-doc = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
+wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
+wordcraft-docbin = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
+wordcraft-formats = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
+wordcraft-layout = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
+wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de", optional = true }
 # Spreadsheets, read, recalculated and printed to a PDF in Rust by gridcraft's engine, a git
 # dependency like pdfcraft, pinned to one commit of its `main` (tests/it/gridcraft.rs checks it).
 # The engine because its print layout is there; it needs none of the crates gridcraft patches.
@@ -114,7 +114,7 @@ bzip2 = "0.6"
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "encoder"] }
 pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
 # Encrypted Word documents for the Word backend's own tests (tests/it/wordcraft.rs).
-wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615" }
+wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "bbe3547dd11bb5f613f3aa893b12f593910644de" }
 # Encrypted workbooks for the spreadsheet backend's own tests (tests/it/gridcraft.rs): its
 # `test-support` feature, never in a build of clv.
 gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "7bb397a3c1015e2a445edcd8feb01789850f4bdd", features = ["test-support"] }

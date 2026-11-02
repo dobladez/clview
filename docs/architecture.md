@@ -138,7 +138,9 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
   pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps
   that ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
-  HTML comes through wordcraft's importer, on a US Letter page, since it gives none, and Markdown
+  HTML comes through wordcraft's importer as a fragment (`html::import_with`), whose text takes the
+  document's styles, not as a web page (`import_on`), which sets Times New Roman over them
+  ([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)), on a US Letter page, since it gives none, and Markdown
   through pulldown-cmark into HTML for it
   ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)). What they
   cost is bounded before it is spent, by their marks before they are imported and their text before

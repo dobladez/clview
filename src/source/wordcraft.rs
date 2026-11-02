@@ -94,7 +94,8 @@ impl Backend for Wordcraft {
 const MAX_FILE: u64 = 256 << 20;
 
 /// The largest Markdown or HTML file this reads: 64 MiB. A page may hold far more than it lays out:
-/// a single-file page's scripts, styles and pictures in `data:` URLs cost next to nothing.
+/// a single-file page's scripts and pictures in `data:` URLs cost next to nothing, and what wordcraft
+/// reads of its styles, it bounds ([ADR-0017](../../docs/adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)).
 const MAX_MARKED_UP: usize = 64 << 20;
 
 /// The most marks a Markdown or HTML file may have ([`marked_up`]): what it costs goes by them, up
@@ -556,7 +557,12 @@ fn marked_up(
     // US Letter, as nothing says otherwise. Less above and below than as printed, for more on a screen.
     let page = wordcraft_doc::SectionProps { margin_top: 54.0, margin_bottom: 54.0, ..Default::default() };
     let fit = (page.text_width(), page.text_height());
-    let mut document = wordcraft_formats::html::import_on(&as_html(bytes), &|source: &str| pictures.measured(source, fit), &page);
+    // As a fragment, which takes the document's own formatting, here `styled`'s. `import_on` reads a web
+    // page, as Word opens one: Times New Roman, and no code style. Only the top and bottom differ from
+    // the default page, and tables size to its width, so they can be set after
+    // ([ADR-0017](../../docs/adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)).
+    let mut document = wordcraft_formats::html::import_with(&as_html(bytes), &|source: &str| pictures.measured(source, fit));
+    document.last_section = page;
     fit_to_the_page(&mut document.body, fit.1);
     styled(&mut document);
     let body = StoryRef::Body;
@@ -602,7 +608,7 @@ const HEADINGS: [(f32, f32, f32, bool); 6] = [
 
 /// How `document`, Markdown or HTML just imported, looks: what the importer gives is a word processor's
 /// defaults, and such a file says little of its own
-/// ([ADR-0016](../../docs/adr/0016-how-markdown-and-html-look.md)). What its inline styles say stays,
+/// ([ADR-0016](../../docs/adr/0016-how-markdown-and-html-look.md)). What its own CSS says stays,
 /// being on the text itself.
 fn styled(document: &mut wordcraft_doc::Document) {
     let colour = |rgb| Some(TextColor::Rgb(rgb));
@@ -1042,6 +1048,23 @@ mod tests {
         assert_eq!(font(b"One", Kind::Markdown), TEXT_FACE);
         assert_eq!(font(b"<p>One</p>", Kind::Html), TEXT_FACE);
         assert_ne!(font(b"{\\rtf1\\ansi One}", Kind::Rtf), TEXT_FACE);
+    }
+
+    /// wordcraft reads HTML two ways: as a web page, set in Times New Roman at a browser's sizes over
+    /// any style of the document's, or as a fragment, which takes the document's. This look is styles.
+    #[test]
+    fn text_and_headings_take_this_look_not_a_web_pages() {
+        let nowhere = Pictures::beside(None);
+        let documents = [markdown(b"# Head\n\nText", &nowhere).unwrap(), html(b"<h1>Head</h1><p>Text</p>", &nowhere).unwrap()];
+        for document in &documents {
+            let paragraphs = document.para_paths(StoryRef::Body);
+            assert_eq!(paragraphs.len(), 2);
+            for para in paragraphs.iter().filter_map(|path| document.para(StoryRef::Body, path)) {
+                assert_eq!(para.runs.len(), 1, "{:?}", para.text);
+                let props = &para.runs[0].props;
+                assert_eq!((props.font.as_deref(), props.size), (None, None), "{:?}", para.text);
+            }
+        }
     }
 
     #[test]

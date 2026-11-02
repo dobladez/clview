@@ -6389,8 +6389,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -6403,8 +6403,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "cfb",
  "chrono",
@@ -6419,8 +6419,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "aes",
  "base64 0.23.1",
@@ -6442,8 +6442,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "brotli-decompressor",
  "harfrust 0.13.3",
@@ -6457,8 +6457,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "cfb",
  "chardetng",
@@ -6476,8 +6476,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "image",
  "serde",
@@ -6485,8 +6485,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "image",
  "js-sys",
@@ -6506,8 +6506,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -6515,8 +6515,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-proof"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "log",
  "miniz_oxide 0.9.1",
@@ -6525,8 +6525,8 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.12.0"
-source = "git+https://github.com/storytold/wordcraft?rev=5b5810fe1f6f815acc3fda27619f61d9bc08b615#5b5810fe1f6f815acc3fda27619f61d9bc08b615"
+version = "0.14.0"
+source = "git+https://github.com/storytold/wordcraft?rev=bbe3547dd11bb5f613f3aa893b12f593910644de#bbe3547dd11bb5f613f3aa893b12f593910644de"
 dependencies = [
  "image",
  "log",

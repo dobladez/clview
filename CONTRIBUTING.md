@@ -28,7 +28,8 @@ The Word backend's wordcraft comes from git the same way, every `rev` of its cra
 it needs no patches, since clv builds its readers, layout and renderer but not its engine, whose
 PDF export does. No crate wordcraft patches may be built here, since its patches don't reach us:
 `tests/it/wordcraft.rs` fails if the crates disagree, or if such a crate comes to be built. Only
-`src/source/wordcraft.rs` and its tests name wordcraft.
+`src/source/wordcraft.rs` and its tests name wordcraft. It stays at `bbe3547` for now: past that, hyphenation
+takes a checkout at build time ([ADR-0018](docs/adr/0018-wordcraft-stays-before-its-proofing-needs-a-checkout-to-build.md)), and those tests fail without it.
 
 The spreadsheet backend's gridcraft likewise, from `tests/it/gridcraft.rs` and
 `src/source/gridcraft.rs`; it reaches the PDF backend only by asking which backend opens the PDF

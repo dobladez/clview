@@ -101,3 +101,9 @@ and 17, wordcraft's README 14 and 14, `AWSSymbols.md` 114 and 111.
 - **Revisit when:** wordcraft draws a run's background as one rectangle: a chip would then have no seams, and
   it wants a dark colour of its own too. Or when its importer reads a stylesheet: then HTML's own would come
   first.
+
+## Update
+
+**2026-11-02.** wordcraft now reads the simple rules of `style` elements, so the second "Revisit when" has
+come: see [ADR-0017](0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md). "HTML's stylesheets aren't read" above, and the alternative that rests
+on it, are as things stood at `5b5810f`.

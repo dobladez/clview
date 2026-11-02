@@ -371,9 +371,12 @@ with `--password`; without it, clv says it needs one.
 Markdown and HTML are laid out the same way, on US Letter pages, since they give no page size.
 Markdown is read as GitHub writes it, with its tables, task lists, strikethrough, footnotes and alerts
 (`> [!NOTE]`), and the HTML in it ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md));
-front matter (`---`) is left out. HTML is read for its text and what its tags and inline styles say of
-it (headings, lists, tables, colours). Its stylesheets and scripts are skipped, so a page designed with
-CSS shows as its words in order, not as a browser draws it. An epub's chapters, being XHTML, open from
+front matter (`---`) is left out. HTML is read for its text and what its tags and CSS say of it
+(headings, lists, tables, colours, margins): its `style` attributes, and the simple rules of its `style`
+elements (`p`, `.note`). Scripts and linked stylesheets are skipped, so a page designed with CSS shows as
+its words in order, not as a browser draws it, and one that counts on rules that aren't read can come out
+oddly: a dark theme's colours on white paper, say
+([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)). An epub's chapters, being XHTML, open from
 its list the same way. What may cost too much to lay out is refused, at its [limits](#limits)
 ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
 
@@ -381,7 +384,7 @@ They say little of how they should look, so clv gives them a look of its own, th
 text in Source Sans and code in JetBrains Mono, both of which come with it; headings falling in size, the
 first two above a line; code blocks on a faint wash, where 80 columns fit on a line; quotes beside a bar;
 tables in fine lines, under a shaded header; links in blue; and an alert's kind, in its colour, at the
-top of its quote. What HTML's inline styles say of its text comes first
+top of its quote. What HTML's own CSS says of its text comes first
 ([ADR-0016](adr/0016-how-markdown-and-html-look.md)).
 
 The pictures Markdown and HTML refer to are drawn by whatever shows them: anything `clv` shows as an
