@@ -1,6 +1,6 @@
-//! Word documents (docx, doc), OpenDocument text and RTF, read, laid out into pages and drawn by
-//! wordcraft, as its app prints them: headers and footers at full strength, no comment balloons,
-//! no proofing marks. A password opens a protected Word document.
+//! Word documents (docx, doc), OpenDocument text, RTF, Markdown and HTML, read, laid out into pages
+//! and drawn by wordcraft, as its app prints them: headers and footers at full strength, no comment
+//! balloons, no proofing marks. A password opens a protected Word document.
 //!
 //! Opening reads and lays out the document once, to know it opens and its pages' sizes, and keeps
 //! only where its bytes are: a renderer, or a pool, reads and lays it out again on its first
@@ -8,6 +8,9 @@
 //!
 //! A docx and an odt are zips: this backend is asked before the zip backend, and knows one by the
 //! names of the files that start it, or a Word document by its own name.
+//!
+//! Markdown and HTML read nothing but themselves: a picture they link to is left out, its alt text
+//! in its place for Markdown, as wordcraft's importers do unless given a way to load one.
 
 use std::borrow::Cow;
 use std::fs::File;
@@ -23,7 +26,7 @@ use super::threads::Threads;
 use super::{Again, Backend, Format, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
-/// Word documents, OpenDocument text and RTF, laid out and drawn by wordcraft.
+/// Word documents, OpenDocument text, RTF, Markdown and HTML, laid out and drawn by wordcraft.
 pub(super) struct Wordcraft;
 
 const OPTIONS: &[OptionSpec] =
@@ -39,7 +42,7 @@ impl Backend for Wordcraft {
     }
 
     fn formats(&self) -> Vec<Format> {
-        vec![WORD, ODT, RTF]
+        vec![WORD, ODT, RTF, MARKDOWN, HTML]
     }
 
     fn credits(&self) -> &[&'static str] {
@@ -84,6 +87,18 @@ impl Backend for Wordcraft {
 /// The largest file this reads: 256 MiB.
 const MAX_FILE: u64 = 256 << 20;
 
+/// The largest Markdown or HTML file this reads: 64 MiB. A page may hold far more than it lays out:
+/// a single-file page's scripts, styles and pictures in `data:` URLs cost next to nothing.
+const MAX_MARKED_UP: usize = 64 << 20;
+
+/// The most marks a Markdown or HTML file may have ([`marked_up`]): what it costs goes by them, up
+/// to 9 KB each between importing and laying out.
+const MAX_MARKS: usize = 500_000;
+
+/// The most text of a Markdown or HTML file that is laid out: 8 MiB, some 5,000 pages, which takes
+/// 20 seconds to open and 1.6 GB.
+const MAX_TEXT: usize = 8 << 20;
+
 /// The most pixels a page is drawn with: 64 million, 256 MiB.
 const MAX_PIXELS: u64 = 64_000_000;
 
@@ -96,6 +111,12 @@ const ODT: Format = Format { name: "OpenDocument text", extensions: &["odt", "ot
 
 /// RTF, by its first bytes alone.
 const RTF: Format = Format { name: "RTF", extensions: &[] };
+
+/// Markdown, by its name alone, since nothing in how it starts says so.
+const MARKDOWN: Format = Format { name: "Markdown", extensions: &["md", "markdown", "mdown", "mkd"] };
+
+/// HTML, by how it starts, or by its name where that doesn't say (a fragment of a page).
+const HTML: Format = Format { name: "HTML", extensions: &["html", "htm", "xhtml"] };
 
 /// What an OpenDocument text says it is, in its first file: a document or a template.
 const ODT_TYPE: &[u8] = b"application/vnd.oasis.opendocument.text";
@@ -110,6 +131,8 @@ enum Kind {
     /// OpenDocument text, a zip whose first file says so.
     Odt,
     Rtf,
+    Markdown,
+    Html,
 }
 
 impl Kind {
@@ -117,6 +140,8 @@ impl Kind {
     /// says so in its first bytes whatever its name (one is often saved as `.doc`), an odt in its
     /// first file. A Word package is a zip with a file in `word/` among the first, or named as a
     /// Word document; a compound file only when named so, since spreadsheets and slides are too.
+    /// HTML says so by how it starts; and text may be Markdown or HTML when named so, which a PDF
+    /// or a picture misnamed isn't.
     fn of(path: &str, head: &[u8]) -> Option<Self> {
         if head.starts_with(b"{\\rtf") {
             return Some(Self::Rtf);
@@ -128,8 +153,36 @@ impl Kind {
             let word = Names(head).any(|name| name.starts_with(b"word/"));
             return (word || WORD.named(path)).then_some(Self::Package);
         }
-        (head.starts_with(COMPOUND) && WORD.named(path)).then_some(Self::Compound)
+        if head.starts_with(COMPOUND) {
+            return WORD.named(path).then_some(Self::Compound);
+        }
+        if starts_as_html(head) {
+            return Some(Self::Html);
+        }
+        if !wordcraft_formats::txt::is_text(head) {
+            return None;
+        }
+        MARKDOWN.named(path).then_some(Self::Markdown).or(HTML.named(path).then_some(Self::Html))
     }
+}
+
+/// Whether a file starting with `head` says it is HTML: a doctype or an `html` element, in any case,
+/// after whatever may come first (a byte order mark, blank space, comments, an XML declaration).
+fn starts_as_html(head: &[u8]) -> bool {
+    let mut rest = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head).trim_ascii_start();
+    loop {
+        let end: &[u8] = match rest {
+            [b'<', b'!', b'-', b'-', ..] => b"-->",
+            [b'<', b'?', ..] => b"?>",
+            _ => break,
+        };
+        let Some(at) = rest.windows(end.len()).position(|bytes| bytes == end) else { return false };
+        rest = rest.get(at.saturating_add(end.len())..).unwrap_or_default().trim_ascii_start();
+    }
+    [&b"<!doctype html"[..], b"<html"].iter().any(|tag| {
+        let named = rest.get(..tag.len()).is_some_and(|start| start.eq_ignore_ascii_case(tag));
+        named && rest.get(tag.len()).is_none_or(|next| next.is_ascii_whitespace() || *next == b'>')
+    })
 }
 
 /// An open document.
@@ -257,6 +310,8 @@ fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str) -> Res
         Kind::Compound => wordcraft_docbin::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Odt => imported("odt", bytes),
         Kind::Rtf => imported("rtf", bytes),
+        Kind::Markdown => markdown(bytes),
+        Kind::Html => html(bytes),
     };
     let mut document = read.map_err(|e| match e == wordcraft_docx::PASSWORD_REQUIRED {
         true => format!("{e}: give it with --password"),
@@ -276,6 +331,38 @@ fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str) -> Res
 fn imported(extension: &str, bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
     let page = wordcraft_doc::SectionProps::default();
     wordcraft_formats::import_on(extension, bytes, &page).unwrap_or_else(|| Err(format!("wordcraft reads no .{extension}")))
+}
+
+/// The Markdown in `bytes`, where any punctuation or line may start a run, a cell or a paragraph.
+fn markdown(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
+    marked_up("md", |b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes)
+}
+
+/// The HTML in `bytes`, where a tag or, in a `pre`, a line may.
+fn html(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
+    marked_up("html", |b| matches!(b, b'<' | b'\r' | b'\n'), bytes)
+}
+
+/// The Markdown or HTML in `bytes`, unless it costs too much to read and lay out
+/// ([ADR-0012](../../docs/adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
+/// `mark` says which bytes may start something of its own, counted before it is imported, since
+/// importing them is what costs; its text, what laying it out costs, can only be told after, since
+/// a page's scripts and styles aren't text.
+fn marked_up(extension: &str, mark: impl Fn(&u8) -> bool, bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
+    if bytes.len() > MAX_MARKED_UP {
+        return Err(format!("the document is more than {} MiB", MAX_MARKED_UP >> 20));
+    }
+    if bytes.iter().filter(|b| mark(b)).count() > MAX_MARKS {
+        return Err(format!("the document has more than {MAX_MARKS} lines and marks"));
+    }
+    let document = imported(extension, bytes)?;
+    let body = wordcraft_doc::StoryRef::Body;
+    let paragraphs = document.para_paths(body);
+    let text = paragraphs.iter().filter_map(|path| document.para(body, path)).fold(0, |all: usize, para| all.saturating_add(para.text.len()));
+    if text > MAX_TEXT {
+        return Err(format!("the document has more than {} MiB of text", MAX_TEXT >> 20));
+    }
+    Ok(document)
 }
 
 /// What `read` returns, or an error if wordcraft panics: its bug costs the document, not the
@@ -352,6 +439,76 @@ mod tests {
         for path in ["a.xls", "a.ppt", "a.msg", "a"] {
             assert_eq!(Kind::of(path, &COMPOUND_HEAD), None, "{path}");
         }
+    }
+
+    #[test]
+    fn markdown_is_text_named_so() {
+        for path in ["a.md", "a.MD", "a.markdown", "a.mdown", "a.mkd"] {
+            assert_eq!(Kind::of(path, b"# Title\n"), Some(Kind::Markdown), "{path}");
+        }
+        assert_eq!(Kind::of("empty.md", b""), Some(Kind::Markdown));
+        assert_eq!(Kind::of("a.md", &[0xFF, 0xFE, b'#', 0, b' ', 0]), Some(Kind::Markdown), "UTF-16, by its byte order mark");
+        for path in ["a.txt", "md", "a.md.txt"] {
+            assert_eq!(Kind::of(path, b"# Title\n"), None, "{path}");
+        }
+    }
+
+    /// A PDF, a picture or a zip given a text name is what it is, for the backend that shows it.
+    #[test]
+    fn what_is_not_text_is_not_markdown_or_html_by_its_name() {
+        for path in ["a.md", "a.html"] {
+            for head in [&b"%PDF-1.7\n"[..], b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", b"PK\x03\x04", &COMPOUND_HEAD] {
+                assert_eq!(Kind::of(path, head), None, "{path}: {head:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn html_is_known_by_how_it_starts_whatever_its_name() {
+        for head in [
+            &b"<!DOCTYPE html>"[..],
+            b"<!doctype HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">",
+            b"<html lang=en>",
+            b"<HTML>",
+            b"<html",
+            b"\xEF\xBB\xBF\n  <html>",
+            b"<?xml version=\"1.0\"?>\n<!-- made by hand -->\n<!DOCTYPE html>",
+        ] {
+            for path in ["a.html", "a.txt", "untitled"] {
+                assert_eq!(Kind::of(path, head), Some(Kind::Html), "{path}: {head:?}");
+            }
+        }
+        for head in [&b"<htmlish>"[..], b"<!doctype xml>", b"<!-- never ends <html>", b"<p>a fragment</p>", b"<svg/>", b"text <html>"] {
+            assert_eq!(Kind::of("untitled", head), None, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn html_that_doesnt_say_so_is_text_named_so() {
+        for path in ["a.html", "a.HTM", "a.xhtml"] {
+            assert_eq!(Kind::of(path, b"<p>a fragment</p>"), Some(Kind::Html), "{path}");
+        }
+    }
+
+    /// What a limit is for: the marks and the text of what is read, not the bytes of the file.
+    #[test]
+    fn markdown_and_html_are_refused_past_their_limits() {
+        let refused = |what: &str, read: fn(&[u8]) -> Result<wordcraft_doc::Document, String>, bytes: &[u8]| {
+            assert!(read(bytes).is_err_and(|e| e.contains(what)), "{what}");
+        };
+        refused("lines and marks", markdown, "*a".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", markdown, "\r".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", html, "<b>".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", html, format!("<pre>{}", "\n".repeat(MAX_MARKS + 1)).as_bytes());
+
+        let text = "a".repeat(MAX_TEXT + 1);
+        refused("of text", markdown, text.as_bytes());
+        refused("of text", html, format!("<p>{text}</p>").as_bytes());
+        assert!(markdown("a".repeat(MAX_TEXT).as_bytes()).is_ok(), "as much text as it may have");
+
+        let hidden = format!("<script>{text}</script><style>{text}</style><img src=\"data:image/png;base64,{text}\"><p>Shown</p>");
+        assert!(html(hidden.as_bytes()).is_ok(), "a page's text is what counts, not its scripts, styles and pictures");
+        refused(" MiB", html, format!("<script>{}</script>", "a".repeat(MAX_MARKED_UP)).as_bytes());
     }
 
     #[test]

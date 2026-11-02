@@ -257,7 +257,7 @@ read.
 
 A file compressed alone with gzip, bzip2 or xz, not a tar, is shown as the file it unpacks to:
 `paper.pdf.gz` as the PDF. A file compressed twice is not shown, and neither is one that unpacks
-to what nothing shows. An option only the unpacked file's backend takes (`--password` for a
+to what nothing shows, or one only its name would tell (`notes.md.gz`, `data.csv.gz`). An option only the unpacked file's backend takes (`--password` for a
 `.pdf.gz`) is refused, as an option no backend takes is.
 
 ## Filtering a list
@@ -303,7 +303,7 @@ that only another backend takes is refused, since it would do nothing for the fi
 | Files | Known by | Their options |
 |---|---|---|
 | [SVG drawings](#svg-drawings), and svgz, gzipped | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz by what it unpacks to; a `.svg` or `.svgz` name when the first 1024 bytes end before the root element. Other XML is not one | none |
-| [Word documents, OpenDocument text and RTF](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too | `--password PW`: the password of a protected Word document |
+| [Word documents, OpenDocument text, RTF, Markdown and HTML](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too; HTML by how it starts (a doctype or an `<html>` element), whatever its name, or a name (`.html`, `.htm`, `.xhtml`) and that it is text; Markdown by its name only (`.md`, `.markdown`, `.mdown`, `.mkd`), and that it is text | `--password PW`: the password of a protected Word document |
 | [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
 | [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | [Images](#images) | Their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld; and TGA, which has no signature, by its `.tga` name | none |
@@ -363,6 +363,17 @@ no comment balloons, no proofing marks. Text is set in the fonts it names when t
 them, and otherwise in the ones wordcraft substitutes, its own included (Source Serif, Source
 Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens
 with `--password`; without it, clv says it needs one.
+
+Markdown and HTML are laid out the same way, on US Letter pages, since they give no page size.
+Markdown is read as most of CommonMark, with GitHub's tables and strikethrough; YAML front matter
+isn't recognised, and shows as a rule and a heading. HTML is read for its text and what its tags and
+inline styles say of it (headings, lists, tables, colours). Its stylesheets and scripts are skipped,
+so a page designed with CSS shows as its words in order, not as a browser draws it. Both read nothing
+but themselves: a picture held in a `data:` URL is drawn, and one they link to is left out, even
+beside the file (Markdown shows its alt text instead). An epub's chapters, being XHTML, open from its
+list the same way, without its stylesheets and pictures. What may cost too much to lay out is
+refused, at its [limits](#limits)
+([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
 
 Opening a document reads and lays it out whole, to know its pages: a quarter of a second for 500
 pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 500 pages hold about
@@ -534,6 +545,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
 | What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
+| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 5 GB and 15 seconds |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |
 | An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |

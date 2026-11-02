@@ -1,14 +1,15 @@
-//! The Word backend, `src/source/wordcraft.rs`: Word documents, OpenDocument text and RTF, as
-//! pages; a protected Word document opened with its password; the rule that nothing else names
-//! wordcraft; and its pin. Its own tests read the first bytes it goes by.
+//! The Word backend, `src/source/wordcraft.rs`: Word documents, OpenDocument text, RTF, Markdown
+//! and HTML, as pages; a protected Word document opened with its password; the rule that nothing
+//! else names wordcraft; and its pin. Its own tests read the first bytes it goes by.
 #![cfg(all(unix, feature = "word"))]
 
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use ::zip::write::SimpleFileOptions;
 use ::zip::{CompressionMethod, ZipWriter};
+use base64::Engine as _;
 use serde_json::Value;
 
 use crate::view::{images, names, png_size, text, tmp, view};
@@ -124,6 +125,100 @@ fn in_a_list_a_document_is_its_first_page() {
     assert_eq!(names(&out.stdout), [" a.docx b.rtf"]);
     let tiles: Vec<_> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
     assert!(shaped(&tiles[..1], 200.0, 300.0) && shaped(&tiles[1..], 612.0, 792.0), "{tiles:?}");
+}
+
+/// The first page `clv` draws of `document`, named `name`, as a PNG.
+fn page(test: &str, name: &str, document: &str) -> Vec<u8> {
+    let out = view(&write(tmp(test, name), document.as_bytes()), &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{name}: {}", text(&out.stderr));
+    images(&out.stdout).swap_remove(0).png
+}
+
+/// Neither gives a page size, so both are laid out on US Letter, as a word processor opens them.
+#[test]
+fn markdown_and_html_are_laid_out_into_pages() {
+    let long = |open: &str, close: &str| -> String { (1..=200).map(|n| format!("{open}Paragraph {n}{close}\n\n")).collect() };
+    for (name, document) in [("long.md", long("", "")), ("long.html", long("<p>", "</p>"))] {
+        let pages = drawn(&write(tmp("word-text", name), document.as_bytes()), &[]);
+        assert!(pages.len() > 1 && shaped(&pages, 612.0, 792.0), "{name}: {pages:?}");
+    }
+}
+
+/// Read as what it is and not as text: a heading written two ways is one heading, which isn't the
+/// same words as a paragraph.
+#[test]
+fn markdown_and_html_are_read_as_such() {
+    let heading = page("word-marked", "a.md", "# One");
+    assert_eq!(heading, page("word-marked", "a.md", "One\n==="));
+    assert_ne!(heading, page("word-marked", "a.md", "One"));
+    let heading = page("word-marked", "a.html", "<h1>One</h1>");
+    assert_eq!(heading, page("word-marked", "a.html", "<H1 >One</H1 >"));
+    assert_ne!(heading, page("word-marked", "a.html", "<p>One</p>"));
+}
+
+/// A picture they link to is left out, though it is right there beside them, so a document says
+/// nothing of what else is on the machine; a picture they hold is drawn.
+#[test]
+fn markdown_and_html_read_nothing_but_themselves() {
+    let mut picture = Cursor::new(Vec::new());
+    ::image::RgbaImage::from_pixel(60, 60, ::image::Rgba([200, 0, 0, 255])).write_to(&mut picture, ::image::ImageFormat::Png).unwrap();
+    let picture = picture.into_inner();
+    write(tmp("word-links", "beside.png"), &picture);
+    let held = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&picture));
+    for (name, document) in [("a.md", "One ![two](SRC) three"), ("a.html", "<p>One <img alt=\"two\" src=\"SRC\"> three</p>")] {
+        let of = |src: &str| page("word-links", name, &document.replace("SRC", src));
+        assert_eq!(of("beside.png"), of("missing.png"), "{name}: read a picture it links to");
+        assert_ne!(of(&held), of("missing.png"), "{name}: left out a picture it holds");
+    }
+}
+
+/// In a directory or an archive they are tiles, while text that is neither is left out.
+#[test]
+fn in_a_list_markdown_and_html_are_tiles() {
+    let files = [("a.md", "# One"), ("b.html", "<p>Two</p>"), ("c.txt", "Three")];
+    let dir = tmp("word-text-list", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, contents) in files {
+        write(dir.join(name), contents.as_bytes());
+    }
+    for path in [dir, write(tmp("word-text-list", "shelf.zip"), &zip(&files))] {
+        let out = view(&path, &["--protocol", "kitty"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert_eq!(names(&out.stdout), [" a.md b.html"], "{}", path.display());
+    }
+}
+
+/// Through a pipe there is no name to go by: HTML says what it is, and Markdown can't.
+#[test]
+fn through_a_pipe_html_says_what_it_is_and_markdown_cant() {
+    let piped = |document: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+            .args(["/dev/stdin", "--protocol", "kitty"])
+            .env("TERM", "dumb")
+            .env_remove("TMUX")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(document.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let out = piped("<!doctype html><p>One</p>");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 1);
+    assert!(!piped("# One").status.success());
+}
+
+/// One that would cost too much is refused with why, before that is spent; what a page has that
+/// isn't laid out (here a script as long as the most text it may have) costs next to nothing.
+#[test]
+fn what_would_cost_too_much_is_refused_and_what_a_page_skips_is_not_counted() {
+    let costly = write(tmp("word-cost", "stars.md"), "*a".repeat(600_000).as_bytes());
+    let out = view(&costly, &["--protocol", "kitty"]);
+    assert!(!out.status.success() && text(&out.stderr).contains("lines and marks"), "{}", text(&out.stderr));
+    let script = format!("<script>{}</script><p>Shown</p>", "a".repeat(9 << 20));
+    assert_eq!(drawn(&write(tmp("word-cost", "page.html"), script.as_bytes()), &[]).len(), 1);
 }
 
 /// A protected Word document opens with its password, says it needs one without, and refuses a

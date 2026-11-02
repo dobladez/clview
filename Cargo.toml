@@ -49,9 +49,9 @@ imagesize = { version = "0.15", optional = true }
 # reader of `source/tar.rs`'s own. Not zstd (the zstd C library), as for zip.
 bzip2 = { version = "0.6", optional = true }
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz"], optional = true }
-# Word documents, OpenDocument text and RTF, read, laid out and drawn in Rust by wordcraft, a
-# git dependency like pdfcraft, from one pinned commit of its `main` (every `rev` below moves
-# together; tests/it/wordcraft.rs checks it). Its reading, layout and drawing crates only: not
+# Word documents, OpenDocument text, RTF, Markdown and HTML, read, laid out and drawn in Rust by
+# wordcraft, a git dependency like pdfcraft, from one pinned commit of its `main` (every `rev` below
+# moves together; tests/it/wordcraft.rs checks it). Its reading, layout and drawing crates only: not
 # its engine, which brings PDF export and the [patch.crates-io] that needs.
 wordcraft-doc = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615", optional = true }
@@ -83,8 +83,8 @@ zip = ["dep:zip"]
 # Tar archives, plain or compressed (gzip, bzip2, xz), as directories, and a file compressed
 # alone as that file: `source/tar.rs`.
 tar = ["dep:flate2", "dep:bzip2", "dep:lzma-rust2"]
-# Word documents (docx, doc), OpenDocument text and RTF: `source/wordcraft.rs`, which lays them
-# out and draws them through wordcraft.
+# Word documents (docx, doc), OpenDocument text, RTF, Markdown and HTML: `source/wordcraft.rs`,
+# which lays them out and draws them through wordcraft.
 word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:wordcraft-formats", "dep:wordcraft-layout", "dep:wordcraft-render"]
 # Spreadsheets (xlsx, xls, xlsb, ods, csv): `source/gridcraft.rs`, which prints them to a PDF
 # through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate

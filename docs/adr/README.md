@@ -23,6 +23,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0009 | [Copy a page through the terminal's clipboard protocol, else the system's clipboard](0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md) | Accepted |
 | 0010 | [A filtered list keeps the whole list's tile size](0010-a-filtered-list-keeps-the-whole-lists-tile-size.md) | Accepted |
 | 0011 | [Text cells where the terminal has no graphics protocol](0011-text-cells-where-the-terminal-has-no-graphics-protocol.md) | Accepted |
+| 0012 | [Bound what Markdown and HTML cost by their marks and their text](0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md) | Accepted |
 
 ## When to write one
 
