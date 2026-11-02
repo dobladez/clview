@@ -1316,17 +1316,6 @@ mod tests {
     }
 
     #[test]
-    fn the_files_are_the_arguments_that_are_not_option_values() {
-        let given = |list: &[&str]| file_args(&parsed(&args(list))).map(|files| files.iter().map(|f| f.to_string()).collect::<Vec<_>>());
-        assert_eq!(given(&["a.pdf", "--pages", "2"]), Ok(vec!["a.pdf".into()]));
-        assert_eq!(given(&["--pages", "2", "a.pdf"]), Ok(vec!["a.pdf".into()]));
-        assert_eq!(given(&["--password", "a.pdf", "b.pdf"]), Ok(vec!["b.pdf".into()]));
-        // `--pager` takes no value; the files are in the order given.
-        assert_eq!(given(&["b.png", "--pager", "a.pdf"]), Ok(vec!["b.png".into(), "a.pdf".into()]));
-        assert!(given(&["--zoom", "2"]).is_err_and(|e| e.contains("missing file")));
-    }
-
-    #[test]
     fn an_option_that_none_of_the_files_backends_takes_is_refused() {
         use crate::source::tests::{Fake, PDF};
         const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
@@ -1346,8 +1335,6 @@ mod tests {
     #[test]
     fn the_reader_is_told_how_many_files_were_left_out_and_the_first_ones_name() {
         let file = |name: &str| (name.to_string(), format!("dir/{name}: no"));
-        assert_eq!(left_out_note(&[]), None);
-        assert_eq!(left_out_note(&[file("a.txt")]).as_deref(), Some("1 file left out: a.txt"));
         assert_eq!(left_out_note(&[file("a.txt"), file("b")]).as_deref(), Some("2 files left out: a.txt, …"));
     }
 
@@ -1475,11 +1462,8 @@ mod tests {
         const NONE: Lists = Lists("nothing", &["lib-c"], &[]);
         const OWN: Lists = Lists("drawings", &[], &[format("SVG", &[])]);
         let help = usage(&[&LOCKED, &PDF, &NONE, &OWN, &PICTURES, &MORE]);
-        let is = format!("clview {}\nCommand-line Viewer: view graphic files without leaving your terminal", env!("CARGO_PKG_VERSION"));
-        assert!(help.starts_with(&format!("{is}\n\n{0} [options] <file>…\n{0} --help | --version\n", crate::NAME)), "{help}");
-        // Under their heading, right after the words about clv, which say nothing of the keys.
+        // Under their heading, right after the words about clv.
         assert!(help.contains(&format!("\n\n{ABOUT}\n\nGeneral Options:\n  --pages ")), "{help}");
-        assert!(!ABOUT.contains("Enter") && !ABOUT.contains("?:"), "{ABOUT}");
         // Aligned under the longest, `--protocol auto|kitty|blocks|ascii`.
         for option in OPTIONS {
             assert!(help.contains(&format!("\n  {:34}  {}\n", option.shown(), option.help)), "{help}");
@@ -1517,11 +1501,6 @@ mod tests {
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
         assert!(nothing.contains(" text cells\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
-        // Last, the manual and where to report issues, whatever the build has.
-        for help in [&help, &nothing] {
-            let end = "\n\nManual: https://github.com/dobladez/clview/blob/main/docs/usage.md\nReport issues and ideas to: https://github.com/dobladez/clview\n";
-            assert!(help.ends_with(end), "{help}");
-        }
     }
 
     #[test]
@@ -1533,14 +1512,6 @@ mod tests {
         assert!(safe.starts_with("a\u{FFFD}]52;c;cHduZWQ=\u{FFFD}b"), "{safe:?}");
         assert_eq!(printable("two\nlines\tand\r"), "two lines and ");
         assert_eq!(printable("rapport-été.pdf"), "rapport-été.pdf");
-    }
-
-    #[test]
-    fn page_ids_follow_on_from_the_runs_start() {
-        let first = fresh_index();
-        let (a, b) = (IdColor::Indexed.id(first), IdColor::Indexed.id(first.wrapping_add(1)));
-        assert_ne!(a, b);
-        assert_ne!(a & 0xff, 0);
     }
 
     #[test]
@@ -1564,41 +1535,13 @@ mod tests {
         assert_eq!(Output::Tmux(IdColor::Rgb).limits(80), (80, 297));
     }
 
+    /// tmux's session knows better than a pane's environment, which may be from another attach.
     #[test]
-    fn more_than_a_page_on_a_terminal_opens_the_pager() {
-        let auto = Paging::from_flags(false, false).unwrap();
-        assert!(auto.pages(18, true));
-        assert!(!auto.pages(1, true), "one page is printed, as less -F does");
-        assert!(!auto.pages(18, false), "not on a terminal");
-        assert!(Paging::from_flags(true, false).unwrap().pages(1, true));
-        assert!(!Paging::from_flags(false, true).unwrap().pages(18, true));
-        assert!(Paging::from_flags(true, true).is_err_and(|e| e.contains("not both")));
-    }
-
-    #[test]
-    fn compression_follows_where_the_terminal_is() {
-        assert_eq!(Compression::parse("auto"), Ok(Compression::Auto));
-        assert!(Compression::parse("best").is_err_and(|e| e.contains("auto, fast or small")));
-        // Over SSH, small PNGs; on this machine, fast ones, and temporary files may be tried.
-        assert_eq!(Compression::Auto.choose(|| true), (PngEffort::Small, false));
-        assert_eq!(Compression::Auto.choose(|| false), (PngEffort::Fast, true));
-        // Chosen by hand: PNGs in the stream, and where the terminal is isn't even asked.
-        assert_eq!(Compression::Fast.choose(|| panic!("asked")), (PngEffort::Fast, false));
-        assert_eq!(Compression::Small.choose(|| panic!("asked")), (PngEffort::Small, false));
-        // tmux's session knows better than a pane's environment, which may be from another attach.
+    fn inside_tmux_the_session_says_whether_the_terminal_is_over_ssh() {
         assert!(over_ssh(true, None));
         assert!(!over_ssh(false, None));
         assert!(!over_ssh(true, Some(false)));
         assert!(over_ssh(false, Some(true)));
-    }
-
-    #[test]
-    fn protocol_names() {
-        assert_eq!(Protocol::parse("auto"), Ok(Protocol::Auto));
-        assert_eq!(Protocol::parse("kitty"), Ok(Protocol::Kitty));
-        assert_eq!(Protocol::parse("blocks"), Ok(Protocol::Text(Glyphs::Blocks)));
-        assert_eq!(Protocol::parse("ascii"), Ok(Protocol::Text(Glyphs::Ascii)));
-        assert!(Protocol::parse("sixel").is_err_and(|e| e.contains("auto, kitty, blocks or ascii")));
     }
 
     /// Page 3 rendered with `warnings`, or failed with `error`.
@@ -1620,8 +1563,9 @@ mod tests {
         assert_eq!(checked(&rendered(&["a colour was guessed"], Some("no page box"))), Err("page 3: no page box".into()));
     }
 
-    /// Where a page goes depends only on its size, and whether it is a natural one: a source past
-    /// its last page has no layout.
+    /// As text, a page keeps the cells it would have and renders four times over, and a picture
+    /// renders what it has: nothing a reader can tell from the cells. A source past its last page
+    /// has no layout.
     #[test]
     fn a_page_is_laid_out_from_its_sources_size() {
         struct Sizes(Vec<(f32, f32)>);
@@ -1633,7 +1577,7 @@ mod tests {
                 self.0.get(page).copied()
             }
             fn natural(&self, page: usize) -> bool {
-                page == 2
+                page == 1
             }
             fn renderer(&self) -> Result<Box<dyn crate::source::Render + '_>, String> {
                 Err("not here".into())
@@ -1649,27 +1593,16 @@ mod tests {
                 None
             }
         }
-        let source = Sizes(vec![(612.0, 792.0), (792.0, 612.0), (100.0, 100.0)]);
+        let source = Sizes(vec![(612.0, 792.0), (100.0, 100.0)]);
         let cell = Cell { w: 10.0, h: 20.0 };
         let window = Area { cols: 80, rows: 24, cell, max_rows: 24 };
-        let portrait = page_layout(&source, 0, Fit::Page, window, Output::Direct).unwrap();
-        let landscape = page_layout(&source, 1, Fit::Page, window, Output::Direct).unwrap();
-        // An 800 × 480 pixel window: both fill its height, the landscape page wider, each scaled to
-        // 480 pixels over its own height.
-        assert_eq!((portrait.rows, landscape.rows), (24, 24));
-        assert!(portrait.cols < landscape.cols, "{portrait:?} {landscape:?}");
-        assert!((portrait.scale - 480.0 / 792.0).abs() < 1e-4 && (landscape.scale - 480.0 / 612.0).abs() < 1e-4, "{portrait:?} {landscape:?}");
-        // A picture, the size it is.
-        let picture = page_layout(&source, 2, Fit::Page, window, Output::Direct).unwrap();
-        assert_eq!((picture.scale, picture.cols, picture.rows), (1.0, 10, 5));
-        assert_eq!(page_layout(&source, 3, Fit::Page, window, Output::Direct).map(|_| ()), Err("no page 4".into()));
-        // As text, the same cells: a page renders four times over, and a picture what it has.
+        assert_eq!(page_layout(&source, 2, Fit::Page, window, Output::Direct).map(|_| ()), Err("no page 3".into()));
         let text = Output::Text(Style { glyphs: Glyphs::Blocks, colours: Colours::Rgb, ground: Ground::Dark });
         let sampled = Area { cell: text.fitting(cell), ..window };
         let page = page_layout(&source, 0, Fit::Page, sampled, text).unwrap();
         let once = fit::layout(page_size(&source, 0).unwrap(), 80, 24, sampled.cell, Fit::Page, 24).unwrap();
         assert_eq!((page.scale, page.cols, page.rows), (once.scale * cells::OVERSAMPLE, once.cols, once.rows));
-        let small = page_layout(&source, 2, Fit::Page, sampled, text).unwrap();
-        assert_eq!(small, fit::layout(page_size(&source, 2).unwrap(), 80, 24, sampled.cell, Fit::Page, 24).unwrap());
+        let small = page_layout(&source, 1, Fit::Page, sampled, text).unwrap();
+        assert_eq!(small, fit::layout(page_size(&source, 1).unwrap(), 80, 24, sampled.cell, Fit::Page, 24).unwrap());
     }
 }

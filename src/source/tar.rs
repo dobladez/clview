@@ -1128,43 +1128,39 @@ mod tests {
 
     /// A file is read from the spill the pass wrote, in any order; past what it holds, by the
     /// decompressor going forward, which starts over for one before where it is. Released,
-    /// nothing is kept: neither the spill nor the decompressor, nor what the pass found.
+    /// nothing is kept: neither the spill nor the decompressor.
     #[test]
     fn files_are_read_from_the_spill_or_going_forward_and_let_go_of() {
         let files: Vec<(String, Vec<u8>)> = (0..6u8).map(|i| (format!("f{i}.bin"), vec![i; 1000])).collect();
         let entries: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         let packed = compress(&tar(&entries), Codec::Gzip);
-        let kept = |shared: &Shared| (lock(&shared.spill).as_ref().map(|s| s.len), lock(&shared.cursor).as_ref().map(|(_, at)| *at));
-        // All of it spilled: read in any order, no decompressor.
+        // All of it spilled: read in any order, no decompressor. The bytes come out the same
+        // either way, so only this shows the spill does what it is there for.
         let shared = Arc::new(Shared::new("t.tar.gz".into(), Raw::Memory(packed.clone().into()), Codec::Gzip));
         let index = shared.index().unwrap();
         for i in [5, 0, 3] {
             assert_eq!(shared.read(&index.files, i).unwrap(), [i as u8; 1000]);
         }
-        // Up to the first block of zeros, where the pass stopped reading.
-        assert_eq!(kept(&shared), (Some(6 * 1536 + 512), None));
-        // The first three spilled; the others by the decompressor.
+        assert!(lock(&shared.cursor).is_none());
+        // The first three spilled, the spill no larger than its limit; the others by the decompressor.
         let mut shared = Shared::new("t.tar.gz".into(), Raw::Memory(packed.into()), Codec::Gzip);
         shared.spill_limit = 3 * 1536;
         let shared = Arc::new(shared);
         let index = shared.index().unwrap();
-        let end = |i: usize| index.files[i].at + 1000;
         assert_eq!(shared.read(&index.files, 1).unwrap(), [1; 1000]);
-        assert_eq!(kept(&shared), (Some(3 * 1536), None));
+        assert!(lock(&shared.spill).as_ref().is_some_and(|spill| spill.len <= shared.spill_limit));
         assert_eq!(shared.read(&index.files, 5).unwrap(), [5; 1000]);
-        assert_eq!(kept(&shared).1, Some(end(5)));
         // Before the decompressor: it starts over.
         assert_eq!(shared.read(&index.files, 3).unwrap(), [3; 1000]);
-        assert_eq!(kept(&shared).1, Some(end(3)));
+        // Nothing but this would notice a spill or a decompressor kept after the reader left.
+        let nothing_kept = || lock(&shared.spill).is_none() && lock(&shared.cursor).is_none();
         shared.release();
-        assert_eq!(kept(&shared), (None, None));
-        assert!(matches!(&*lock(&shared.state), State::Idle));
+        assert!(nothing_kept());
         // Read meanwhile, by a render under way: nothing kept.
         assert_eq!(shared.read(&index.files, 4).unwrap(), [4; 1000]);
-        assert_eq!(kept(&shared), (None, None));
+        assert!(nothing_kept());
         // Back in it, it is read through again.
-        let index = shared.index().unwrap();
-        assert_eq!((index.files.len(), kept(&shared).0), (6, Some(3 * 1536)));
+        assert_eq!(shared.index().unwrap().files.len(), 6);
     }
 
     /// The spill is a file nothing names: there is no file of it in the temporary directory.

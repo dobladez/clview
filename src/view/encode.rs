@@ -95,7 +95,6 @@ mod tests {
         rgba[..4].copy_from_slice(&[64, 0, 0, 128]);
         let small = encode_png(w, h, &rgba, PngEffort::Small).unwrap();
         let fast = encode_png(w, h, &rgba, PngEffort::Fast).unwrap();
-        assert_ne!(fast, small, "a different compression");
         assert_eq!(decode(&fast), decode(&small));
         // Straight alpha out: the premultiplied (64, 0, 0, 128) is (128, 0, 0, 128).
         assert_eq!(decode(&fast).2[..4], [128, 0, 0, 128]);

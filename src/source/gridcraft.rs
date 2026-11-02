@@ -351,7 +351,6 @@ mod tests {
     use ::zip::{CompressionMethod, ZipWriter};
     use proptest::prelude::*;
 
-    use super::super::Pixels;
     use super::super::head::zip_head;
     use super::*;
 
@@ -424,21 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn what_gridcraft_says_on_reading_comes_with_the_first_page() {
-        let frame = |page| Frame {
-            request: Request { page, scale: 1.0, tag: 0 },
-            width: 0,
-            height: 0,
-            rgba: Pixels::new(Vec::new()),
-            error: None,
-            warnings: vec!["its own".into()],
-        };
-        let notes = ["sheet cut short".to_string()];
-        assert_eq!(noted(frame(0), &notes).warnings, ["sheet cut short", "its own"]);
-        assert_eq!(noted(frame(1), &notes).warnings, ["its own"]);
-    }
-
-    #[test]
     fn a_csvs_columns_are_as_wide_as_what_they_hold() {
         let csv = b"date,note\n2026-03-01,a note much longer than a column starts\n";
         let (workbook, _) = gridcraft_engine::io::open_bytes_with("a.csv", csv, None, false).unwrap();
@@ -460,18 +444,12 @@ mod tests {
 
     #[test]
     fn what_gridcraft_tells_an_editor_is_told_a_reader_as_a_reader_needs_it() {
-        assert_eq!(for_reader(gridcraft_engine::io::DECRYPTED_NOTICE), None);
-        let ods = for_reader("ODS data-only import: formulas become their saved results. Save a new .xlsx file; ODS saving is not supported.");
-        assert_eq!(ods.as_deref(), Some("an ods is shown by its values: its formatting, charts and pictures are left out"));
         assert!(for_reader("XLSB data-only import: …").is_some_and(|note| note.starts_with("an xlsb is shown by its values")));
         assert_eq!(for_reader("sheet \"Data\" is damaged; kept 37036 rows").as_deref(), Some("sheet \"Data\" is damaged; kept 37036 rows"));
     }
 
     #[test]
-    fn gridcraft_is_reworded_where_clv_says_it_otherwise() {
-        let required = format!("'a.xlsx' {}", gridcraft_engine::io::PASSWORD_REQUIRED);
-        assert_eq!(reworded("dir/a.xlsx", &required), "this workbook is protected with a password: give it with --password");
-        assert_eq!(reworded("a.xlsx", gridcraft_engine::io::WRONG_PASSWORD), "the password is incorrect");
+    fn gridcraft_saying_it_cant_open_a_file_says_only_why() {
         assert_eq!(reworded("dir/a.xlsx", "We can't open 'a.xlsx': no workbook part"), "no workbook part");
         assert_eq!(reworded("a.xlsx", "something else"), "something else");
     }

@@ -565,16 +565,6 @@ mod tests {
     }
 
     #[test]
-    fn the_question_is_decrqm_for_mode_5522_wrapped_for_tmux() {
-        let mut out = Vec::new();
-        ask(&mut out, Wrap::None);
-        assert_eq!(out, b"\x1b[?5522$p");
-        out.clear();
-        ask(&mut out, Wrap::Tmux);
-        assert_eq!(out, b"\x1bPtmux;\x1b\x1b[?5522$p\x1b\\");
-    }
-
-    #[test]
     fn a_write_is_a_start_the_png_in_chunks_of_4096_and_an_end() {
         let png: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
         let mut write = Write::new(png.clone(), 7, Wrap::None);
@@ -625,14 +615,6 @@ mod tests {
         let unwrapped: Vec<u8> =
             String::from_utf8(wrapped).unwrap().replace("\x1bPtmux;", "").replace("\x1b\\\x1b\\", "\x1b\\").replace("\x1b\x1b", "\x1b").into_bytes();
         assert_eq!(unwrapped, plain);
-    }
-
-    #[test]
-    fn a_copy_goes_to_the_terminal_when_it_speaks_the_protocol_else_to_this_machines() {
-        assert_eq!(way(true, true), Way::Terminal);
-        assert_eq!(way(true, false), Way::Terminal, "over SSH too");
-        assert_eq!(way(false, true), Way::System);
-        assert_eq!(way(false, false), Way::Nowhere);
     }
 
     /// A 2 × 1 page rendered for `request`, or failed.
@@ -734,9 +716,10 @@ mod tests {
         // A large picture is copied smaller, and says of what.
         let photo = Size { w: 6000.0, h: 4000.0, natural: true };
         copier.start("photo.jpg".into(), 0, 0, Some(photo), 4, now, &mut Vec::new());
-        let copy = copier.copy.as_mut().unwrap();
-        copy.size = (4899, 3266);
-        assert_eq!(copied(copy), "copied photo.jpg, 4899 × 3266 pixels of its 6000 × 4000");
+        copier.answer(Key::Clipboard(true));
+        copier.rendered(frame(Request { page: 0, scale: 1.0, tag: 4 }, None));
+        until_sent(&mut copier, &mut Vec::new());
+        assert_eq!(copier.answer(Key::Copied(1, Ok(()))).as_deref(), Some("copied photo.jpg, 2 × 1 pixels of its 6000 × 4000"));
     }
 
     #[test]

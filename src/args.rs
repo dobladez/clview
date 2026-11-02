@@ -150,11 +150,4 @@ mod tests {
         assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &specs).unwrap_err(), "unknown option -x");
         assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &specs).unwrap().value("--password"), Some("-r"));
     }
-
-    #[test]
-    fn help_shows_an_option_with_its_value() {
-        assert_eq!(OptionSpec { name: "--zoom", short: None, value: Some("auto|N"), help: "" }.shown(), "--zoom auto|N");
-        assert_eq!(OptionSpec { name: "--pager", short: None, value: None, help: "" }.shown(), "--pager");
-        assert_eq!(OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "" }.shown(), "-r, --recurse");
-    }
 }

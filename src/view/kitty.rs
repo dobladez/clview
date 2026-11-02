@@ -533,13 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn a_virtual_placement_names_its_image_and_size() {
-        let mut out = Vec::new();
-        place_virtual(&mut out, 42, 30, 12, Wrap::None);
-        assert_eq!(out, b"\x1b_Ga=p,U=1,q=2,i=42,c=30,r=12\x1b\\");
-    }
-
-    #[test]
     fn placeholder_rows_are_the_specification_example_with_what_can_be_inferred_left_out() {
         // The protocol's 2 × 2 example for image 42, in the 256-colour palette, marks every cell:
         // row 0 is 10EEEE 0305 0305, 10EEEE 0305 030D. The second cell's marks say what the

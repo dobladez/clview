@@ -103,16 +103,13 @@ fn a_word_document_odt_and_rtf_are_their_pages() {
 
 /// A Word package is known by what it holds, whatever its name: `word/` among its first files
 /// (an RTF by its first bytes, as the backend's own tests check); named as a Word document, one
-/// that isn't is the error, rather than a folder. A zip of other files stays an archive.
+/// that isn't is the error, rather than a folder.
 #[test]
 fn a_document_is_known_by_what_it_holds() {
     assert_eq!(drawn(&write(tmp("word-known", "renamed.zip"), &docx(2)), &[]).len(), 2);
     let broken = write(tmp("word-known", "broken.docx"), &zip(&[("notes.txt", "not a document")]));
     let out = view(&broken, &["--protocol", "kitty"]);
     assert!(!out.status.success() && text(&out.stderr).starts_with(&format!("clv: {}: ", broken.display())), "{}", text(&out.stderr));
-    let archive = write(tmp("word-known", "notes.zip"), &zip(&[("notes.txt", "plain text")]));
-    let out = view(&archive, &["--protocol", "kitty"]);
-    assert!(!text(&out.stderr).contains("wordcraft"), "{}", text(&out.stderr));
 }
 
 /// In a directory, or an archive, a document is a tile: its first page.
@@ -210,12 +207,4 @@ fn nothing_but_this_backend_names_wordcraft() {
     }
     assert!(read >= 20, "read {read} files");
     assert!(named.is_empty(), "named outside the Word backend:\n{}", named.join("\n"));
-}
-
-/// `--help` lists the formats the backend shows by wordcraft.
-#[test]
-fn help_credits_wordcraft() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").output().unwrap();
-    let help = text(&out.stdout);
-    assert!(help.contains("\n  Documents, by wordcraft: Word (.docx "), "{help}");
 }

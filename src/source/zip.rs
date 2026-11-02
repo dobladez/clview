@@ -346,9 +346,6 @@ mod tests {
         // Gone: the archive opens the file only to read, and says so.
         std::fs::remove_file(&path).unwrap();
         assert!(top.open("a.txt").is_err());
-        let reader = Reader::Disk { path: Arc::from(path.as_str()), file: None, at: 7 };
-        let Reader::Disk { file, at, .. } = reader.clone() else { panic!("on disk") };
-        assert!(file.is_none() && at == 7);
     }
 
     #[test]

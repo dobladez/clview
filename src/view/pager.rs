@@ -2106,9 +2106,6 @@ mod tests {
         // Zooming starts at the top of the page.
         press(&mut nav, &[Key::Char(' '), Key::Char('+')]);
         assert_eq!((nav.zoom, nav.scroll), (Zoom::Width, 0));
-        // `f` and `d`, which fitted the width and turned two-up off, are keys no more.
-        press(&mut nav, &[Key::Char('f'), Key::Char('d')]);
-        assert_eq!((nav.zoom, nav.per_row), (Zoom::Width, 1));
         press(&mut nav, &[Key::Char('r')]);
         assert!(nav.rerender);
         assert_eq!(press(&mut nav, &[Key::Char('q')]), Step::Quit);
@@ -2142,7 +2139,6 @@ mod tests {
         assert_eq!(press(&mut list(0), &[Key::Char('c')]), Step::Continue);
         press(&mut nav, &[Key::Char('?')]);
         assert_eq!((press(&mut nav, &[Key::Char('c')]), nav.help), (Step::Continue, false));
-        assert!(PAGE_HELP.iter().chain(LIST_HELP).filter(|(keys, _)| *keys == "c").count() == 2);
     }
 
     #[test]

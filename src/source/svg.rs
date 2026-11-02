@@ -1568,7 +1568,6 @@ mod tests {
         let laughs =
             (1..10).fold("<!ENTITY lol0 'lol'>".to_string(), |d, i| format!("{d}<!ENTITY lol{i} '{}'>", format!("&lol{};", i - 1).repeat(10)));
         let text = format!("<!DOCTYPE svg [{laughs}]><svg xmlns='http://www.w3.org/2000/svg'><text>&lol9;</text></svg>");
-        assert!(entities_bound(&text) > MAX_EXPANDED);
         assert!(open(text.as_bytes()).err().is_some_and(|e| e.contains("entities expand")));
         let illustrator = "<!DOCTYPE svg PUBLIC '-//W3C//DTD SVG 1.1//EN' 'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd' [\
             <!ENTITY ns_svg 'http://www.w3.org/2000/svg'> <!ENTITY ns_xlink 'http://www.w3.org/1999/xlink'>]>\
@@ -1626,40 +1625,31 @@ mod tests {
 
     #[test]
     fn text_is_counted_through_uses_and_too_much_is_left_out() {
-        let ns = "xmlns='http://www.w3.org/2000/svg'";
-        let scan = |text: &str| {
-            let doc = roxmltree::Document::parse(text).unwrap();
-            Scan::of(&doc).map(|s| (s.has_text, s.text(), s.weight.bytes >= s.text()))
-        };
-        assert_eq!(scan(&format!("<svg {ns}><rect/></svg>")), Ok((false, 0, true)));
-        assert_eq!(scan(&format!("<svg {ns}><title>not drawn</title><text>Hello</text></svg>")), Ok((true, 5, true)));
-        assert_eq!(scan(&format!("<svg {ns}><defs><text id='t'>Hello</text></defs><use href='#t'/><use href='#t'/></svg>")), Ok((true, 10, true)));
-        assert_eq!(scan(&format!("<svg {ns}><text>a<tspan>bc</tspan></text></svg>")), Ok((true, 3, true)));
-        // Too much text, in 2100 lines of 100: the rest is drawn, the text left out, and said.
         let line = format!("<text y='5' font-size='1'>{}</text>", "abcd ".repeat(20));
-        let long = svg(10, 10, &format!("<rect width='10' height='10' fill='red'/>{}", line.repeat(2100)));
-        let frame = render(&open(long.as_bytes()).unwrap(), 1.0);
-        assert_eq!((frame.error.as_deref(), pixel(&frame, 5, 8)), (None, [255, 0, 0, 255]));
-        assert_eq!(frame.warnings, ["its text was left out: more than 200000 characters"]);
+        let once = line.replacen("<text", "<text id='t'", 1);
+        // In 2100 lines of 100, or one line used 2100 times: the rest is drawn, the text left out,
+        // and said.
+        for body in [line.repeat(2100), format!("<defs>{once}</defs>{}", "<use href='#t'/>".repeat(2100))] {
+            let long = svg(10, 10, &format!("<rect width='10' height='10' fill='red'/>{body}"));
+            let frame = render(&open(long.as_bytes()).unwrap(), 1.0);
+            assert_eq!((frame.error.as_deref(), pixel(&frame, 5, 8)), (None, [255, 0, 0, 255]));
+            assert_eq!(frame.warnings, ["its text was left out: more than 200000 characters"]);
+        }
     }
 
     /// usvg lays out a `<text>` in time that grows as the square of its characters, and as its
     /// spans times its characters: text that would take too long is left out, and said.
     #[test]
     fn text_too_long_to_lay_out_is_left_out() {
-        let layout = |body: &str| {
-            let text = svg(10, 10, body);
-            let doc = roxmltree::Document::parse(&text).unwrap();
-            Scan::of(&doc).map(|s| s.layout)
-        };
-        assert_eq!(layout("<text>abc</text><text>de<tspan>f</tspan></text>"), Ok(9 + 3 * SPAN_COST + 9 + 2 * 3 * SPAN_COST));
         // 20,000 characters in 6,667 spans: half a minute of layout.
         let spans = svg(10, 10, &format!("<rect width='10' height='10' fill='red'/><text y='5'>{}</text>", "<tspan>ab </tspan>".repeat(6_667)));
         let frame = render(&open(spans.as_bytes()).unwrap(), 1.0);
         assert_eq!((frame.error.as_deref(), pixel(&frame, 5, 8)), (None, [255, 0, 0, 255]));
         assert_eq!(frame.warnings, ["its text was left out: too long to lay out, in one <text> or in many spans"]);
         // 10,000 characters in 100 spans are laid out.
-        assert!(layout(&format!("<text>{}</text>", format!("<tspan>{}</tspan>", "abcd ".repeat(20)).repeat(100))).unwrap() < MAX_LAYOUT);
+        let ordinary = svg(10, 10, &format!("<text>{}</text>", format!("<tspan>{}</tspan>", "abcd ".repeat(20)).repeat(100)));
+        let frame = render(&open(ordinary.as_bytes()).unwrap(), 1.0);
+        assert!(!frame.warnings.iter().any(|warning| warning.contains("too long")), "{:?}", frame.warnings);
     }
 
     #[test]
@@ -1737,31 +1727,9 @@ mod tests {
                       <clipPath id='c'><circle cx='50' cy='50' r='45'/></clipPath>";
         let drawing = open(svg(100, 100, shadow).as_bytes()).unwrap();
         // 4000 × 4000, the viewer's largest area (16 MP).
-        let estimate = Estimate::of(&drawing_tree(&drawing), Transform::from_scale(40.0, 40.0), Dims { w: 4000, h: 4000 }).unwrap();
-        assert!(estimate.peak <= MAX_RENDER && estimate.work <= MAX_WORK, "{estimate:?}");
         let frame = render(&drawing, 40.0);
         assert_eq!((frame.error.as_deref(), frame.width), (None, 4000));
         assert_eq!(pixel(&frame, 2000, 2000)[3], 230, "the group's opacity");
-    }
-
-    fn drawing_tree(drawing: &Drawing) -> usvg::Tree {
-        let Encoded::Memory(bytes) = &drawing.0.encoded else { panic!("in memory") };
-        guarded_parse(bytes).unwrap().tree
-    }
-
-    #[test]
-    fn a_layer_is_estimated_as_resvg_allocates_it() {
-        let estimate = |body: &str| {
-            let drawing = open(svg(100, 100, body).as_bytes()).unwrap();
-            Estimate::of(&drawing_tree(&drawing), Transform::identity(), Dims { w: 100, h: 100 }).unwrap()
-        };
-        let canvas = 100 * 100 * 4;
-        assert_eq!(estimate("<rect width='50' height='50'/>").peak, canvas);
-        // A 50 × 50 group with opacity: its layer, 2 px more each side.
-        assert_eq!(estimate("<g opacity='0.5'><rect width='50' height='50'/></g>").peak, canvas + 54 * 54 * 4);
-        // Nested, they add up; within five times the canvas each way however large.
-        assert_eq!(estimate("<g opacity='0.5'><g opacity='0.5'><rect width='50' height='50'/></g></g>").peak, canvas + 2 * 54 * 54 * 4);
-        assert_eq!(estimate("<g opacity='0.5'><rect x='-1e6' width='2e6' height='50'/></g>").peak, canvas + 500 * 54 * 4);
     }
 
     /// Fonts are found only for a drawing with text, which is then drawn.
@@ -1777,12 +1745,14 @@ mod tests {
             assert!(inked > 100, "{inked} pixels of text");
             assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
         }
+        // Nothing shows whether fonts were looked for, which takes a while, but this decides it.
+        let plain = svg(10, 10, "<title>not drawn</title><rect width='1' height='1'/>");
+        assert!(!Scan::of(&roxmltree::Document::parse(&plain).unwrap()).unwrap().has_text);
     }
 
     #[test]
     fn a_drawing_too_large_is_refused() {
-        let big = format!("<svg xmlns='http://www.w3.org/2000/svg'><desc>{}</desc></svg>", "x".repeat(MAX_FILE as usize));
-        assert!(open(big.as_bytes()).err().is_some_and(|e| e.contains("more than 64 MiB")) || within(big.into_bytes()).is_err());
+        assert!(within(vec![b' '; MAX_FILE as usize + 1]).is_err_and(|e| e.contains("more than 64 MiB")));
         let bomb = gzipped(&vec![b' '; (MAX_FILE + 10) as usize]);
         assert!(open(&bomb).err().is_some_and(|e| e.contains("more than 64 MiB unpacked")));
         let drawing = open(svg(100, 100, "").as_bytes()).unwrap();

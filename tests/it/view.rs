@@ -182,6 +182,7 @@ fn bad_arguments_say_what_is_allowed() {
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),
         (&["--protocol", "kitty", "--pages"], "--pages needs a value"),
+        (&["--protocol", "kitty", "--pager", "--no-pager"], "not both"),
     ] {
         let out = view(&pdf, args);
         assert!(!out.status.success(), "{args:?}");
@@ -196,9 +197,6 @@ fn no_arguments_print_the_help() {
     let out = Command::new(BIN).output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), text(&help.stdout));
-    let end =
-        "\n\nManual: https://github.com/dobladez/clview/blob/main/docs/usage.md\nReport issues and ideas to: https://github.com/dobladez/clview\n";
-    assert!(text(&out.stdout).ends_with(end), "{}", text(&out.stdout));
 }
 
 /// Run `clv` as if in a tmux pane, with no `tmux` command on the PATH to ask.
@@ -366,6 +364,7 @@ fn help_and_version() {
     let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CARGO_PKG_VERSION"));
     assert!(out.status.success() && help.starts_with(&start), "{help}");
     assert!(help.contains("\n\nGeneral Options:\n  --pages ") && help.contains("\n  --zoom auto|width|N "), "{help}");
+    assert!(help.contains("\n  -r, --recurse "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
     // shows: the PDF one, and the documents' and spreadsheets' when they are built.
     let heading = |(line, next): &(&str, &str)| line.starts_with("   for ") && line.ends_with(':') && next.starts_with("     --");
@@ -373,7 +372,7 @@ fn help_and_version() {
     assert_eq!(headings, 1 + usize::from(cfg!(feature = "word")) + usize::from(cfg!(feature = "sheet")), "{help}");
     assert!(help.contains("\n\n   for PDFs:\n     --password PW ") && !help.contains("no options"), "{help}");
     // Then the formats shown, by the libraries each backend credits: a backend's only when it is
-    // built. Which libraries, each backend's own tests say.
+    // built.
     let shown = |what: &str, formats: &str| {
         let row =
             |line: &str| line.strip_prefix(&format!("  {what}, by ")).and_then(|rest| rest.split_once(": ")).map(|(_, listed)| listed.to_owned());

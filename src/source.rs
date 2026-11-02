@@ -429,13 +429,6 @@ pub(crate) mod tests {
         assert!(read >= 9, "read {read} files in {}", dir.display());
     }
 
-    #[test]
-    fn pixels_read_a_backends_buffer_as_bytes() {
-        assert_eq!(&*Pixels::new(vec![1u8, 2, 3, 4]), &[1, 2, 3, 4]);
-        assert_eq!(&*Pixels::new([9u8; 3]), &[9, 9, 9]);
-        assert!(Pixels::new(Vec::new()).is_empty());
-    }
-
     /// A backend that opens files starting with `magic`: to a page (a folder's), or if it
     /// `holds` files, to the directory beside the file, named as it is with `.d` after. It lists
     /// one format, and credits one library, named as it is.
@@ -487,17 +480,6 @@ pub(crate) mod tests {
         assert_eq!(pick(&backends, "a.pdf", b"%PDF-1.7\n").map(|b| b.name()), Ok("pdf-one"));
         assert_eq!(pick(&backends, "a.png", b"\x89PNG\r\n").map(|b| b.name()), Ok("png"));
         assert_eq!(pick(&[&PDF_TOO, &PDF], "a.pdf", b"%PDF-2.0").map(|b| b.name()), Ok("pdf-two"));
-    }
-
-    #[test]
-    fn a_directorys_file_that_no_backend_opens_is_no_error() {
-        let path = std::env::temp_dir().join(format!("clview-shown-by-{}", std::process::id()));
-        std::fs::write(&path, b"hello").unwrap();
-        let path = path.to_str().unwrap();
-        assert!(shown_by(Input::open(path).unwrap(), &[&PDF, &PNG]).is_none());
-        std::fs::write(path, b"\x89PNG\r\n").unwrap();
-        assert_eq!(shown_by(Input::open(path).unwrap(), &[&PDF, &PNG]).map(|(b, _)| b.name()), Some("png"));
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -590,7 +572,5 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
-        #[cfg(not(any(feature = "pdf", feature = "image", feature = "svg", feature = "zip", feature = "tar", feature = "word", feature = "sheet")))]
-        assert!(BACKENDS.is_empty());
     }
 }

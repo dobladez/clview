@@ -117,8 +117,7 @@ workbook's kind is told by, `Codec`'s compressions in tar's), so what `--help` l
 can't disagree; `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks
 every backend built. A backend also names the libraries it reads and draws its files through
 (`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the names
-are written in the backend's own file, so the viewer still names none, and each library's own tests
-check its credit.
+are written in the backend's own file, so the viewer still names none.
 
 Nothing in `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the
 files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.

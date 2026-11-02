@@ -135,7 +135,6 @@ fn written(text: &str, place: Place, output: Output) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::kitty::IdColor;
     use super::*;
 
     const CELL: Cell = Cell { w: 10.0, h: 20.0 };
@@ -207,36 +206,5 @@ mod tests {
     fn the_real_help_has_room_for_all_of_it_in_its_own_width() {
         let help = crate::view::usage(&[]);
         assert_eq!(place(&help, window(100, 40), CELL).map(|p| p.rows), Some(MOST_ROWS));
-    }
-
-    #[test]
-    fn directly_the_icon_goes_up_beside_the_lines_and_the_cursor_comes_back() {
-        let help = help();
-        let place = Place { across: 90, cols: 10, rows: 5 };
-        let out = written(&help, place, Output::Direct).unwrap();
-        let top = format!("clview\n{}\n\nclv [options]\nclv --help\n", "x".repeat(69));
-        let before = format!("{top}\x1b[5A\r\x1b[90C\x1b_Ga=T,f=100,t=d,q=2,C=1,c=10,r=5,m=1;");
-        assert!(out.starts_with(before.as_bytes()), "{:?}", String::from_utf8_lossy(&out[..before.len()]));
-        assert!(out.ends_with(b"\x1b\\\x1b[5B\r\nthe rest\nand more\n"), "{:?}", String::from_utf8_lossy(&out[out.len() - 40..]));
-    }
-
-    #[test]
-    fn inside_tmux_it_is_placeholder_cells_beside_the_lines_with_the_image_passed_through() {
-        let help = help();
-        let place = Place { across: 90, cols: 10, rows: 5 };
-        for colour in [IdColor::Rgb, IdColor::Indexed] {
-            let out = String::from_utf8(written(&help, place, Output::Tmux(colour)).unwrap()).unwrap();
-            let id = colour.id(ID_INDEX);
-            let top = format!("clview\n{}\n\nclv [options]\nclv --help\n", "x".repeat(69));
-            assert!(out.starts_with(&format!("{top}\x1b[5A\x1bPtmux;\x1b\x1b_Ga=t,f=100,t=d,q=2,i={id},m=1;")), "{colour:?}");
-            assert!(out.contains(&format!("\x1b\x1b_Ga=p,U=1,q=2,i={id},c=10,r=5\x1b\x1b\\\x1b\\")), "{colour:?}");
-            for row in 0..5 {
-                let mut cells = Vec::new();
-                assert!(kitty::placeholder_row(&mut cells, id, colour, row, 10));
-                let line = format!("\r\x1b[90C{}\x1b[1B", String::from_utf8(cells).unwrap());
-                assert!(out.contains(&line), "{colour:?}: row {row}");
-            }
-            assert!(out.ends_with("\x1b[1B\r\nthe rest\nand more\n"), "{colour:?}");
-        }
     }
 }

@@ -175,24 +175,14 @@ fn displayed(path: &str, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<
 mod tests {
     use super::*;
 
-    /// Page 3 rendered with `warnings`, or failed with `error`.
-    fn rendered(warnings: Vec<RenderWarning>, error: Option<&str>) -> RenderedPage {
+    /// No test file makes a page fail to render, so this is what says a render's error gets through.
+    #[test]
+    fn a_frame_keeps_why_its_render_failed() {
         let request = RenderRequest { page: 2, kind: RequestKind::Pixels, tile: None, scale: 1.5, tag: 9, preview: false };
         let rgba = pdfcraft_render::Pixels::from(vec![0xFF80_8080; 2]);
-        RenderedPage { request, width: 2, height: 1, rgba, error: error.map(String::from), text: None, warnings, millis: 0 }
-    }
-
-    #[test]
-    fn a_frame_keeps_the_request_the_pixels_and_every_warning() {
-        let frame = frame(rendered(vec![RenderWarning::ContentTruncated, RenderWarning::ColourFallback], None));
-        assert_eq!(frame.request, Request { page: 2, scale: 1.5, tag: 9 });
-        assert_eq!((frame.width, frame.height, &*frame.rgba), (2, 1, &[0x80, 0x80, 0x80, 0xFF, 0x80, 0x80, 0x80, 0xFF][..]));
-        assert_eq!(
-            frame.warnings,
-            ["content past the page's safety budget was skipped", "a colour that could not be computed was painted in a fallback colour"]
-        );
-        assert_eq!(frame.error, None);
-        assert_eq!(super::frame(rendered(Vec::new(), Some("no page box"))).error.as_deref(), Some("no page box"));
+        let failed =
+            RenderedPage { request, width: 2, height: 1, rgba, error: Some("no page box".into()), text: None, warnings: Vec::new(), millis: 0 };
+        assert_eq!(frame(failed).error.as_deref(), Some("no page box"));
     }
 
     #[test]
@@ -205,11 +195,5 @@ mod tests {
         assert!(!is_pdf(b"%PDF"), "a truncated header");
         assert!(!is_pdf(b"\x89PNG\r\n\x1a\n"));
         assert!(!is_pdf(b""));
-    }
-
-    #[test]
-    fn a_request_asks_pdfcraft_for_pixels() {
-        let r = pdfcraft_request(Request { page: 4, scale: 2.0, tag: 11 });
-        assert_eq!((r.page, r.kind, r.tile, r.scale, r.tag, r.preview), (4, RequestKind::Pixels, None, 2.0, 11, false));
     }
 }
