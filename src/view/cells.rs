@@ -589,8 +589,11 @@ mod tests {
                 let level = |s: u8| [0, 95, 135, 175, 215, 255][usize::from(s)];
                 [level(at / 36), level(at / 6 % 6), level(at % 6)]
             };
+            // A channel's nearest level is at most 48 away, but the colour is the nearest in all three at
+            // once, so a grey can win and leave one channel further: 57 at most, among every colour there
+            // is (44, 48, 125 goes to 68).
             for (c, near) in [r, g, b].iter().zip(colour) {
-                prop_assert!((i32::from(*c) - near).abs() <= 48, "{r},{g},{b} → {code}");
+                prop_assert!((i32::from(*c) - near).abs() <= 57, "{r},{g},{b} → {code}");
             }
         }
 
