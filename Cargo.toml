@@ -26,8 +26,8 @@ todo = "warn"
 # pin means moving every `rev` below together, the [patch.crates-io] ones included;
 # tests/it/pdfcraft_pin.rs fails when they disagree or pdfcraft patches a crate this file doesn't.
 [dependencies]
-pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
-pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e", optional = true }
+pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b", optional = true }
+pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b", optional = true }
 # Images, decoded in Rust: the `image` crate's decoders (no rayon: the pager has threads of its
 # own), and jxl-oxide for JPEG XL. Not AVIF: the `image` crate's AVIF decoder (`avif-native`,
 # the dav1d C library) turns most files' colours, as libavif writes them, through the wrong
@@ -112,7 +112,7 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2
 flate2 = "1.1"
 bzip2 = "0.6"
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "encoder"] }
-pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
 # Encrypted Word documents for the Word backend's own tests (tests/it/wordcraft.rs).
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615" }
 # Encrypted workbooks for the spreadsheet backend's own tests (tests/it/gridcraft.rs): its
@@ -122,19 +122,20 @@ proptest = "1"
 serde_json = "1"
 toml = "0.9"
 
-# The renderer's patched hayro, lopdf and vello_common, from pdfcraft's `vendor/` at the same
-# commit. pdfcraft applies them with its own [patch.crates-io], which Cargo honours only in the
+# The renderer's patched hayro, lopdf, vello_common and vello_cpu, from pdfcraft's `vendor/` at the
+# same commit. pdfcraft applies them with its own [patch.crates-io], which Cargo honours only in the
 # root manifest, so without these the stock crates.io releases build silently, without its
 # crash and rendering fixes.
 [patch.crates-io]
-hayro = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
-vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "d28d047a9e6ad5431ee3602a97ac483c0605fd9e" }
+hayro = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+vello_cpu = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
 
 # Dependencies optimised even in debug builds: rendering a page unoptimised is slow enough to
 # time the tests out. Our own code keeps line tables, so panics and backtraces still show lines.

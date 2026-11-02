@@ -19,7 +19,7 @@ It takes Rust 1.95 or later, the `rust-version`. All seven features are on by de
 
 The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
 `main` in [`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
-`[patch.crates-io]` ones included (they are pdfcraft's patched hayro and lopdf), then run the
+`[patch.crates-io]` ones included (they are pdfcraft's patched hayro, lopdf and vello), then run the
 tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
 instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
 renderer would replace that file and the dependencies, and nothing else.
