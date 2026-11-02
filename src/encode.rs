@@ -1,5 +1,6 @@
-//! Rendered pages → PNG for the terminal. The renderer hands out premultiplied RGBA; the kitty
-//! graphics protocol takes straight alpha, as a PNG (`f=100`) or as raw pixels (`f=32`).
+//! Rendered pages → PNG, for the terminal and for a document to hold as a picture. A renderer hands
+//! out premultiplied RGBA; the kitty graphics protocol takes straight alpha, as a PNG (`f=100`) or as
+//! raw pixels (`f=32`).
 
 /// How hard PNG encoding works at making the file small. The pixels come out the same either way.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

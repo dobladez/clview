@@ -51,6 +51,10 @@ impl Backend for Images {
         format(path, head).is_some()
     }
 
+    fn draws_pictures(&self) -> bool {
+        true
+    }
+
     fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
         let format = format(&path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;

@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
-use super::encode::unpremultiply;
+use crate::encode::unpremultiply;
 use crate::source::Frame;
 
 use super::kitty::{self, Wrap};

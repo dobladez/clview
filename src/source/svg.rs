@@ -64,6 +64,10 @@ impl Backend for Svg {
         is_svg(path, head)
     }
 
+    fn draws_pictures(&self) -> bool {
+        true
+    }
+
     fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
         let error = |e: String| format!("{path}: {e}");

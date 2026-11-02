@@ -365,15 +365,26 @@ Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected 
 with `--password`; without it, clv says it needs one.
 
 Markdown and HTML are laid out the same way, on US Letter pages, since they give no page size.
-Markdown is read as most of CommonMark, with GitHub's tables and strikethrough; YAML front matter
-isn't recognised, and shows as a rule and a heading. HTML is read for its text and what its tags and
-inline styles say of it (headings, lists, tables, colours). Its stylesheets and scripts are skipped,
-so a page designed with CSS shows as its words in order, not as a browser draws it. Both read nothing
-but themselves: a picture held in a `data:` URL is drawn, and one they link to is left out, even
-beside the file (Markdown shows its alt text instead). An epub's chapters, being XHTML, open from its
-list the same way, without its stylesheets and pictures. What may cost too much to lay out is
-refused, at its [limits](#limits)
+Markdown is read as GitHub writes it, with its tables, task lists, strikethrough and footnotes, and
+the HTML in it ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md));
+front matter (`---`) is left out. HTML is read for its text and what its tags and inline styles say of
+it (headings, lists, tables, colours). Its stylesheets and scripts are skipped, so a page designed with
+CSS shows as its words in order, not as a browser draws it. An epub's chapters, being XHTML, open from
+its list the same way. What may cost too much to lay out is refused, at its [limits](#limits)
 ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
+
+The pictures Markdown and HTML refer to are drawn by whatever shows them: anything `clv` shows as an
+image, an SVG drawing, or a PDF's first page, at its own size, or smaller to fit the column and the
+page. They are read when a page they are on first shows, so opening a document, or a list of them,
+reads none.
+
+Only what is near the file is read: a path from its directory, `..` included. **Nothing is fetched**:
+a picture on the web shows as its alt text. So does an absolute path, which on the web means from a
+site's root; one that is missing; and a file that is no picture, such as another document. What comes
+through a pipe or from an archive has no directory, so none of its pictures can be reached, an epub's
+included. A picture in a `data:` URL is drawn, if it is a PNG, JPEG, GIF, WebP or BMP. The first page
+says how many pictures on this machine were left out, and a page says if one of its own can't be drawn,
+a grey box in its place ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
 
 Opening a document reads and lays it out whole, to know its pages: a quarter of a second for 500
 pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 500 pages hold about
@@ -546,6 +557,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 5 GB and 15 seconds |
+| A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |
 | An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |

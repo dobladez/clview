@@ -30,6 +30,8 @@ A file, named on the command line, found in a directory or read from an archive,
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`) and `BACKENDS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
+| `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
+| `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
 | `src/source/folder.rs` | A container as a list shows it, to be opened: one page, a folder drawn in code |
@@ -53,7 +55,6 @@ A file, named on the command line, found in a directory or read from an archive,
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
-| `encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure |
 | `icon.rs` | The icon beside `--help`'s first lines: whether it can show, where it goes, and its escape codes ([The icon in `--help`](#the-icon-in---help-iconrs)) |
 | `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
 
@@ -137,10 +138,16 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
   pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps
   that ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
-  Markdown and HTML come through the same importers as odt and RTF, on a US Letter page, since they
-  give none. What they cost is bounded before it is spent, by their marks before they are imported
-  and their text before they are laid out
-  ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
+  HTML comes through wordcraft's importer, on a US Letter page, since it gives none, and Markdown
+  through pulldown-cmark into HTML for it
+  ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)). What they
+  cost is bounded before it is spent, by their marks before they are imported and their text before
+  they are laid out ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
+  The pictures they refer to are laid out as stand-ins, PNGs saying only the size to show one at, from
+  `Source::size`, so neither reading nor laying out reads a picture's pixels. A page's own are drawn
+  when it first renders, by the first backend that says `draws_pictures` and opens the file, and
+  replace their stand-ins in the document's `media`, under a lock that pages rendering share
+  ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings

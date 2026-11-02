@@ -18,10 +18,10 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 
-use super::encode::{self, PngEffort};
 use super::fit::{MAX_AREA, MAX_PIXELS, Size};
 use super::keys::{CLIP_ID, ClipError, Key};
 use super::kitty::{self, Wrap};
+use crate::encode::{self, PngEffort};
 use crate::source::{Frame, Request};
 
 /// Pixels per unit of a page's size it is copied at, when it has no pixels of its own: 144 per

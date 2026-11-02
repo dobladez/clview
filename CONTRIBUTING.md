@@ -49,8 +49,9 @@ it prints, never by name.
   or describes it. `tests/it/pdfcraft.rs` checks the code. Likewise resvg and what it renders with
   (usvg, tiny-skia, roxmltree, fontdb): only in `src/source/svg.rs`, `tests/it/resvg.rs` (which
   checks it) and `Cargo.toml`; bzip2 and lzma-rust2 only in `src/source/tar.rs`, `tests/it/tar.rs`
-  (which checks it) and `Cargo.toml` (flate2 there and in the SVG backend, for svgz); wordcraft only
-  in `src/source/wordcraft.rs`, `tests/it/wordcraft.rs` (which checks it) and `Cargo.toml`; gridcraft
+  (which checks it) and `Cargo.toml` (flate2 there and in the SVG backend, for svgz); wordcraft and
+  pulldown-cmark only in `src/source/wordcraft.rs`, `tests/it/wordcraft.rs` (which checks it) and
+  `Cargo.toml`; gridcraft
   only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend

@@ -11,8 +11,8 @@
 
 use std::io::Write as _;
 
-use super::encode::check_raster;
 use super::fit::Cell;
+use crate::encode::check_raster;
 
 /// The most cells a page is drawn in: far more than a window has, and a page fitted to a window's
 /// width is a few thousand rows at most. A cell may take 39 bytes, so this bounds a page's text to

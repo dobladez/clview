@@ -9,19 +9,24 @@
 //! A docx and an odt are zips: this backend is asked before the zip backend, and knows one by the
 //! names of the files that start it, or a Word document by its own name.
 //!
-//! Markdown and HTML read nothing but themselves: a picture they link to is left out, its alt text
-//! in its place for Markdown, as wordcraft's importers do unless given a way to load one.
+//! Markdown is read by pulldown-cmark, into the HTML wordcraft's importer reads, the one that can be
+//! given pictures. The pictures both refer to are drawn by the backends that show them, through
+//! `source/picture.rs`, when a page they are on first renders.
 
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
-use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
+use pulldown_cmark::{Event, Options, Parser};
+use wordcraft_doc::para::{InlineObject, Wrap};
+use wordcraft_doc::{Block, StoryRef};
+use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 use wordcraft_render::RenderOptions;
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
+use super::picture::{Pictures, Promised};
 use super::threads::Threads;
 use super::{Again, Backend, Format, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
@@ -46,7 +51,7 @@ impl Backend for Wordcraft {
     }
 
     fn credits(&self) -> &[&'static str] {
-        &["wordcraft"]
+        &["wordcraft", "pulldown-cmark"]
     }
 
     fn options(&self) -> &'static [OptionSpec] {
@@ -62,20 +67,20 @@ impl Backend for Wordcraft {
         let error = |e: String| format!("{path}: {e}");
         let kind = Kind::of(&path, &input.head).ok_or_else(|| error("not a document this reads".into()))?;
         let password = options.value("--password").map(String::from);
-        let read_as = |bytes: &[u8]| caught(|| laid_out(bytes, kind, password.as_deref(), &path));
+        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside));
         let (stored, laid) = match input.reopenable()? {
             Reopenable::Disk(file) => {
                 let bytes = read(file).map_err(error)?;
-                (Stored::Disk(PathBuf::from(&path)), read_as(&bytes))
+                (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
             }
             Reopenable::Bytes(bytes) => {
                 let bytes = within(bytes).map_err(error)?;
-                let laid = read_as(&bytes);
+                let laid = read_as(&bytes, None);
                 (Stored::Memory(bytes), laid)
             }
             Reopenable::Again(again) => {
                 let bytes = again().and_then(within).map_err(error)?;
-                (Stored::Held(again), read_as(&bytes))
+                (Stored::Held(again), read_as(&bytes, None))
             }
         };
         // Only the pages' sizes are kept: the document goes, and a render reads it again.
@@ -210,8 +215,48 @@ enum Stored {
 
 /// A document read and laid out.
 struct Laid {
-    document: wordcraft_doc::Document,
+    /// Written to only to hold a picture a page wants, or let go of one: pages render side by side.
+    document: RwLock<wordcraft_doc::Document>,
     layout: DocLayout,
+    pictures: Promised,
+}
+
+impl Laid {
+    /// `page`'s pictures drawn, for it to render, and what the reader should know of them.
+    fn drawn_pictures(&self, page: &Page, first: bool) -> Vec<String> {
+        let mut notes = Vec::new();
+        if first && self.pictures.left_out() > 0 {
+            notes.push(format!("{} pictures it refers to are left out: missing, or not what {} shows", self.pictures.left_out(), crate::NAME));
+        }
+        if self.pictures.is_empty() {
+            return notes;
+        }
+        let (changes, failed) = {
+            let document = self.document.read().unwrap_or_else(PoisonError::into_inner);
+            self.pictures.draw(&pictures_on(&document, page))
+        };
+        if failed {
+            notes.push("a picture it refers to could not be drawn".into());
+        }
+        if !changes.is_empty() {
+            self.document.write().unwrap_or_else(PoisonError::into_inner).media.extend(changes);
+        }
+        notes
+    }
+}
+
+/// What `document` holds for the pictures on `page`, by key: of each paragraph on it, even one that
+/// goes on to another page.
+fn pictures_on<'a>(document: &'a wordcraft_doc::Document, page: &Page) -> Vec<&'a str> {
+    let paragraph = |item: &Placed| match item {
+        Placed::Lines { story, path, .. } => document.para(*story, path),
+        _ => None,
+    };
+    let picture = |object: &'a InlineObject| match object {
+        InlineObject::Image { media, .. } => Some(media.as_str()),
+        _ => None,
+    };
+    page.items.iter().filter_map(paragraph).flat_map(|para| para.objects.iter()).filter_map(picture).collect()
 }
 
 /// A document laid out, by the first render of a renderer or a pool, each of which has its own:
@@ -263,7 +308,7 @@ impl Document {
         let laid = laid
             .get_or_init(|| {
                 let bytes = self.bytes()?;
-                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path)).map(Arc::new)
+                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside())).map(Arc::new)
             })
             .clone()?;
         let page = laid.layout.pages.get(request.page).ok_or_else(|| format!("the document has no page {}", request.page.saturating_add(1)))?;
@@ -272,12 +317,22 @@ impl Document {
         if w > side || h > side || w.saturating_mul(h) > MAX_PIXELS {
             return Err(format!("{w} × {h} pixels is too large to render"));
         }
+        let warnings = laid.drawn_pictures(page, request.page == 0);
         let mut options = RenderOptions::default();
         // A printed page: headers and footers dimmed only while the body is being edited.
         options.display.dim_header = false;
-        let drawn = wordcraft_render::render_page(&laid.document, page, request.scale, &options);
+        let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+        let drawn = wordcraft_render::render_page(&document, page, request.scale, &options);
         // Premultiplied RGBA, row by row, as a frame's are.
-        Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings: Vec::new() })
+        Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings })
+    }
+
+    /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
+    fn beside(&self) -> Option<&Path> {
+        match &self.stored {
+            Stored::Disk(path) => path.parent(),
+            Stored::Memory(_) | Stored::Held(_) => None,
+        }
     }
 
     /// Its bytes: the ones kept, or the file's again.
@@ -302,16 +357,18 @@ fn pixels(size: f32, scale: f32) -> Result<u64, String> {
 }
 
 /// The document in `bytes`, of `kind`, read with `password` if it is protected, and laid out into
-/// pages. `path` is the file's, for the fields that show it.
-fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str) -> Result<Laid, String> {
+/// pages. `path` is the file's, for the fields that show it, and `beside` the directory it is in, for
+/// the pictures it refers to.
+fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>) -> Result<Laid, String> {
+    let pictures = Pictures::beside(beside);
     let read = match kind {
         Kind::Package => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Compound if wordcraft_docx::is_encrypted(bytes) => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Compound => wordcraft_docbin::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Odt => imported("odt", bytes),
         Kind::Rtf => imported("rtf", bytes),
-        Kind::Markdown => markdown(bytes),
-        Kind::Html => html(bytes),
+        Kind::Markdown => markdown(bytes, &pictures),
+        Kind::Html => html(bytes, &pictures),
     };
     let mut document = read.map_err(|e| match e == wordcraft_docx::PASSWORD_REQUIRED {
         true => format!("{e}: give it with --password"),
@@ -324,7 +381,8 @@ fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str) -> Res
     if layout.pages.is_empty() {
         return Err("the document has no pages to show".into());
     }
-    Ok(Laid { document, layout })
+    let pictures = pictures.promised_in(&document.media);
+    Ok(Laid { document: RwLock::new(document), layout, pictures })
 }
 
 /// The document in `bytes`, in the format `extension` names, through wordcraft's importers.
@@ -334,13 +392,34 @@ fn imported(extension: &str, bytes: &[u8]) -> Result<wordcraft_doc::Document, St
 }
 
 /// The Markdown in `bytes`, where any punctuation or line may start a run, a cell or a paragraph.
-fn markdown(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
-    marked_up("md", |b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes)
+fn markdown(bytes: &[u8], pictures: &Pictures<'_>) -> Result<wordcraft_doc::Document, String> {
+    let as_html = |bytes: &[u8]| markdown_as_html(&wordcraft_formats::txt::decode(bytes));
+    marked_up(|b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes, as_html, pictures)
 }
 
 /// The HTML in `bytes`, where a tag or, in a `pre`, a line may.
-fn html(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
-    marked_up("html", |b| matches!(b, b'<' | b'\r' | b'\n'), bytes)
+fn html(bytes: &[u8], pictures: &Pictures<'_>) -> Result<wordcraft_doc::Document, String> {
+    marked_up(|b| matches!(b, b'<' | b'\r' | b'\n'), bytes, wordcraft_formats::html::decode, pictures)
+}
+
+/// `text`, Markdown, as HTML for wordcraft's importer to read
+/// ([ADR-0014](../../docs/adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)):
+/// GitHub's tables, strikethrough, task lists and footnotes, with what it would leave out written
+/// otherwise, a table's grid and a task's checkbox, and front matter (`---`) left out.
+fn markdown_as_html(text: &str) -> String {
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+    let events = Parser::new_ext(text, options).map(|event| match event {
+        Event::TaskListMarker(true) => Event::Text("☑ ".into()),
+        Event::TaskListMarker(false) => Event::Text("☐ ".into()),
+        other => other,
+    });
+    let mut out = String::with_capacity(text.len());
+    pulldown_cmark::html::push_html(&mut out, events);
+    out.replace("<table>", "<table border=\"1\">")
 }
 
 /// The Markdown or HTML in `bytes`, unless it costs too much to read and lay out
@@ -348,21 +427,61 @@ fn html(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
 /// `mark` says which bytes may start something of its own, counted before it is imported, since
 /// importing them is what costs; its text, what laying it out costs, can only be told after, since
 /// a page's scripts and styles aren't text.
-fn marked_up(extension: &str, mark: impl Fn(&u8) -> bool, bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
+fn marked_up(
+    mark: impl Fn(&u8) -> bool,
+    bytes: &[u8],
+    as_html: impl FnOnce(&[u8]) -> String,
+    pictures: &Pictures<'_>,
+) -> Result<wordcraft_doc::Document, String> {
     if bytes.len() > MAX_MARKED_UP {
         return Err(format!("the document is more than {} MiB", MAX_MARKED_UP >> 20));
     }
     if bytes.iter().filter(|b| mark(b)).count() > MAX_MARKS {
         return Err(format!("the document has more than {MAX_MARKS} lines and marks"));
     }
-    let document = imported(extension, bytes)?;
-    let body = wordcraft_doc::StoryRef::Body;
+    let page = wordcraft_doc::SectionProps::default();
+    let fit = (page.text_width(), page.text_height());
+    let mut document = wordcraft_formats::html::import_on(&as_html(bytes), &|source: &str| pictures.measured(source, fit), &page);
+    fit_to_the_page(&mut document.body, fit.1);
+    let body = StoryRef::Body;
     let paragraphs = document.para_paths(body);
     let text = paragraphs.iter().filter_map(|path| document.para(body, path)).fold(0, |all: usize, para| all.saturating_add(para.text.len()));
     if text > MAX_TEXT {
         return Err(format!("the document has more than {} MiB of text", MAX_TEXT >> 20));
     }
     Ok(document)
+}
+
+/// Pictures taller than `height` shrunk to it, keeping their shape: laid out as they are, they would
+/// be cut off at the foot of the page. The width of one is already within the column, and the size of a
+/// picture referred to within both: this is for those a document gives a size to, or holds itself.
+fn fit_to_the_page(blocks: &mut [Arc<Block>], height: f32) {
+    for block in blocks {
+        match Arc::make_mut(block) {
+            Block::Para(para) => {
+                let mut changed = false;
+                for object in &mut para.objects {
+                    if let InlineObject::Image { w, h, float, .. } = object
+                        && float.wrap == Wrap::Inline
+                        && h.is_finite()
+                        && *h > height
+                    {
+                        *w = (*w * height / *h).max(1.0);
+                        *h = height;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    para.touch();
+                }
+            }
+            Block::Table(table) => {
+                for cell in table.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
+                    fit_to_the_page(&mut cell.blocks, height);
+                }
+            }
+        }
+    }
 }
 
 /// What `read` returns, or an error if wordcraft panics: its bug costs the document, not the
@@ -493,22 +612,68 @@ mod tests {
     /// What a limit is for: the marks and the text of what is read, not the bytes of the file.
     #[test]
     fn markdown_and_html_are_refused_past_their_limits() {
-        let refused = |what: &str, read: fn(&[u8]) -> Result<wordcraft_doc::Document, String>, bytes: &[u8]| {
+        let nowhere = Pictures::beside(None);
+        let markdown = |bytes: &[u8]| markdown(bytes, &nowhere);
+        let html = |bytes: &[u8]| html(bytes, &nowhere);
+        let refused = |what: &str, read: &dyn Fn(&[u8]) -> Result<wordcraft_doc::Document, String>, bytes: &[u8]| {
             assert!(read(bytes).is_err_and(|e| e.contains(what)), "{what}");
         };
-        refused("lines and marks", markdown, "*a".repeat(MAX_MARKS + 1).as_bytes());
-        refused("lines and marks", markdown, "\r".repeat(MAX_MARKS + 1).as_bytes());
-        refused("lines and marks", html, "<b>".repeat(MAX_MARKS + 1).as_bytes());
-        refused("lines and marks", html, format!("<pre>{}", "\n".repeat(MAX_MARKS + 1)).as_bytes());
+        refused("lines and marks", &markdown, "*a".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", &markdown, "\r".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", &html, "<b>".repeat(MAX_MARKS + 1).as_bytes());
+        refused("lines and marks", &html, format!("<pre>{}", "\n".repeat(MAX_MARKS + 1)).as_bytes());
 
         let text = "a".repeat(MAX_TEXT + 1);
-        refused("of text", markdown, text.as_bytes());
-        refused("of text", html, format!("<p>{text}</p>").as_bytes());
+        refused("of text", &markdown, text.as_bytes());
+        refused("of text", &html, format!("<p>{text}</p>").as_bytes());
         assert!(markdown("a".repeat(MAX_TEXT).as_bytes()).is_ok(), "as much text as it may have");
 
         let hidden = format!("<script>{text}</script><style>{text}</style><img src=\"data:image/png;base64,{text}\"><p>Shown</p>");
         assert!(html(hidden.as_bytes()).is_ok(), "a page's text is what counts, not its scripts, styles and pictures");
-        refused(" MiB", html, format!("<script>{}</script>", "a".repeat(MAX_MARKED_UP)).as_bytes());
+        refused(" MiB", &html, format!("<script>{}</script>", "a".repeat(MAX_MARKED_UP)).as_bytes());
+    }
+
+    /// The pager's way: pages rendering side by side on a pool's threads, each drawing its pictures
+    /// into what they share, and every page showing its own, however they fall out.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_pools_threads_draw_their_pages_pictures() {
+        let dir = std::env::temp_dir().join(format!("clview-word-pool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut document = String::new();
+        let pages = 6;
+        for n in 0..pages {
+            // A picture of its own on each page, and one they all share.
+            let own = 40u8.saturating_mul(n + 1);
+            let pixels: Vec<u8> = [own, 0, 0, 255].repeat(400);
+            std::fs::write(dir.join(format!("{n}.png")), crate::encode::encode_png(20, 20, &pixels, crate::encode::PngEffort::Fast).unwrap())
+                .unwrap();
+            document.push_str(&format!("<p style=\"page-break-after:always\"><img src=\"{n}.png\"> <img src=\"0.png\"></p>"));
+        }
+        let path = dir.join("a.html");
+        std::fs::write(&path, document).unwrap();
+
+        let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
+        assert!(source.pages() >= usize::from(pages));
+        let pool = source.pool(4);
+        let requests: Vec<Request> = (0..usize::from(pages)).map(|page| Request { page, scale: 1.0, tag: 0 }).collect();
+        let started = std::time::Instant::now();
+        let mut done = vec![false; requests.len()];
+        while done.iter().any(|page| !page) {
+            assert!(started.elapsed().as_secs() < 60, "still waiting for {done:?}");
+            pool.set_queue(requests.iter().filter(|request| !done[request.page]).copied().collect());
+            let Some(frame) = pool.try_recv() else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                continue;
+            };
+            assert_eq!(frame.error, None);
+            let page = frame.request.page;
+            let own = 40u8.saturating_mul(u8::try_from(page).unwrap() + 1);
+            let shows = frame.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0].abs_diff(own) < 3 && pixel[1] < 3 && pixel[2] < 3);
+            assert!(shows, "page {page} doesn't show its picture");
+            done[page] = true;
+        }
     }
 
     #[test]

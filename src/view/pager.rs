@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::clip;
-use super::encode::PngEffort;
+use crate::encode::PngEffort;
 use crate::source::{Container, Frame, Pool, Ready, Source};
 
 use super::files::{Files, Written};

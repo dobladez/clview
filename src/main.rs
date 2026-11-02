@@ -7,6 +7,8 @@
 #[cfg(unix)]
 mod args;
 #[cfg(unix)]
+mod encode;
+#[cfg(unix)]
 mod source;
 #[cfg(unix)]
 mod view;

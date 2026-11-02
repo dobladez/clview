@@ -13,8 +13,8 @@ documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs i
   (a PDF's `--password`) are the backend's, never the viewer's. `docs/architecture.md` has their
   table: the order they are asked in and why, how each tells its files, and what each keeps.
 - `src/source/`'s other files serve them: `dir.rs` (a directory as a `Container`), `joined.rs` and
-  `folder.rs` (a list's tiles, and its folders), `threads.rs` (render threads for a backend with
-  nothing better), `head.rs` and `tree.rs` (what a zip's first files say, and the directories an
-  archive's names make).
+  `folder.rs` (a list's tiles, and its folders), `picture.rs` (the pictures a document refers to, drawn
+  by the backends), `threads.rs` (render threads for a backend with nothing better), `head.rs` and
+  `tree.rs` (what a zip's first files say, and the directories an archive's names make).
 
 @CONTRIBUTING.md

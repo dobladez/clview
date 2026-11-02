@@ -13,6 +13,8 @@ mod image;
 mod joined;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
+#[cfg(feature = "word")]
+mod picture;
 #[cfg(feature = "svg")]
 mod svg;
 #[cfg(feature = "tar")]
@@ -83,6 +85,13 @@ pub(crate) trait Backend {
     /// `input` opened, with the values `options` gives its own options: its pages, or for a file
     /// that holds files (an archive), a container of them.
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String>;
+    /// Whether a document may show what it opens as a picture: its first page, drawn by this backend.
+    /// Not what may hold other files or refer to pictures of its own, so that a document can't come to
+    /// draw itself.
+    #[cfg_attr(not(feature = "word"), expect(dead_code, reason = "only documents refer to pictures"))]
+    fn draws_pictures(&self) -> bool {
+        false
+    }
 }
 
 /// A format a backend shows, as `--help` lists it.

@@ -5,7 +5,6 @@
 mod cells;
 mod clip;
 mod detect;
-mod encode;
 mod files;
 mod fit;
 mod icon;
@@ -22,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use cells::{Colours, Glyphs, Ground, Style};
-use encode::PngEffort;
+use crate::encode::{self, PngEffort};
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};

@@ -104,3 +104,11 @@ little.
 - **Follow-ups:** LaTeX and plain text, which the same importers read.
 - **Revisit when:** wordcraft's importers or layout cost less, or can be stopped; or its Markdown
   importer can load pictures, and they are wanted.
+
+## Update, 2026-11-02
+
+The limits stand. Two things around them changed the same day: Markdown now reaches wordcraft through
+pulldown-cmark and its HTML importer, the limits counted on the Markdown
+([ADR-0014](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md), which measured them
+again), and the pictures they refer to are drawn, not left out
+([ADR-0013](0013-a-documents-pictures-are-drawn-by-the-backends.md)).

@@ -24,6 +24,8 @@ Use [`template.md`](template.md) as the starting point.
 | 0010 | [A filtered list keeps the whole list's tile size](0010-a-filtered-list-keeps-the-whole-lists-tile-size.md) | Accepted |
 | 0011 | [Text cells where the terminal has no graphics protocol](0011-text-cells-where-the-terminal-has-no-graphics-protocol.md) | Accepted |
 | 0012 | [Bound what Markdown and HTML cost by their marks and their text](0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md) | Accepted |
+| 0013 | [A document's pictures are drawn by the backends, and only from near it](0013-a-documents-pictures-are-drawn-by-the-backends.md) | Accepted |
+| 0014 | [Markdown through pulldown-cmark into wordcraft's HTML importer](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) | Accepted |
 
 ## When to write one
 

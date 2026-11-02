@@ -40,6 +40,10 @@ impl Backend for Pdfcraft {
         is_pdf(head)
     }
 
+    fn draws_pictures(&self) -> bool {
+        true
+    }
+
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
         Ok(Opened::Pages(Box::new(Pdf::open(&path, Arc::new(input.bytes()?), options.value("--password"))?)))

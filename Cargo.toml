@@ -49,6 +49,8 @@ imagesize = { version = "0.15", optional = true }
 # reader of `source/tar.rs`'s own. Not zstd (the zstd C library), as for zip.
 bzip2 = { version = "0.6", optional = true }
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz"], optional = true }
+# Markdown, into the HTML wordcraft's importer reads, which can be given pictures: ADR-0014.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
 # Word documents, OpenDocument text, RTF, Markdown and HTML, read, laid out and drawn in Rust by
 # wordcraft, a git dependency like pdfcraft, from one pinned commit of its `main` (every `rev` below
 # moves together; tests/it/wordcraft.rs checks it). Its reading, layout and drawing crates only: not
@@ -85,7 +87,7 @@ zip = ["dep:zip"]
 tar = ["dep:flate2", "dep:bzip2", "dep:lzma-rust2"]
 # Word documents (docx, doc), OpenDocument text, RTF, Markdown and HTML: `source/wordcraft.rs`,
 # which lays them out and draws them through wordcraft.
-word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:wordcraft-formats", "dep:wordcraft-layout", "dep:wordcraft-render"]
+word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:wordcraft-formats", "dep:wordcraft-layout", "dep:wordcraft-render", "dep:pulldown-cmark"]
 # Spreadsheets (xlsx, xls, xlsb, ods, csv): `source/gridcraft.rs`, which prints them to a PDF
 # through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate
 # to see what an xlsx's sheets unpack to before gridcraft reads them.
