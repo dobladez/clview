@@ -38,6 +38,8 @@ clv --password PW secret.pdf
 | `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
+| `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default) |
+| `--theme light`, `--theme dark` | Markdown and HTML that way, whatever the terminal |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
@@ -82,6 +84,7 @@ In a file's pages:
 | `-`, `_` | zoom out: one more page to a row |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
+| `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)) |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
@@ -99,6 +102,7 @@ In a list:
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
+| `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
@@ -385,6 +389,15 @@ through a pipe or from an archive has no directory, so none of its pictures can 
 included. A picture in a `data:` URL is drawn, if it is a PNG, JPEG, GIF, WebP or BMP. The first page
 says how many pictures on this machine were left out, and a page says if one of its own can't be drawn,
 a grey box in its place ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+
+Markdown and HTML have no paper of their own, so on a terminal with a dark background they go light
+on dark, the page exactly the terminal's colour, so that it is no rectangle at all. `d` turns them to
+dark on light and back, `--theme` says how they start, and a terminal that doesn't say what its
+background is gets them as printed, with `d` still going to a dark grey. Pictures stay as they are,
+but for thin near-black ink, a logo or a line drawing made for white paper, which would vanish on dark:
+it comes with white behind it. A Word document, an RTF or a PDF is a page as printed, and stays so;
+`d` says so. What `c` copies is the page as it is shown
+([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 
 Opening a document reads and lays it out whole, to know its pages: a quarter of a second for 500
 pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 500 pages hold about

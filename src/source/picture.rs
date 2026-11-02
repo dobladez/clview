@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{BACKENDS, Backend, Input, Opened, Request, Source, guarded, shown_by};
+use super::{BACKENDS, Backend, Input, Opened, Paper, Request, Source, guarded, shown_by};
 use crate::args::Parsed;
 use crate::encode::{PngEffort, encode_png};
 
@@ -119,11 +119,15 @@ impl Promise {
         caught(|| {
             let source = opened(&self.path)?;
             let mut renderer = source.renderer()?;
-            let request = Request { page: 0, scale: self.scale, tag: 0 };
+            let request = Request { page: 0, scale: self.scale, tag: 0, paper: Paper::Printed };
             let frame = guarded(request, || renderer.render(request));
-            match frame.error {
-                Some(error) => Err(error),
-                None => encode_png(frame.width, frame.height, &frame.rgba, PngEffort::Fast),
+            if let Some(error) = frame.error {
+                return Err(error);
+            }
+            // Decided once and for all: on white paper the white can't be seen.
+            match thin_and_near_black(&frame.rgba) {
+                true => encode_png(frame.width, frame.height, &on_white(&frame.rgba), PngEffort::Fast),
+                false => encode_png(frame.width, frame.height, &frame.rgba, PngEffort::Fast),
             }
         })
     }
@@ -159,17 +163,23 @@ impl Promised {
         self.by_key.is_empty()
     }
 
-    /// What the document should hold now that a page showing `on_page` (keys of what it holds) is
-    /// wanted, by key, and whether one of those could not be drawn. Each is drawn only once, unless
-    /// it was let go of. Nothing is locked while they are drawn: pages already drawn go on rendering.
-    pub(super) fn draw(&self, on_page: &[&str]) -> (Vec<(String, Png)>, bool) {
+    /// Those of `on_page` (keys of what a document holds) not drawn yet, drawn, or why not. Nothing is
+    /// locked meanwhile: other pages go on rendering, and another thread may draw one of these too.
+    pub(super) fn draw<'k>(&self, on_page: &[&'k str]) -> Vec<(&'k str, Result<Vec<u8>, String>)> {
         let wanted: Vec<(&str, &Promise)> = {
             let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
             let done = |key: &str| held.failed.contains(key) || held.drawn.iter().any(|(drawn, _)| drawn == key);
             on_page.iter().filter(|key| !done(key)).filter_map(|key| Some((*key, self.by_key.get(*key)?))).collect()
         };
-        let drawn: Vec<_> = wanted.into_iter().map(|(key, promise)| (key, promise.draw())).collect();
+        wanted.into_iter().map(|(key, promise)| (key, promise.draw())).collect()
+    }
 
+    /// What the document should now hold, by key, for `drawn` ([`Promised::draw`]) on a page showing
+    /// `on_page`: what it holds is let go of past [`MAX_HELD`], but not that page's. The caller holds the
+    /// document's lock for writing from before this until what it returns is in the document. So a page
+    /// that finds a picture drawn and goes to render finds it held, not its stand-in, since it must
+    /// wait for that lock to read the document.
+    pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str]) -> Vec<(String, Png)> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let mut changes = Vec::new();
         for (key, picture) in drawn {
@@ -194,9 +204,46 @@ impl Promised {
                 changes.push((key, promise.stand_in.clone()));
             }
         }
-        let failed = on_page.iter().any(|key| held.failed.contains(*key));
-        (changes, failed)
+        changes
     }
+
+    /// Whether any of `on_page` could not be drawn.
+    pub(super) fn failed(&self, on_page: &[&str]) -> bool {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        on_page.iter().any(|key| held.failed.contains(*key))
+    }
+}
+
+/// Whether a picture, as premultiplied RGBA, is thin ink that dark paper would swallow: near black
+/// (a mean luma under 48 of what is opaque), on under half of it, the rest clear, as a logo or a line
+/// drawing made for white paper is. A dark window's screenshot, however clear its shadow's margins, is
+/// more than half window, and shows on dark paper as it is (ADR-0015).
+fn thin_and_near_black(rgba: &[u8]) -> bool {
+    let (mut clear, mut opaque, mut luma) = (0u64, 0u64, 0u64);
+    let pixels = rgba.as_chunks::<4>().0;
+    for [r, g, b, a] in pixels {
+        match *a {
+            0..16 => clear = clear.saturating_add(1),
+            129.. => {
+                opaque = opaque.saturating_add(1);
+                // A luma in hundredths of a thousandth, undoing the premultiplication: below 2^32.
+                let premultiplied = 2126 * u64::from(*r) + 7152 * u64::from(*g) + 722 * u64::from(*b);
+                luma = luma.saturating_add(premultiplied * 255 / u64::from(*a) / 10000);
+            }
+            _ => {}
+        }
+    }
+    let all = pixels.len() as u64;
+    opaque > 0 && clear.saturating_mul(20) >= all && opaque.saturating_mul(2) < all && luma < opaque.saturating_mul(48)
+}
+
+/// `rgba`, premultiplied, on white.
+fn on_white(rgba: &[u8]) -> Vec<u8> {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|[r, g, b, a]| [r.saturating_add(255 - a), g.saturating_add(255 - a), b.saturating_add(255 - a), 255])
+        .collect()
 }
 
 /// The picture at `path` opened, by the first backend whose files may be pictures. Only a regular
@@ -377,6 +424,42 @@ mod tests {
         assert!(one.len() < 1024, "{}", one.len());
     }
 
+    /// `pixels` premultiplied RGBA, `clear` of them clear out of `of`, the rest this colour and opaque.
+    fn with(colour: [u8; 3], opaque: usize, of: usize) -> Vec<u8> {
+        let [r, g, b] = colour;
+        [[r, g, b, 255].repeat(opaque), [0; 4].repeat(of - opaque)].concat()
+    }
+
+    #[test]
+    fn only_thin_near_black_ink_would_be_swallowed_by_dark_paper() {
+        const BLACK: [u8; 3] = [10, 10, 10];
+        assert!(thin_and_near_black(&with(BLACK, 44, 100)), "a logo");
+        assert!(thin_and_near_black(&with([45, 45, 45], 25, 100)), "an icon nearly as dark as the paper");
+        assert!(!thin_and_near_black(&with(BLACK, 64, 100)), "a dark window, its shadow's margins clear");
+        assert!(!thin_and_near_black(&with(BLACK, 100, 100)), "a dark picture with nothing clear");
+        assert!(!thin_and_near_black(&with(BLACK, 96, 100)), "rounded corners");
+        assert!(!thin_and_near_black(&with([200, 40, 40], 25, 100)), "a colour that shows");
+        assert!(!thin_and_near_black(&with(BLACK, 0, 100)), "nothing at all");
+        assert!(!thin_and_near_black(&[]));
+        let half_seen: Vec<u8> = [100, 100, 100, 100].repeat(100);
+        assert!(!thin_and_near_black(&half_seen), "nothing opaque or clear to go by");
+    }
+
+    #[test]
+    fn what_is_put_on_white_keeps_its_ink() {
+        assert_eq!(on_white(&[0, 0, 0, 0]), [255, 255, 255, 255], "clear");
+        assert_eq!(on_white(&[10, 20, 30, 255]), [10, 20, 30, 255], "opaque");
+        assert_eq!(on_white(&[50, 50, 50, 128]), [177, 177, 177, 255], "half seen");
+    }
+
+    /// What a document does for a page showing `on_page`: what it should now hold, and whether one of
+    /// them could not be drawn.
+    #[cfg(feature = "image")]
+    fn drawn(promised: &Promised, on_page: &[&str]) -> (Vec<(String, Png)>, bool) {
+        let changes = promised.hold(promised.draw(on_page), on_page);
+        (changes, promised.failed(on_page))
+    }
+
     /// Promises with a picture to draw, each a file of `png`, and what they hold at most.
     #[cfg(feature = "image")]
     fn promised(keys: &[&str], png: &[u8], max_held: usize) -> Promised {
@@ -398,12 +481,12 @@ mod tests {
     #[test]
     fn a_picture_is_drawn_once_and_only_those_a_page_shows() {
         let promised = promised(&["a", "b"], &picture(), MAX_HELD);
-        let (changes, failed) = promised.draw(&["a", "not promised"]);
+        let (changes, failed) = drawn(&promised, &["a", "not promised"]);
         assert!(!failed);
         assert_eq!(changes.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(), ["a"]);
         assert_eq!(size_of(&changes[0].1), (2, 2), "the picture itself");
-        assert!(promised.draw(&["a"]).0.is_empty(), "already drawn");
-        assert_eq!(promised.draw(&["b"]).0.len(), 1);
+        assert!(drawn(&promised, &["a"]).0.is_empty(), "already drawn");
+        assert_eq!(drawn(&promised, &["b"]).0.len(), 1);
     }
 
     /// Past what it holds, it lets go of what was drawn longest ago, back to its stand-in, but not of
@@ -413,16 +496,16 @@ mod tests {
     fn past_the_most_it_holds_a_document_lets_go_of_what_it_drew_longest_ago() {
         let png = picture();
         let promised = promised(&["a", "b", "c"], &png, png.len() * 2);
-        assert_eq!(promised.draw(&["a"]).0.len(), 1);
-        assert_eq!(promised.draw(&["b"]).0.len(), 1);
-        let (changes, _) = promised.draw(&["c"]);
+        assert_eq!(drawn(&promised, &["a"]).0.len(), 1);
+        assert_eq!(drawn(&promised, &["b"]).0.len(), 1);
+        let (changes, _) = drawn(&promised, &["c"]);
         let what = |key: &str| changes.iter().find(|(k, _)| k == key).map(|(_, held)| held.clone());
         assert_eq!(what("c").map(|held| held.len()), Some(png.len()), "drawn");
         assert_eq!(what("a").unwrap().as_slice(), b"a", "its stand-in again");
         assert!(what("b").is_none(), "within what it holds");
-        assert_eq!(promised.draw(&["a"]).0.iter().filter(|(key, _)| key == "a").count(), 1, "drawn again");
+        assert_eq!(drawn(&promised, &["a"]).0.iter().filter(|(key, _)| key == "a").count(), 1, "drawn again");
 
-        let everything = promised.draw(&["a", "b", "c"]);
+        let everything = drawn(&promised, &["a", "b", "c"]);
         assert!(everything.0.iter().all(|(_, held)| held.len() == png.len()), "a page's own are never let go of");
     }
 
@@ -433,9 +516,9 @@ mod tests {
         let mut broken = picture();
         broken.truncate(40);
         let promised = promised(&["broken"], &broken, MAX_HELD);
-        assert_eq!(promised.draw(&["broken"]), (Vec::new(), true));
-        assert_eq!(promised.draw(&["other"]), (Vec::new(), false), "it says so for a page it is on");
-        assert_eq!(promised.draw(&["broken"]), (Vec::new(), true));
+        assert_eq!(drawn(&promised, &["broken"]), (Vec::new(), true));
+        assert_eq!(drawn(&promised, &["other"]), (Vec::new(), false), "it says so for a page it is on");
+        assert_eq!(drawn(&promised, &["broken"]), (Vec::new(), true));
     }
 
     #[cfg(feature = "image")]

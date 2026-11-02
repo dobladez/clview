@@ -99,6 +99,8 @@ pub(crate) struct BackgroundReply {
     /// Whether its background is light, from an `ESC ] 11 ; rgb:RRRR/GGGG/BBBB` before the device
     /// attributes reply.
     pub(crate) light: Option<bool>,
+    /// That colour, to a byte a channel.
+    pub(crate) colour: Option<[u8; 3]>,
     /// The device attributes reply came: nothing more is coming.
     pub(crate) done: bool,
 }
@@ -107,12 +109,18 @@ pub(crate) struct BackgroundReply {
 pub(crate) fn parse_background_reply(bytes: &[u8]) -> BackgroundReply {
     let attributes = find_attributes(bytes);
     let before = bytes.get(..attributes.unwrap_or(bytes.len())).unwrap_or_default();
-    BackgroundReply { light: find_light(before), done: attributes.is_some() }
+    let colour = find_background(before);
+    BackgroundReply { light: colour.map(is_light), colour, done: attributes.is_some() }
 }
 
-/// Whether the first complete `ESC ] 11 ; rgb:R/G/B`, ended by ST or BEL, is a light colour. Each
-/// channel is one to four hex digits, as X11 writes colours, a fraction of all of them set.
-fn find_light(bytes: &[u8]) -> Option<bool> {
+/// Whether `colour` is a light one.
+pub(crate) fn is_light([r, g, b]: [u8; 3]) -> bool {
+    0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b) > 127.5
+}
+
+/// The colour of the first complete `ESC ] 11 ; rgb:R/G/B`, ended by ST or BEL. Each channel is one to
+/// four hex digits, as X11 writes colours, a fraction of all of them set.
+fn find_background(bytes: &[u8]) -> Option<[u8; 3]> {
     const START: &[u8] = b"\x1b]11;rgb:";
     let mut from = 0;
     while let Some(start) = find(bytes, START, from) {
@@ -123,13 +131,14 @@ fn find_light(bytes: &[u8]) -> Option<bool> {
             let fraction = |channel: &[u8]| {
                 let digits = u32::try_from(channel.len()).ok().filter(|n| (1..=4).contains(n))?;
                 let value = u32::from_str_radix(std::str::from_utf8(channel).ok()?, 16).ok()?;
-                Some(f64::from(value) / f64::from((1u32 << (digits * 4)) - 1))
+                // At most all of them set, so at most a byte.
+                Some((f64::from(value) * 255.0 / f64::from((1u32 << (digits * 4)) - 1)).round() as u8)
             };
             let mut channels = rest.get(..end).unwrap_or_default().split(|b| *b == b'/');
             if let (Some(r), Some(g), Some(b), None) = (channels.next(), channels.next(), channels.next(), channels.next())
                 && let (Some(r), Some(g), Some(b)) = (fraction(r), fraction(g), fraction(b))
             {
-                return Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5);
+                return Some([r, g, b]);
             }
         }
         from = channels;
@@ -176,6 +185,24 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_background_says_its_colour_however_many_digits_it_has() {
+        for (said, colour) in [
+            ("rgb:1e1e/2e2e/3e3e", [0x1E, 0x2E, 0x3E]),
+            ("rgb:1e/2e/3e", [0x1E, 0x2E, 0x3E]),
+            ("rgb:1/2/3", [0x11, 0x22, 0x33]),
+            ("rgb:0000/0000/0000", [0, 0, 0]),
+            ("rgb:ffff/ffff/ffff", [255, 255, 255]),
+        ] {
+            for end in ["\x1b\\", "\x07"] {
+                let reply = parse_background_reply(format!("\x1b]11;{said}{end}\x1b[?62;c").as_bytes());
+                assert_eq!((reply.colour, reply.done), (Some(colour), true), "{said}");
+                assert_eq!(reply.light, Some(is_light(colour)), "{said}");
+            }
+        }
+        assert_eq!(parse_background_reply(b"\x1b[?62;c").colour, None, "it doesn't say");
+    }
 
     const OK: &[u8] = b"\x1b_Gi=31;OK\x1b\\";
     const ATTRIBUTES: &[u8] = b"\x1b[?62;c";
@@ -275,17 +302,17 @@ mod tests {
     fn the_background_comes_before_the_attributes() {
         let reply = |answer: &[u8]| parse_background_reply(&[answer, ATTRIBUTES].concat());
         // As kitty and xterm write it, ended by ST or by BEL.
-        assert_eq!(reply(b"\x1b]11;rgb:0000/0000/0000\x1b\\"), BackgroundReply { light: Some(false), done: true });
-        assert_eq!(reply(b"\x1b]11;rgb:ffff/ffff/ffff\x07"), BackgroundReply { light: Some(true), done: true });
+        assert_eq!(reply(b"\x1b]11;rgb:0000/0000/0000\x1b\\"), BackgroundReply { light: Some(false), colour: Some([0; 3]), done: true });
+        assert_eq!(reply(b"\x1b]11;rgb:ffff/ffff/ffff\x07"), BackgroundReply { light: Some(true), colour: Some([255; 3]), done: true });
         // Any number of digits, up to four; green counts most.
         assert_eq!(reply(b"\x1b]11;rgb:f/f/f\x07").light, Some(true));
         assert_eq!(reply(b"\x1b]11;rgb:ff/00/ff\x07").light, Some(false));
         assert_eq!(reply(b"\x1b]11;rgb:00/ff/00\x07").light, Some(true));
         // A terminal that doesn't know the question answers the attributes alone.
-        assert_eq!(parse_background_reply(ATTRIBUTES), BackgroundReply { light: None, done: true });
+        assert_eq!(parse_background_reply(ATTRIBUTES), BackgroundReply { light: None, colour: None, done: true });
         // An answer after the attributes is not this terminal answering the query.
         let late = [ATTRIBUTES, b"\x1b]11;rgb:ffff/ffff/ffff\x07"].concat();
-        assert_eq!(parse_background_reply(&late), BackgroundReply { light: None, done: true });
+        assert_eq!(parse_background_reply(&late), BackgroundReply { light: None, colour: None, done: true });
     }
 
     #[test]
@@ -310,7 +337,7 @@ mod tests {
         }
         // Keys typed while waiting, a stray ESC: ignored, the answer still found.
         let noisy = [b"j\x1b".as_slice(), b"\x1b]11;rgb:zz/ff/ff\x07", b"\x1b]11;rgb:ffff/ffff/ffff\x07", b"q", ATTRIBUTES].concat();
-        assert_eq!(parse_background_reply(&noisy), BackgroundReply { light: Some(true), done: true });
+        assert_eq!(parse_background_reply(&noisy), BackgroundReply { light: Some(true), colour: Some([255; 3]), done: true });
     }
 
     proptest::proptest! {

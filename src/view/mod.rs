@@ -20,12 +20,12 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use cells::{Colours, Glyphs, Ground, Style};
 use crate::encode::{self, PngEffort};
+use cells::{Colours, Glyphs, Ground, Style};
 
 use crate::CliError;
 use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Listing, Opened, Part, Ready, Request, Source};
+use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Listing, Opened, Paper, Part, Ready, Request, Source};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -37,6 +37,12 @@ const OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
     OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
     OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit" },
+    OptionSpec {
+        name: "--theme",
+        short: None,
+        value: Some("auto|light|dark"),
+        help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
+    },
     OptionSpec {
         name: "--compression",
         short: None,
@@ -250,6 +256,48 @@ struct Terminal {
     /// Whether the terminal runs on this machine, not over SSH: the system's clipboard is the
     /// reader's then.
     local: bool,
+    /// What pages start on.
+    paper: Paper,
+    /// The colour of dark paper, when pages are on it or turned to it.
+    dark: [u8; 3],
+}
+
+/// The colour of dark paper where a terminal doesn't say one, or its own is light: a dark grey like
+/// many terminals', with room below it for what is darker.
+const DARK_PAPER: [u8; 3] = [0x1E, 0x1E, 0x1E];
+
+/// What `--theme` says of pages with a dark form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Theme {
+    Auto,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err(format!("--theme: expected auto, light or dark, got {}", printable(value))),
+        }
+    }
+
+    /// What pages start on, and the colour of dark paper, for a terminal whose background is
+    /// `background`, if it says. On a dark terminal that colour is its own: the page is what is behind
+    /// it, not a rectangle on it.
+    fn papers(self, background: Option<[u8; 3]>) -> (Paper, [u8; 3]) {
+        let own = background.filter(|colour| !detect::is_light(*colour));
+        let dark = own.unwrap_or(DARK_PAPER);
+        let paper = match self {
+            Self::Light => Paper::Printed,
+            Self::Dark => Paper::Dark(dark),
+            Self::Auto if own.is_some() => Paper::Dark(dark),
+            Self::Auto => Paper::Printed,
+        };
+        (paper, dark)
+    }
 }
 
 pub(super) fn run(args: &[String]) -> Result<(), CliError> {
@@ -407,6 +455,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let zoom = options.value("--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
     let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
+    let theme = Theme::parse(options.value("--theme").unwrap_or("auto"))?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let opener = Opener { backends, options: &options };
@@ -423,7 +472,11 @@ fn view(args: &[String]) -> Result<(), CliError> {
     // asked instead), never back in canonical mode between a question and the pager. On FreeBSD a
     // read begun in canonical mode stays a line read after raw mode returns: the reader thread,
     // its next read begun in between, would hold every key until Enter.
-    let _raw = match (&tty, paging && !inside_tmux) {
+    // Only what has a dark form, or may hold one, asks for the background; and not when told not to
+    // ask, or when the output is no terminal's. Asking inside tmux is why raw mode is wanted there too.
+    let may_have_dark = shown.pages.source.dark_form() || shown.is_list();
+    let asks_background = may_have_dark && protocol != Protocol::Kitty && !plain && std::io::stdout().is_terminal();
+    let _raw = match (&tty, paging && (!inside_tmux || asks_background)) {
         (Some(tty), true) => Some(tty.raw()?),
         _ => None,
     };
@@ -437,13 +490,26 @@ fn view(args: &[String]) -> Result<(), CliError> {
         },
         _ if check_terminal(protocol, tty.as_ref())? => {
             let cell = tty.as_ref().and_then(ask_cell);
-            (Terminal { output: Output::Direct, cell, effort: PngEffort::Fast, files: false, local: true }, None)
+            (
+                Terminal {
+                    output: Output::Direct,
+                    cell,
+                    effort: PngEffort::Fast,
+                    files: false,
+                    local: true,
+                    paper: Paper::Printed,
+                    dark: DARK_PAPER,
+                },
+                None,
+            )
         }
         _ => (text(Glyphs::Blocks), Some(UNSUPPORTED.to_owned())),
     };
     let remote = over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten());
     let (effort, files) = compression.choose(|| remote);
-    let terminal = Terminal { effort, files, local: !remote, ..terminal };
+    let background = tty.as_ref().filter(|_| asks_background).and_then(ask_background);
+    let (paper, dark) = theme.papers(background);
+    let terminal = Terminal { effort, files, local: !remote, paper, dark, ..terminal };
     // Inside tmux, what this run prints stays in the terminal after it, for tmux's placeholder
     // cells (`sweep.rs`): so it is recorded, and first the pictures no pane holds any more go.
     // Only when the output is this pane's, not a file `cat` shows later.
@@ -919,13 +985,19 @@ fn text_terminal(glyphs: Glyphs, tty: Option<&Tty>, inside_tmux: bool) -> Termin
     }
     let told = client.and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
     let cell = if inside_tmux { told } else { tty.and_then(ask_cell) };
-    Terminal { output: Output::Text(style), cell, effort: PngEffort::Fast, files: false, local: true }
+    Terminal { output: Output::Text(style), cell, effort: PngEffort::Fast, files: false, local: true, paper: Paper::Printed, dark: DARK_PAPER }
 }
 
 /// Whether the terminal's background is light, if it says.
 fn ask_light(tty: &Tty) -> Option<bool> {
     let reply = ask(tty, detect::BACKGROUND_QUERY, |reply| detect::parse_background_reply(reply).done).ok()?;
     detect::parse_background_reply(&reply).light
+}
+
+/// The terminal's background colour, if it says.
+fn ask_background(tty: &Tty) -> Option<[u8; 3]> {
+    let reply = ask(tty, detect::BACKGROUND_QUERY, |reply| detect::parse_background_reply(reply).done).ok()?;
+    detect::parse_background_reply(&reply).colour
 }
 
 /// Send the support query and read the answer.
@@ -991,7 +1063,15 @@ fn tmux_terminal(protocol: Protocol) -> Result<Result<Terminal, String>, CliErro
         Err(e) => note(&format!("warning: couldn't check tmux's allow-passthrough ({e}); images may not show")),
     }
     let cell = client.ok().and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    Ok(Ok(Terminal { output: Output::Tmux(colour), cell, effort: PngEffort::Fast, files: false, local: true }))
+    Ok(Ok(Terminal {
+        output: Output::Tmux(colour),
+        cell,
+        effort: PngEffort::Fast,
+        files: false,
+        local: true,
+        paper: Paper::Printed,
+        dark: DARK_PAPER,
+    }))
 }
 
 /// The colour placeholder cells name images with, once the terminal outside tmux is known to
@@ -1071,8 +1151,9 @@ fn print_pages(
         let mut printed = Vec::new();
         for (slot, &page) in (0u16..).zip(chunk) {
             let place = Area { cols: grid.cols, rows: grid.page_rows, cell, max_rows };
-            let drawn = page_layout(source, page, grid.fit, place, terminal.output)
-                .and_then(|layout| encode(&renderer.render(request(page, &layout, 0)), &layout, terminal).map(|image| (layout, image)));
+            let drawn = page_layout(source, page, grid.fit, place, terminal.output).and_then(|layout| {
+                encode(&renderer.render(request(page, &layout, 0, terminal.paper)), &layout, terminal).map(|image| (layout, image))
+            });
             match drawn {
                 Ok((layout, image)) => {
                     if let Some(warning) = &image.warning {
@@ -1262,8 +1343,8 @@ fn page_layout(source: &dyn Source, page: usize, fit: Fit, place: Area, output: 
 }
 
 /// The render of `page` at `layout`'s scale, tagged so its result can be told from others.
-fn request(page: usize, layout: &Layout, tag: u64) -> Request {
-    Request { page, scale: layout.scale, tag }
+fn request(page: usize, layout: &Layout, tag: u64, paper: Paper) -> Request {
+    Request { page, scale: layout.scale, tag, paper }
 }
 
 /// A rendered page as this terminal is sent it, a PNG or text, or why there is none. Errors name
@@ -1302,6 +1383,27 @@ fn png(p: &Frame, effort: PngEffort) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_theme_says_what_pages_start_on() {
+        const OWN: [u8; 3] = [0x1E, 0x2E, 0x3E];
+        const LIGHT: [u8; 3] = [0xFD, 0xF6, 0xE3];
+        assert_eq!(Theme::Auto.papers(Some(OWN)), (Paper::Dark(OWN), OWN), "a dark terminal: its own colour");
+        assert_eq!(Theme::Auto.papers(Some(LIGHT)), (Paper::Printed, DARK_PAPER), "a light one");
+        assert_eq!(Theme::Auto.papers(None), (Paper::Printed, DARK_PAPER), "one that doesn't say");
+        assert_eq!(Theme::Light.papers(Some(OWN)), (Paper::Printed, OWN), "turned, it has that colour to go to");
+        assert_eq!(Theme::Dark.papers(Some(OWN)), (Paper::Dark(OWN), OWN));
+        assert_eq!(Theme::Dark.papers(Some(LIGHT)), (Paper::Dark(DARK_PAPER), DARK_PAPER), "not a light colour for dark paper");
+        assert_eq!(Theme::Dark.papers(None), (Paper::Dark(DARK_PAPER), DARK_PAPER));
+    }
+
+    #[test]
+    fn a_theme_is_one_of_three() {
+        assert_eq!(Theme::parse("auto"), Ok(Theme::Auto));
+        assert_eq!(Theme::parse("light"), Ok(Theme::Light));
+        assert_eq!(Theme::parse("dark"), Ok(Theme::Dark));
+        assert!(Theme::parse("sepia").is_err_and(|e| e.contains("auto, light or dark")));
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -1545,7 +1647,7 @@ mod tests {
 
     /// Page 3 rendered with `warnings`, or failed with `error`.
     fn rendered(warnings: &[&str], error: Option<&str>) -> Frame {
-        let request = Request { page: 2, scale: 1.0, tag: 0 };
+        let request = Request { page: 2, scale: 1.0, tag: 0, paper: Default::default() };
         let rgba = crate::source::Pixels::new(Vec::new());
         Frame { request, width: 0, height: 0, rgba, error: error.map(String::from), warnings: warnings.iter().map(|w| w.to_string()).collect() }
     }

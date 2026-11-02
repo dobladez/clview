@@ -28,7 +28,7 @@ use wordcraft_render::RenderOptions;
 use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
 use super::threads::Threads;
-use super::{Again, Backend, Format, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Format, Frame, Input, Opened, Paper, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Word documents, OpenDocument text, RTF, Markdown and HTML, laid out and drawn by wordcraft.
@@ -231,15 +231,21 @@ impl Laid {
         if self.pictures.is_empty() {
             return notes;
         }
-        let (changes, failed) = {
+        let on_page: Vec<String> = {
             let document = self.document.read().unwrap_or_else(PoisonError::into_inner);
-            self.pictures.draw(&pictures_on(&document, page))
+            pictures_on(&document, page).into_iter().map(str::to_owned).collect()
         };
-        if failed {
-            notes.push("a picture it refers to could not be drawn".into());
+        let on_page: Vec<&str> = on_page.iter().map(String::as_str).collect();
+        // Nothing locked while they are drawn, which may take a while; then, under one lock, held and
+        // in the document at once, or another page could find one drawn and render its stand-in.
+        let drawn = self.pictures.draw(&on_page);
+        if !drawn.is_empty() {
+            let mut document = self.document.write().unwrap_or_else(PoisonError::into_inner);
+            let changes = self.pictures.hold(drawn, &on_page);
+            document.media.extend(changes);
         }
-        if !changes.is_empty() {
-            self.document.write().unwrap_or_else(PoisonError::into_inner).media.extend(changes);
+        if self.pictures.failed(&on_page) {
+            notes.push("a picture it refers to could not be drawn".into());
         }
         notes
     }
@@ -276,6 +282,11 @@ impl Source for Paged {
     /// A page scales: fitted to the window, it fills it, as a PDF's does.
     fn natural(&self, _page: usize) -> bool {
         false
+    }
+
+    /// Markdown and HTML have no paper of their own, unlike what is laid out to be printed.
+    fn dark_form(&self) -> bool {
+        matches!(self.0.kind, Kind::Markdown | Kind::Html)
     }
 
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
@@ -321,8 +332,19 @@ impl Document {
         let mut options = RenderOptions::default();
         // A printed page: headers and footers dimmed only while the body is being edited.
         options.display.dim_header = false;
+        let dark = match request.paper {
+            Paper::Dark(paper) if matches!(self.kind, Kind::Markdown | Kind::Html) => Some(paper),
+            _ => None,
+        };
+        if let Some(paper) = dark {
+            options.dark = true;
+            options.dark_paper = grey_of(paper);
+        }
         let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
-        let drawn = wordcraft_render::render_page(&document, page, request.scale, &options);
+        let mut drawn = wordcraft_render::render_page(&document, page, request.scale, &options);
+        if let Some(paper) = dark {
+            on_paper(&mut drawn.pixels, paper);
+        }
         // Premultiplied RGBA, row by row, as a frame's are.
         Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings })
     }
@@ -343,6 +365,36 @@ impl Document {
             Stored::Held(again) => again().and_then(within),
         };
         again.map(Cow::Owned).map_err(|e| format!("reading the file again: {e}"))
+    }
+}
+
+/// The grey as bright as `colour`: what wordcraft's dark page can be.
+fn grey_of([r, g, b]: [u8; 3]) -> u8 {
+    let luma = (2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b)) / 10000;
+    u8::try_from(luma).unwrap_or(u8::MAX)
+}
+
+/// `pixels`, a dark page on the grey of `paper`, on `paper` itself, so the page is exactly the colour
+/// behind it: each channel stretched to keep its white and meet that colour at the grey. A picture on
+/// the page shifts with it, as little as the colour is from grey.
+fn on_paper(pixels: &mut [u8], paper: [u8; 3]) {
+    let grey = grey_of(paper);
+    if paper == [grey; 3] {
+        return;
+    }
+    let stretch = |to: u8| -> [u8; 256] {
+        let (grey, to) = (u32::from(grey), u32::from(to));
+        std::array::from_fn(|from| {
+            // Within a byte: `from` is below 256, and each stays between its two ends.
+            let from = from as u32;
+            let at = if from <= grey { from * to / grey.max(1) } else { to + (from - grey) * (255 - to) / (255 - grey).max(1) };
+            at.min(255) as u8
+        })
+    };
+    let [r, g, b] = paper.map(stretch);
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        // Each channel a byte, so each index is within its table.
+        *pixel = [r[usize::from(pixel[0])], g[usize::from(pixel[1])], b[usize::from(pixel[2])], pixel[3]];
     }
 }
 
@@ -633,46 +685,95 @@ mod tests {
         refused(" MiB", &html, format!("<script>{}</script>", "a".repeat(MAX_MARKED_UP)).as_bytes());
     }
 
+    #[test]
+    fn a_dark_page_is_exactly_the_paper_asked_for_and_keeps_its_white() {
+        assert_eq!(grey_of([0x1E; 3]), 0x1E);
+        assert_eq!(grey_of([255; 3]), 255);
+        for paper in [[0x1E, 0x2E, 0x3E], [0, 0, 0], [0x28, 0x2C, 0x34], [0x00, 0x2B, 0x36], [0x1E, 0x1E, 0x1E]] {
+            let grey = grey_of(paper);
+            let mut pixels = [grey, grey, grey, 255, 255, 255, 255, 255, 40, 200, 90, 77];
+            on_paper(&mut pixels, paper);
+            assert_eq!(pixels[..4], [paper[0], paper[1], paper[2], 255], "the page: {paper:?}");
+            assert_eq!(pixels[4..8], [255; 4], "white: {paper:?}");
+            assert_eq!(pixels[11], 77, "what is seen through stays: {paper:?}");
+        }
+        let mut grey = [0x1E, 0x1E, 0x1E, 255, 80, 90, 100, 255];
+        on_paper(&mut grey, [0x1E; 3]);
+        assert_eq!(grey, [0x1E, 0x1E, 0x1E, 255, 80, 90, 100, 255], "a grey terminal: nothing to do");
+    }
+
+    /// The page's corner, drawn through `backend` on `paper`, from a file of `contents` named `name`.
+    fn corner(name: &str, contents: &[u8], paper: Paper) -> (bool, [u8; 3]) {
+        let dir = std::env::temp_dir().join(format!("clview-word-corner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages: {name}") };
+        let frame = source.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0, paper });
+        assert_eq!(frame.error, None);
+        (source.dark_form(), [frame.rgba[0], frame.rgba[1], frame.rgba[2]])
+    }
+
+    /// Markdown and HTML go on the paper asked for; what is laid out to be printed stays as printed.
+    #[test]
+    fn only_markdown_and_html_have_a_dark_form() {
+        const PAPER: [u8; 3] = [0x1E, 0x2E, 0x3E];
+        for (name, contents) in [("a.md", &b"# One"[..]), ("a.html", b"<p>One</p>")] {
+            assert_eq!(corner(name, contents, Paper::Dark(PAPER)), (true, PAPER), "{name}");
+            assert_eq!(corner(name, contents, Paper::Printed), (true, [255; 3]), "{name}");
+        }
+        assert_eq!(corner("a.rtf", b"{\\rtf1\\ansi One}", Paper::Dark(PAPER)), (false, [255; 3]));
+    }
+
     /// The pager's way: pages rendering side by side on a pool's threads, each drawing its pictures
-    /// into what they share, and every page showing its own, however they fall out.
+    /// into what they share, and every page showing them, its own and the one on every page. Many times
+    /// over, as a page that finds that one drawn by another thread must not render its stand-in, which
+    /// only shows sometimes.
     #[cfg(feature = "image")]
     #[test]
     fn a_pools_threads_draw_their_pages_pictures() {
         let dir = std::env::temp_dir().join(format!("clview-word-pool-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let picture = |red: u8| {
+            let pixels: Vec<u8> = [red, 0, 0, 255].repeat(400);
+            crate::encode::encode_png(20, 20, &pixels, crate::encode::PngEffort::Fast).unwrap()
+        };
+        let shows =
+            |frame: &Frame, red: u8| frame.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0].abs_diff(red) < 3 && pixel[1] < 3 && pixel[2] < 3);
+        const SHARED: u8 = 250;
+        std::fs::write(dir.join("shared.png"), picture(SHARED)).unwrap();
+        let pages = 6u8;
         let mut document = String::new();
-        let pages = 6;
         for n in 0..pages {
-            // A picture of its own on each page, and one they all share.
-            let own = 40u8.saturating_mul(n + 1);
-            let pixels: Vec<u8> = [own, 0, 0, 255].repeat(400);
-            std::fs::write(dir.join(format!("{n}.png")), crate::encode::encode_png(20, 20, &pixels, crate::encode::PngEffort::Fast).unwrap())
-                .unwrap();
-            document.push_str(&format!("<p style=\"page-break-after:always\"><img src=\"{n}.png\"> <img src=\"0.png\"></p>"));
+            std::fs::write(dir.join(format!("{n}.png")), picture(40 * (n + 1))).unwrap();
+            document.push_str(&format!("<p style=\"page-break-after:always\"><img src=\"{n}.png\"> <img src=\"shared.png\"></p>"));
         }
         let path = dir.join("a.html");
         std::fs::write(&path, document).unwrap();
 
-        let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
-        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
-        assert!(source.pages() >= usize::from(pages));
-        let pool = source.pool(4);
-        let requests: Vec<Request> = (0..usize::from(pages)).map(|page| Request { page, scale: 1.0, tag: 0 }).collect();
-        let started = std::time::Instant::now();
-        let mut done = vec![false; requests.len()];
-        while done.iter().any(|page| !page) {
-            assert!(started.elapsed().as_secs() < 60, "still waiting for {done:?}");
-            pool.set_queue(requests.iter().filter(|request| !done[request.page]).copied().collect());
-            let Some(frame) = pool.try_recv() else {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-                continue;
-            };
-            assert_eq!(frame.error, None);
-            let page = frame.request.page;
-            let own = 40u8.saturating_mul(u8::try_from(page).unwrap() + 1);
-            let shows = frame.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0].abs_diff(own) < 3 && pixel[1] < 3 && pixel[2] < 3);
-            assert!(shows, "page {page} doesn't show its picture");
-            done[page] = true;
+        for round in 0..300 {
+            let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+            let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
+            assert!(source.pages() >= usize::from(pages));
+            let pool = source.pool(4);
+            let requests: Vec<Request> =
+                (0..usize::from(pages)).map(|page| Request { page, scale: 0.5, tag: 0, paper: Default::default() }).collect();
+            let started = std::time::Instant::now();
+            let mut done = vec![false; requests.len()];
+            while done.iter().any(|page| !page) {
+                assert!(started.elapsed().as_secs() < 60, "still waiting for {done:?}");
+                pool.set_queue(requests.iter().filter(|request| !done[request.page]).copied().collect());
+                let Some(frame) = pool.try_recv() else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
+                assert_eq!(frame.error, None);
+                let page = frame.request.page;
+                assert!(shows(&frame, 40 * (u8::try_from(page).unwrap() + 1)), "round {round}: page {page} doesn't show its picture");
+                assert!(shows(&frame, SHARED), "round {round}: page {page} doesn't show the one they share");
+                done[page] = true;
+            }
         }
     }
 

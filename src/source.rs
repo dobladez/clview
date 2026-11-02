@@ -323,12 +323,24 @@ fn pick<'b>(backends: &[&'b dyn Backend], path: &str, head: &[u8]) -> Result<&'b
 }
 
 /// A render asked of a source: `page` (0-based) at `scale` output pixels per unit of its
-/// [`Source::size`]. `tag` tells the result apart from others of the same page.
+/// [`Source::size`], on `paper`. `tag` tells the result apart from others of the same page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Request {
     pub(crate) page: usize,
     pub(crate) scale: f32,
     pub(crate) tag: u64,
+    pub(crate) paper: Paper,
+}
+
+/// What a page is wanted on, for a source with a dark form ([`Source::dark_form`]). Any other is
+/// shown as it is, whatever is asked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Paper {
+    /// As printed.
+    #[default]
+    Printed,
+    /// Light on dark, the page this colour.
+    Dark([u8; 3]),
 }
 
 /// Premultiplied RGBA, row by row, top to bottom: a backend's own buffer, read as bytes, so its
@@ -386,6 +398,11 @@ pub(crate) trait Source {
     /// to the window, it is never drawn larger, unless the reader zooms to the width. A PDF's
     /// points are a unit for any scale.
     fn natural(&self, page: usize) -> bool;
+    /// Whether it has pages to show on dark paper ([`Paper::Dark`]): a page that is just text with no
+    /// paper of its own. A PDF or a Word document is a page as printed, white in its design.
+    fn dark_form(&self) -> bool {
+        false
+    }
     /// A renderer on this thread, for pages printed one after another.
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String>;
     /// Renders on threads of their own, for the pager: keys still work while pages render, and

@@ -492,7 +492,7 @@ mod tests {
 
     /// A rendered page of `width` × `height` opaque grey pixels.
     fn page(width: u32, height: u32) -> Frame {
-        let request = crate::source::Request { page: 0, scale: 1.0, tag: 0 };
+        let request = crate::source::Request { page: 0, scale: 1.0, tag: 0, paper: Default::default() };
         let rgba = crate::source::Pixels::new([0x80, 0x80, 0x80, 0xFF].repeat((width * height) as usize));
         Frame { request, width, height, rgba, error: None, warnings: Vec::new() }
     }

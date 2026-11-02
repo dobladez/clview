@@ -603,6 +603,35 @@ fn inside_tmux_a_pane_without_passthrough_stops_rather_than_drawing_text() {
     assert!(!capture.contains("\x1b[48;"), "{capture:?}");
 }
 
+/// Inside tmux it is tmux that answers about the background, with the pane's own colour; and asking
+/// leaves the pager's keys working: `d` turns the page and says so, and `q` quits.
+#[cfg(feature = "word")]
+#[test]
+fn inside_tmux_markdown_takes_the_panes_colour_and_d_turns_it() {
+    let Some(Shell { server, pane, pdf, .. }) = shell("dark-pane") else { return };
+    let notes = pdf.with_file_name("notes.md");
+    std::fs::write(&notes, "# One\n\nSome text.\n").unwrap();
+    server.tmux(&["select-pane", "-t", &pane, "-P", "bg=#000000"]);
+    let capture = || String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-e", "-t", &pane])).into_owned();
+    let until = |what: &str, done: &dyn Fn(&str) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done(&capture()) {
+            assert!(Instant::now() < deadline, "{what} never happened: {:?}", capture());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let white = |c: &str| ["48;2;255;255;255", "48;5;231", "48;5;15"].iter().any(|code| c.contains(code));
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol blocks --pager", notes.display()), "Enter"]);
+    until("the page", &|c| c.contains("page 1/1"));
+    assert!(!white(&capture()), "white on a black pane: {:?}", capture());
+    server.tmux(&["send-keys", "-t", &pane, "d"]);
+    until("turned to white", &|c| c.contains("dark on light") && white(c));
+    server.tmux(&["send-keys", "-t", &pane, "d"]);
+    until("turned back", &|c| c.contains("light on dark") && !white(c));
+    server.tmux(&["send-keys", "-t", &pane, "q"]);
+    until("the shell back", &|c| !c.contains("light on dark"));
+}
+
 /// The pager's text cells are the pane's, however tmux shows it: drawn and turned with no passthrough
 /// and nothing asked of tmux about what reached the terminal.
 #[test]

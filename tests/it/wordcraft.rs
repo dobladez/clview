@@ -435,6 +435,65 @@ fn what_has_no_directory_has_no_pictures() {
     assert_eq!(held("pic.png"), held("missing.png"), "in an archive");
 }
 
+/// The colour at a page's corner.
+fn corner(page: &[u8]) -> [u8; 3] {
+    ::image::load_from_memory(page).unwrap().to_rgb8().get_pixel(0, 0).0
+}
+
+/// `--theme` says what Markdown and HTML go on, in a page's every colour. With no terminal to ask,
+/// they are as printed; and what is laid out to be printed stays so, whatever is said.
+#[test]
+fn the_theme_turns_markdown_and_html_dark_and_nothing_else() {
+    let dark = [0x1E, 0x1E, 0x1E];
+    let of = |name: &str, contents: &[u8], args: &[&str]| {
+        let path = write(tmp("word-theme", name), contents);
+        let out = view(&path, &[&["--protocol", "kitty"], args].concat());
+        assert!(out.status.success(), "{name}: {}", text(&out.stderr));
+        images(&out.stdout).swap_remove(0).png
+    };
+    for (name, contents) in [("a.md", &b"# One"[..]), ("a.html", b"<h1>One</h1>")] {
+        assert_eq!(corner(&of(name, contents, &["--theme", "dark"])), dark, "{name}");
+        assert_eq!(corner(&of(name, contents, &["--theme", "light"])), [255; 3], "{name}");
+        assert_eq!(corner(&of(name, contents, &["--theme", "auto"])), [255; 3], "{name}: no terminal to go by");
+        assert_eq!(corner(&of(name, contents, &[])), [255; 3], "{name}");
+        // Its ink turned too: the page has something much lighter on it.
+        let page = ::image::load_from_memory(&of(name, contents, &["--theme", "dark"])).unwrap().to_rgb8();
+        assert!(page.pixels().any(|p| p.0.iter().all(|c| *c > 128)), "{name}: nothing light on the page");
+    }
+    assert_eq!(corner(&of("a.docx", &docx(1), &["--theme", "dark"])), [255; 3], "a Word document");
+    assert_eq!(corner(&of("a.rtf", RTF.as_bytes(), &["--theme", "dark"])), [255; 3], "an RTF");
+    assert_eq!(corner(&of("a.pdf", &crate::fixtures::letter("One", 1), &["--theme", "dark"])), [255; 3], "a PDF");
+
+    let path = write(tmp("word-theme", "b.md"), b"# One");
+    let out = view(&path, &["--protocol", "kitty", "--theme", "sepia"]);
+    assert!(!out.status.success() && text(&out.stderr).contains("auto, light or dark"), "{}", text(&out.stderr));
+}
+
+/// A picture of near-black lines and nothing else would vanish on dark paper, so it comes with white
+/// behind it; what shows on dark, or is mostly picture, keeps what is behind it.
+#[cfg(feature = "svg")]
+#[test]
+fn dark_paper_doesnt_swallow_a_near_black_drawing() {
+    let dir = directory("word-swallow");
+    let drawing = |fill: &str, side: u32| {
+        format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="{side}" height="{side}" fill="{fill}"/></svg>"#)
+    };
+    write(dir.join("logo.svg"), drawing("rgb(10,10,10)", 100).as_bytes());
+    write(dir.join("colour.svg"), drawing("rgb(220,20,20)", 100).as_bytes());
+    write(dir.join("window.svg"), drawing("rgb(10,10,10)", 180).as_bytes());
+    let whites = |picture: &str, theme: &str| {
+        let path = write(dir.join("a.md"), format!("![two]({picture})").as_bytes());
+        let out = view(&path, &["--protocol", "kitty", "--theme", theme]);
+        let page = ::image::load_from_memory(&images(&out.stdout)[0].png).unwrap().to_rgb8();
+        page.pixels().filter(|p| p.0 == [255; 3]).count()
+    };
+    assert!(whites("logo.svg", "dark") > 100, "the logo has white behind it");
+    assert_eq!(whites("colour.svg", "dark"), 0, "a colour shows without it");
+    assert_eq!(whites("window.svg", "dark"), 0, "a dark window shows without it");
+    let (of_logo, of_nothing) = (whites("logo.svg", "light"), whites("missing.svg", "light"));
+    assert!(of_logo > of_nothing / 2, "on white paper, white behind it is nothing to see");
+}
+
 /// In a directory or an archive they are tiles, while text that is neither is left out.
 #[test]
 fn in_a_list_markdown_and_html_are_tiles() {

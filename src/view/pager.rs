@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::clip;
 use crate::encode::PngEffort;
-use crate::source::{Container, Frame, Pool, Ready, Source};
+use crate::source::{Container, Frame, Paper, Pool, Ready, Request, Source};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -60,6 +60,8 @@ const MAX_FILTER: usize = 256;
 const FILTER_KEYS: &str = "⏎ keep · esc cancel";
 /// What `/` says in a file's pages.
 const NO_SEARCH: &str = "no text search; / filters lists";
+/// What `d` says of what can't change: a PDF or a Word document is a page as printed.
+const NO_DARK_FORM: &str = "only Markdown and HTML go dark";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -109,6 +111,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     ("r  Ctrl-L", "render the pages again"),
+    ("d", "Markdown and HTML light on dark, or dark on light"),
     ("c", "copy the page to the clipboard"),
 ];
 /// In a list:
@@ -122,6 +125,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
     ("+ -", "bigger, fewer to a row; smaller, more to a row"),
     ("r  Ctrl-L", "render again"),
+    ("d", "Markdown and HTML light on dark, or dark on light"),
     ("c", "copy its picture to the clipboard"),
 ];
 /// Leaving, gone into from a list or not, and these keys themselves.
@@ -176,6 +180,8 @@ pub(super) fn run(
         first_id,
         next_id: 0,
         tag: 0,
+        paper: terminal.paper,
+        dark: terminal.dark,
         tmux_check: watch.as_ref().map(|_| Instant::now() + TMUX_EVERY),
         watch,
         hidden: false,
@@ -357,6 +363,8 @@ struct Nav {
     help: bool,
     /// Render the pages again even if nothing changed (`r`, Ctrl-L).
     rerender: bool,
+    /// The reader asked for pages on the other paper.
+    turn_paper: bool,
     /// A list's tiles' names, by tile, as a filter matches them ([`fold`]); none for a file's
     /// pages.
     names: Vec<String>,
@@ -408,6 +416,7 @@ impl Nav {
             hint: true,
             help: false,
             rerender: false,
+            turn_paper: false,
             names: Vec::new(),
             filter: None,
         }
@@ -527,6 +536,7 @@ impl Nav {
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('d') => self.turn_paper = true,
             Key::Char('/') => self.message = Some(NO_SEARCH.into()),
             _ => {}
         }
@@ -563,6 +573,7 @@ impl Nav {
             }
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('d') => self.turn_paper = true,
             Key::Char('/') => self.start_filter(),
             _ => {}
         }
@@ -1002,6 +1013,9 @@ struct Pager<'a> {
     first_id: u64,
     next_id: u64,
     tag: u64,
+    /// What pages are on now, and the colour of dark paper.
+    paper: Paper,
+    dark: [u8; 3],
     /// Inside tmux: which terminals show the pane and what they missed, and when to ask again.
     watch: Option<tmux::Watch>,
     tmux_check: Option<Instant>,
@@ -1068,7 +1082,10 @@ impl Pager<'_> {
         let area_rows = size.rows.saturating_sub(1).max(1);
         let (max_cols, max_rows) = self.output.limits(size.cols);
         let mut out = Vec::new();
-        // Pages made for another window, or asked to be made again, go.
+        if std::mem::take(&mut self.level.nav.turn_paper) {
+            self.turn_paper();
+        }
+        // Pages made for another window or paper, or asked to be made again, go.
         if std::mem::take(&mut self.level.nav.rerender) || self.size != Some(size) {
             for sent in self.sent.drain(..) {
                 delete(&mut out, sent.id, self.output);
@@ -1693,10 +1710,28 @@ impl Pager<'_> {
     }
 
     /// Tell the pool which renders are still wanted, most urgent first (a page being copied, then
-    /// the pages): it keeps those and cancels the rest.
+    /// the pages): it keeps those and cancels the rest. A page goes on the paper it is shown on, and
+    /// is copied as it is shown.
     fn requeue(&self) {
-        let copy = self.copier.request(self.level.id);
-        self.level.pool.set_queue(copy.into_iter().chain(self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag))).collect());
+        let copy = self.copier.request(self.level.id).map(|copy| Request { paper: self.paper, ..copy });
+        let pages = self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag, self.paper));
+        self.level.pool.set_queue(copy.into_iter().chain(pages).collect());
+    }
+
+    /// Pages on the other paper, if what is shown has a dark form; all sent so far go, on the next draw,
+    /// as for `r`. A level gone back to has its pages made again too, on this paper.
+    fn turn_paper(&mut self) {
+        if !self.level.source.dark_form() {
+            self.level.nav.message = Some(NO_DARK_FORM.into());
+            return;
+        }
+        let (paper, said) = match self.paper {
+            Paper::Printed => (Paper::Dark(self.dark), "light on dark"),
+            Paper::Dark(_) => (Paper::Printed, "dark on light"),
+        };
+        self.paper = paper;
+        self.level.nav.rerender = true;
+        self.level.nav.message = Some(said.into());
     }
 }
 
@@ -2108,6 +2143,12 @@ mod tests {
         assert_eq!((nav.zoom, nav.scroll), (Zoom::Width, 0));
         press(&mut nav, &[Key::Char('r')]);
         assert!(nav.rerender);
+        let mut nav = reader(0, 12, 40, 40);
+        assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
+        assert!(nav.turn_paper, "on a page");
+        let mut nav = list(9);
+        assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
+        assert!(nav.turn_paper, "in a list");
         assert_eq!(press(&mut nav, &[Key::Char('q')]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Char('x'), Key::PageUp, Key::End]), Step::Continue);
@@ -2387,12 +2428,13 @@ mod tests {
         let zoom = nav.zoom;
         press(&mut nav, &[Key::Char('/')]);
         // Keys that quit, move, zoom, go up, show the keys or type a number, elsewhere.
-        assert_eq!(type_in(&mut nav, "q j1?u gG+-/rc"), Step::Continue);
-        assert_eq!(filter_text(&nav), Some("q j1?u gG+-/rc"));
+        assert_eq!(type_in(&mut nav, "q j1?u gG+-/rcd"), Step::Continue);
+        assert_eq!(filter_text(&nav), Some("q j1?u gG+-/rcd"));
+        assert!(!nav.turn_paper, "typed, it is a letter of the filter");
         assert_eq!((nav.help, nav.zoom, nav.typed.as_str(), nav.rerender, typing(&nav)), (false, zoom, "", false, true));
         // A control character isn't: Ctrl-L renders again, and Ctrl-C still quits.
         press(&mut nav, &[Key::Char('\u{c}'), Key::Char('\u{1b}')]);
-        assert_eq!((nav.rerender, filter_text(&nav)), (true, Some("q j1?u gG+-/rc")));
+        assert_eq!((nav.rerender, filter_text(&nav)), (true, Some("q j1?u gG+-/rcd")));
         assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
     }
 

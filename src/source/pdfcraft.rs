@@ -135,7 +135,7 @@ fn pdfcraft_request(r: Request) -> RenderRequest {
 
 /// A page pdfcraft rendered, its warnings put into words.
 fn frame(p: RenderedPage) -> Frame {
-    let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag };
+    let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag, paper: Default::default() };
     let warnings = p
         .warnings
         .iter()

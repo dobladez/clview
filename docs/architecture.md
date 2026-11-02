@@ -148,6 +148,10 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and
   replace their stand-ins in the document's `media`, under a lock that pages rendering share
   ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+  Markdown and HTML have a dark form (`Source::dark_form`): asked for `Paper::Dark` in a request, they
+  render through wordcraft's dark page, on the grey as bright as that colour, then stretched to it
+  (`on_paper`). The viewer holds the paper and puts it in each request, so `d` needs only what `r` does
+  ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings

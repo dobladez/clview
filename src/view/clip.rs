@@ -22,7 +22,7 @@ use super::fit::{MAX_AREA, MAX_PIXELS, Size};
 use super::keys::{CLIP_ID, ClipError, Key};
 use super::kitty::{self, Wrap};
 use crate::encode::{self, PngEffort};
-use crate::source::{Frame, Request};
+use crate::source::{Frame, Paper, Request};
 
 /// Pixels per unit of a page's size it is copied at, when it has no pixels of its own: 144 per
 /// inch for a PDF's points, twice a drawing's CSS pixels, as a 2× screen shows them. A picture is
@@ -244,7 +244,8 @@ impl Copier {
         // Finite and positive (`scale` checked), so the casts saturate at worst.
         let smaller = (size.natural && scale < 1.0).then(|| (size.w.round() as u32, size.h.round() as u32));
         let said = format!("copying {what}…");
-        let stage = Stage::Rendering(Request { page, scale, tag });
+        // The pager puts the page on the paper it is shown on, when it queues this.
+        let stage = Stage::Rendering(Request { page, scale, tag, paper: Paper::Printed });
         self.copy = Some(Copying { what, level, smaller, size: (0, 0), stage });
         said
     }
@@ -644,14 +645,14 @@ mod tests {
         assert_eq!(copier.start("page 3".into(), 1, 2, Some(PAGE), 40, now, &mut out), "copying page 3…");
         assert_eq!(out, b"\x1b[?5522$p", "asked the first time");
         // Its render goes in the level's queue, and only that level's.
-        assert_eq!(copier.request(1), Some(Request { page: 2, scale: 2.0, tag: 40 }));
+        assert_eq!(copier.request(1), Some(Request { page: 2, scale: 2.0, tag: 40, paper: Default::default() }));
         assert_eq!(copier.request(2), None);
         assert!(copier.wants(40) && !copier.wants(41));
         // Another copy waits for this one.
         let mut again = Vec::new();
         assert_eq!(copier.start("page 4".into(), 1, 3, Some(PAGE), 41, now, &mut again), "still copying page 3");
         assert!(again.is_empty());
-        copier.rendered(frame(Request { page: 2, scale: 2.0, tag: 40 }, None));
+        copier.rendered(frame(Request { page: 2, scale: 2.0, tag: 40, paper: Default::default() }, None));
         assert_eq!(copier.wait(), Some(POLL));
         // Until the terminal answers, the page waits.
         out.clear();
@@ -672,7 +673,7 @@ mod tests {
         let mut out = Vec::new();
         copier.start("page 4".into(), 1, 3, Some(PAGE), 41, now, &mut out);
         assert!(out.is_empty());
-        copier.rendered(frame(Request { page: 3, scale: 2.0, tag: 41 }, None));
+        copier.rendered(frame(Request { page: 3, scale: 2.0, tag: 41, paper: Default::default() }, None));
         until_sent(&mut copier, &mut Vec::new());
         assert_eq!(copier.answer(Key::Copied(2, Err(ClipError::Denied))).as_deref(), Some("the terminal didn't copy page 4: not allowed (EPERM)"));
     }
@@ -682,7 +683,7 @@ mod tests {
         let mut copier = Copier::new(false, PngEffort::Fast, Wrap::None);
         let then = Instant::now();
         copier.start("beach.jpg".into(), 0, 4, Some(PAGE), 7, then, &mut Vec::new());
-        copier.rendered(frame(Request { page: 4, scale: 2.0, tag: 7 }, None));
+        copier.rendered(frame(Request { page: 4, scale: 2.0, tag: 7, paper: Default::default() }, None));
         // No answer at all, a second on: it doesn't speak it.
         let said = copier.on(then + ASK_WAIT, &mut Vec::new()).unwrap();
         assert!(said.starts_with("can't copy beach.jpg: this terminal has no clipboard for pictures"), "{said}");
@@ -690,7 +691,7 @@ mod tests {
         let mut out = Vec::new();
         copier.start("beach.jpg".into(), 0, 4, Some(PAGE), 8, then, &mut out);
         assert!(out.is_empty());
-        copier.rendered(frame(Request { page: 4, scale: 2.0, tag: 8 }, None));
+        copier.rendered(frame(Request { page: 4, scale: 2.0, tag: 8, paper: Default::default() }, None));
         assert!(copier.on(then, &mut Vec::new()).is_some_and(|s| s.starts_with("can't copy")));
     }
 
@@ -699,7 +700,7 @@ mod tests {
         let mut copier = Copier::new(false, PngEffort::Fast, Wrap::None);
         let now = Instant::now();
         copier.start("page 1".into(), 0, 0, Some(PAGE), 1, now, &mut Vec::new());
-        copier.rendered(frame(Request { page: 0, scale: 2.0, tag: 1 }, Some("broken")));
+        copier.rendered(frame(Request { page: 0, scale: 2.0, tag: 1, paper: Default::default() }, Some("broken")));
         assert_eq!(copier.on(now, &mut Vec::new()).as_deref(), Some("can't copy page 1: broken"));
         // A page with no size, or none at all, is never asked for.
         assert_eq!(
@@ -717,7 +718,7 @@ mod tests {
         let photo = Size { w: 6000.0, h: 4000.0, natural: true };
         copier.start("photo.jpg".into(), 0, 0, Some(photo), 4, now, &mut Vec::new());
         copier.answer(Key::Clipboard(true));
-        copier.rendered(frame(Request { page: 0, scale: 1.0, tag: 4 }, None));
+        copier.rendered(frame(Request { page: 0, scale: 1.0, tag: 4, paper: Default::default() }, None));
         until_sent(&mut copier, &mut Vec::new());
         assert_eq!(copier.answer(Key::Copied(1, Ok(()))).as_deref(), Some("copied photo.jpg, 2 × 1 pixels of its 6000 × 4000"));
     }
@@ -729,7 +730,7 @@ mod tests {
         copier.start("page 1".into(), 0, 0, Some(PAGE), 1, then, &mut Vec::new());
         copier.answer(Key::Clipboard(true));
         assert_eq!(copier.lost(), None, "nothing went out yet");
-        copier.rendered(frame(Request { page: 0, scale: 2.0, tag: 1 }, None));
+        copier.rendered(frame(Request { page: 0, scale: 2.0, tag: 1, paper: Default::default() }, None));
         until_sent(&mut copier, &mut Vec::new());
         let sent = Instant::now();
         assert_eq!(copier.on(sent, &mut Vec::new()), None);
@@ -740,7 +741,7 @@ mod tests {
         assert_eq!(copier.answer(Key::Copied(1, Ok(()))).as_deref(), Some("copied page 1, 2 × 1 pixels"));
         // tmux throwing output away while one goes out ends it.
         copier.start("page 2".into(), 0, 1, Some(PAGE), 2, then, &mut Vec::new());
-        copier.rendered(frame(Request { page: 1, scale: 2.0, tag: 2 }, None));
+        copier.rendered(frame(Request { page: 1, scale: 2.0, tag: 2, paper: Default::default() }, None));
         while !matches!(copier.copy.as_ref().map(|c| &c.stage), Some(Stage::Sending(_) | Stage::Sent { .. })) {
             copier.on(Instant::now(), &mut Vec::new());
         }

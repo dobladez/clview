@@ -119,7 +119,7 @@ mod tests {
     use crate::source::Pixels;
 
     fn request(page: usize) -> Request {
-        Request { page, scale: 1.0, tag: page as u64 }
+        Request { page, scale: 1.0, tag: page as u64, paper: Default::default() }
     }
 
     /// A 1 × 1 page whose one pixel is its page number.

@@ -1340,7 +1340,7 @@ mod tests {
     }
 
     fn render(drawing: &Drawing, scale: f32) -> Frame {
-        drawing.renderer().unwrap().render(Request { page: 0, scale, tag: 7 })
+        drawing.renderer().unwrap().render(Request { page: 0, scale, tag: 7, paper: Default::default() })
     }
 
     /// The pixel at `x`, `y` of `frame`.
@@ -1422,7 +1422,7 @@ mod tests {
         for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert!(render(&drawing, scale).error.is_some_and(|e| e.contains("can't render at scale")), "{scale}");
         }
-        let second = drawing.renderer().unwrap().render(Request { page: 1, scale: 1.0, tag: 7 });
+        let second = drawing.renderer().unwrap().render(Request { page: 1, scale: 1.0, tag: 7, paper: Default::default() });
         assert!(second.error.is_some_and(|e| e.contains("one page")));
     }
 
@@ -1478,12 +1478,12 @@ mod tests {
         let Opened::Pages(drawing) = Svg.open(input, &Parsed::default()).unwrap() else { panic!("pages") };
         let mut first = drawing.renderer().unwrap();
         let red = |frame: Frame| frame.rgba.first().copied();
-        assert_eq!(red(first.render(Request { page: 0, scale: 1.0, tag: 1 })), Some(10));
+        assert_eq!(red(first.render(Request { page: 0, scale: 1.0, tag: 1, paper: Default::default() })), Some(10));
         std::fs::write(&path, filled("#c8c8c8")).unwrap();
-        assert_eq!(red(first.render(Request { page: 0, scale: 2.0, tag: 2 })), Some(10));
-        assert_eq!(red(drawing.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3 })), Some(200));
+        assert_eq!(red(first.render(Request { page: 0, scale: 2.0, tag: 2, paper: Default::default() })), Some(10));
+        assert_eq!(red(drawing.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3, paper: Default::default() })), Some(200));
         std::fs::remove_file(&path).unwrap();
-        let gone = drawing.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 4 });
+        let gone = drawing.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 4, paper: Default::default() });
         assert!(gone.error.is_some_and(|e| e.starts_with("reading the file again: ")));
     }
 

@@ -1327,6 +1327,198 @@ fn a_small_picture_gets_a_column_for_each_pixel() {
     assert!(lines.iter().all(|line| line.chars().count() == 20), "{shown:?}");
 }
 
+/// One that says it is kitty, so isn't asked if it speaks the protocol, and shows images.
+const KITTY: Terminal = Terminal { term: Some("xterm-kitty"), ..PLAIN };
+
+/// A dark terminal, not grey, as many are: what a page takes from it can't be mistaken.
+const DARK: &str = "rgb:1e1e/2e2e/3e3e";
+#[cfg(feature = "word")]
+const DARK_COLOUR: [u8; 3] = [0x1E, 0x2E, 0x3E];
+
+/// What `clv` falls back on for dark paper.
+#[cfg(feature = "word")]
+const DARK_PAPER: [u8; 3] = [0x1E, 0x1E, 0x1E];
+
+/// The colour at the corner of each page sent so far, in order.
+fn corners(text: &str) -> Vec<[u8; 3]> {
+    use base64::Engine as _;
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\x1b_Ga=t,f=100,t=d,q=2,i=") {
+        rest = &rest[at..];
+        let mut payload = String::new();
+        loop {
+            let Some(body) = rest.strip_prefix("\x1b_G") else { return found };
+            let Some(end) = body.find("\x1b\\") else { return found };
+            let Some((control, data)) = body[..end].split_once(';') else { return found };
+            payload.push_str(data);
+            rest = &body[end + 2..];
+            if control.ends_with("m=0") {
+                break;
+            }
+        }
+        let png = base64::engine::general_purpose::STANDARD.decode(&payload).unwrap();
+        found.push(::image::load_from_memory(&png).unwrap().to_rgb8().get_pixel(0, 0).0);
+    }
+    found
+}
+
+/// A Markdown file for a test.
+#[cfg(feature = "word")]
+fn markdown(test: &str) -> PathBuf {
+    let path = crate::view::tmp(test, "notes.md");
+    std::fs::write(&path, "# One\n\nSome text.\n").unwrap();
+    path
+}
+
+/// Wait until `count` pages have been sent, then the colour at the corner of the last.
+fn last_corner(view: &Session, count: usize) -> [u8; 3] {
+    view.wait_until("the page", |t| transmitted(t) >= count && corners(t).len() >= count);
+    *corners(&view.text()).last().unwrap()
+}
+
+/// On a dark terminal, Markdown takes the terminal's own colour, so the page is what is behind it, and
+/// `d` turns it to white and back: sent again each time, and saying so.
+#[cfg(feature = "word")]
+#[test]
+fn markdown_is_on_a_dark_terminals_own_colour_and_d_turns_it() {
+    if !pty_works() {
+        return;
+    }
+    let terminal = Terminal { background: Some(DARK), ..KITTY };
+    let mut view = Session::start_on(terminal, &markdown("dark"), &["--pager"], 80, 40);
+    assert_eq!(last_corner(&view, 1), DARK_COLOUR);
+    view.press("d");
+    assert_eq!(last_corner(&view, 2), [255; 3]);
+    view.wait_until("said", |t| bar(t).contains("dark on light"));
+    view.press("d");
+    assert_eq!(last_corner(&view, 3), DARK_COLOUR);
+    view.wait_until("said", |t| bar(t).contains("light on dark"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A light terminal, or one that doesn't say, gets a page as printed; `d` still takes it to dark paper,
+/// of a colour of `clv`'s own, since the terminal's isn't one or isn't known.
+#[cfg(feature = "word")]
+#[test]
+fn on_a_light_terminal_or_one_that_doesnt_say_d_goes_to_a_dark_of_its_own() {
+    if !pty_works() {
+        return;
+    }
+    for background in [Some("rgb:fdfd/f6f6/e3e3"), None] {
+        let mut view = Session::start_on(Terminal { background, ..KITTY }, &markdown("light"), &["--pager"], 80, 40);
+        assert_eq!(last_corner(&view, 1), [255; 3], "{background:?}");
+        view.press("d");
+        assert_eq!(last_corner(&view, 2), DARK_PAPER, "{background:?}");
+        view.press("q");
+        assert!(view.finish().success());
+    }
+}
+
+/// `--theme` decides how it starts, whatever the terminal is; turned, it still goes to that terminal's
+/// colour.
+#[cfg(feature = "word")]
+#[test]
+fn the_theme_decides_how_it_starts() {
+    if !pty_works() {
+        return;
+    }
+    let dark = Terminal { background: Some(DARK), ..KITTY };
+    let mut view = Session::start_on(dark, &markdown("theme"), &["--pager", "--theme", "light"], 80, 40);
+    assert_eq!(last_corner(&view, 1), [255; 3]);
+    view.press("d");
+    assert_eq!(last_corner(&view, 2), DARK_COLOUR);
+    view.press("q");
+    assert!(view.finish().success());
+
+    let light = Terminal { background: Some("rgb:ffff/ffff/ffff"), ..KITTY };
+    let mut view = Session::start_on(light, &markdown("theme"), &["--pager", "--theme", "dark"], 80, 40);
+    assert_eq!(last_corner(&view, 1), DARK_PAPER);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// What has no dark form doesn't ask about the background, and `d` says so and sends nothing.
+#[test]
+fn what_has_no_dark_form_isnt_asked_and_d_says_so() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("no-dark", 1);
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
+    assert_eq!(last_corner(&view, 1), [255; 3]);
+    view.press("d");
+    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML go dark"));
+    assert_eq!(transmitted(&view.text()), 1, "sent again");
+    assert!(!view.text().contains("\x1b]11;"), "asked about the background");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In a list, `d` turns what has a dark form, and what hasn't stays white.
+#[cfg(feature = "word")]
+#[test]
+fn in_a_list_only_what_has_a_dark_form_turns() {
+    if !pty_works() {
+        return;
+    }
+    let dir = crate::view::tmp("dark-list", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.md"), "# One").unwrap();
+    std::fs::copy(fixture("dark-list", 1), dir.join("b.pdf")).unwrap();
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &dir, &[], 80, 40);
+    view.wait_until("both tiles", |t| corners(t).len() >= 2);
+    let tiles = corners(&view.text());
+    assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
+    view.press("d");
+    view.wait_until("both again", |t| corners(t).len() >= 4);
+    assert_eq!(corners(&view.text())[2..], [[255; 3], [255; 3]]);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// `c` copies the page as it is shown.
+#[cfg(feature = "word")]
+#[test]
+fn a_page_is_copied_on_the_paper_it_is_shown_on() {
+    if !pty_works() {
+        return;
+    }
+    let terminal = Terminal { background: Some(DARK), clipboard: Some(true), ..KITTY };
+    let mut view = Session::start_on(terminal, &markdown("copy-dark"), &["--pager"], 100, 60);
+    assert_eq!(last_corner(&view, 1), DARK_COLOUR);
+    view.press("c");
+    view.wait_until("copied", |t| t.contains("copied notes.md"));
+    let colour = |png: &[u8]| ::image::load_from_memory(png).unwrap().to_rgb8().get_pixel(0, 0).0;
+    assert_eq!(colour(&copied_png(&view.text(), 1)), DARK_COLOUR);
+    view.press("d");
+    assert_eq!(last_corner(&view, 2), [255; 3]);
+    view.press("c");
+    view.wait_until("copied again", |t| copied_png(t, 2).ends_with(b"\x60\x82"));
+    assert_eq!(colour(&copied_png(&view.text(), 2)), [255; 3]);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In text cells too: on a dark terminal, a page of text is its letters, not a block of ink with holes
+/// in it, as it is on white paper.
+#[cfg(feature = "word")]
+#[test]
+fn text_cells_go_dark_too() {
+    if !pty_works() {
+        return;
+    }
+    let page = |args: &[&str]| {
+        let terminal = Terminal { background: Some("rgb:0000/0000/0000"), ..TEXT_ONLY };
+        let mut view = Session::start_on(terminal, &markdown("dark-cells"), &[&["--protocol", "ascii"], args].concat(), 80, 40);
+        assert!(view.finish().success());
+        visible(&view.text()).matches('@').count()
+    };
+    assert!(page(&["--theme", "light"]) > 500, "white paper is all ink");
+    assert!(page(&[]) < 50, "dark paper is none");
+}
+
 /// A cell's ink shows against the background, so a terminal is asked for it, and white is all ink on
 /// a dark one and none on a light one. Half-blocks don't depend on it, so aren't asked.
 #[test]
