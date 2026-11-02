@@ -159,30 +159,5 @@ fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
 /// (`CLAUDE.md`). (Gzip's flate2 is the SVG backend's too, for svgz.)
 #[test]
 fn nothing_but_this_backend_names_its_decompressors() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let own = [root.join("src/source/tar.rs"), root.join("tests/it/tar.rs")];
-    let (mut read, mut named) = (0, Vec::new());
-    let mut dirs = vec![root.join("src"), root.join("tests")];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            if own.contains(&path) || path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            read += 1;
-            let text = std::fs::read_to_string(&path).unwrap();
-            for (n, line) in text.lines().enumerate() {
-                let lower = line.to_lowercase();
-                if line.trim() != "mod tar;" && ["bzip2", "lzma"].iter().any(|library| lower.contains(library)) {
-                    named.push(format!("{}:{}: {}", path.strip_prefix(root).unwrap().display(), n + 1, line.trim()));
-                }
-            }
-        }
-    }
-    assert!(read >= 20, "read {read} files");
-    assert!(named.is_empty(), "named outside the tar backend:\n{}", named.join("\n"));
+    crate::fixtures::named_only_in(&["src/source/tar.rs", "tests/it/tar.rs"], &[], &["bzip2", "lzma"]);
 }

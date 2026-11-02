@@ -886,6 +886,7 @@ impl Container for Directory {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::os::unix::fs::MetadataExt as _;
     use std::time::{Duration, Instant};
 
     use proptest::prelude::*;
@@ -1163,18 +1164,10 @@ mod tests {
         assert_eq!(shared.index().unwrap().files.len(), 6);
     }
 
-    /// The spill is a file nothing names: there is no file of it in the temporary directory.
+    /// The spill is a file nothing names: no directory entry leads to it, whatever it was made as.
     #[test]
     fn the_spill_has_no_name() {
-        let file = Spill::file().unwrap();
-        let prefix = format!(".{}-tar-{}-", crate::NAME, std::process::id());
-        let named =
-            std::fs::read_dir(std::env::temp_dir()).unwrap().filter_map(Result::ok).any(|e| e.file_name().to_string_lossy().starts_with(&prefix));
-        assert!(!named);
-        file.write_all_at(b"still there", 0).unwrap();
-        let mut back = [0; 11];
-        file.read_exact_at(&mut back, 0).unwrap();
-        assert_eq!(&back, b"still there");
+        assert_eq!(Spill::file().unwrap().metadata().unwrap().nlink(), 0);
     }
 
     /// The pass through runs on a thread of its own, saying how far it has got, and stops when

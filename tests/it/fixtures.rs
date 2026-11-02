@@ -1,4 +1,7 @@
-//! Synthetic PDFs for the tests, written by hand: any PDF backend reads them.
+//! What the tests share: synthetic PDFs, written by hand so that any PDF backend reads them, and
+//! the check that what a backend renders with is named only by it.
+
+use std::path::{Path, PathBuf};
 
 /// A US Letter document (612 × 792 pt) of `pages` pages, each reading `title` and its number.
 /// `title` is plain text, without parentheses or backslashes.
@@ -34,4 +37,36 @@ pub(crate) fn pdf(objects: &[String]) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
     out
+}
+
+/// Panics if the code in `src` or `tests` names any of `libraries` (in lower case, in any case in
+/// the code) outside the files `own` (from the crate's root) and the lines `allowed`. Each backend's
+/// tests call this with their own names, which live nowhere else: this file names none of them.
+pub(crate) fn named_only_in(own: &[&str], allowed: &[&str], libraries: &[&str]) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let own: Vec<PathBuf> = own.iter().map(|file| root.join(file)).collect();
+    let (mut read, mut named) = (0, Vec::new());
+    let mut dirs = vec![root.join("src"), root.join("tests")];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if own.contains(&path) || path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            read += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (n, line) in text.lines().enumerate() {
+                let lower = line.to_lowercase();
+                if !allowed.contains(&line.trim()) && libraries.iter().any(|library| lower.contains(library)) {
+                    named.push(format!("{}:{}: {}", path.strip_prefix(root).unwrap().display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    assert!(read >= 20, "read {read} files");
+    assert!(named.is_empty(), "{libraries:?} named outside their backend:\n{}", named.join("\n"));
 }

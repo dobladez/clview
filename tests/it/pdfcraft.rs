@@ -1,8 +1,6 @@
 //! The PDF backend, `src/source/pdfcraft.rs`: what pdfcraft does for a PDF beyond drawing its
 //! pages, and the rule that nothing else names it, so it can be swapped for another renderer.
 
-use std::path::Path;
-
 use pdfcraft_cos::{Algorithm, NewEncryption};
 
 use crate::fixtures::pdf;
@@ -131,33 +129,6 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
 /// renderer.
 #[test]
 fn nothing_but_this_backend_names_pdfcraft() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let allowed_line = |line: &str| {
-        let line = line.trim();
-        line == "&pdfcraft::Pdfcraft," || line == "mod pdfcraft;" || line == "mod pdfcraft_pin;"
-    };
-    let (mut read, mut named) = (0, Vec::new());
-    let mut dirs = vec![root.join("src"), root.join("tests")];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            let own = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("pdfcraft"));
-            if own || path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            read += 1;
-            let text = std::fs::read_to_string(&path).unwrap();
-            for (n, line) in text.lines().enumerate() {
-                if line.to_lowercase().contains("pdfcraft") && !allowed_line(line) {
-                    named.push(format!("{}:{}: {}", path.strip_prefix(root).unwrap().display(), n + 1, line.trim()));
-                }
-            }
-        }
-    }
-    assert!(read >= 20, "read {read} files");
-    assert!(named.is_empty(), "named outside the PDF backend:\n{}", named.join("\n"));
+    let own = ["src/source/pdfcraft.rs", "tests/it/pdfcraft.rs", "tests/it/pdfcraft_pin.rs"];
+    crate::fixtures::named_only_in(&own, &["&pdfcraft::Pdfcraft,", "mod pdfcraft;", "mod pdfcraft_pin;"], &["pdfcraft"]);
 }

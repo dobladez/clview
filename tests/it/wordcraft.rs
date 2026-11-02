@@ -178,33 +178,9 @@ fn every_wordcraft_crate_is_from_the_pinned_commit_and_none_it_patches_is_built(
 /// be swapped for another.
 #[test]
 fn nothing_but_this_backend_names_wordcraft() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let allowed_line = |line: &str| {
-        let line = line.trim();
-        line == "&wordcraft::Wordcraft," || line == "mod wordcraft;"
-    };
-    let (mut read, mut named) = (0, Vec::new());
-    let mut dirs = vec![root.join("src"), root.join("tests")];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            let own = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("wordcraft"));
-            if own || path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            read += 1;
-            let text = std::fs::read_to_string(&path).unwrap();
-            for (n, line) in text.lines().enumerate() {
-                if line.to_lowercase().contains("wordcraft") && !allowed_line(line) {
-                    named.push(format!("{}:{}: {}", path.strip_prefix(root).unwrap().display(), n + 1, line.trim()));
-                }
-            }
-        }
-    }
-    assert!(read >= 20, "read {read} files");
-    assert!(named.is_empty(), "named outside the Word backend:\n{}", named.join("\n"));
+    crate::fixtures::named_only_in(
+        &["src/source/wordcraft.rs", "tests/it/wordcraft.rs"],
+        &["&wordcraft::Wordcraft,", "mod wordcraft;"],
+        &["wordcraft"],
+    );
 }

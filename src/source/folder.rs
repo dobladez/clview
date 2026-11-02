@@ -193,36 +193,39 @@ mod tests {
         frame.rgba[at..at + 4].try_into().unwrap()
     }
 
+    /// What makes it a folder, so that it can be repainted or reshaped without this failing.
     #[test]
-    fn a_folder_is_its_front_over_its_back_with_a_tab_and_nothing_around() {
+    fn a_folder_is_a_lighter_front_over_a_back_with_a_tab_and_nothing_around() {
         let frame = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3 });
         assert_eq!((frame.width, frame.height, frame.error.as_deref(), frame.request.tag), (100, 80, None, 3));
-        // Around it, nothing; the tab is the back's colour; the front is lighter.
-        assert_eq!(pixel(&frame, 1, 1), [0; 4]);
-        assert_eq!(pixel(&frame, 60, 7), [0; 4], "right of the tab");
-        assert_eq!(pixel(&frame, 20, 10), [107, 143, 191, 255]);
-        assert_eq!(pixel(&frame, 50, 50), [140, 174, 216, 255]);
+        let (w, h) = (frame.width, frame.height);
+        // Around it, nothing.
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(pixel(&frame, x, y), [0; 4], "({x}, {y})");
+        }
+        // Its top row is the tab's, on the left.
+        let top = (0..h).find(|&y| (0..w).any(|x| pixel(&frame, x, y)[3] == 255)).unwrap();
+        let tab: Vec<u32> = (0..w).filter(|&x| pixel(&frame, x, top)[3] == 255).collect();
+        assert!(tab.iter().all(|x| *x < w / 2), "{tab:?}");
+        // The tab is the back's: the front is lighter.
+        let light = |p: [u8; 4]| p[..3].iter().map(|c| u32::from(*c)).sum::<u32>();
+        assert!(light(pixel(&frame, w / 2, h / 2)) > light(pixel(&frame, tab[tab.len() / 2], top)));
         // Premultiplied: no colour brighter than its alpha.
         assert!(frame.rgba.chunks(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
     }
 
-    /// A parcel: tape down the whole folder and across it, each piece outlined, the line going
-    /// past the folder's edge, and a bow rising above the tape.
+    /// A parcel is a folder with something tied round it, across its middle and past its edge, and
+    /// most of the folder shows as it is.
     #[test]
-    fn a_parcel_is_a_folder_tied_up_with_tape_and_a_bow() {
-        let frame = Folder(Badge::Parcel).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0 });
-        let plain = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0 });
-        let (tape, line, front) = ([150, 106, 62, 255], [28, 24, 22, 255], [140, 174, 216, 255]);
-        // The knot, the tape over the back, and across it; the bow's loop above the tape.
-        for (x, y) in [(50, 48), (50, 15), (20, 48), (37, 40)] {
-            assert_eq!(pixel(&frame, x, y), tape, "({x}, {y})");
-        }
-        assert_eq!(pixel(&plain, 37, 40), front);
-        // The line beside the tape, and past the folder's left edge.
-        assert_eq!((pixel(&frame, 44, 30), pixel(&frame, 5, 48)), (line, line));
-        assert_eq!(pixel(&plain, 5, 48), [0; 4]);
-        // Away from it, the folder as it is.
-        assert_eq!(pixel(&frame, 20, 30), pixel(&plain, 20, 30));
+    fn a_parcel_is_a_folder_with_something_tied_round_it() {
+        let drawn = |badge| Folder(badge).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0 });
+        let (frame, plain) = (drawn(Badge::Parcel), drawn(Badge::None));
+        let (w, h) = (frame.width, frame.height);
+        assert_eq!((w, h), (plain.width, plain.height));
+        assert_ne!(pixel(&frame, w / 2, h * 6 / 10), pixel(&plain, w / 2, h * 6 / 10), "where it crosses");
+        let both = || frame.rgba.chunks(4).zip(plain.rgba.chunks(4));
+        assert!(both().any(|(tied, bare)| tied[3] > 0 && bare[3] == 0), "past the folder's edge");
+        assert!(both().filter(|(tied, bare)| tied == bare).count() * 2 > both().count(), "the rest as it is");
         assert!(frame.rgba.chunks(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
         // At any scale, small or large, it draws.
         for scale in [0.001, 0.3, 7.5] {

@@ -177,32 +177,7 @@ const LIBRARIES: [&str; 6] = ["resvg", "usvg", "tiny_skia", "tiny-skia", "roxmlt
 /// would read the same with another SVG renderer.
 #[test]
 fn nothing_but_this_backend_names_resvg() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let own = [root.join("src/source/svg.rs"), root.join("tests/it/resvg.rs")];
-    let (mut read, mut named) = (0, Vec::new());
-    let mut dirs = vec![root.join("src"), root.join("tests")];
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-            if own.contains(&path) || path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
-            read += 1;
-            let text = std::fs::read_to_string(&path).unwrap();
-            for (n, line) in text.lines().enumerate() {
-                let lower = line.to_lowercase();
-                if line.trim() != "mod resvg;" && LIBRARIES.iter().any(|library| lower.contains(library)) {
-                    named.push(format!("{}:{}: {}", path.strip_prefix(root).unwrap().display(), n + 1, line.trim()));
-                }
-            }
-        }
-    }
-    assert!(read >= 20, "read {read} files");
-    assert!(named.is_empty(), "named outside the SVG backend:\n{}", named.join("\n"));
+    crate::fixtures::named_only_in(&["src/source/svg.rs", "tests/it/resvg.rs"], &["mod resvg;"], &LIBRARIES);
 }
 
 /// The estimate of what a render takes follows how resvg 0.49 renders (`Estimate` in
