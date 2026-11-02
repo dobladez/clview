@@ -655,8 +655,8 @@ mod tests {
             None
         };
         assert!(Files::spawn(slow, hangs).is_none());
-        assert!(started.elapsed() < slow + slow / 2, "{:?}", started.elapsed());
-        let stall = Duration::from_millis(50);
+        assert!(started.elapsed() < slow * 2, "{:?}", started.elapsed());
+        let stall = Duration::from_millis(500);
         // The pager's end of a thread this test plays: it answers a look (one file waiting), then
         // stalls in the middle of writing a page.
         let (jobs, inbox) = mpsc::channel();
@@ -672,10 +672,13 @@ mod tests {
         assert!(!files.ready(Instant::now()));
         assert_eq!(files.check(Instant::now()), [4, 5]);
         assert_eq!(files.check(Instant::now()), Vec::<u32>::new());
-        assert!(after.elapsed() < stall);
-        // At the end, the thread is told to stop and waited for, at most once more.
+        assert!(after.elapsed() < stall, "{:?}", after.elapsed());
+        // At the end, the thread is told to stop and waited for, at most once more. A second wait
+        // would take two stalls, so one has until then: macOS CI runners have taken over 100 ms
+        // for a wait of 50.
+        let stopping = Instant::now();
         drop(files);
-        assert!(after.elapsed() < stall * 3);
+        assert!(stopping.elapsed() < stall * 2, "{:?}", stopping.elapsed());
         let asked = inbox.try_iter().collect::<Vec<_>>();
         assert!(matches!(asked.as_slice(), [Job::Check(_), Job::Write { .. }, Job::Stop]), "nothing else asked after the stall");
         drop(outbox);
