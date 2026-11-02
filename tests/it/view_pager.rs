@@ -81,7 +81,8 @@ pub(crate) struct Session {
 /// `clv` names, as kitty does (and deletes them), the temporary directory `clv` gets, the
 /// cell size it answers when asked (the device attributes alone when `None`), whether it says it
 /// speaks the clipboard protocol when asked and answers a write as kitty does (`None`: it never
-/// answers), whether `clv` runs over SSH, and the `TERM` it names (`None`: whatever the tests got).
+/// answers), whether `clv` runs over SSH, the `TERM` it names (`None`: whatever the tests got), and
+/// the background colour it says when asked (the device attributes alone when `None`).
 #[derive(Clone, Copy)]
 struct Terminal<'a> {
     takes_files: bool,
@@ -90,13 +91,21 @@ struct Terminal<'a> {
     clipboard: Option<bool>,
     ssh: bool,
     term: Option<&'a str>,
+    background: Option<&'a str>,
 }
 
 /// One that never reads files, as script(1) doesn't, and doesn't know its cell size.
-const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false, term: None };
+const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false, term: None, background: None };
+
+/// One that doesn't speak the graphics protocol: whatever terminal the tests run in, and with xterm's
+/// 256 colours, which is what the environment says with no `COLORTERM`.
+const TEXT_ONLY: Terminal = Terminal { term: Some("xterm-256color"), ..PLAIN };
 
 /// `clv`'s question about the cell size, which a pseudo-terminal without pixels gets.
 const CELL_QUERY: &[u8] = b"\x1b[16t\x1b[c";
+
+/// `clv`'s question about the background, which ink on it depends on.
+const BACKGROUND_QUERY: &[u8] = b"\x1b]11;?\x1b\\\x1b[c";
 
 /// `clv`'s question whether the terminal speaks the clipboard protocol (DECRQM for mode 5522).
 const CLIPBOARD_QUERY: &[u8] = b"\x1b[?5522$p";
@@ -117,7 +126,7 @@ impl Session {
             script.env("TMPDIR", dir);
         }
         // On this machine, whatever machine the tests run from: an SSH login would turn the files off.
-        for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "KITTY_WINDOW_ID", "TERM_PROGRAM"] {
+        for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "KITTY_WINDOW_ID", "TERM_PROGRAM", "COLORTERM", "NO_COLOR"] {
             script.env_remove(name);
         }
         if let Some(term) = terminal.term {
@@ -132,9 +141,10 @@ impl Session {
         let keys = Arc::new(Mutex::new(child.stdin.take()));
         let mut stdout = child.stdout.take().unwrap();
         let (collected, took, answers) = (output.clone(), taken.clone(), keys.clone());
+        let background = terminal.background.map(str::to_owned);
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
-            let (mut scanned, mut asked, mut clip_asked, mut written) = (0, 0, 0, 0);
+            let (mut scanned, mut asked, mut clip_asked, mut written, mut background_asked) = (0, 0, 0, 0, 0);
             while let Ok(n) = stdout.read(&mut buf) {
                 if n == 0 {
                     break;
@@ -150,6 +160,14 @@ impl Session {
                     let cell = terminal.cell.map(|(w, h)| format!("\x1b[6;{h};{w}t")).unwrap_or_default();
                     if let Some(stdin) = answers.lock().unwrap().as_mut() {
                         let _ = stdin.write_all(format!("{cell}\x1b[?62;c").as_bytes()).and_then(|()| stdin.flush());
+                    }
+                }
+                // Answer the background question, as kitty and xterm do.
+                while let Some(at) = output[background_asked..].windows(BACKGROUND_QUERY.len()).position(|w| w == BACKGROUND_QUERY) {
+                    background_asked += at + BACKGROUND_QUERY.len();
+                    let colour = background.as_ref().map(|c| format!("\x1b]11;{c}\x1b\\")).unwrap_or_default();
+                    if let Some(stdin) = answers.lock().unwrap().as_mut() {
+                        let _ = stdin.write_all(format!("{colour}\x1b[?62;c").as_bytes()).and_then(|()| stdin.flush());
                     }
                 }
                 // Answer the clipboard question, and the end of each write, as kitty 0.49.2 does.
@@ -1115,4 +1133,258 @@ fn help_through_a_pipe_has_no_escape_codes_on_a_terminal_that_shows_images() {
     child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
     child.wait().unwrap();
     assert_eq!(String::from_utf8(out).unwrap().replace("\r\n", "\n"), help_text());
+}
+
+/// What a stream shows, once its escape sequences are taken out: control sequences, and the string
+/// ones (the operating system's and the graphics protocol's), which end with ST.
+fn visible(text: &str) -> String {
+    let (mut out, mut chars) = (String::new(), text.chars());
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                chars.by_ref().find(|c| ('@'..='~').contains(c));
+            }
+            Some(']' | '_') => {
+                chars.by_ref().find(|c| *c == '\x1b');
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether `text` sets a colour for a cell: only page rows do, not the status line.
+fn has_cells(text: &str) -> bool {
+    text.contains("\x1b[48;") || text.contains("\x1b[38;")
+}
+
+/// A terminal that doesn't answer the graphics query gets the pages all the same, in text cells and
+/// with nothing sent for images, and the status line says why. `q` puts the screen back.
+#[test]
+fn a_terminal_without_the_protocol_gets_text_cells_and_is_told() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("no-protocol", 3);
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &[], 80, 40);
+    view.wait_until("told", |t| t.contains("no graphics protocol: drawing text cells"));
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3") && has_cells(t));
+    let text = view.text();
+    assert_eq!(text.matches("\x1b_G").count(), 1, "only the question: {text:?}");
+    view.press("q");
+    assert!(view.finish().success());
+    assert!(view.text().ends_with("\x1b[?1049l") || view.text().contains("\x1b[?1049l"));
+}
+
+/// Asked for by name: no question about the protocol, no temporary files, no warning; and pages
+/// turn, each of its own rows.
+#[test]
+fn blocks_by_name_ask_nothing_about_images_and_page() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("blocks-pager", 3);
+    let dir = pdf.with_file_name("tmp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let terminal = Terminal { takes_files: true, tmpdir: Some(&dir), ..TEXT_ONLY };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "blocks"], 80, 40);
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3") && has_cells(t));
+    let before = view.text().len();
+    view.press("n");
+    view.wait_until("page 2 drawn", |t| drawn(&t[before..], "page 2/3") && has_cells(&t[before..]));
+    let text = view.text();
+    assert!(!text.contains("\x1b_G"), "{text:?}");
+    assert!(!text.contains("no graphics protocol"), "{text:?}");
+    assert!(view.taken.lock().unwrap().is_empty());
+    view.press("q");
+    assert!(view.finish().success());
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "a file in {}", dir.display());
+}
+
+/// A redraw that changes nothing on the page writes none of its rows: over SSH, or on a slow
+/// terminal, a screenful of colours for a key that moves nothing would be felt.
+#[test]
+fn a_redraw_writes_only_the_rows_that_change() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("rows", 3);
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks"], 80, 40);
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3") && has_cells(t));
+    let before = view.text().len();
+    // A number being typed: the status line says so, and the page is as it was.
+    view.press("2");
+    view.wait_until("the number said", |t| t[before..].contains("go to page 2"));
+    assert!(!has_cells(&view.text()[before..]), "{:?}", &view.text()[before..]);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// What else wrote to the rows, or asks for them all again: the keys' help, and `r`, which is how a
+/// screen something else garbled comes right. So `r` writes even a row that was blank before and
+/// stays blank: three pages to a row leave the window's top row empty.
+#[test]
+fn help_and_r_draw_every_row_again() {
+    if !pty_works() {
+        return;
+    }
+    const TOP_ROW: &str = "\x1b[1;1H\x1b[2K";
+    let pdf = fixture("rows-again", 3);
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks", "--zoom", "3"], 80, 40);
+    view.wait_until("the pages drawn", |t| drawn(t, "pages 1–3/3") && has_cells(t));
+    view.press("?");
+    view.wait_until("the help", |t| t.contains("Keys"));
+    let before = view.text().len();
+    view.press("?");
+    view.wait_until("the pages back", |t| has_cells(&t[before..]) && drawn(&t[before..], "pages 1–3/3"));
+    // Written again, and nothing changed since.
+    view.press("2");
+    let settled = view.text().len();
+    view.wait_until("the number said", |t| t[settled..].contains("go to page 2"));
+    assert!(!view.text()[settled..].contains(TOP_ROW), "{:?}", &view.text()[settled..]);
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("drawn again", |t| has_cells(&t[before..]) && t[before..].contains(TOP_ROW));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// Moving through a list only moves the highlight: the tiles' rows stay, the names' row is written.
+#[test]
+fn moving_through_a_list_of_text_tiles_writes_only_their_names() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("text-list", 1);
+    let other = pdf.with_file_name("other.pdf");
+    std::fs::write(&other, crate::fixtures::letter("Other", 1)).unwrap();
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &[other.to_str().unwrap(), "--protocol", "blocks"], 100, 40);
+    // The name chosen, centred under its tile, alone in its highlight as the status line's isn't.
+    let chosen = |text: &str, name: &str| text.split("\x1b[7m").skip(1).any(|on| on.split("\x1b[0m").next().is_some_and(|on| on.trim() == name));
+    view.wait_until("both tiles drawn", |t| chosen(t, "one.pdf") && t.contains("other.pdf") && has_cells(t) && drawn(t, "1/2"));
+    let before = view.text().len();
+    view.press("l");
+    view.wait_until("the next chosen", |t| chosen(&t[before..], "other.pdf"));
+    assert!(!has_cells(&view.text()[before..]), "{:?}", &view.text()[before..]);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A picture whose top half is red and whose bottom half is blue.
+#[cfg(feature = "image")]
+fn two_colours(test: &str, width: u32, height: u32) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("two.png");
+    let rgba: Vec<u8> =
+        (0..height).flat_map(|y| (0..width).flat_map(move |_| if y < height / 2 { [255, 0, 0, 255] } else { [0, 0, 255, 255] })).collect();
+    image::save_buffer(&png, &rgba, width, height, image::ExtendedColorType::Rgba8).unwrap();
+    png
+}
+
+/// As wide as the window, a tall picture runs past the bottom: its rows of text scroll as an image's
+/// pixels do, its bottom half only showing further down.
+#[cfg(feature = "image")]
+#[test]
+fn a_page_taller_than_the_window_scrolls_its_rows() {
+    if !pty_works() {
+        return;
+    }
+    const RED: &str = "\x1b[48;5;196m";
+    const BLUE: &str = "\x1b[48;5;21m";
+    let png = two_colours("text-scroll", 40, 400);
+    let mut view = Session::start_on(TEXT_ONLY, &png, &["--pager", "--protocol", "blocks", "--zoom", "width"], 40, 12);
+    view.wait_until("the top drawn", |t| drawn(t, "page 1/1") && t.contains(RED));
+    assert!(!view.text().contains(BLUE), "the bottom half already: {:?}", view.text());
+    let before = view.text().len();
+    view.press("G");
+    view.press(" ".repeat(20).as_str());
+    view.wait_until("the bottom drawn", |t| t[before..].contains(BLUE));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A small picture, printed, is a column for each pixel across and as many rows as keep its shape in
+/// the 10 × 20 px cells assumed, whatever it would cover as an image; not one that keeps its size on
+/// screen, of which text cells would show next to nothing.
+#[cfg(feature = "image")]
+#[test]
+fn a_small_picture_gets_a_column_for_each_pixel() {
+    if !pty_works() {
+        return;
+    }
+    let png = picture("text-small", 20, 10);
+    let mut view = Session::start_on(TEXT_ONLY, &png, &["--protocol", "blocks"], 80, 24);
+    assert!(view.finish().success());
+    let shown = visible(&view.text());
+    let lines: Vec<&str> = shown.split("\r\n").filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 5, "{shown:?}");
+    assert!(lines.iter().all(|line| line.chars().count() == 20), "{shown:?}");
+}
+
+/// A cell's ink shows against the background, so a terminal is asked for it, and white is all ink on
+/// a dark one and none on a light one. Half-blocks don't depend on it, so aren't asked.
+#[test]
+fn ascii_inks_for_the_terminals_background() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("ground", 1);
+    let page = |background| {
+        let terminal = Terminal { background, ..TEXT_ONLY };
+        let mut view = Session::start_on(terminal, &pdf, &["--protocol", "ascii"], 80, 40);
+        assert!(view.finish().success());
+        view.text()
+    };
+    let ink = |text: &str| visible(text).matches('@').count();
+    assert!(ink(&page(Some("rgb:0000/0000/0000"))) > 500);
+    assert!(ink(&page(None)) > 500, "dark, when it doesn't say");
+    let light = page(Some("rgb:ffff/ffff/ffff"));
+    assert_eq!(ink(&light), 0, "{light:?}");
+    assert!(visible(&light).contains(':'), "the page's text in ink: {light:?}");
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks"], 80, 40);
+    assert!(view.finish().success());
+    assert!(!view.text().contains("\x1b]11;"), "{:?}", view.text());
+}
+
+/// `c` copies the page as it is, not as text cells show it.
+#[test]
+fn c_copies_the_page_itself_from_text_cells() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("text-copy", 3);
+    let terminal = Terminal { clipboard: Some(true), ..TEXT_ONLY };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "blocks"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
+    view.press("c");
+    view.wait_until("page 1 copied", |t| t.contains("copied page 1, 1224 × 1584 pixels"));
+    assert_eq!(png_size(&copied_png(&view.text(), 1)), (1224, 1584));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A terminal that takes no escape codes is sent none: no question, no pager, no colours; every page
+/// printed in characters alone, and it is told why.
+#[test]
+fn a_dumb_terminal_is_sent_no_escape_codes() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("dumb", 2);
+    let terminal = Terminal { term: Some("dumb"), ..PLAIN };
+    for args in [&[][..], &["--protocol", "ascii"], &["--protocol", "blocks"]] {
+        let mut view = Session::start_on(terminal, &pdf, args, 80, 24);
+        assert!(view.finish().success(), "{args:?}");
+        let text = view.text();
+        assert!(!text.contains('\x1b'), "{args:?}: {text:?}");
+        // The two pages' rows, and the warning when it wasn't asked for by name.
+        assert!(text.lines().count() > 20, "{args:?}: {text:?}");
+        assert_eq!(text.contains("drawing text cells instead"), args.is_empty(), "{args:?}: {text:?}");
+    }
 }

@@ -13,6 +13,14 @@ pub(crate) fn term_name_says_kitty(name: &str) -> bool {
     matches!(name.trim(), "xterm-kitty" | "xterm-ghostty")
 }
 
+/// A terminal name of one that takes no escape codes to speak of (`dumb`, such as Emacs' shell; a
+/// real VT; or none at all), which would show a question instead of answering it, and has no use
+/// for a pager's cursor moves. Inside tmux, `TERM` is tmux's, which takes them.
+pub(crate) fn term_name_says_plain(name: Option<&str>) -> bool {
+    let name = name.unwrap_or_default().trim();
+    name.is_empty() || name == "dumb" || name.starts_with("vt")
+}
+
 /// The query the protocol recommends: a 1×1 RGB image the terminal checks but doesn't keep
 /// (`a=q`, id 31), then a Primary Device Attributes request, which every terminal answers. A
 /// graphics reply before the attributes reply means the protocol is supported.
@@ -81,6 +89,54 @@ fn find_cell(bytes: &[u8]) -> Option<(u16, u16)> {
     None
 }
 
+/// Asks for the background colour (OSC 11, from xterm's control sequences), for what is drawn in
+/// ink ([`super::cells::Ground`]), then for the device attributes, which end the wait.
+pub(crate) const BACKGROUND_QUERY: &[u8] = b"\x1b]11;?\x1b\\\x1b[c";
+
+/// What the terminal has answered to [`BACKGROUND_QUERY`] so far.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackgroundReply {
+    /// Whether its background is light, from an `ESC ] 11 ; rgb:RRRR/GGGG/BBBB` before the device
+    /// attributes reply.
+    pub(crate) light: Option<bool>,
+    /// The device attributes reply came: nothing more is coming.
+    pub(crate) done: bool,
+}
+
+/// Read the replies to [`BACKGROUND_QUERY`] in `bytes`. Anything else in there is ignored.
+pub(crate) fn parse_background_reply(bytes: &[u8]) -> BackgroundReply {
+    let attributes = find_attributes(bytes);
+    let before = bytes.get(..attributes.unwrap_or(bytes.len())).unwrap_or_default();
+    BackgroundReply { light: find_light(before), done: attributes.is_some() }
+}
+
+/// Whether the first complete `ESC ] 11 ; rgb:R/G/B`, ended by ST or BEL, is a light colour. Each
+/// channel is one to four hex digits, as X11 writes colours, a fraction of all of them set.
+fn find_light(bytes: &[u8]) -> Option<bool> {
+    const START: &[u8] = b"\x1b]11;rgb:";
+    let mut from = 0;
+    while let Some(start) = find(bytes, START, from) {
+        let channels = start.saturating_add(START.len());
+        let rest = bytes.get(channels..).unwrap_or_default();
+        let end = rest.iter().position(|b| !(b.is_ascii_hexdigit() || *b == b'/'))?;
+        if matches!(rest.get(end..), Some([0x07, ..] | [0x1b, b'\\', ..])) {
+            let fraction = |channel: &[u8]| {
+                let digits = u32::try_from(channel.len()).ok().filter(|n| (1..=4).contains(n))?;
+                let value = u32::from_str_radix(std::str::from_utf8(channel).ok()?, 16).ok()?;
+                Some(f64::from(value) / f64::from((1u32 << (digits * 4)) - 1))
+            };
+            let mut channels = rest.get(..end).unwrap_or_default().split(|b| *b == b'/');
+            if let (Some(r), Some(g), Some(b), None) = (channels.next(), channels.next(), channels.next(), channels.next())
+                && let (Some(r), Some(g), Some(b)) = (fraction(r), fraction(g), fraction(b))
+            {
+                return Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5);
+            }
+        }
+        from = channels;
+    }
+    None
+}
+
 /// Where a complete graphics reply for id 31 (`ESC _G … i=31 … ESC \`) starts.
 fn find_graphics(bytes: &[u8]) -> Option<usize> {
     let mut from = 0;
@@ -133,6 +189,16 @@ mod tests {
         assert!(!env_says_kitty(Some("xterm-256color"), Some("Apple_Terminal"), false));
         assert!(!env_says_kitty(Some("tmux-256color"), Some("tmux"), false));
         assert!(!env_says_kitty(None, None, false));
+    }
+
+    #[test]
+    fn some_terminals_take_no_escape_codes() {
+        for plain in [None, Some(""), Some("dumb"), Some("vt100"), Some("vt220")] {
+            assert!(term_name_says_plain(plain), "{plain:?}");
+        }
+        for not in [Some("xterm"), Some("xterm-256color"), Some("screen"), Some("tmux-256color"), Some("linux"), Some("xterm-kitty")] {
+            assert!(!term_name_says_plain(not), "{not:?}");
+        }
     }
 
     #[test]
@@ -205,11 +271,54 @@ mod tests {
         assert_eq!(parse_cell_reply(&noisy), CellReply { cell: Some((14, 25)), done: true });
     }
 
+    #[test]
+    fn the_background_comes_before_the_attributes() {
+        let reply = |answer: &[u8]| parse_background_reply(&[answer, ATTRIBUTES].concat());
+        // As kitty and xterm write it, ended by ST or by BEL.
+        assert_eq!(reply(b"\x1b]11;rgb:0000/0000/0000\x1b\\"), BackgroundReply { light: Some(false), done: true });
+        assert_eq!(reply(b"\x1b]11;rgb:ffff/ffff/ffff\x07"), BackgroundReply { light: Some(true), done: true });
+        // Any number of digits, up to four; green counts most.
+        assert_eq!(reply(b"\x1b]11;rgb:f/f/f\x07").light, Some(true));
+        assert_eq!(reply(b"\x1b]11;rgb:ff/00/ff\x07").light, Some(false));
+        assert_eq!(reply(b"\x1b]11;rgb:00/ff/00\x07").light, Some(true));
+        // A terminal that doesn't know the question answers the attributes alone.
+        assert_eq!(parse_background_reply(ATTRIBUTES), BackgroundReply { light: None, done: true });
+        // An answer after the attributes is not this terminal answering the query.
+        let late = [ATTRIBUTES, b"\x1b]11;rgb:ffff/ffff/ffff\x07"].concat();
+        assert_eq!(parse_background_reply(&late), BackgroundReply { light: None, done: true });
+    }
+
+    #[test]
+    fn a_background_cut_off_waits_for_more() {
+        assert_eq!(parse_background_reply(b""), BackgroundReply::default());
+        assert_eq!(parse_background_reply(b"\x1b]11;rgb:ffff/ff"), BackgroundReply::default());
+        assert_eq!(parse_background_reply(b"\x1b]11;rgb:ffff/ffff/ffff\x1b"), BackgroundReply::default());
+    }
+
+    #[test]
+    fn a_background_that_makes_no_sense_is_no_answer() {
+        for odd in [
+            &b"\x1b]11;rgb:ff/ff\x07"[..],
+            b"\x1b]11;rgb:ff/ff/ff/ff\x07",
+            b"\x1b]11;rgb:fffff/ffff/ffff\x07",
+            b"\x1b]11;rgb:/ff/ff\x07",
+            b"\x1b]11;rgb:ff/ff/ffx\x07",
+            b"\x1b]11;?\x07",
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+        ] {
+            assert_eq!(parse_background_reply(&[odd, ATTRIBUTES].concat()).light, None, "{odd:?}");
+        }
+        // Keys typed while waiting, a stray ESC: ignored, the answer still found.
+        let noisy = [b"j\x1b".as_slice(), b"\x1b]11;rgb:zz/ff/ff\x07", b"\x1b]11;rgb:ffff/ffff/ffff\x07", b"q", ATTRIBUTES].concat();
+        assert_eq!(parse_background_reply(&noisy), BackgroundReply { light: Some(true), done: true });
+    }
+
     proptest::proptest! {
         #[test]
         fn any_bytes_parse(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
             let _ = parse_reply(&bytes);
             let _ = parse_cell_reply(&bytes);
+            let _ = parse_background_reply(&bytes);
         }
 
         #[test]

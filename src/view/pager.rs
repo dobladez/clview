@@ -39,8 +39,8 @@ use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
-    FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, chars, checked, cut, label,
-    left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
+    FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, cell_lines, chars, checked,
+    cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -185,6 +185,7 @@ pub(super) fn run(
         files: None,
         stalled_files: None,
         placed_at: None,
+        on_glass: Vec::new(),
         copier: clip::Copier::new(terminal.local, terminal.effort, terminal.output.wrap()),
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
@@ -885,7 +886,8 @@ struct View {
     size: WindowSize,
 }
 
-/// A page rendered for the window and sent to the terminal under an image id of its own.
+/// A page rendered for the window and sent to the terminal under an image id of its own; or drawn
+/// as text, which stays here until it goes on screen.
 struct Sent {
     view: View,
     id: u32,
@@ -896,12 +898,29 @@ struct Sent {
     height: u32,
     /// What the reader should know about it while it is on screen (content skipped).
     warning: Option<String>,
+    /// Its text, a line for each row of cells, when pages are drawn as text.
+    text: Vec<Vec<u8>>,
 }
 
 impl Sent {
-    /// What it takes up in the terminal: its pixels, four bytes each.
+    /// What it takes up, in the terminal: its pixels, four bytes each; or here: its text.
     fn bytes(&self) -> u64 {
-        u64::from(self.width).saturating_mul(u64::from(self.height)).saturating_mul(4)
+        match self.text.is_empty() {
+            true => u64::from(self.width).saturating_mul(u64::from(self.height)).saturating_mul(4),
+            false => text_bytes(&self.text),
+        }
+    }
+}
+
+/// The bytes of `text`.
+fn text_bytes(text: &[Vec<u8>]) -> u64 {
+    text.iter().map(|line| u64::try_from(line.len()).unwrap_or(u64::MAX)).fold(0, u64::saturating_add)
+}
+
+/// Take image `id` out of the terminal. Text leaves nothing there to take.
+fn delete(out: &mut Vec<u8>, id: u32, output: Output) {
+    if !matches!(output, Output::Text(_)) {
+        kitty::delete(out, id, output.wrap());
     }
 }
 
@@ -1002,6 +1021,9 @@ struct Pager<'a> {
     stalled_files: Option<Files>,
     /// When the last placements went out: their errors are answered.
     placed_at: Option<Instant>,
+    /// Pages drawn as text: what each row of the screen holds, so that a redraw writes only the
+    /// rows that change. Empty once something else may have written to them.
+    on_glass: Vec<Vec<u8>>,
     /// Copies to the clipboard (`c`), and what the terminal said of its clipboard.
     copier: clip::Copier,
 }
@@ -1020,13 +1042,15 @@ enum Payload {
     Png(Vec<u8>),
     /// Straight RGBA pixels in a temporary file.
     File(PathBuf),
+    /// A line of text for each row of cells, kept here until it goes on screen.
+    Text(Vec<Vec<u8>>),
 }
 
 impl Drop for Pager<'_> {
     fn drop(&mut self) {
         let mut out = Vec::new();
         for sent in &self.sent {
-            kitty::delete(&mut out, sent.id, self.output.wrap());
+            delete(&mut out, sent.id, self.output);
         }
         let _ = self.screen.tty.write_all(&out);
     }
@@ -1039,19 +1063,20 @@ impl Pager<'_> {
     fn draw(&mut self) -> Result<(), String> {
         let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
         let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(self.cell).unwrap_or(FALLBACK_CELL);
+        let cell = self.output.fitting(cell);
         // The last row is the status line.
         let area_rows = size.rows.saturating_sub(1).max(1);
         let (max_cols, max_rows) = self.output.limits(size.cols);
-        let wrap = self.output.wrap();
         let mut out = Vec::new();
         // Pages made for another window, or asked to be made again, go.
         if std::mem::take(&mut self.level.nav.rerender) || self.size != Some(size) {
             for sent in self.sent.drain(..) {
-                kitty::delete(&mut out, sent.id, wrap);
+                delete(&mut out, sent.id, self.output);
             }
             self.wanted.clear();
             self.failed.clear();
             self.placed.clear();
+            self.on_glass.clear();
             self.size = Some(size);
         }
         let grid = self.grid(Area { cols: max_cols, rows: area_rows, cell, max_rows });
@@ -1076,7 +1101,7 @@ impl Pager<'_> {
             }
             let next = match self.wanted.iter().position(|w| w.view == v) {
                 Some(at) => Ok(self.wanted.swap_remove(at)),
-                None => page_layout(&*source, v.page, v.fit, v.cols, v.rows, cell, max_rows).map(|layout| {
+                None => page_layout(&*source, v.page, v.fit, Area { cols: v.cols, rows: v.rows, cell, max_rows }, self.output).map(|layout| {
                     self.tag = self.tag.wrapping_add(1);
                     Wanted { view: v, layout, tag: self.tag }
                 }),
@@ -1258,9 +1283,8 @@ impl Pager<'_> {
             self.level.nav.message = Some(said);
         }
         let mut out = Vec::new();
-        let wrap = self.output.wrap();
         for sent in self.sent.iter().filter(|s| s.view.level == gone) {
-            kitty::delete(&mut out, sent.id, wrap);
+            delete(&mut out, sent.id, self.output);
         }
         let deleted: Vec<u32> = self.sent.iter().filter(|s| s.view.level == gone).map(|s| s.id).collect();
         self.sent.retain(|s| s.view.level != gone);
@@ -1416,6 +1440,7 @@ impl Pager<'_> {
             }
         }
         self.placed.clear();
+        self.on_glass.clear();
         let help = self.level.nav.help_lines();
         let keys = help.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
         let lines = std::iter::once(String::from("Keys")).chain(help.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
@@ -1433,11 +1458,19 @@ impl Pager<'_> {
     /// Each place on screen has a placement of its own, so a page given twice shows twice.
     fn place(&mut self, out: &mut Vec<u8>, size: WindowSize, area_rows: u16, grid: Grid) {
         let wrap = self.output.wrap();
-        // Erasing text never erases images (only clearing the whole screen does, by the
-        // protocol): placements are what show and move them.
-        for row in 1..=size.rows {
-            out.extend_from_slice(format!("\x1b[{row};1H\x1b[2K").as_bytes());
-        }
+        // Drawn as text, each row is written whole, below, and erased only as what replaces it
+        // comes: a terminal may paint between the two, and that shows as tearing, not a blank.
+        let mut text_rows = match self.output {
+            Output::Text(_) => vec![Vec::new(); usize::from(size.rows)],
+            Output::Direct | Output::Tmux(_) => {
+                // Erasing text never erases images (only clearing the whole screen does, by the
+                // protocol): placements are what show and move them.
+                for row in 1..=size.rows {
+                    out.extend_from_slice(format!("\x1b[{row};1H\x1b[2K").as_bytes());
+                }
+                Vec::new()
+            }
+        };
         let per_row = grid.per_row.max(1);
         let (across, down) = (grid.cols.saturating_add(fit::GAP), grid.page_rows.saturating_add(grid.label).saturating_add(fit::ROW_GAP));
         let filled = u16::try_from(self.level.nav.pages.len()).map_or(per_row, |n| n.clamp(1, per_row));
@@ -1470,6 +1503,16 @@ impl Pager<'_> {
                         let _ = kitty::placeholder_row(out, s.id, colour, scroll.saturating_add(row), s.cols);
                     }
                 }
+                Output::Text(_) => {
+                    for row in 0..visible {
+                        let at = top.saturating_add(row);
+                        let text = s.text.get(usize::from(scroll.saturating_add(row)));
+                        if let (Some(line), Some(text)) = (text_rows.get_mut(usize::from(at)), text) {
+                            cursor(line, at, left);
+                            line.extend_from_slice(text);
+                        }
+                    }
+                }
             }
             placed.push((s.id, placement));
         }
@@ -1480,10 +1523,22 @@ impl Pager<'_> {
         for (slot, view) in (0u16..).zip(labelled) {
             let Some((v, item)) = view.and_then(|v| Some((v, self.level.items.get(v.page)?))) else { continue };
             let row = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows);
-            cursor(out, row, left.saturating_add((slot % per_row).saturating_mul(across)));
+            let into = text_rows.get_mut(usize::from(row)).unwrap_or(&mut *out);
+            cursor(into, row, left.saturating_add((slot % per_row).saturating_mul(across)));
             let name = printable(&label(item.name(), grid.cols));
             let (on, off) = if chosen == Some(v.page) { ("\x1b[7m", "\x1b[0m") } else { ("", "") };
-            out.extend_from_slice(format!("{on}{name}{off}").as_bytes());
+            into.extend_from_slice(format!("{on}{name}{off}").as_bytes());
+        }
+        // The rows of text that aren't as they already are.
+        if matches!(self.output, Output::Text(_)) {
+            for (row, line) in (0u16..).zip(&text_rows) {
+                if self.on_glass.get(usize::from(row)) != Some(line) {
+                    cursor(out, row, 0);
+                    out.extend_from_slice(b"\x1b[2K");
+                    out.extend_from_slice(line);
+                }
+            }
+            self.on_glass = text_rows;
         }
         // The pages before leave the screen; their data stays in the terminal for later. Inside
         // tmux, erasing their placeholder cells already did it.
@@ -1526,25 +1581,35 @@ impl Pager<'_> {
             on_screen |= self.on_screen.contains(&Some(wanted.view));
             let id = self.new_id();
             let (width, height) = (page.width, page.height);
-            match checked(&page).and_then(|warning| Ok((warning, self.payload(id, page)?))) {
+            match checked(&page).and_then(|warning| Ok((warning, self.payload(id, page, &wanted.layout)?))) {
                 Ok((warning, Some(payload))) => {
                     let mut out = Vec::new();
-                    let bytes = u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4);
+                    let bytes = match &payload {
+                        Payload::Text(text) => text_bytes(text),
+                        Payload::Png(_) | Payload::File(_) => u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4),
+                    };
                     for gone in make_room(&mut self.sent, bytes, self.budget, self.kept, &self.on_screen) {
-                        kitty::delete(&mut out, gone, wrap);
+                        delete(&mut out, gone, self.output);
                         self.placed.retain(|(placed, _)| *placed != gone);
                     }
                     let (cols, rows) = (wanted.layout.cols, wanted.layout.rows);
-                    match &payload {
-                        Payload::Png(png) => kitty::transmit(&mut out, id, png, wrap),
-                        Payload::File(path) => kitty::transmit_file(&mut out, id, path, width, height, wrap),
-                    }
+                    let text = match payload {
+                        Payload::Png(png) => {
+                            kitty::transmit(&mut out, id, &png, wrap);
+                            Vec::new()
+                        }
+                        Payload::File(path) => {
+                            kitty::transmit_file(&mut out, id, &path, width, height, wrap);
+                            Vec::new()
+                        }
+                        Payload::Text(text) => text,
+                    };
                     if let Output::Tmux(_) = self.output {
                         kitty::place_virtual(&mut out, id, cols, rows, wrap);
                     }
                     self.wrote(1);
                     self.tty.write_all(&out)?;
-                    self.sent.push(Sent { view: wanted.view, id, cols, rows, width, height, warning });
+                    self.sent.push(Sent { view: wanted.view, id, cols, rows, width, height, warning, text });
                 }
                 // The files' thread kept the page: the next draw asks for it again.
                 Ok((_, None)) => on_screen = true,
@@ -1563,9 +1628,13 @@ impl Pager<'_> {
     }
 
     /// `page`'s pixels ready to send as image `id`: in a temporary file when the terminal takes
-    /// them, otherwise as a PNG. A file that can't be written ends the files, and says why.
-    /// `None` when the files' thread stopped answering with the page.
-    fn payload(&mut self, id: u32, page: Frame) -> Result<Option<Payload>, String> {
+    /// them, otherwise as a PNG; or as text, in the cells `layout` gives it. A file that can't be
+    /// written ends the files, and says why. `None` when the files' thread stopped answering with
+    /// the page.
+    fn payload(&mut self, id: u32, page: Frame, layout: &Layout) -> Result<Option<Payload>, String> {
+        if let Output::Text(style) = self.output {
+            return cell_lines(&page, layout, style).map(|text| Some(Payload::Text(text)));
+        }
         let now = Instant::now();
         let mut page = page;
         if let Some(files) = self.files.as_mut()
@@ -1599,7 +1668,7 @@ impl Pager<'_> {
         // The terminal may have taken one after all, late: none is left behind in it.
         let mut out = Vec::new();
         for id in &lost {
-            kitty::delete(&mut out, *id, self.output.wrap());
+            delete(&mut out, *id, self.output);
         }
         self.wrote(0);
         self.tty.write_all(&out)?;
@@ -2205,7 +2274,7 @@ mod tests {
     /// Page `page` sent as image `id`, `mb` megabytes of pixels, with `warning`.
     fn sent(page: usize, id: u32, mb: u32, warning: Option<&str>) -> Sent {
         let view = View { level: 0, page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE };
-        Sent { view, id, cols: 50, rows: 40, width: 1024, height: mb * 256, warning: warning.map(String::from) }
+        Sent { view, id, cols: 50, rows: 40, width: 1024, height: mb * 256, warning: warning.map(String::from), text: Vec::new() }
     }
 
     #[test]
@@ -2255,7 +2324,7 @@ mod tests {
     #[test]
     fn source_rows_follow_the_scroll() {
         let view = View { level: 0, page: 0, fit: Fit::Width, cols: 50, rows: 40, size: FALLBACK_SIZE };
-        let shown = Sent { view, id: 1, cols: 50, rows: 100, width: 1000, height: 2000, warning: None };
+        let shown = Sent { view, id: 1, cols: 50, rows: 100, width: 1000, height: 2000, warning: None, text: Vec::new() };
         assert_eq!(source_rows(&shown, 0, 30), Rect { x: 0, y: 0, w: 1000, h: 600 });
         assert_eq!(source_rows(&shown, 70, 30), Rect { x: 0, y: 1400, w: 1000, h: 600 });
         // Never past the bottom, whatever it is asked.

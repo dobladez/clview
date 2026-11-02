@@ -65,6 +65,11 @@ fn fixture(test: &str, pages: usize) -> PathBuf {
     pdf
 }
 
+/// What a private server mustn't take from the environment the tests run in, as whatever starts it
+/// hands its environment on to its panes: a tmux the tests run in, and what says which colours text
+/// cells are drawn in.
+const NOT_INHERITED: [&str; 4] = ["TMUX", "TMUX_PANE", "COLORTERM", "NO_COLOR"];
+
 /// A private tmux server, and the script(1) processes its clients run under; all go at the end,
 /// the server's socket too (tmux leaves it behind when killed). It starts with `config`.
 struct Server {
@@ -83,7 +88,12 @@ impl Server {
 
     /// A tmux command, outside any tmux the tests run in: its output when it succeeds.
     fn run(&self, args: &[&str]) -> Option<Vec<u8>> {
-        let out = Command::new("tmux").arg("-L").arg(&self.socket).args(args).env_remove("TMUX").env_remove("TMUX_PANE").output().ok()?;
+        let mut command = Command::new("tmux");
+        command.arg("-L").arg(&self.socket).args(args);
+        for name in NOT_INHERITED {
+            command.env_remove(name);
+        }
+        let out = command.output().ok()?;
         out.status.success().then_some(out.stdout)
     }
 
@@ -105,7 +115,10 @@ impl Server {
         // terminfo database; kitty's own entry isn't.
         let line = format!("stty rows 58 cols 200 && exec tmux -L {} -f '{}' {line}", self.socket, self.config.display());
         let mut client = script(&line);
-        client.env_remove("TMUX").env_remove("TMUX_PANE").env("TERM", "xterm-256color");
+        for name in NOT_INHERITED {
+            client.env_remove(name);
+        }
+        client.env("TERM", "xterm-256color");
         if let Some(terminfo) = &self.kitty_terminfo {
             client.env("TERM", "xterm-kitty").env("TERMINFO", terminfo);
         }
@@ -558,4 +571,59 @@ fn inside_tmux_help_shows_the_icon_beside_its_first_lines_and_keeps_one_image() 
     assert_eq!(ids_of(&second, "t"), [id], "a second image in the terminal");
     assert_eq!(ids_of(&second, "d"), [0u32; 0]);
     assert_eq!(recorded(&server), "", "the icon needs no record: it replaces itself");
+}
+
+/// A terminal not known to show images, inside tmux, gets text cells and is told why: tmux keeps
+/// them as it keeps any text, nothing goes through passthrough, and there is nothing to record.
+#[test]
+fn inside_tmux_a_terminal_without_the_protocol_gets_text_cells_the_pane_keeps() {
+    let Some(Shell { server, pane, output, pdf }) = shell("text") else { return };
+    let err = pdf.with_file_name("err");
+    let from = output.lock().unwrap().len();
+    in_pane(&server, &pane, &format!("'{BIN}' '{}' 2>'{}'", pdf.display(), err.display()), &pdf.with_file_name("done"));
+    let said = std::fs::read_to_string(&err).unwrap();
+    assert!(said.contains("not known to show images") && said.contains("drawing text cells instead"), "{said}");
+    let capture = String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-e", "-t", &pane])).into_owned();
+    assert!(capture.contains("\x1b[48;") || capture.contains("\x1b[38;"), "{capture:?}");
+    assert!(!String::from_utf8_lossy(&output.lock().unwrap()[from..]).contains("\x1bPtmux;"));
+    assert_eq!(recorded(&server), "");
+}
+
+/// A terminal known to show images, in a pane that doesn't pass them, stops rather than falling back
+/// to text cells: one command gets the images.
+#[test]
+fn inside_tmux_a_pane_without_passthrough_stops_rather_than_drawing_text() {
+    let Some(Shell { server, pane, pdf, .. }) = shell_on("text-off", true) else { return };
+    server.tmux(&["set-option", "-p", "-t", &pane, "allow-passthrough", "off"]);
+    let err = pdf.with_file_name("err");
+    in_pane(&server, &pane, &format!("clear; '{BIN}' '{}' 2>'{}'", pdf.display(), err.display()), &pdf.with_file_name("done"));
+    let said = std::fs::read_to_string(&err).unwrap();
+    assert!(said.contains("allow-passthrough"), "{said}");
+    let capture = String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-e", "-t", &pane])).into_owned();
+    assert!(!capture.contains("\x1b[48;"), "{capture:?}");
+}
+
+/// The pager's text cells are the pane's, however tmux shows it: drawn and turned with no passthrough
+/// and nothing asked of tmux about what reached the terminal.
+#[test]
+fn inside_tmux_the_pager_draws_text_cells_in_the_pane() {
+    let Some(Shell { server, pane, output, pdf }) = shell("text-pager") else { return };
+    std::fs::write(&pdf, crate::fixtures::letter("Two", 2)).unwrap();
+    let from = output.lock().unwrap().len();
+    let capture = || String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-e", "-t", &pane])).into_owned();
+    let until = |what: &str, done: &dyn Fn(&str) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done(&capture()) {
+            assert!(Instant::now() < deadline, "{what} never happened: {:?}", capture());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol blocks --zoom 1", pdf.display()), "Enter"]);
+    until("page 1", &|c| c.contains("page 1/2") && c.contains("\x1b[48;"));
+    server.tmux(&["send-keys", "-t", &pane, "n"]);
+    until("page 2", &|c| c.contains("page 2/2") && c.contains("\x1b[48;"));
+    server.tmux(&["send-keys", "-t", &pane, "q"]);
+    until("the shell back", &|c| !c.contains("page 2/2"));
+    assert!(!String::from_utf8_lossy(&output.lock().unwrap()[from..]).contains("\x1bPtmux;"));
+    assert_eq!(recorded(&server), "");
 }

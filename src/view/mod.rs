@@ -1,6 +1,8 @@
 //! Pages drawn straight into the terminal through the kitty graphics protocol (kitty, Ghostty,
-//! WezTerm and others), from a [`Source`]. Usage and behaviour: `docs/usage.md`.
+//! WezTerm and others), or in text cells where there is none, from a [`Source`]. Usage and
+//! behaviour: `docs/usage.md`.
 
+mod cells;
 mod clip;
 mod detect;
 mod encode;
@@ -19,6 +21,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use cells::{Colours, Glyphs, Ground, Style};
 use encode::PngEffort;
 
 use crate::CliError;
@@ -41,13 +44,18 @@ const OPTIONS: &[OptionSpec] = &[
         value: Some("auto|fast|small"),
         help: "fast PNGs or small ones (auto: small over SSH, else fast)",
     },
-    OptionSpec { name: "--protocol", short: None, value: Some("auto|kitty"), help: "kitty: send the images without asking the terminal first" },
+    OptionSpec {
+        name: "--protocol",
+        short: None,
+        value: Some("auto|kitty|blocks|ascii"),
+        help: "kitty: don't ask the terminal first; blocks or ascii: text cells",
+    },
 ];
 
 /// What `--help` says before the options.
 const ABOUT: &str = "\
 clv shows the pages of files in your terminal. It uses the kitty graphics protocol.
-  * Terminals: kitty, Ghostty and WezTerm. Also in tmux.
+  * Terminals: kitty, Ghostty and WezTerm. Also in tmux. Others get a preview in text cells.
   * Connections: on your computer, or through SSH.
   * Systems: macOS, Linux and FreeBSD.
 
@@ -63,17 +71,22 @@ const FALLBACK_SIZE: WindowSize = WindowSize { cols: 80, rows: 24, xpixel: 0, yp
 /// milliseconds, so this only matters for one that never does.
 const QUERY_TIMEOUT: Duration = Duration::from_millis(500);
 
-const NOT_A_TERMINAL: &str = "stdout is not a terminal (--protocol kitty sends the escape codes anyway)";
+const NOT_A_TERMINAL: &str = "stdout is not a terminal (--protocol kitty sends the escape codes anyway; blocks or ascii write text)";
 const UNSUPPORTED: &str = "this terminal doesn't show images through the kitty graphics protocol (kitty, Ghostty and WezTerm do)";
+/// What is done about it, after why, and how not to be told again.
+const TEXT_INSTEAD: &str = "drawing text cells instead (--protocol blocks asks for them, without this warning)";
+/// As much as fits on the pager's status line, in an 80-column window.
+const TEXT_INSTEAD_SHORT: &str = "no graphics protocol: drawing text cells";
 
 /// While the pager owns the screen, panic messages aren't printed over it (see [`run`]).
 static QUIET: AtomicBool = AtomicBool::new(false);
 
-/// Which graphics protocol: found out by asking, or taken on trust.
+/// What to draw with: the graphics protocol, found out by asking or taken on trust, or text cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Protocol {
     Auto,
     Kitty,
+    Text(Glyphs),
 }
 
 impl Protocol {
@@ -81,7 +94,9 @@ impl Protocol {
         match s {
             "auto" => Ok(Self::Auto),
             "kitty" => Ok(Self::Kitty),
-            other => Err(format!("--protocol {other:?}: use auto or kitty")),
+            "blocks" => Ok(Self::Text(Glyphs::Blocks)),
+            "ascii" => Ok(Self::Text(Glyphs::Ascii)),
+            other => Err(format!("--protocol {other:?}: use auto, kitty, blocks or ascii")),
         }
     }
 }
@@ -93,6 +108,8 @@ enum Output {
     Direct,
     /// Through tmux's passthrough, and drawn by placeholder cells whose colour names the image.
     Tmux(IdColor),
+    /// No images: characters and their colours, which any terminal shows and tmux keeps.
+    Text(Style),
 }
 
 impl Output {
@@ -100,15 +117,35 @@ impl Output {
     /// at most [`kitty::MAX_CELLS`] of either.
     fn limits(self, cols: u16) -> (u16, u16) {
         match self {
-            Self::Direct => (cols, u16::MAX),
+            Self::Direct | Self::Text(_) => (cols, u16::MAX),
             Self::Tmux(_) => (cols.min(kitty::MAX_CELLS), kitty::MAX_CELLS),
         }
     }
 
+    /// How an escape code reaches the terminal. Text cells don't ask tmux to pass anything on, so
+    /// what else goes out with them (asking about the clipboard) takes no passthrough either.
     fn wrap(self) -> Wrap {
         match self {
-            Self::Direct => Wrap::None,
+            Self::Direct | Self::Text(_) => Wrap::None,
             Self::Tmux(_) => Wrap::Tmux,
+        }
+    }
+
+    /// The cell pages are fitted with, on a terminal whose cells are `cell`: text cells render
+    /// only what they can show ([`cells::sampling_cell`]).
+    fn fitting(self, cell: Cell) -> Cell {
+        match self {
+            Self::Direct | Self::Tmux(_) => cell,
+            Self::Text(_) => cells::sampling_cell(cell),
+        }
+    }
+
+    /// What `layout` renders at for a page of `size`. A picture's own filter is smooth, and its
+    /// pixels are all there is, so only a page with no natural size oversamples for text cells.
+    fn rendering(self, layout: Layout, size: Size) -> Layout {
+        match self {
+            Self::Text(_) if !size.natural => fit::oversampled(layout, size, cells::OVERSAMPLE),
+            _ => layout,
         }
     }
 
@@ -116,7 +153,7 @@ impl Output {
     /// can name inside it.
     fn ids(self) -> IdColor {
         match self {
-            Self::Direct => IdColor::Rgb,
+            Self::Direct | Self::Text(_) => IdColor::Rgb,
             Self::Tmux(colour) => colour,
         }
     }
@@ -379,8 +416,10 @@ fn view(args: &[String]) -> Result<(), CliError> {
     // Said first, what was left out may be why there are fewer than asked for.
     let shown = shown.pick(given.as_deref())?;
     let tty = Tty::open().ok();
-    let paging = paging.pages(shown.pages.pages.len(), std::io::stdout().is_terminal() && tty.is_some());
     let inside_tmux = tmux::inside();
+    // A terminal that takes no escape codes gets no pager, unless told it takes images all the same.
+    let plain = protocol != Protocol::Kitty && !inside_tmux && term_says_plain();
+    let paging = paging.pages(shown.pages.pages.len(), std::io::stdout().is_terminal() && tty.is_some() && !plain);
     // Paging, the terminal stays in raw mode from the first question on (outside tmux, which is
     // asked instead), never back in canonical mode between a question and the pager. On FreeBSD a
     // read begun in canonical mode stays a line read after raw mode returns: the reader thread,
@@ -389,12 +428,19 @@ fn view(args: &[String]) -> Result<(), CliError> {
         (Some(tty), true) => Some(tty.raw()?),
         _ => None,
     };
-    let terminal = if inside_tmux {
-        tmux_terminal(protocol)?
-    } else {
-        check_terminal(protocol, tty.as_ref())?;
-        let cell = tty.as_ref().and_then(ask_cell);
-        Terminal { output: Output::Direct, cell, effort: PngEffort::Fast, files: false, local: true }
+    // What the terminal can't show is said once, not stopped at: `instead` says why it is text.
+    let text = |glyphs| text_terminal(glyphs, tty.as_ref(), inside_tmux);
+    let (terminal, instead) = match protocol {
+        Protocol::Text(glyphs) => (text(glyphs), None),
+        _ if inside_tmux => match tmux_terminal(protocol)? {
+            Ok(terminal) => (terminal, None),
+            Err(why) => (text(Glyphs::Blocks), Some(why)),
+        },
+        _ if check_terminal(protocol, tty.as_ref())? => {
+            let cell = tty.as_ref().and_then(ask_cell);
+            (Terminal { output: Output::Direct, cell, effort: PngEffort::Fast, files: false, local: true }, None)
+        }
+        _ => (text(Glyphs::Blocks), Some(UNSUPPORTED.to_owned())),
     };
     let remote = over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten());
     let (effort, files) = compression.choose(|| remote);
@@ -402,7 +448,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     // Inside tmux, what this run prints stays in the terminal after it, for tmux's placeholder
     // cells (`sweep.rs`): so it is recorded, and first the pictures no pane holds any more go.
     // Only when the output is this pane's, not a file `cat` shows later.
-    let tidies = inside_tmux && std::io::stdout().is_terminal();
+    let tidies = inside_tmux && std::io::stdout().is_terminal() && !matches!(terminal.output, Output::Text(_));
     if tidies {
         let mut out = Vec::new();
         sweep::forget(&mut out);
@@ -413,10 +459,14 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let said = left_out_note(&left_out);
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
+        let said = said.or_else(|| instead.is_some().then(|| TEXT_INSTEAD_SHORT.to_owned()));
         let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener)?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());
+    }
+    if let Some(why) = instead {
+        note(&format!("warning: {why}; {TEXT_INSTEAD}"));
     }
     let size = tty.as_ref().and_then(Tty::size).unwrap_or(FALLBACK_SIZE);
     let names: Option<Vec<String>> = shown.is_list().then(|| shown.items.iter().map(|item| item.name().to_owned()).collect());
@@ -820,21 +870,63 @@ fn takes_all(backends: &[&dyn Backend], options: &Parsed<'_>, files: &str) -> Re
     Err(format!("{name} doesn't apply to {files}, which {opens} {verb}"))
 }
 
-/// Make sure stdout is a terminal that shows kitty images, unless `--protocol kitty` says to
-/// trust it. The environment answers for kitty and Ghostty; any other terminal is asked.
-fn check_terminal(protocol: Protocol, tty: Option<&Tty>) -> Result<(), CliError> {
+/// Whether stdout is a terminal that shows kitty images, or `--protocol kitty` says to trust it.
+/// The environment answers for kitty and Ghostty; any other terminal is asked. Output that goes
+/// elsewhere has no terminal to go by, and stops.
+fn check_terminal(protocol: Protocol, tty: Option<&Tty>) -> Result<bool, CliError> {
     if protocol == Protocol::Kitty {
-        return Ok(());
+        return Ok(true);
     }
     if !std::io::stdout().is_terminal() {
         return Err(NOT_A_TERMINAL.into());
     }
     let var = |name| std::env::var(name).ok();
     if detect::env_says_kitty(var("TERM").as_deref(), var("TERM_PROGRAM").as_deref(), std::env::var_os("KITTY_WINDOW_ID").is_some()) {
-        return Ok(());
+        return Ok(true);
     }
-    let tty = tty.ok_or(UNSUPPORTED)?;
-    if ask_terminal(tty)? { Ok(()) } else { Err(UNSUPPORTED.into()) }
+    match tty {
+        // One that takes no escape codes would show the question: it has its answer.
+        Some(tty) if !term_says_plain() => Ok(ask_terminal(tty)?),
+        _ => Ok(false),
+    }
+}
+
+/// Whether `TERM` says the terminal takes no escape codes ([`detect::term_name_says_plain`]).
+fn term_says_plain() -> bool {
+    detect::term_name_says_plain(std::env::var("TERM").ok().as_deref())
+}
+
+/// The terminal, for pages drawn in text cells with `glyphs`. Only their shape needs the cell's
+/// size, which is asked for as for images; its background is asked for when what is drawn depends
+/// on it. Output to a file or a pipe has no terminal to ask: ASCII is plain text there, for logs
+/// and mail and whatever else reads it, and blocks keep the colours the environment says, as they
+/// are only of use shown later on a terminal.
+fn text_terminal(glyphs: Glyphs, tty: Option<&Tty>, inside_tmux: bool) -> Terminal {
+    let to_terminal = std::io::stdout().is_terminal();
+    // One that takes no escape codes would show the questions, and it doesn't answer them.
+    let tty = tty.filter(|_| inside_tmux || !term_says_plain());
+    let client = inside_tmux.then(tmux::client).and_then(Result::ok);
+    let var = |name| std::env::var(name).ok();
+    let colours = match (glyphs, to_terminal) {
+        (Glyphs::Ascii, false) => Colours::None,
+        _ => {
+            let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+            Colours::from_env(no_color, var("COLORTERM").as_deref(), var("TERM").as_deref(), client.as_ref().is_some_and(|c| c.rgb))
+        }
+    };
+    let mut style = Style { glyphs, colours, ground: Ground::Dark };
+    if style.inks() && to_terminal {
+        style.ground = tty.and_then(ask_light).map_or(Ground::Dark, |light| if light { Ground::Light } else { Ground::Dark });
+    }
+    let told = client.and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
+    let cell = if inside_tmux { told } else { tty.and_then(ask_cell) };
+    Terminal { output: Output::Text(style), cell, effort: PngEffort::Fast, files: false, local: true }
+}
+
+/// Whether the terminal's background is light, if it says.
+fn ask_light(tty: &Tty) -> Option<bool> {
+    let reply = ask(tty, detect::BACKGROUND_QUERY, |reply| detect::parse_background_reply(reply).done).ok()?;
+    detect::parse_background_reply(&reply).light
 }
 
 /// Send the support query and read the answer.
@@ -878,15 +970,20 @@ fn ask(tty: &Tty, query: &[u8], done: impl Fn(&[u8]) -> bool) -> Result<Vec<u8>,
 }
 
 /// Inside tmux: ask tmux which terminal its client runs in (`TERM` names tmux itself), and
-/// whether the pane passes escape codes through. When it doesn't, `clv` stops, and leaves the
-/// setting as it is ([`tmux::passthrough`]).
-fn tmux_terminal(protocol: Protocol) -> Result<Terminal, CliError> {
+/// whether the pane passes escape codes through. A terminal not known to show images is the inner
+/// `Err`, saying why, for text cells to go instead. When the pane doesn't pass them, `clv` stops,
+/// though text cells would show: one command gets images, and it leaves the setting as it is
+/// ([`tmux::passthrough`]).
+fn tmux_terminal(protocol: Protocol) -> Result<Result<Terminal, String>, CliError> {
     let to_terminal = std::io::stdout().is_terminal();
     if protocol == Protocol::Auto && !to_terminal {
         return Err(NOT_A_TERMINAL.into());
     }
     let client = tmux::client();
-    let colour = tmux_colour(protocol, &client)?;
+    let colour = match tmux_colour(protocol, &client) {
+        Ok(colour) => colour,
+        Err(why) => return Ok(Err(why)),
+    };
     match tmux::passthrough() {
         Ok(true) => {}
         // Nothing would show. Written elsewhere, the output may yet be shown where it is on.
@@ -895,7 +992,7 @@ fn tmux_terminal(protocol: Protocol) -> Result<Terminal, CliError> {
         Err(e) => note(&format!("warning: couldn't check tmux's allow-passthrough ({e}); images may not show")),
     }
     let cell = client.ok().and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    Ok(Terminal { output: Output::Tmux(colour), cell, effort: PngEffort::Fast, files: false, local: true })
+    Ok(Ok(Terminal { output: Output::Tmux(colour), cell, effort: PngEffort::Fast, files: false, local: true }))
 }
 
 /// The colour placeholder cells name images with, once the terminal outside tmux is known to
@@ -953,6 +1050,7 @@ fn print_pages(
 ) -> Result<(), CliError> {
     let mut renderer = source.renderer()?;
     let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(terminal.cell).unwrap_or(fit::FALLBACK_CELL);
+    let cell = terminal.output.fitting(cell);
     // One row stays free for the shell prompt after the last page.
     let rows = size.rows.saturating_sub(1).max(1);
     let (cols, max_rows) = terminal.output.limits(size.cols);
@@ -973,15 +1071,16 @@ fn print_pages(
         let grid = grid_at(zoom, start);
         let mut printed = Vec::new();
         for (slot, &page) in (0u16..).zip(chunk) {
-            let drawn = page_layout(source, page, grid.fit, grid.cols, grid.page_rows, cell, max_rows)
-                .and_then(|layout| encode(&renderer.render(request(page, &layout, 0)), terminal.effort).map(|image| (layout, image)));
+            let place = Area { cols: grid.cols, rows: grid.page_rows, cell, max_rows };
+            let drawn = page_layout(source, page, grid.fit, place, terminal.output)
+                .and_then(|layout| encode(&renderer.render(request(page, &layout, 0)), &layout, terminal).map(|image| (layout, image)));
             match drawn {
                 Ok((layout, image)) => {
                     if let Some(warning) = &image.warning {
                         note(&format!("warning: {warning}"));
                     }
                     let index = u64::try_from(start.saturating_add(usize::from(slot))).unwrap_or(u64::MAX);
-                    printed.push(Printed { slot, index, layout, png: image.png });
+                    printed.push(Printed { slot, index, layout, png: image.png, text: image.text });
                 }
                 Err(e) => failed.push(e),
             }
@@ -1011,12 +1110,13 @@ fn print_pages(
 }
 
 /// A page of a printed row: its place in the row, its place in the list (which picks its image
-/// id inside tmux), the cells it covers, and its image.
+/// id inside tmux), the cells it covers, and its image or its text.
 struct Printed {
     slot: u16,
     index: u64,
     layout: Layout,
     png: Vec<u8>,
+    text: Vec<Vec<u8>>,
 }
 
 /// Draw a row of printed pages, at least one, at the cursor where `grid` puts them, and leave the
@@ -1032,6 +1132,8 @@ fn print_row(out: &mut Vec<u8>, row: &[Printed], grid: Grid, output: Output, fir
         let across = p.slot.saturating_mul(grid.cols.saturating_add(fit::GAP)).saturating_add(grid.cols.saturating_sub(p.layout.cols) / 2);
         if alone { (0, 0) } else { (across, grid.page_rows.saturating_sub(p.layout.rows) / 2) }
     };
+    // A line of text for each row of cells, where the cells are text to tmux or to the terminal.
+    let lines = if alone { row.first().map_or(0, |p| p.layout.rows) } else { grid.page_rows };
     match output {
         Output::Direct if alone => {
             for p in row {
@@ -1060,22 +1162,39 @@ fn print_row(out: &mut Vec<u8>, row: &[Printed], grid: Grid, output: Output, fir
                 kitty::transmit(out, id(p), &p.png, Wrap::Tmux);
                 kitty::place_virtual(out, id(p), p.layout.cols, p.layout.rows, Wrap::Tmux);
             }
-            // A line of text for each row of cells: every page's placeholder cells in its place.
-            let lines = if alone { row.first().map_or(0, |p| p.layout.rows) } else { grid.page_rows };
-            for line in 0..lines {
-                let mut written = 0u16;
-                for p in row {
-                    let (x, y) = at(p);
-                    let Some(cells) = line.checked_sub(y).filter(|r| *r < p.layout.rows) else { continue };
-                    out.extend(std::iter::repeat_n(b' ', usize::from(x.saturating_sub(written))));
-                    // The layout keeps rows and columns within the placeholders' table.
-                    if kitty::placeholder_row(out, id(p), colour, cells, p.layout.cols) {
-                        written = x.max(written).saturating_add(p.layout.cols);
-                    }
-                }
-                out.push(b'\n');
+            // The layout keeps rows and columns within the placeholders' table.
+            lines_of_cells(out, row, lines, at, |out, p, cells| kitty::placeholder_row(out, id(p), colour, cells, p.layout.cols));
+        }
+        Output::Text(_) => lines_of_cells(out, row, lines, at, |out, p, cells| match p.text.get(usize::from(cells)) {
+            Some(text) => {
+                out.extend_from_slice(text);
+                true
+            }
+            None => false,
+        }),
+    }
+}
+
+/// `lines` lines of text, each with every page of `row` that reaches it in its place (`at`, across
+/// and down), as `write` writes its row of cells, saying whether it did.
+fn lines_of_cells(
+    out: &mut Vec<u8>,
+    row: &[Printed],
+    lines: u16,
+    at: impl Fn(&Printed) -> (u16, u16),
+    write: impl Fn(&mut Vec<u8>, &Printed, u16) -> bool,
+) {
+    for line in 0..lines {
+        let mut written = 0u16;
+        for p in row {
+            let (x, y) = at(p);
+            let Some(cells) = line.checked_sub(y).filter(|r| *r < p.layout.rows) else { continue };
+            out.extend(std::iter::repeat_n(b' ', usize::from(x.saturating_sub(written))));
+            if write(out, p, cells) {
+                written = x.max(written).saturating_add(p.layout.cols);
             }
         }
+        out.push(b'\n');
     }
 }
 
@@ -1122,7 +1241,9 @@ fn fresh_index() -> u64 {
 
 /// A page rendered for the terminal, as a PNG.
 struct Image {
+    /// What the terminal is sent: empty when the page is drawn as `text`.
     png: Vec<u8>,
+    text: Vec<Vec<u8>>,
     /// Something the reader should know about the page, such as content left out.
     warning: Option<String>,
 }
@@ -1132,12 +1253,13 @@ fn page_size(source: &dyn Source, page: usize) -> Option<Size> {
     source.size(page).map(|(w, h)| Size { w, h, natural: source.natural(page) })
 }
 
-/// Where `source`'s `page` goes in `cols` × `rows` cells, never more than `max_rows` tall. Errors
-/// name the page.
-fn page_layout(source: &dyn Source, page: usize, fit: Fit, cols: u16, rows: u16, cell: Cell, max_rows: u16) -> Result<Layout, String> {
+/// Where `source`'s `page` goes in `place`, and what it renders at for `output`. Errors name the
+/// page.
+fn page_layout(source: &dyn Source, page: usize, fit: Fit, place: Area, output: Output) -> Result<Layout, String> {
     let number = page.saturating_add(1);
     let size = page_size(source, page).ok_or_else(|| format!("no page {number}"))?;
-    fit::layout(size, cols, rows, cell, fit, max_rows).map_err(|e| format!("page {number}: {e}"))
+    let layout = fit::layout(size, place.cols, place.rows, place.cell, fit, place.max_rows).map_err(|e| format!("page {number}: {e}"))?;
+    Ok(output.rendering(layout, size))
 }
 
 /// The render of `page` at `layout`'s scale, tagged so its result can be told from others.
@@ -1145,10 +1267,21 @@ fn request(page: usize, layout: &Layout, tag: u64) -> Request {
     Request { page, scale: layout.scale, tag }
 }
 
-/// A rendered page as a PNG, or why there is none. Errors name the page.
-fn encode(p: &Frame, effort: PngEffort) -> Result<Image, String> {
+/// A rendered page as this terminal is sent it, a PNG or text, or why there is none. Errors name
+/// the page.
+fn encode(p: &Frame, layout: &Layout, terminal: &Terminal) -> Result<Image, String> {
     let warning = checked(p)?;
-    Ok(Image { png: png(p, effort)?, warning })
+    match terminal.output {
+        Output::Text(style) => Ok(Image { png: Vec::new(), text: cell_lines(p, layout, style)?, warning }),
+        Output::Direct | Output::Tmux(_) => Ok(Image { png: png(p, terminal.effort)?, text: Vec::new(), warning }),
+    }
+}
+
+/// A rendered page's pixels as a line of text for each row of cells `layout` gives it. Errors name
+/// the page.
+fn cell_lines(p: &Frame, layout: &Layout, style: Style) -> Result<Vec<Vec<u8>>, String> {
+    let number = p.request.page.saturating_add(1);
+    cells::lines(p.width, p.height, &p.rgba, layout.cols, layout.rows, style).map_err(|e| format!("page {number}: {e}"))
 }
 
 /// Why a page failed to render, or what the reader should know about it, if anything, in the
@@ -1347,20 +1480,20 @@ mod tests {
         // Under their heading, right after the words about clv, which say nothing of the keys.
         assert!(help.contains(&format!("\n\n{ABOUT}\n\nGeneral Options:\n  --pages ")), "{help}");
         assert!(!ABOUT.contains("Enter") && !ABOUT.contains("?:"), "{ABOUT}");
-        // Aligned under the longest, `--compression auto|fast|small`.
+        // Aligned under the longest, `--protocol auto|kitty|blocks|ascii`.
         for option in OPTIONS {
-            assert!(help.contains(&format!("\n  {:29}  {}\n", option.shown(), option.help)), "{help}");
+            assert!(help.contains(&format!("\n  {:34}  {}\n", option.shown(), option.help)), "{help}");
         }
         // A backend's options further in, under what it shows, their help in the same column, and
         // nothing for one that takes none.
-        assert!(help.contains(&format!("\n\n   for locked PDFs:\n     {:26}  a password\n\n", "--password PW")), "{help}");
+        assert!(help.contains(&format!("\n\n   for locked PDFs:\n     {:31}  a password\n\n", "--password PW")), "{help}");
         assert!(!help.contains("for PDFs:") && !help.contains("for images:") && !help.contains("no options"), "{help}");
         // An option that needs it widens the column, its indent counted.
-        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option", short: None, value: Some("VALUE"), help: "long" };
+        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option-indeed", short: None, value: Some("VALUE"), help: "long" };
         const TAKES_IT: Fake = Fake { name: "long", shows: "long things", magic: b"%PDF-", options: &[LONG], holds: false };
         let wide = usage(&[&TAKES_IT]);
-        assert!(wide.contains("\n     --a-rather-long-option VALUE  long\n"), "{wide}");
-        assert!(wide.contains(&format!("\n  {:31}  {}\n", OPTIONS[0].shown(), OPTIONS[0].help)), "{wide}");
+        assert!(wide.contains("\n     --a-rather-long-option-indeed VALUE  long\n"), "{wide}");
+        assert!(wide.contains(&format!("\n  {:38}  {}\n", OPTIONS[0].shown(), OPTIONS[0].help)), "{wide}");
         // Last, the formats, under what their backend shows and the libraries it credits: those of
         // backends that show the same together, each once, with the names a file of it goes by,
         // wrapped at 100 columns; no credit for a backend that credits none, and no row for one
@@ -1383,7 +1516,7 @@ mod tests {
         wrapped(&mut out, "Long:", &["x".repeat(HELP_WIDTH), "y".into()]);
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
-        assert!(nothing.contains(" first\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
+        assert!(nothing.contains(" text cells\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
         // Last, the manual and where to report issues, whatever the build has.
         for help in [&help, &nothing] {
             let end = "\n\nManual: https://github.com/dobladez/clview/blob/main/docs/usage.md\nReport issues and ideas to: https://github.com/dobladez/clview\n";
@@ -1463,7 +1596,9 @@ mod tests {
     fn protocol_names() {
         assert_eq!(Protocol::parse("auto"), Ok(Protocol::Auto));
         assert_eq!(Protocol::parse("kitty"), Ok(Protocol::Kitty));
-        assert!(Protocol::parse("sixel").is_err_and(|e| e.contains("auto or kitty")));
+        assert_eq!(Protocol::parse("blocks"), Ok(Protocol::Text(Glyphs::Blocks)));
+        assert_eq!(Protocol::parse("ascii"), Ok(Protocol::Text(Glyphs::Ascii)));
+        assert!(Protocol::parse("sixel").is_err_and(|e| e.contains("auto, kitty, blocks or ascii")));
     }
 
     /// Page 3 rendered with `warnings`, or failed with `error`.
@@ -1516,16 +1651,25 @@ mod tests {
         }
         let source = Sizes(vec![(612.0, 792.0), (792.0, 612.0), (100.0, 100.0)]);
         let cell = Cell { w: 10.0, h: 20.0 };
-        let portrait = page_layout(&source, 0, Fit::Page, 80, 24, cell, 24).unwrap();
-        let landscape = page_layout(&source, 1, Fit::Page, 80, 24, cell, 24).unwrap();
+        let window = Area { cols: 80, rows: 24, cell, max_rows: 24 };
+        let portrait = page_layout(&source, 0, Fit::Page, window, Output::Direct).unwrap();
+        let landscape = page_layout(&source, 1, Fit::Page, window, Output::Direct).unwrap();
         // An 800 × 480 pixel window: both fill its height, the landscape page wider, each scaled to
         // 480 pixels over its own height.
         assert_eq!((portrait.rows, landscape.rows), (24, 24));
         assert!(portrait.cols < landscape.cols, "{portrait:?} {landscape:?}");
         assert!((portrait.scale - 480.0 / 792.0).abs() < 1e-4 && (landscape.scale - 480.0 / 612.0).abs() < 1e-4, "{portrait:?} {landscape:?}");
         // A picture, the size it is.
-        let picture = page_layout(&source, 2, Fit::Page, 80, 24, cell, 24).unwrap();
+        let picture = page_layout(&source, 2, Fit::Page, window, Output::Direct).unwrap();
         assert_eq!((picture.scale, picture.cols, picture.rows), (1.0, 10, 5));
-        assert_eq!(page_layout(&source, 3, Fit::Page, 80, 24, cell, 24).map(|_| ()), Err("no page 4".into()));
+        assert_eq!(page_layout(&source, 3, Fit::Page, window, Output::Direct).map(|_| ()), Err("no page 4".into()));
+        // As text, the same cells: a page renders four times over, and a picture what it has.
+        let text = Output::Text(Style { glyphs: Glyphs::Blocks, colours: Colours::Rgb, ground: Ground::Dark });
+        let sampled = Area { cell: text.fitting(cell), ..window };
+        let page = page_layout(&source, 0, Fit::Page, sampled, text).unwrap();
+        let once = fit::layout(page_size(&source, 0).unwrap(), 80, 24, sampled.cell, Fit::Page, 24).unwrap();
+        assert_eq!((page.scale, page.cols, page.rows), (once.scale * cells::OVERSAMPLE, once.cols, once.rows));
+        let small = page_layout(&source, 2, Fit::Page, sampled, text).unwrap();
+        assert_eq!(small, fit::layout(page_size(&source, 2).unwrap(), 80, 24, sampled.cell, Fit::Page, 24).unwrap());
     }
 }

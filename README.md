@@ -2,7 +2,7 @@
 
 `clv` shows PDFs, images, SVG drawings, Word documents and spreadsheets in the terminal, through the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
-WezTerm, inside tmux too, on macOS, Linux and FreeBSD.
+WezTerm, inside tmux too, on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
 
 https://github.com/user-attachments/assets/bee14c3d-781f-49f4-8f0f-df44e3300eb3
 
@@ -20,6 +20,7 @@ clv -r ~/Photos            # its subdirectories' files too, as tiles of their ow
 clv comics.zip             # an archive: its files and directories, as a directory's
 clv photos.tar.xz          # a tar too, plain or compressed, read through once with progress
 clv paper.pdf.gz           # a file compressed alone: the PDF it unpacks to
+clv --protocol ascii photo.jpg > photo.txt  # as plain text, for a log or a mail
 ```
 
 More than a page opens a pager: one page at a time, two side by side when the window is wide
@@ -29,7 +30,7 @@ choose one, Enter opens it (a file to its pages, a folder to its own list), and 
 copies the page, or the tile, to the clipboard as a picture. `?` lists the keys.
 
 **Everything else is in the manual, [`docs/usage.md`](docs/usage.md)**: the options, the keys, lists
-and archives, what each format shows, tmux, SSH and the limits.
+and archives, what each format shows, text cells, tmux, SSH and the limits.
 
 ## What it shows
 

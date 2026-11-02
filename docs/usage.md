@@ -14,9 +14,10 @@ fits.
 Printed pages are drawn in rows one under another and stay in the terminal's scrollback, the same
 as text that `cat` prints.
 
-Output to a file or a pipe takes `--protocol kitty` (without it, `clv` stops with an error). Then
-`clv` doesn't page: it writes every page's escape codes one after another, and `cat` shows them
-later in a terminal that speaks the protocol.
+Output to a file or a pipe takes `--protocol kitty`, `blocks` or `ascii` (without one, `clv` stops
+with an error). Then `clv` doesn't page: with `kitty` it writes every page's escape codes one after
+another, and `cat` shows them later in a terminal that speaks the protocol; with the others it
+writes [text cells](#text-cells).
 
 A file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
@@ -40,8 +41,10 @@ clv --password PW secret.pdf
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
-| `--protocol auto` | check that the terminal can show images first (the default) |
+| `--protocol auto` | images if the terminal can show them, otherwise [text cells](#text-cells) and a warning (the default) |
 | `--protocol kitty` | skip the check and send the escape codes anyway, even to a file or a pipe |
+| `--protocol blocks` | [text cells](#text-cells) of half-blocks and colours, even where images would show |
+| `--protocol ascii` | [text cells](#text-cells) of ASCII characters |
 
 Printed without the pager, pages follow the zoom too, a row of them under another: `--zoom 3`
 prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
@@ -398,11 +401,50 @@ works on macOS, Linux and FreeBSD, and [inside tmux](#inside-tmux).
 
 `--protocol auto` trusts the environment for kitty (`TERM=xterm-kitty` or `KITTY_WINDOW_ID`) and
 Ghostty (`TERM=xterm-ghostty` or `TERM_PROGRAM=ghostty`). Any other terminal is asked with the
-query the protocol recommends, and has half a second to answer. A terminal that doesn't speak the
-protocol gets an error that says so, and nothing is drawn.
+query the protocol recommends, and has half a second to answer, unless `TERM` says it takes no
+escape codes at all. A terminal that doesn't speak the protocol gets [text cells](#text-cells) instead, and is told so: with a warning on stderr when
+printing, and on the status line in the pager. `--protocol blocks` asks for them without the
+warning.
 
 Windows isn't supported yet: Windows Terminal speaks sixel, not the kitty protocol. Sixel may come
 later, which would also bring the terminals that speak only sixel.
+
+## Text cells
+
+Without images, a page is drawn as text: any terminal shows it, tmux keeps it as it keeps other
+text, and it can go to a file. It is a preview: a cell holds very little, so pictures and drawings
+show what they are, and a document shows its layout, but its body text won't be readable, even as
+wide as the window.
+
+| `--protocol` | Each cell | Holds | Needs |
+|---|---|---|---|
+| `blocks` | `▀`, its foreground above and its background below | two colours | a terminal with colours, and a font with the block characters |
+| `ascii` | one of ` .:-=+*#%@`, more ink for more brightness | one sample, in its colour | nothing |
+
+What else to know:
+
+- **Colours** go by the environment. `NO_COLOR`, set and not empty, means none. `COLORTERM=truecolor`
+  or `24bit` means 24-bit, as does tmux saying its terminal takes them, or a `TERM` that says so
+  (`xterm-kitty`, `xterm-ghostty`, one ending in `-direct`). `TERM` unset, `dumb` or `vt…` means none,
+  and anything else xterm's 256.
+- **Without colours**, `blocks` shades each cell, with `░▒▓█`, one sample to a cell, and `ascii` is
+  those characters and nothing else.
+- **To a file or a pipe**, `ascii` is plain text, whatever the environment says: nothing but ASCII
+  characters and line ends. `blocks` keeps its colours, as it has to be shown on a terminal anyway.
+- **The background.** What is transparent shows the terminal's background. Characters show against
+  it too, so `ascii`, and `blocks` without colours, ask the terminal what it is and draw light on a
+  dark one and dark on a light one. A terminal that doesn't say, or output to a file or a pipe, is
+  taken to be dark, and a light one would then show a negative.
+- **Their size.** A page fits the window as it would as an image, and in the terminal's cell's
+  shape. A picture's natural size is about a column for each of its pixels across, as long as the
+  window takes it, so a small one is larger on screen than it would be as an image.
+- **`c`** copies the page as it is, not as the cells show it.
+- **`--compression`** only applies to what `c` copies.
+- **A terminal that takes no escape codes**, as `TERM` says (`dumb`, `vt…`, or none), isn't asked
+  anything and doesn't get the pager: every page is printed, in characters alone unless `COLORTERM`
+  says otherwise.
+- **Double-width blocks.** Some terminals set up for Chinese, Japanese or Korean draw `▀` two columns
+  wide, which breaks up the page; `--protocol ascii` doesn't have that problem.
 
 ## Size and sharpness
 
@@ -448,8 +490,10 @@ either way.
   switching windows and panes. Placeholders number at most 297 rows and columns, so inside tmux a
   page is never drawn larger than that.
 - Inside tmux, `TERM` describes tmux, not the terminal, so `clv` asks tmux which terminal it runs
-  in. `xterm-kitty` and `xterm-ghostty` are trusted. For anything else, `clv` refuses unless
-  `--protocol kitty` is given.
+  in. `xterm-kitty` and `xterm-ghostty` are trusted. Anything else gets [text cells](#text-cells)
+  and a warning, unless `--protocol kitty` is given. With `allow-passthrough` off, a trusted terminal
+  doesn't get them: `clv` stops, as above, since one command gets the images.
+- [Text cells](#text-cells) need none of this, or what follows: they are text in the pane.
 - Pages turned while the pane is hidden (another window in front, or the window zoomed on another
   pane) arrive when it shows again. A terminal that attaches to the session later gets the pages
   too.
@@ -483,6 +527,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | A compressed tar, read through | 32 GiB | the listing stops, with a warning |
 | A file compressed alone, unpacked | 512 MiB | refused |
 | An image's pixels | 512 MiB (about 134 megapixels) | refused when it is opened |
+| A page in [text cells](#text-cells) | 4,194,304 cells | the page fails with why |
 | An SVG file, or what an svgz unpacks to | 64 MiB | refused |
 | An SVG's content, what it repeats counted: its entities expanded, each `use` copied, a marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to for each shape | 128 MiB, a million elements, 1024 levels deep, or stylesheet rules times elements past 50 million | refused before it is parsed |
 | An SVG's text, its `use`s counted | 200,000 characters, or about three seconds to lay out (a `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s) | that text is left out, with a warning, and the rest drawn |

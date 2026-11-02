@@ -31,7 +31,7 @@ pub(crate) fn view(pdf: &Path, args: &[&str]) -> Output {
 pub(crate) fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(BIN);
     command.arg(pdf).args(args).env("TERM", "dumb");
-    for name in ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
+    for name in ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "COLORTERM", "NO_COLOR"] {
         command.env_remove(name);
     }
     command.envs(env.iter().copied()).output().unwrap()
@@ -178,7 +178,7 @@ fn bad_arguments_say_what_is_allowed() {
     for (args, expected) in [
         (&["--zoom", "sideways"][..], "use auto, width or a number of pages per row (1–8)"),
         (&["--zoom", "9"], "use auto, width or a number of pages per row (1–8)"),
-        (&["--protocol", "sixel"], "use auto or kitty"),
+        (&["--protocol", "sixel"], "use auto, kitty, blocks or ascii"),
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),
         (&["--protocol", "kitty", "--pages"], "--pages needs a value"),
@@ -624,4 +624,79 @@ fn errors_name_the_command() {
     assert_eq!(text(&out.stderr), "clv: missing file\n");
     let out = Command::new(BIN).arg("--frobnicate").output().unwrap();
     assert_eq!(text(&out.stderr), "clv: unknown option --frobnicate\n");
+}
+
+/// ASCII through a pipe is plain text, for whatever reads it: no escape codes and nothing past
+/// ASCII, whatever the environment says of colours, the same width all the way down, and a white
+/// page all ink, as nothing says the background is light.
+#[test]
+fn ascii_through_a_pipe_is_plain_text() {
+    let pdf = fixture("ascii", 1);
+    let out = view_with(&pdf, &["--protocol", "ascii"], &[("COLORTERM", "truecolor"), ("TERM", "xterm-256color")]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert!(out.stdout.is_ascii() && !out.stdout.contains(&0x1b), "{}", text(&out.stdout));
+    let page = text(&out.stdout);
+    let lines: Vec<&str> = page.lines().collect();
+    assert!(lines.len() > 1 && lines.iter().all(|line| line.len() == lines[0].len()), "{page}");
+    assert!(page.matches('@').count() > page.len() / 2, "{page}");
+    // The text on the page is there, as less ink.
+    assert!(lines.iter().any(|line| line.contains(|c| !matches!(c, '@' | ' '))), "{page}");
+}
+
+/// Blocks keep the colours the environment says, for a terminal that shows them later, and shade
+/// where it says there are none. No graphics either way, and the colours go back at each line's end.
+#[test]
+fn blocks_take_their_colours_from_the_environment() {
+    let pdf = fixture("blocks", 1);
+    const WHITE_RGB: &str = "\x1b[48;2;255;255;255m";
+    const WHITE_256: &str = "\x1b[48;5;231m";
+    let page = |env: &[(&str, &str)]| {
+        let out = view_with(&pdf, &["--protocol", "blocks"], env);
+        assert!(out.status.success() && out.stderr.is_empty(), "{env:?}: {}", text(&out.stderr));
+        let page = text(&out.stdout);
+        assert!(!page.contains("\x1b_G"), "{env:?}: {page}");
+        page
+    };
+    let rgb = page(&[("COLORTERM", "truecolor")]);
+    assert!(rgb.contains(WHITE_RGB) && !rgb.contains(WHITE_256), "{rgb}");
+    assert!(rgb.lines().all(|line| line.ends_with("\x1b[0m")), "{rgb}");
+    let palette = page(&[("TERM", "xterm-256color")]);
+    assert!(palette.contains(WHITE_256) && !palette.contains(WHITE_RGB), "{palette}");
+    for none in [&[("NO_COLOR", "1"), ("COLORTERM", "truecolor")][..], &[]] {
+        let shaded = page(none);
+        assert!(!shaded.contains('\x1b') && shaded.contains('█'), "{none:?}: {shaded}");
+    }
+    // An empty NO_COLOR isn't one, as its convention has it.
+    assert!(page(&[("NO_COLOR", ""), ("COLORTERM", "truecolor")]).contains(WHITE_RGB));
+}
+
+/// Pages side by side are text side by side: each line both pages' cells, with the gap between.
+#[test]
+fn text_cells_print_in_rows_as_zoomed() {
+    let pdf = fixture("ascii-rows", 3);
+    let out = view(&pdf, &["--protocol", "ascii", "--zoom", "2"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let page = text(&out.stdout);
+    let lines: Vec<&str> = page.lines().collect();
+    // A page's top is blank, so all ink: two runs of it on a row of two.
+    assert_eq!(lines[0].split_whitespace().count(), 2, "{page}");
+    // The second row's one page, under the first of the row above.
+    let rows: Vec<&[&str]> = lines.split(|line| line.is_empty()).collect();
+    assert_eq!(rows.len(), 2, "{page}");
+    assert_eq!(rows[1][0].split_whitespace().count(), 1, "{page}");
+    assert_eq!(rows[1][0].len(), rows[0][0].find(char::is_whitespace).unwrap(), "{page}");
+}
+
+/// A list's tiles are text too, each row with its names under it.
+#[test]
+fn a_lists_tiles_print_as_text_with_their_names() {
+    let (a, b) = (tmp("ascii-list", "first.pdf"), tmp("ascii-list", "second.pdf"));
+    std::fs::write(&a, crate::fixtures::letter("A", 1)).unwrap();
+    std::fs::write(&b, crate::fixtures::letter("B", 1)).unwrap();
+    let out = view(&a, &[b.to_str().unwrap(), "--protocol", "ascii"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let page = text(&out.stdout);
+    let names = page.lines().last().unwrap();
+    assert!(names.contains("first.pdf") && names.contains("second.pdf"), "{page}");
+    assert!(page.lines().next().unwrap().split_whitespace().count() == 2, "{page}");
 }

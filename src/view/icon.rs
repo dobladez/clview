@@ -125,6 +125,8 @@ fn written(text: &str, place: Place, output: Output) -> Option<Vec<u8>> {
                 cursor_by(&mut out, 1, 'B');
             }
         }
+        // Text cells are for terminals without images, which get no icon.
+        Output::Text(_) => return None,
     }
     out.push(b'\r');
     out.extend_from_slice(rest.as_bytes());

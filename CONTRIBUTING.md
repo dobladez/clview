@@ -104,15 +104,17 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 - **`tests/it/`** is one test binary, its modules sharing the fixtures. Its tests show PDFs, so it
   needs the `pdf` feature. The generic tests write their PDFs by hand (`tests/it/fixtures.rs`), so
   any PDF backend reads them.
-- **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`.
+- **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`, and text cells, which a
+  pipe takes as they are.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
-  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. `--help`'s
-  icon is tested here as well, since it depends on stdout being a terminal.
+  size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. It plays one
+  without the protocol as well, for text cells. `--help`'s icon is tested here too, since it depends
+  on stdout being a terminal.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
-  pages printed from a shell, deleted once no pane holds them, and `--help`'s icon, on a client
-  whose terminfo entry says it is kitty.
+  pages printed from a shell, deleted once no pane holds them, `--help`'s icon, on a client whose
+  terminfo entry says it is kitty, and text cells in a pane.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
   XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/resvg.rs`**: the SVG backend through the viewer: what it draws, the limits a drawing is
@@ -136,7 +138,8 @@ its README.
 
 Output is images in a terminal, so look at the result in kitty, Ghostty or WezTerm. Without a
 terminal, `--protocol kitty` writes the escape codes to stdout (the integration tests read them
-back), and `script(1)` gives a test a pseudo-terminal (`tests/it/view_pager.rs`).
+back), `--protocol ascii` writes text you can read as it is, and `script(1)` gives a test a
+pseudo-terminal (`tests/it/view_pager.rs`).
 
 To try a real kitty without touching your own, run `kitty --start-as=hidden --config NONE` with
 `TMUX` and `TMUX_PANE` unset (an inherited `TMUX` makes `clv` think it is inside your tmux: it

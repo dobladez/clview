@@ -21,7 +21,8 @@ A file, named on the command line, found in a directory or read from an archive,
 2. **The viewer asks for pages.** The pager or the printer asks the source for a page at a scale, and
    gets a `Frame` of pixels back. It knows what it shows only through the traits in `src/source.rs`.
 3. **The pages reach the terminal**, as PNGs in the stream or raw pixels in a temporary file,
-   directly or through tmux, and the pager keeps track of what the terminal still holds.
+   directly or through tmux, and the pager keeps track of what the terminal still holds; or, without
+   the graphics protocol, as [text cells](#text-cells-cellsrs).
 
 | Where | What it does |
 |---|---|
@@ -42,11 +43,12 @@ A file, named on the command line, found in a directory or read from an archive,
 | File | What it does |
 |---|---|
 | `mod.rs` | Arguments, the checks before drawing, printing pages without the pager (`--no-pager`, a single page), in rows as zoomed, choosing PNG compression and whether to try temporary files |
-| `detect.rs` | Whether the terminal speaks the protocol, from the environment and its answer to a query, and the terminal's answer about its cell size. Pure |
+| `detect.rs` | Whether the terminal speaks the protocol, from the environment and its answer to a query, and the terminal's answers about its cell size and its background. Pure |
 | `tty.rs` | `/dev/tty`: size, raw mode, and reads with a timeout through a reader thread (on macOS, `poll(2)` on `/dev/tty` answers `POLLNVAL` at once) |
 | `keys.rs` | Bytes from the terminal into keys, and the terminal's answers to graphics commands and about its clipboard. Pure, total over any bytes |
 | `fit.rs` | The render scale and the cells a page covers, the zoom, and how many pages share the window. Pure arithmetic |
 | `kitty.rs` | The protocol's escape codes, and the Unicode placeholders used inside tmux. Pure |
+| `cells.rs` | Rendered pixels into lines of text cells, for a terminal without the protocol ([Text cells](#text-cells-cellsrs)). Pure |
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
@@ -289,6 +291,47 @@ Inside tmux, tmux keeps its own copy of the screen and knows nothing of images:
 - **The terminal.** `TERM` names tmux, so `clv` asks tmux for its client's terminal
   (`#{client_termname}`) and cell size (`#{client_cell_width}`, `#{client_cell_height}`).
 
+## Text cells (`cells.rs`)
+
+`Output::Text` is the third way a page reaches the screen, beside `Direct` and `Tmux`: `--protocol
+blocks` or `ascii` ask for it, and `--protocol auto` falls back to blocks when `check_terminal` or
+`tmux_terminal` find the terminal doesn't speak the protocol
+([ADR-0011](adr/0011-text-cells-where-the-terminal-has-no-graphics-protocol.md)). Nothing goes out
+but SGR colours and characters `cells.rs` writes, so nothing a document shapes reaches the terminal.
+
+- **What a render is asked for.** `Output::fitting` gives `fit.rs` a cell of the terminal's cell's
+  shape (clamped to between 1:1 and 1:4) with one pixel for each sample (`cells::sampling_cell`):
+  1 × 2 for a 10 × 20 cell. So the arithmetic in `fit.rs` holds as it is, a tile is still square, and
+  a picture whose natural size fits gets a column for each pixel across. A page with no natural size
+  then renders four times over in each direction (`cells::OVERSAMPLE`, `Output::rendering`), within
+  `MAX_PIXELS` and `MAX_AREA`, since a backend's picture is point-sampled at so small a scale.
+- **From pixels to cells** (`cells::lines`). Each sample is the box of pixels it covers, averaged,
+  which is any frame into any cells. A box under half opaque is no colour, as the terminal's
+  background is unknown. A half-block cell writes `▀` for its two colours, a space when they are the
+  same, and `▄` when only its bottom has one. A cell of ink picks a character by coverage: over a
+  dark background, its brightest channel, in the colour at that brightness; over a light one, one
+  less its darkest channel, in what is left of the colour. Mixed by how much of the cell the
+  character covers, each comes back to about the colour it started from. Colours are written only
+  when they change, and every line ends with them put back.
+- **The background** matters only to ink: `ascii`, and `blocks` without colours (`Style::inks`).
+  `ask_light` sends OSC 11 from xterm's control sequences, followed by the device attributes query
+  as the cell size's question is, and goes by its answer's luminance. Half-blocks colour the whole
+  cell, so they ask nothing.
+- **Printing** (`print_row`) writes a line of text for each row of cells, as tmux's placeholder rows
+  are written (`lines_of_cells`).
+- **The pager.** `Sent` keeps a page's text (`Sent::text`) rather than an id the terminal knows, and
+  `make_room` counts its bytes. `place` writes it where it would place an image, and `scroll` is a
+  row into it. Nothing is kept in the terminal, so temporary files, `tmux::Watch`, `sweep.rs` and
+  passthrough don't come into it: `Output::wrap` is `Wrap::None` even inside tmux, for the clipboard's
+  question too, as the pane may not pass it.
+- **Redraws write what changed.** A key usually changes little, and a full window of colours is
+  hundreds of kilobytes. `place` builds each row in `text_rows`, and writes only those that differ
+  from `Pager::on_glass`, which is cleared whenever something else may have written to them (the
+  keys' help, `r`, a new window size). A row is erased in the same breath as it is written, not all
+  rows first: synchronized output hides that where a terminal has it, and elsewhere a terminal that
+  paints midway shows the screen tearing rather than going blank.
+- **Limits.** `cells::MAX_CELLS` (4 million) bounds a page's text; a cell takes 39 bytes at most.
+
 ## The icon in `--help` (`icon.rs`)
 
 The help has to work in any terminal and through any pipe, and the icon is a decoration, so it may
@@ -484,5 +527,6 @@ one Windows Terminal speaks (as do xterm, foot, WezTerm and others), so it is th
 `clv` to Windows and to more terminals. It would be a second output beside `kitty.rs` more than a
 change to it: sixel keeps no images in the terminal by id, and has no temporary files and no
 Unicode placeholders, so every page turn sends the page's pixels again, and pictures go through a
-palette (commonly 256 colours). On Windows, `tty.rs` would also need the console's own API for raw
+palette (commonly 256 colours). [Text cells](#text-cells-cellsrs) are the same shape in the pager: a
+page kept here and written whenever it goes on screen. On Windows, `tty.rs` would also need the console's own API for raw
 mode and the window size, through a crate, since the crate forbids `unsafe`.

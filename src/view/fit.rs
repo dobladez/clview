@@ -121,9 +121,7 @@ pub(crate) fn layout(size: Size, cols: u16, rows: u16, cell: Cell, fit: Fit, max
         Fit::Page => (area_w / page_w).min(area_h / page_h),
         Fit::Width => area_w / page_w,
     };
-    // In f64, where the area of any f32 page is finite.
-    let by_area = (MAX_AREA / (f64::from(page_w) * f64::from(page_h))).sqrt() as f32;
-    let scale = fitted.min(f32::from(max_rows) * cell.h / page_h).min(MAX_PIXELS / page_w).min(MAX_PIXELS / page_h).min(by_area);
+    let scale = fitted.min(f32::from(max_rows) * cell.h / page_h).min(largest_scale(page_w, page_h));
     if !positive(scale) {
         return Err("the page is too large or too small to show".into());
     }
@@ -137,6 +135,19 @@ pub(crate) fn layout(size: Size, cols: u16, rows: u16, cell: Cell, fit: Fit, max
     let image_cols = (page_w * scale / cell.w).ceil().clamp(1.0, f32::from(cols));
     let image_rows = (page_h * scale / cell.h).ceil().clamp(1.0, f32::from(row_limit));
     Ok(Layout { scale, cols: image_cols as u16, rows: image_rows as u16 })
+}
+
+/// The largest scale a page `page_w` × `page_h` renders at: within [`MAX_PIXELS`] and [`MAX_AREA`].
+fn largest_scale(page_w: f32, page_h: f32) -> f32 {
+    // In f64, where the area of any f32 page is finite.
+    let by_area = (MAX_AREA / (f64::from(page_w) * f64::from(page_h))).sqrt() as f32;
+    (MAX_PIXELS / page_w).min(MAX_PIXELS / page_h).min(by_area)
+}
+
+/// `layout`, a layout of a page of `size`, rendering `by` times as many pixels a side, as far as a
+/// render may go, in the same cells.
+pub(crate) fn oversampled(layout: Layout, size: Size, by: f32) -> Layout {
+    Layout { scale: (layout.scale * by).min(largest_scale(size.w, size.h)).max(layout.scale), ..layout }
 }
 
 /// The cells between two pages side by side.
@@ -298,6 +309,21 @@ mod tests {
         let l = layout(LETTER, 100, 30, CELL, Fit::Width, u16::MAX).unwrap();
         assert_eq!(l.scale, 1000.0 / 612.0);
         assert_eq!((l.cols, l.rows), (100, 65));
+    }
+
+    #[test]
+    fn oversampling_renders_more_in_the_same_cells_within_the_limits_of_a_render() {
+        let plain = layout(LETTER, 80, 24, Cell { w: 1.0, h: 2.0 }, Fit::Page, 24).unwrap();
+        let more = oversampled(plain, LETTER, 4.0);
+        assert_eq!((more.scale, more.cols, more.rows), (plain.scale * 4.0, plain.cols, plain.rows));
+        // A page as tall as a render goes gets no more pixels, and none fewer.
+        let tall = pts(100.0, 8192.0);
+        let wide = layout(tall, 8192, 24, Cell { w: 1.0, h: 2.0 }, Fit::Width, u16::MAX).unwrap();
+        assert_eq!(oversampled(wide, tall, 4.0).scale, wide.scale);
+        // Nor past the area of a render, however large the page.
+        let huge = pts(4000.0, 4000.0);
+        let most = oversampled(layout(huge, 1000, 1000, Cell { w: 1.0, h: 2.0 }, Fit::Page, 1000).unwrap(), huge, 8.0);
+        assert!(f64::from(most.scale * 4000.0).powi(2) <= MAX_AREA * 1.001, "{most:?}");
     }
 
     #[test]
