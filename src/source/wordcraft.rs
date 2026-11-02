@@ -19,9 +19,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
-use pulldown_cmark::{Event, Options, Parser};
+use pulldown_cmark::{BlockQuoteKind, Event, Options, Parser, Tag};
 use wordcraft_doc::para::{InlineObject, Wrap};
-use wordcraft_doc::{Block, StoryRef};
+use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
+use wordcraft_doc::{Block, Rgb, StoryRef, TextColor};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 use wordcraft_render::RenderOptions;
 
@@ -456,22 +457,83 @@ fn html(bytes: &[u8], pictures: &Pictures<'_>) -> Result<wordcraft_doc::Document
 
 /// `text`, Markdown, as HTML for wordcraft's importer to read
 /// ([ADR-0014](../../docs/adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)):
-/// GitHub's tables, strikethrough, task lists and footnotes, with what it would leave out written
-/// otherwise, a table's grid and a task's checkbox, and front matter (`---`) left out.
+/// GitHub's tables, strikethrough, task lists, footnotes and alerts, with what it would leave out
+/// written otherwise, a table's grid, a task's checkbox and what an alert is, and front matter (`---`)
+/// left out.
 fn markdown_as_html(text: &str) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_GFM
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
-    let events = Parser::new_ext(text, options).map(|event| match event {
-        Event::TaskListMarker(true) => Event::Text("☑ ".into()),
-        Event::TaskListMarker(false) => Event::Text("☐ ".into()),
-        other => other,
+    let mut alert = None;
+    let events = Parser::new_ext(text, options).flat_map(|event| {
+        // What an alert is goes on the line above its first paragraph's text, or else alone.
+        let (before, after) = match (alert.take(), &event) {
+            (Some(kind), Event::Start(Tag::Paragraph)) => (None, Some(Event::InlineHtml(format!("{}<br>", alert_label(kind)).into()))),
+            (Some(kind), _) => (Some(Event::Html(format!("<p>{}</p>", alert_label(kind)).into())), None),
+            (None, _) => (None, None),
+        };
+        if let Event::Start(Tag::BlockQuote(Some(kind))) = &event {
+            alert = Some(*kind);
+        }
+        let event = match event {
+            Event::TaskListMarker(true) => Event::Text("☑ ".into()),
+            Event::TaskListMarker(false) => Event::Text("☐ ".into()),
+            other => other,
+        };
+        [before, Some(event), after].into_iter().flatten()
     });
     let mut out = String::with_capacity(text.len());
     pulldown_cmark::html::push_html(&mut out, events);
-    out.replace("<table>", "<table border=\"1\">")
+    numbers_in_their_footnotes(&out.replace("<table>", "<table border=\"1\">"))
+}
+
+/// What an alert (`> [!NOTE]`) says it is, and its colour.
+fn alert(kind: BlockQuoteKind) -> (&'static str, Rgb) {
+    match kind {
+        BlockQuoteKind::Note => ("Note", LINK),
+        BlockQuoteKind::Tip => ("Tip", Rgb(0x1A, 0x7F, 0x37)),
+        BlockQuoteKind::Important => ("Important", Rgb(0x4F, 0x2D, 0x94)),
+        BlockQuoteKind::Warning => ("Warning", Rgb(0x9A, 0x67, 0x00)),
+        BlockQuoteKind::Caution => ("Caution", Rgb(0xA4, 0x0E, 0x26)),
+    }
+}
+
+/// What an alert is, in its colour, for the top of its quote.
+fn alert_label(kind: BlockQuoteKind) -> String {
+    let (name, Rgb(r, g, b)) = alert(kind);
+    format!("<strong style=\"color:#{r:02X}{g:02X}{b:02X}\">{name}</strong>")
+}
+
+/// `html` with each footnote's number in its first paragraph, in smaller text, rather than on a line of
+/// its own above it. What is written by hand to look like one, but isn't, stays as it is. Only what comes
+/// right after each number is looked at, so a file of them takes no longer than a file of anything.
+fn numbers_in_their_footnotes(html: &str) -> String {
+    const NUMBER: &str = "<sup class=\"footnote-definition-label\">";
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some((before, after)) = rest.split_once(NUMBER) {
+        out.push_str(before);
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        // ASCII digits, so that's a char boundary.
+        let (number, text) = after.split_at(digits);
+        match text.strip_prefix("</sup>\n<p>") {
+            Some(text) => {
+                out.push_str("<p style=\"font-size:9.5pt\"><sup>");
+                out.push_str(number);
+                out.push_str("</sup> ");
+                rest = text;
+            }
+            None => {
+                out.push_str(NUMBER);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The Markdown or HTML in `bytes`, unless it costs too much to read and lay out
@@ -491,10 +553,12 @@ fn marked_up(
     if bytes.iter().filter(|b| mark(b)).count() > MAX_MARKS {
         return Err(format!("the document has more than {MAX_MARKS} lines and marks"));
     }
-    let page = wordcraft_doc::SectionProps::default();
+    // US Letter, as nothing says otherwise. Less above and below than as printed, for more on a screen.
+    let page = wordcraft_doc::SectionProps { margin_top: 54.0, margin_bottom: 54.0, ..Default::default() };
     let fit = (page.text_width(), page.text_height());
     let mut document = wordcraft_formats::html::import_on(&as_html(bytes), &|source: &str| pictures.measured(source, fit), &page);
     fit_to_the_page(&mut document.body, fit.1);
+    styled(&mut document);
     let body = StoryRef::Body;
     let paragraphs = document.para_paths(body);
     let text = paragraphs.iter().filter_map(|path| document.para(body, path)).fold(0, |all: usize, para| all.saturating_add(para.text.len()));
@@ -502,6 +566,177 @@ fn marked_up(
         return Err(format!("the document has more than {} MiB of text", MAX_TEXT >> 20));
     }
     Ok(document)
+}
+
+/// The faces of a Markdown or HTML page's text and code, which come with wordcraft, so that a page
+/// looks the same on any machine.
+const TEXT_FACE: &str = "Source Sans 3";
+const CODE_FACE: &str = "JetBrains Mono";
+
+/// The size of its text, and of a code block's, at which 80 columns fit on a line of the block.
+const TEXT_SIZE: f32 = 11.0;
+const CODE_SIZE: f32 = 9.4;
+
+/// The room below a paragraph of text.
+const TEXT_AFTER: f32 = 9.0;
+
+/// The size of code among text, for the size of that text: a monospaced face looks the larger.
+const CODE_AMONG_TEXT: f32 = 0.88;
+
+/// Its colours, for white paper: wordcraft's dark page turns each into what suits dark paper.
+const INK: Rgb = Rgb(0x1F, 0x23, 0x28);
+const QUIET_INK: Rgb = Rgb(0x59, 0x63, 0x6E);
+const HAIRLINE: Rgb = Rgb(0xD0, 0xD7, 0xDE);
+const WASH: Rgb = Rgb(0xF6, 0xF8, 0xFA);
+const LINK: Rgb = Rgb(0x09, 0x69, 0xDA);
+
+/// Each heading's size, the space before and after it, and whether a line runs under it.
+const HEADINGS: [(f32, f32, f32, bool); 6] = [
+    (23.0, 18.0, 11.0, true),
+    (17.5, 18.0, 9.0, true),
+    (14.0, 15.0, 6.0, false),
+    (12.0, 13.0, 4.0, false),
+    (11.0, 11.0, 4.0, false),
+    (10.0, 11.0, 4.0, false),
+];
+
+/// How `document`, Markdown or HTML just imported, looks: what the importer gives is a word processor's
+/// defaults, and such a file says little of its own
+/// ([ADR-0016](../../docs/adr/0016-how-markdown-and-html-look.md)). What its inline styles say stays,
+/// being on the text itself.
+fn styled(document: &mut wordcraft_doc::Document) {
+    let colour = |rgb| Some(TextColor::Rgb(rgb));
+    let line = |width, color, space| Border { style: BorderStyle::Single, width, color: Some(color), space };
+    let styles = &mut document.styles;
+    styles.default_chr.font = Some(TEXT_FACE.into());
+    styles.default_chr.size = Some(TEXT_SIZE);
+    styles.default_chr.color = colour(INK);
+    styles.default_para.line_spacing = Some(LineSpacing::Multiple(1.15));
+    styles.default_para.space_after = Some(TEXT_AFTER);
+    for (level, (size, before, after, ruled)) in HEADINGS.into_iter().enumerate() {
+        if let Some(heading) = styles.get_mut(&format!("Heading{}", level + 1)) {
+            heading.para.space_before = Some(before);
+            heading.para.space_after = Some(after);
+            heading.para.line_spacing = Some(LineSpacing::Multiple(1.05));
+            heading.para.borders = ruled.then(|| Borders { bottom: Some(line(0.5, HAIRLINE, 3.0)), ..Default::default() });
+            heading.chr.font = Some(TEXT_FACE.into());
+            heading.chr.size = Some(size);
+            heading.chr.bold = Some(true);
+            heading.chr.italic = None;
+            heading.chr.color = colour(if level == 5 { QUIET_INK } else { INK });
+        }
+    }
+    if let Some(quote) = styles.get_mut("Quote") {
+        quote.para.align = Some(wordcraft_doc::Align::Left);
+        quote.para.space_before = Some(0.0);
+        // The bar on the left edge of the text, from its distance and half its width.
+        quote.para.indent_left = Some(11.25);
+        quote.para.borders = Some(Borders { left: Some(line(2.5, HAIRLINE, 10.0)), ..Default::default() });
+        quote.chr.italic = None;
+        quote.chr.color = colour(QUIET_INK);
+    }
+    // Each line of a code block is a paragraph: alike, they are one box, its edges the colour of its
+    // wash for the room they keep around the code, which is indented by that room to keep it in the column.
+    if let Some(code) = styles.get_mut("Code") {
+        code.para.space_before = Some(4.0);
+        code.para.space_after = Some(14.0);
+        code.para.contextual_spacing = Some(true);
+        code.para.line_spacing = Some(LineSpacing::Multiple(1.05));
+        code.para.indent_left = Some(8.0);
+        code.para.indent_right = Some(8.0);
+        code.para.shading = Some(WASH);
+        code.para.borders = Some(Borders::all(line(0.5, WASH, 8.0)));
+        code.chr.font = Some(CODE_FACE.into());
+        code.chr.size = Some(CODE_SIZE);
+    }
+    if let Some(item) = styles.get_mut("ListParagraph") {
+        item.para.contextual_spacing = Some(false);
+        item.para.space_after = Some(2.0);
+    }
+    if let Some(parts) = styles.get_mut("TableGrid").and_then(|grid| grid.table.as_mut()) {
+        parts.borders = Some(Borders::all(line(0.5, HAIRLINE, 0.0)));
+        parts.cell_margins = Some([3.5, 6.0, 3.5, 6.0]);
+        parts.header_fill = Some(WASH);
+        parts.header_chr.bold = Some(true);
+    }
+    for level in document.numbering.abstracts.iter_mut().flat_map(|list| list.levels.iter_mut().enumerate()) {
+        let (depth, level) = level;
+        level.indent = 20.0 + 18.0 * depth as f32;
+        level.hanging = 14.0;
+        level.tab = None;
+    }
+    if let Some(Block::Para(first)) = document.body.first_mut().map(Arc::make_mut) {
+        first.props.space_before = Some(0.0);
+    }
+    styled_blocks(&mut document.body, &document.numbering);
+}
+
+/// What a style can't say, in `blocks`: what depends on the blocks beside one, or on the text in it.
+fn styled_blocks(blocks: &mut [Arc<Block>], numbering: &wordcraft_doc::Numbering) {
+    let list_of = |block: Option<&Arc<Block>>| match block.map(|block| &**block) {
+        Some(Block::Para(para)) => para.props.numbering.map(|list| list.num),
+        _ => None,
+    };
+    for at in 0..blocks.len() {
+        let next_list = list_of(blocks.get(at + 1));
+        let after_table = at.checked_sub(1).and_then(|before| blocks.get(before)).is_some_and(|block| matches!(**block, Block::Table(_)));
+        let Some(block) = blocks.get_mut(at) else { break };
+        match Arc::make_mut(block) {
+            Block::Para(para) => {
+                styled_para(para, next_list, after_table, numbering);
+                para.touch();
+            }
+            Block::Table(table) => {
+                for cell in table.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
+                    styled_blocks(&mut cell.blocks, numbering);
+                }
+            }
+        }
+    }
+}
+
+/// `para`, before what may be a block of the list `next_list`, and maybe after a table.
+fn styled_para(para: &mut wordcraft_doc::Paragraph, next_list: Option<u32>, after_table: bool, numbering: &wordcraft_doc::Numbering) {
+    let heading = para.props.style.as_deref().and_then(|style| style.strip_prefix("Heading")).and_then(|level| level.parse::<usize>().ok());
+    let text_size = heading.and_then(|level| HEADINGS.get(level.wrapping_sub(1))).map_or(TEXT_SIZE, |heading| heading.0);
+    for run in &mut para.runs {
+        // Code among text is what the importer gives this font. Its face alone says so: a shading
+        // would show a seam between each two letters (ADR-0016).
+        if run.props.font.as_deref() == Some(wordcraft_formats::model::MONO_FONT) {
+            run.props.font = Some(CODE_FACE.into());
+            run.props.size = Some((run.props.size.unwrap_or(text_size) * CODE_AMONG_TEXT).max(1.0));
+        }
+        if run.props.link.is_some() && run.props.color.is_none() {
+            run.props.color = Some(TextColor::Rgb(LINK));
+        }
+    }
+    let list = para.props.numbering.map(|list| list.num);
+    if list.is_some() && list != next_list {
+        para.props.space_after = Some(TEXT_AFTER);
+    }
+    // A task's box takes its bullet's place, and its text the text's.
+    if ["☑ ", "☐ "].iter().any(|task| para.text.starts_with(task)) {
+        let level = para.props.numbering.and_then(|list| numbering.abstract_of(list.num)?.levels.get(usize::from(list.level)));
+        if let Some(level) = level.filter(|level| level.format == wordcraft_doc::section::NumFormat::Bullet) {
+            para.props.indent_left = Some(level.indent);
+            para.props.indent_first = Some(-level.hanging);
+            para.props.numbering = None;
+            // A box is three bytes, and its space is the fourth, as just checked. The same length, so
+            // the runs stay as they are.
+            para.text.replace_range(3..4, "\t");
+        }
+    }
+    // A rule is a paragraph of nothing with a line under it.
+    if para.text.is_empty()
+        && let Some(bottom) = para.props.borders.as_mut().and_then(|borders| borders.bottom.as_mut())
+    {
+        bottom.color = Some(HAIRLINE);
+        para.props.space_before = Some(6.0);
+        para.props.space_after = Some(14.0);
+    }
+    if after_table && heading.is_none() {
+        para.props.space_before = Some(14.0);
+    }
 }
 
 /// Pictures taller than `height` shrunk to it, keeping their shape: laid out as they are, they would
@@ -724,6 +959,263 @@ mod tests {
             assert_eq!(corner(name, contents, Paper::Printed), (true, [255; 3]), "{name}");
         }
         assert_eq!(corner("a.rtf", b"{\\rtf1\\ansi One}", Paper::Dark(PAPER)), (false, [255; 3]));
+    }
+
+    /// How many pixels to a point the styling's tests look at a page.
+    const SCALE: f32 = 2.0;
+    /// The page's left margin, and its width, in those pixels.
+    const MARGIN: u32 = 144;
+    const PAGE_WIDTH: u32 = 1224;
+
+    /// The first page of this Markdown on `paper`.
+    fn looked_at(markdown: &str, paper: Paper) -> Frame {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let at = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("clview-word-looks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{at}.md"));
+        std::fs::write(&path, markdown).unwrap();
+        let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
+        let frame = source.renderer().unwrap().render(Request { page: 0, scale: SCALE, tag: 0, paper });
+        assert_eq!(frame.error, None);
+        assert_eq!(frame.width, PAGE_WIDTH);
+        std::fs::remove_file(&path).unwrap();
+        frame
+    }
+
+    fn colour_at(frame: &Frame, x: u32, y: u32) -> [u8; 3] {
+        let at = (y as usize * frame.width as usize + x as usize) * 4;
+        [frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2]]
+    }
+
+    fn brightness([r, g, b]: [u8; 3]) -> u8 {
+        grey_of([r, g, b])
+    }
+
+    /// Dark ink on white: not a line or a wash, which are faint.
+    fn dark_ink(colour: [u8; 3]) -> bool {
+        brightness(colour) < 128
+    }
+
+    /// Anything on white.
+    fn not_white(colour: [u8; 3]) -> bool {
+        colour != [255; 3]
+    }
+
+    /// A line of text, in pixels.
+    #[derive(Clone, Copy, Debug)]
+    struct Inked {
+        top: u32,
+        bottom: u32,
+        left: u32,
+        right: u32,
+    }
+
+    /// What `ink` finds on a page, in lines: rows with some, apart from others by rows with none.
+    fn lines_of(frame: &Frame, ink: fn([u8; 3]) -> bool) -> Vec<Inked> {
+        let mut lines: Vec<Inked> = Vec::new();
+        let mut in_line = false;
+        for y in 0..frame.height {
+            let inked: Vec<u32> = (0..frame.width).filter(|x| ink(colour_at(frame, *x, y))).collect();
+            let (Some(left), Some(right)) = (inked.first().copied(), inked.last().copied()) else {
+                in_line = false;
+                continue;
+            };
+            match lines.last_mut().filter(|_| in_line) {
+                Some(line) => *line = Inked { bottom: y, left: line.left.min(left), right: line.right.max(right), ..*line },
+                None => lines.push(Inked { top: y, bottom: y, left, right }),
+            }
+            in_line = true;
+        }
+        lines
+    }
+
+    /// What decides that a page isn't a word processor's: Word documents stay as they say.
+    #[test]
+    fn only_markdown_and_html_are_given_this_look() {
+        let font = |bytes: &[u8], kind| {
+            let laid = laid_out(bytes, kind, None, "a", None).unwrap();
+            let document = laid.document.read().unwrap();
+            document.styles.default_chr.font.clone().unwrap()
+        };
+        assert_eq!(font(b"One", Kind::Markdown), TEXT_FACE);
+        assert_eq!(font(b"<p>One</p>", Kind::Html), TEXT_FACE);
+        assert_ne!(font(b"{\\rtf1\\ansi One}", Kind::Rtf), TEXT_FACE);
+    }
+
+    #[test]
+    fn headings_step_down_and_the_first_starts_the_page() {
+        let frame = looked_at("# Hxg\n\n## Hxg\n\n### Hxg\n\n#### Hxg\n\n##### Hxg\n\n###### Hxg", Paper::Printed);
+        let lines = lines_of(&frame, dark_ink);
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        let heights: Vec<u32> = lines.iter().map(|line| line.bottom - line.top).collect();
+        assert!(heights.is_sorted_by(|a, b| a > b), "{heights:?}");
+        // The space before it would leave it further down: 54 points of margin, and some of its size.
+        assert!(lines[0].top < 2 * 72, "{:?}", lines[0]);
+    }
+
+    /// A word processor's code block is its lines one under the other: here, one box the width of the
+    /// text, blank lines included, on either paper.
+    #[test]
+    fn a_code_block_is_one_box_as_wide_as_the_text() {
+        let box_of = |paper| {
+            let frame = looked_at("Above\n\n```\none\n\nthree\n```\n\nBelow", paper);
+            let empty = colour_at(&frame, 0, 0);
+            // Inside its right edge, which the short text above and below it doesn't reach.
+            let x = PAGE_WIDTH - MARGIN - 4;
+            let rows: Vec<u32> = (0..frame.height).filter(|y| colour_at(&frame, x, *y) != empty).collect();
+            let (top, bottom) = (rows[0], *rows.last().unwrap());
+            assert_eq!(rows.len() as u32, bottom - top + 1, "{paper:?}: a gap in it");
+            let middle = (top + bottom) / 2;
+            let wash = colour_at(&frame, x, middle);
+            // Its lines are fills that meet on parts of a pixel, by a step or two that doesn't show.
+            let near = |colour: [u8; 3]| colour.iter().zip(wash).all(|(a, b)| a.abs_diff(b) <= 3);
+            assert!((top + 1..bottom).all(|y| near(colour_at(&frame, x, y))), "{paper:?}: a seam in it");
+            for (x, inside) in [(MARGIN - 3, false), (MARGIN + 3, true), (PAGE_WIDTH - MARGIN - 3, true), (PAGE_WIDTH - MARGIN + 3, false)] {
+                assert_eq!(colour_at(&frame, x, middle) != empty, inside, "{paper:?}: at {x}");
+            }
+            (top, bottom, empty, wash, frame)
+        };
+        let (top, bottom, _, wash, frame) = box_of(Paper::Printed);
+        assert!(wash.iter().zip([WASH.0, WASH.1, WASH.2]).all(|(a, b)| a.abs_diff(b) <= 3), "{wash:?}");
+        let lines = lines_of(&frame, dark_ink);
+        let [above, one, three, below] = lines[..] else { panic!("{lines:?}") };
+        assert!(above.bottom < top && top < one.top && three.bottom < bottom && bottom < below.top, "{top}..{bottom}: {lines:?}");
+        // On dark paper, a little lighter than the page, not a hole in it or a light in it.
+        let (_, _, empty, wash, _) = box_of(Paper::Dark([0x1E; 3]));
+        assert_eq!(empty, [0x1E; 3]);
+        assert!(brightness(wash) > brightness(empty) && brightness(wash) < brightness(empty) + 16, "{wash:?}");
+    }
+
+    /// A paragraph's room around each line would leave them apart, in their box.
+    #[test]
+    fn a_code_blocks_lines_are_close() {
+        let lines = lines_of(&looked_at("```\nHxg\nHxg\n```", Paper::Printed), dark_ink);
+        let [one, two] = lines[..] else { panic!("{lines:?}") };
+        assert!(two.top - one.top < 2 * 16, "{lines:?}");
+    }
+
+    #[test]
+    fn code_is_monospaced_among_text_and_in_a_block_as_text_isnt() {
+        let frame = looked_at("`llllllllll`\n\n`MMMMMMMMMM`\n\n```\nllllllllll\nMMMMMMMMMM\n```\n\nllllllllll\n\nMMMMMMMMMM", Paper::Printed);
+        let lines = lines_of(&frame, dark_ink);
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        let width = |at: usize| (lines[at].right - lines[at].left) as f32;
+        for (narrow, wide, what) in [(0, 1, "among text"), (2, 3, "in a block")] {
+            assert!(width(narrow) / width(wide) > 0.85, "{what}: {} of {}", width(narrow), width(wide));
+        }
+        assert!(width(4) / width(5) < 0.6, "text: {} of {}", width(4), width(5));
+    }
+
+    /// What most code is written to: wrapped sooner, every long line of it would break.
+    #[test]
+    fn eighty_columns_of_code_fit_on_a_line() {
+        let lines = |columns: usize| lines_of(&looked_at(&format!("```\n{}\n```", "0".repeat(columns)), Paper::Printed), dark_ink).len();
+        assert_eq!((lines(80), lines(81)), (1, 2));
+    }
+
+    #[test]
+    fn a_quote_is_where_text_is_with_a_bar_beside_it() {
+        let frame = looked_at("> One\n>\n> Two", Paper::Printed);
+        let lines = lines_of(&frame, dark_ink);
+        let [one, two] = lines[..] else { panic!("{lines:?}") };
+        // As a word processor has it, it would be in the middle of the page.
+        assert!(one.left < MARGIN + 2 * 14 && two.left < MARGIN + 2 * 14, "{lines:?}");
+        // The bar goes on between its paragraphs.
+        let bar = (MARGIN..one.left).find(|x| not_white(colour_at(&frame, *x, one.top))).expect("a bar");
+        assert!((one.top..=two.bottom).all(|y| not_white(colour_at(&frame, bar, y))), "the bar stops");
+    }
+
+    #[test]
+    fn a_link_stands_out_on_either_paper_and_text_doesnt() {
+        let blue = |markdown: &str, paper| {
+            let frame = looked_at(markdown, paper);
+            frame.rgba.as_chunks::<4>().0.iter().any(|pixel| i32::from(pixel[2]) > i32::from(pixel[0]) + 60)
+        };
+        for paper in [Paper::Printed, Paper::Dark([0x1E; 3])] {
+            assert!(blue("[One](https://example.com)", paper), "{paper:?}");
+            assert!(!blue("One", paper), "{paper:?}");
+        }
+    }
+
+    #[test]
+    fn lists_stand_apart_as_their_items_dont() {
+        let lines = lines_of(&looked_at("- one\n- two\n\n1. three\n2. four\n\nAfter", Paper::Printed), dark_ink);
+        let [one, two, three, four, after] = lines[..] else { panic!("{lines:?}") };
+        let (items, lists) = (two.top - one.bottom, three.top - two.bottom);
+        assert!(lists >= items + 2 * 5, "{items} between items, {lists} between lists");
+        assert!(after.top - four.bottom >= items + 2 * 5, "after a list: {lines:?}");
+    }
+
+    /// Only a bullet goes, since a numbered task keeps its number; and what is in a table is styled too.
+    #[test]
+    fn a_tasks_box_takes_the_place_of_its_bullet() {
+        let laid = laid_out(b"- one\n- [x] two\n\n1. [x] three\n\n| [`a`](b) |\n|---|\n", Kind::Markdown, None, "a", None).unwrap();
+        let document = laid.document.read().unwrap();
+        let paras: Vec<&wordcraft_doc::Paragraph> =
+            document.para_paths(StoryRef::Body).iter().filter_map(|path| document.para(StoryRef::Body, path)).collect();
+        let [one, two, three, cell, ..] = paras[..] else { panic!("{} paragraphs", paras.len()) };
+        assert!(one.props.numbering.is_some());
+        assert_eq!((two.props.numbering, two.text.as_str()), (None, "☑\ttwo"));
+        assert_eq!(two.props.indent_left.unwrap() + two.props.indent_first.unwrap(), 6.0, "where the bullet would be");
+        assert!(three.props.numbering.is_some() && three.text == "☑ three", "{:?}", three.text);
+        let run = &cell.runs[0].props;
+        assert_eq!((run.font.as_deref(), run.color), (Some(CODE_FACE), Some(TextColor::Rgb(LINK))));
+    }
+
+    #[test]
+    fn a_table_keeps_its_distance_from_what_follows() {
+        let lines = lines_of(&looked_at("| One |\n|---|\n| Two |\n\nAfter", Paper::Printed), not_white);
+        let [table, after] = lines[..] else { panic!("{lines:?}") };
+        assert!(after.top - table.bottom >= 2 * 10, "{lines:?}");
+    }
+
+    #[test]
+    fn a_footnotes_number_is_on_its_line() {
+        let lines = lines_of(&looked_at("One[^1]\n\n[^1]: Two", Paper::Printed), dark_ink);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        // What only looks like one, cut short or with no number, stays as it is.
+        for html in ["<sup class=\"footnote-definition-label\">", "<sup class=\"footnote-definition-label\">x</sup>\n<p>y", "z"] {
+            assert_eq!(numbers_in_their_footnotes(html), html);
+        }
+    }
+
+    /// A dark page inverts a colour's lightness, which leaves one of middling lightness about as it was:
+    /// a purple fine on white came out at 2.3 to 1 on dark paper.
+    #[test]
+    fn what_is_coloured_can_be_read_on_either_paper() {
+        let contrast = |a: Rgb, b: Rgb| {
+            let linear = |channel: u8| {
+                let share = f32::from(channel) / 255.0;
+                if share <= 0.04045 { share / 12.92 } else { ((share + 0.055) / 1.055).powf(2.4) }
+            };
+            let light = |c: Rgb| 0.2126 * linear(c.0) + 0.7152 * linear(c.1) + 0.0722 * linear(c.2);
+            let (a, b) = (light(a), light(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        let kinds = [BlockQuoteKind::Note, BlockQuoteKind::Tip, BlockQuoteKind::Important, BlockQuoteKind::Warning, BlockQuoteKind::Caution];
+        let dark = RenderOptions { dark: true, dark_paper: 0x1E, ..Default::default() };
+        for colour in [INK, QUIET_INK, LINK].into_iter().chain(kinds.map(|kind| alert(kind).1)) {
+            assert!(contrast(colour, Rgb::WHITE) >= 4.5, "{colour:?} on white");
+            assert!(contrast(dark.ink(colour), Rgb(0x1E, 0x1E, 0x1E)) >= 4.5, "{colour:?} on dark, as {:?}", dark.ink(colour));
+        }
+    }
+
+    /// As written, an alert is a quote that starts with its tag.
+    #[test]
+    fn an_alert_says_what_it_is() {
+        let html = markdown_as_html("> [!WARNING]\n> Mind it\n\n> [!MAYBE]\n> Not one");
+        assert!(html.contains(">Warning</strong>") && !html.contains("[!WARNING]"), "{html}");
+        assert!(html.contains("[!MAYBE]"), "{html}");
+        // Right above its text, a line's height (about 17.5 points) from it, not a paragraph apart.
+        let lines = lines_of(&looked_at("> [!NOTE]\n> Mind it", Paper::Printed), dark_ink);
+        let [kind, text] = lines[..] else { panic!("{lines:?}") };
+        assert!(text.top - kind.top < 2 * 20, "{lines:?}");
+        // With no paragraph to go on, it still says.
+        for alert in ["> [!TIP]\n> - One", "> [!TIP]"] {
+            assert!(markdown_as_html(alert).contains(">Tip</strong>"), "{alert}");
+        }
     }
 
     /// The pager's way: pages rendering side by side on a pool's threads, each drawing its pictures

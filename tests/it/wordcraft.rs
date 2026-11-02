@@ -265,7 +265,8 @@ fn a_drawing_or_a_pdfs_page_is_a_picture() {
     let (size, red) = found(&of("![two](drawing.svg)"), RED);
     let (width, height) = red.expect("the drawing");
     let expected = 45.0 / 612.0 * size.0 as f32;
-    assert!((width as f32 - expected).abs() < 3.0 && width == height, "{width} × {height}, not about {expected}");
+    // Square, but for a row or column that where it falls on the pixels leaves only partly covered.
+    assert!((width as f32 - expected).abs() < 3.0 && width.abs_diff(height) <= 1, "{width} × {height}, not about {expected}");
     assert_ne!(of("![two](figure.pdf)"), of("![two](missing.pdf)"), "a PDF's page");
     assert_eq!(view(&write(dir.join("b.md"), b"![two](figure.pdf)"), &["--protocol", "kitty"]).status.code(), Some(0));
 }
@@ -290,11 +291,11 @@ fn a_picture_fits_the_page_and_keeps_its_shape() {
     assert!(about(w, 468.0) && about(h, 46.8), "to the column: {w} × {h}");
 
     let (w, h) = of("![two](tall.png)").1.expect("tall");
-    assert!(about(w, 81.0) && about(h, 648.0), "to the page: {w} × {h}");
+    assert!(about(w, 85.5) && about(h, 684.0), "to the page: {w} × {h}");
 
     // A size the document gives it: fitted after it is read.
     let (w, h) = of("<img src=\"small.png\" width=\"100\" height=\"2000\">").1.expect("given a size");
-    assert!(about(w, 32.4) && about(h, 648.0), "to the page: {w} × {h}");
+    assert!(about(w, 34.2) && about(h, 684.0), "to the page: {w} × {h}");
 }
 
 /// Opening a document draws none of its pictures, and a page draws only its own: a picture that can't

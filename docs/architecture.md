@@ -143,6 +143,9 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)). What they
   cost is bounded before it is spent, by their marks before they are imported and their text before
   they are laid out ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
+  How they look is set after they are imported, by `styled`, in the document's styles where those can
+  say it, and on its paragraphs and runs where they can't
+  ([ADR-0016](adr/0016-how-markdown-and-html-look.md)).
   The pictures they refer to are laid out as stand-ins, PNGs saying only the size to show one at, from
   `Source::size`, so neither reading nor laying out reads a picture's pixels. A page's own are drawn
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and

@@ -27,6 +27,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0013 | [A document's pictures are drawn by the backends, and only from near it](0013-a-documents-pictures-are-drawn-by-the-backends.md) | Accepted |
 | 0014 | [Markdown through pulldown-cmark into wordcraft's HTML importer](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) | Accepted |
 | 0015 | [Markdown and HTML on dark paper, the terminal's own colour](0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) | Accepted |
+| 0016 | [How Markdown and HTML look](0016-how-markdown-and-html-look.md) | Accepted |
 
 ## When to write one
 
