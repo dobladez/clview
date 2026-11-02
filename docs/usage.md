@@ -439,7 +439,8 @@ a 7.6 MB one of 37,000 rows that prints to 1,648 pages. Why spreadsheets are pri
 
 kitty, Ghostty and WezTerm speak the
 [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/), among others. It
-works on macOS, Linux and FreeBSD, and [inside tmux](#inside-tmux).
+works on macOS, Linux and FreeBSD, and [inside tmux](#inside-tmux). Inside Zellij too: pages showed
+in a quick try of 0.45.1, though no test covers it.
 
 `--protocol auto` trusts the environment for kitty (`TERM=xterm-kitty` or `KITTY_WINDOW_ID`) and
 Ghostty (`TERM=xterm-ghostty` or `TERM_PROGRAM=ghostty`). Any other terminal is asked with the

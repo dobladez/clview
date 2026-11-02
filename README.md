@@ -1,8 +1,13 @@
 # clview
 
-`clv` shows PDFs, images, SVG drawings, Word documents and spreadsheets in the terminal, through the
-[kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/): kitty, Ghostty and
-WezTerm, inside tmux too, on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
+I hate leaving the terminal, so `clv` shows PDFs, images, Word documents, spreadsheets, drawings,
+Markdown and HTML inside it.
+
+🤖 DISCLAIMER: entirely coded with Claude Code, and a bit of Codex.
+
+`clv` draws using the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+when available: kitty, Ghostty and WezTerm, locally or over SSH, and inside tmux or Zellij too. It
+runs on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
 
 https://github.com/user-attachments/assets/bee14c3d-781f-49f4-8f0f-df44e3300eb3
 
@@ -23,14 +28,17 @@ clv paper.pdf.gz           # a file compressed alone: the PDF it unpacks to
 clv --protocol ascii photo.jpg > photo.txt  # as plain text, for a log or a mail
 ```
 
-More than a page opens a pager: one page at a time, two side by side when the window is wide
-enough; `-` and `+` zoom out to rows of pages and back in to the window's width. Several files,
-a directory or an archive, are a list: a tile for each, by its first page, its name under it. The arrows
-choose one, Enter opens it (a file to its pages, a folder to its own list), and Esc or `u` goes back. `c`
-copies the page, or the tile, to the clipboard as a picture. `?` lists the keys.
+A file with more than one page opens in a pager. The pager shows one page, or two pages side by
+side when the window is wide enough. Use `-` to zoom out to rows of pages. Use `+` to zoom in. Use
+`?` to show the keys.
 
-**Everything else is in the manual, [`docs/usage.md`](docs/usage.md)**: the options, the keys, lists
-and archives, what each format shows, text cells, tmux, SSH and the limits.
+Two or more files, a directory or an archive open as a list of tiles. A file's tile shows its first
+page and its name. Use the arrow keys to select a tile. Use `Enter` to open it. A file opens to its
+pages, and a folder opens to its own list. Use `Esc` or `u` (up) to go back.
+
+Use `c` to copy the current page or tile to the clipboard as a picture.
+
+See [`docs/usage.md`](docs/usage.md) for all options and more details.
 
 ## What it shows
 
@@ -45,8 +53,6 @@ and archives, what each format shows, text cells, tmux, SSH and the limits.
 | Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |
 | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories | the [`zip`](https://crates.io/crates/zip) crate |
 | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories; and a file compressed alone (`paper.pdf.gz`) | [flate2](https://crates.io/crates/flate2), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2), and a tar reader of clv's own |
-
-This began as `view` in pdfcraft's command line.
 
 ## Installing
 
@@ -74,6 +80,12 @@ cargo install --locked --git https://github.com/dobladez/clview    # installs `c
 How to build and test it, and the rules its code keeps, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 How it works inside is in [`docs/architecture.md`](docs/architecture.md), and why some choices were
 made in [`docs/adr/`](docs/adr/README.md).
+
+## Short History
+
+`clv` began as the `view` subcommand in pdfcraft's command line, in
+[pull request #2920](https://github.com/storytold/pdfcraft/pull/2920). I immediately realized I
+wanted to support all other types of docs and it had to be a separate tool.
 
 ## License
 
