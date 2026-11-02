@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "clview"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
