@@ -64,7 +64,7 @@ wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "5b58
 # Spreadsheets, read, recalculated and printed to a PDF in Rust by gridcraft's engine, a git
 # dependency like pdfcraft, pinned to one commit of its `main` (tests/it/gridcraft.rs checks it).
 # The engine because its print layout is there; it needs none of the crates gridcraft patches.
-gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", optional = true }
+gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "7bb397a3c1015e2a445edcd8feb01789850f4bdd", optional = true }
 # The parameters of a gridcraft command (fitting a CSV's columns), already in its tree.
 serde_json = { version = "1", optional = true }
 base64 = "0.23"
@@ -117,7 +117,7 @@ pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91
 wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "5b5810fe1f6f815acc3fda27619f61d9bc08b615" }
 # Encrypted workbooks for the spreadsheet backend's own tests (tests/it/gridcraft.rs): its
 # `test-support` feature, never in a build of clv.
-gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "1f4c67ef0a0200e48d832c7cbbb5570b743b7837", features = ["test-support"] }
+gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "7bb397a3c1015e2a445edcd8feb01789850f4bdd", features = ["test-support"] }
 proptest = "1"
 serde_json = "1"
 toml = "0.9"
