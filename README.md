@@ -1,9 +1,12 @@
+
+
+
 # clview
 
 I hate leaving the terminal, so `clv` shows PDFs, images, Word documents, spreadsheets, drawings,
 Markdown and HTML inside it.
 
-https://github.com/user-attachments/assets/4deeaded-14de-4ec5-ad32-d2aebaf5d7ac
+https://github.com/user-attachments/assets/fdcf242e-d6d6-4566-9b30-46ac6a08e365
 
 🤖 DISCLAIMER: entirely coded using Claude Code, and a bit of Codex (from my terminal, of course)
 
