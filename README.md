@@ -3,13 +3,13 @@
 I hate leaving the terminal, so `clv` shows PDFs, images, Word documents, spreadsheets, drawings,
 Markdown and HTML inside it.
 
-🤖 DISCLAIMER: entirely coded with Claude Code, and a bit of Codex.
+https://github.com/user-attachments/assets/4deeaded-14de-4ec5-ad32-d2aebaf5d7ac
+
+🤖 DISCLAIMER: entirely coded using Claude Code, and a bit of Codex (from my terminal, of course)
 
 `clv` draws using the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 when available: kitty, Ghostty and WezTerm, locally or over SSH, and inside tmux or Zellij too. It
 runs on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
-
-https://github.com/user-attachments/assets/bee14c3d-781f-49f4-8f0f-df44e3300eb3
 
 ```sh
 clv report.pdf             # page through it, like less
