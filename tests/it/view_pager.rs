@@ -982,7 +982,9 @@ fn copied_png(text: &str, id: u32) -> Vec<u8> {
     let mut png = Vec::new();
     for (at, _) in text.match_indices(&start) {
         let data = &text[at + start.len()..];
-        png.extend(base64::engine::general_purpose::STANDARD.decode(&data[..data.find("\x1b\\").unwrap()]).unwrap());
+        // `wait_until` asks of what has come so far, which may end inside a packet.
+        let Some(end) = data.find("\x1b\\") else { break };
+        png.extend(base64::engine::general_purpose::STANDARD.decode(&data[..end]).unwrap());
     }
     png
 }
