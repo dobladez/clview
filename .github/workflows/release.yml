@@ -87,7 +87,7 @@ jobs:
       - name: notes
         run: |
           set -euo pipefail
-          awk -v heading="## ${GITHUB_REF_NAME#v} " 'index($0, heading) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          awk -v version="${GITHUB_REF_NAME#v}" -f .github/release-notes.awk CHANGELOG.md > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
             echo "::error::CHANGELOG.md has nothing under ${GITHUB_REF_NAME#v}"
             exit 1
