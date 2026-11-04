@@ -20,7 +20,7 @@ use gridcraft_engine::model::Workbook;
 use gridcraft_engine::{DocState, Session, Trust};
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
-use super::{Again, BACKENDS, Backend, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source};
+use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source};
 use crate::args::{OptionSpec, Parsed};
 
 /// Spreadsheets, printed by gridcraft.
@@ -51,6 +51,11 @@ impl Backend for Gridcraft {
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
         Kind::of(path, head).is_some()
+    }
+
+    /// It prints the whole workbook to open it.
+    fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
+        Some(Deferred { dark_form: false })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -262,7 +267,7 @@ fn checked_sheets(bytes: &[u8], max: u64) -> Result<(), String> {
 /// A spreadsheet's printed pages, as the backend that opens PDFs opened them, with what gridcraft
 /// said on reading it: said with the first page, as a page's own warnings are.
 struct Noted {
-    pages: Box<dyn Source>,
+    pages: Box<dyn Source + Send>,
     notes: Arc<[String]>,
 }
 

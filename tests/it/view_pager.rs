@@ -1478,6 +1478,78 @@ fn in_a_list_only_what_has_a_dark_form_turns() {
     assert!(view.finish().success());
 }
 
+/// Each image sent, its size: what kitty is told in the stream.
+fn sizes_sent(text: &str) -> Vec<(u32, u32)> {
+    use base64::Engine as _;
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\x1b_Ga=t,f=100,t=d,q=2,i=") {
+        rest = &rest[at..];
+        let mut payload = String::new();
+        loop {
+            let Some(body) = rest.strip_prefix("\x1b_G") else { return found };
+            let Some(end) = body.find("\x1b\\") else { return found };
+            let Some((control, data)) = body[..end].split_once(';') else { return found };
+            payload.push_str(data);
+            rest = &body[end + 2..];
+            if control.ends_with("m=0") {
+                break;
+            }
+        }
+        found.push(crate::view::png_size(&base64::engine::general_purpose::STANDARD.decode(&payload).unwrap()));
+    }
+    found
+}
+
+/// A list shows before its PDFs are opened, and each comes to its tile at its true size: the size it
+/// was first taken to have is never rendered at.
+#[test]
+fn a_tile_opened_on_demand_is_sent_at_its_true_size() {
+    if !pty_works() {
+        return;
+    }
+    let dir = crate::view::tmp("later-size", "pager");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::view::wide("Wide")).unwrap();
+    std::fs::write(dir.join("b.pdf"), crate::fixtures::letter("Tall", 1)).unwrap();
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
+    let sizes = sizes_sent(&view.text());
+    assert_eq!(sizes.len(), 2, "each rendered once: {sizes:?}");
+    let (wide, tall) = (sizes.iter().find(|(w, h)| w > h).unwrap(), sizes.iter().find(|(w, h)| h > w).unwrap());
+    // Fitted to its place by its own width: at a US Letter page's scale it would come out wider.
+    assert!(wide.0 * 792 < tall.1 * 999 && wide.0 * 10 >= tall.1 * 9, "{sizes:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A file that turns out broken keeps its place in the list and its name there, marked: the others
+/// don't move, the status line says why when it is chosen, and Enter says so and stays in the list.
+#[test]
+fn a_file_that_turns_out_broken_keeps_its_tile_and_says_why() {
+    if !pty_works() {
+        return;
+    }
+    let dir = crate::view::tmp("later-broken", "pager");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), b"%PDF-1.7 and nothing a PDF has").unwrap();
+    std::fs::write(dir.join("b.pdf"), crate::fixtures::letter("Fine", 1)).unwrap();
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("its mark", |t| t.contains("! a.pdf"));
+    view.wait_until("the other tile, and why", |t| transmitted(t) == 1 && bar(t).contains("a.pdf: "));
+    view.press("\r");
+    view.wait_until("why, going in", |t| t.rmatch_indices("a.pdf: ").count() > 1);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!view.text().contains("page 1/"), "it went into a file that can't be shown");
+    // The other tile still opens to its pages.
+    view.press("\x1b[C");
+    view.wait_until("b chosen", |t| chosen(t).as_deref() == Some("b.pdf"));
+    view.press("\r");
+    view.wait_until("b opened", |t| bar(t).contains(" b.pdf esc back"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// `c` copies the page as it is shown.
 #[cfg(feature = "word")]
 #[test]

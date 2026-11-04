@@ -68,6 +68,22 @@ impl<'a> Parsed<'a> {
     pub(crate) fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.given.iter().map(|(name, _)| *name)
     }
+
+    /// The options given, to outlast the command line: for a thread that opens files.
+    pub(crate) fn owned(&self) -> OwnedOptions {
+        OwnedOptions(self.given.iter().map(|(name, value)| (*name, value.map(str::to_owned))).collect())
+    }
+}
+
+/// The options of a [`Parsed`], its own.
+#[derive(Debug, Default)]
+pub(crate) struct OwnedOptions(Vec<(&'static str, Option<String>)>);
+
+impl OwnedOptions {
+    /// As they were read, without the files.
+    pub(crate) fn parsed(&self) -> Parsed<'_> {
+        Parsed { operands: Vec::new(), given: self.0.iter().map(|(name, value)| (*name, value.as_deref())).collect() }
+    }
 }
 
 /// The most pages one `A-B` range, or a whole list, may name: a bound on what a typed list can

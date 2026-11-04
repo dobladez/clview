@@ -125,7 +125,7 @@ mod tests {
     /// A 1 × 1 page whose one pixel is its page number.
     fn frame(request: Request) -> Frame {
         let pixel = u8::try_from(request.page).unwrap();
-        Frame { request, width: 1, height: 1, rgba: Pixels::new(vec![pixel; 4]), error: None, warnings: Vec::new() }
+        Frame { request, width: 1, height: 1, rgba: Pixels::new(vec![pixel; 4]), error: None, warnings: Vec::new(), again: false }
     }
 
     /// Every result until `count` have come, or five seconds have passed.

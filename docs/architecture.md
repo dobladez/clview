@@ -34,6 +34,7 @@ A file, named on the command line, found in a directory or read from an archive,
 | `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
+| `src/source/later.rs` | A list's file not opened until its tile is wanted, and the threads that open them |
 | `src/source/folder.rs` | A container as a list shows it, to be opened: one page, a folder drawn in code |
 | `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
@@ -108,6 +109,13 @@ against its own and every backend's, lists them in `--help` under the backends t
 and refuses one the chosen backend doesn't take. The backend's `open` gets the parsed command line
 and reads its own options from it, so an option that belongs to one kind of file (a PDF's
 `--password`) is the backend's, never the viewer's.
+
+A backend whose `open` costs more than a list should spend on a file the reader may never come to says
+so, going by the file's name and first bytes (`Backend::deferred`), with what a list needs unopened:
+whether its pages have a dark form. Documents, PDFs, drawings and spreadsheets do. Images don't, as
+their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
+defers promises pages, never a container
+([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
 
 A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
 messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name and
@@ -210,10 +218,52 @@ little while idle: an image holds its header, not its pixels.
 rendered and sent ahead, and the parts of the others are let go of as an off-screen tile's are.
 The tiles keep the size the whole list gives them, so the matches are placements of what is in
 the terminal ([ADR-0010](adr/0010-a-filtered-list-keeps-the-whole-lists-tile-size.md)).
-A list shows once all its files are opened, so no tile arrives under a filter later. For the
-filter, `keys.rs` decodes UTF-8: a character past ASCII is one key, one cut between reads waits
+A list shows once all its files are found, whether or not they are opened yet, so no tile arrives
+under a filter later. For the filter, `keys.rs` decodes UTF-8: a character past ASCII is one key, one cut between reads waits
 for the rest as an escape sequence does, and bytes that aren't UTF-8, or a control character,
 are dropped.
+
+### Files opened when their tiles are wanted
+
+The files "opened" above are only read as far as their first bytes for a backend that says `Backend::deferred`: the file, among
+others or in a container, becomes an `Item::Later`, closed, with `source::Later` as its part
+([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)). `Input::later` says how to
+come back to it, by its path or its `Again`; a pipe can't be come back to, nor anything named in `/dev`
+(redirected, `/dev/stdin` is a regular file, but on macOS opening it again goes on from where it was
+read to), so those open as they are reached. A
+file named alone never defers, as it is shown at once. So what the list knows from the start is its
+tiles' number and names, each file's backend (for `takes_all`), and whether any has a dark form.
+
+`Later` reports one page, as a tile. It opens on `source::Openers`, four threads for the whole run,
+each with a stack of 8 MiB, what the main thread has had to open files with. A `Later`'s pool asks for it
+when given requests, and forgets it when given none or dropped, if no thread has begun it; one begun
+goes on, and what it opened to is kept for when the reader comes back. The pool for the opened source
+is made once it is known. So what renders stays what `Joined` already bounds: `Pools` gives requests
+only to the most urgent parts, which limits how many open too.
+
+Until it is open `Later::size` is a stand-in, US Letter, and the pager's layouts come from `source.size`,
+so the first request made for a tile is at a scale from nothing:
+
+1. The pager's `draw` lays out the tile and requests it, which only starts the file opening.
+2. On finishing, the pool answers each request it holds with `Frame::asked_again`, no page and no error,
+   and `Pager::receive` drops those `Wanted`s and asks for a draw. That is a redraw whether the tile
+   is on screen or not, since it has to be asked for again either way.
+3. `draw` lays the tile out again. `Later::size` and `Later::natural` only look: the result moves from
+   the thread to `Later` when the pool answers in `try_recv`, or on `Later::outcome`, neither of them
+   during a layout. So no thread finishing can change a size between `draw` reading it and listing what
+   it worked out from it, and whatever is listed before the size is known is answered as above. A
+   `Wanted` kept from before (one `Pools` hadn't
+   passed on) has its layout compared each `draw`, and if that has changed it goes under a new tag.
+4. The pool passes the new request to the opened source's pool. A file that failed answers it with
+   `Frame::failed`, as a render does, so a failed tile takes the path any failed page takes: `fail`,
+   the note when its tile is chosen, and a `!` before its label in `place`.
+
+Printing can wait, so `print_pages` calls `Source::settle` before its layout, which opens the file on
+the spot, and a `Later`'s renderer is the opened source's. The pager never calls it. Going into a tile
+(`Pager::go_on_into`) and copying one (`Pager::copy`) ask `Later::outcome`, which also moves the file to
+the front of the queue. Going in, that is asked again each `POLL`, keys meaning what they do while a
+container is read; copying says it is still opening, and copies once it is, after a `draw`, so that what
+is listed is from the true size.
 
 ## Getting pages to the terminal
 

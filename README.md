@@ -71,8 +71,8 @@ cargo install --locked --git https://github.com/dobladez/clview    # installs `c
 
 ## Plans
 
-- Open a list's files only when their tiles come on screen, and let go of them after: today
-  every file is opened before anything shows, which for a directory of large PDFs takes a while.
+- Let go of a list's files once the reader has moved on: a PDF opened holds its whole file until
+  the list is left.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
 - More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures

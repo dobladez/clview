@@ -29,7 +29,7 @@ use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{self, fontdb, roxmltree};
 
 use super::threads::Threads;
-use super::{Again, Backend, Format, Frame, HEAD, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// SVG drawings, rendered by resvg.
@@ -66,6 +66,11 @@ impl Backend for Svg {
 
     fn draws_pictures(&self) -> bool {
         true
+    }
+
+    /// It parses the whole drawing to open it.
+    fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
+        Some(Deferred { dark_form: false })
     }
 
     fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
@@ -1019,7 +1024,7 @@ impl Drawn {
         let mut pixmap = Pixmap::new(cw, ch).ok_or_else(|| format!("no canvas of {cw} × {ch} pixels"))?;
         resvg::render(&self.tree, transform, &mut pixmap.as_mut());
         // tiny-skia's pixels are premultiplied RGBA, row by row, as a frame's are.
-        Ok(Frame { request, width: cw, height: ch, rgba: Pixels::new(pixmap.take()), error: None, warnings: self.warnings.clone() })
+        Ok(Frame { request, width: cw, height: ch, rgba: Pixels::new(pixmap.take()), error: None, warnings: self.warnings.clone(), again: false })
     }
 }
 

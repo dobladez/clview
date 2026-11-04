@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
 
-use super::{Backend, Format, Frame, Input, Opened, Pixels, Request, Source};
+use super::{Backend, Deferred, Format, Frame, Input, Opened, Pixels, Request, Source};
 use crate::args::{OptionSpec, Parsed};
 
 /// PDFs, rendered by pdfcraft.
@@ -42,6 +42,11 @@ impl Backend for Pdfcraft {
 
     fn draws_pictures(&self) -> bool {
         true
+    }
+
+    /// It reads the whole file to open it.
+    fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
+        Some(Deferred { dark_form: false })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -145,7 +150,7 @@ fn frame(p: RenderedPage) -> Frame {
         })
         .map(String::from)
         .collect();
-    Frame { request, width: p.width, height: p.height, rgba: Pixels::new(p.rgba), error: p.error, warnings }
+    Frame { request, width: p.width, height: p.height, rgba: Pixels::new(p.rgba), error: p.error, warnings, again: false }
 }
 
 /// What is drawn for a file, as the pdfcraft app draws it.

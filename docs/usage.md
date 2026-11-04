@@ -196,16 +196,27 @@ says `3/12 · 2 of 2`, and a number typed is one of the list's. A number past th
 is an error, as a page past the end of a file is. A pattern that matches a single file gives
 that file's pages, as naming it alone does.
 
-A file that can't be shown, among others, is left out: why is said on stderr before anything is
-shown, the pager's status line names it at first, and printed pages end with an error that says
-how many were left out. With none left, nothing is shown. An option goes to the files that take
-it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
+A file nothing shows, or a broken picture, among others, is left out: why is said on stderr before
+anything is shown, the pager's status line names it at first, and printed pages end with an error
+that says how many were left out. With none left, nothing is shown. An option goes to the files that
+take it: `--password` to the PDFs among them, and it is refused only when none of them takes it.
 
-Opening a file reads what its backend needs to know its pages: an image's header, a PDF's whole
-file. Every file given is opened before anything shows, which for many large PDFs takes a while
-(20 of an 11 MB, 3,000-page manual take 16 seconds and half a gigabyte); opening only the files
-on screen is planned. Files are rendered only when their tiles are wanted, and let go of once
-you are elsewhere, so hundreds of photos open at once hold little more than their sizes.
+Opening a file reads what its backend needs to know its pages: an image's header, but a PDF's whole
+file, a document's whole layout, a spreadsheet printed. So a list shows as soon as each file's first
+bytes are read (518 Markdown files, in about a tenth of a second on an M3 Max), and a PDF, a document,
+a drawing or a spreadsheet is opened only when its tile nears the screen, its tile empty until then,
+while the keys keep working. Enter on one still opening says `opening notes.md…` until it can go in,
+Esc stops waiting, and `c` on one says it is still opening. Printed, each is opened as it is reached.
+Pictures and archives are opened as the list is listed, as that costs little.
+
+One of those that turns out not to open (a broken file, a PDF that needs a password) keeps its tile,
+empty, so that nothing moves, its name marked `! notes.pdf`. The status line says why when it is
+chosen, and Enter says so and stays in the list. Printed, the rest are printed and the error at the end
+names it. One never reached says nothing, as nothing has opened it.
+
+Files are rendered only when their tiles are wanted, and let go of once you are elsewhere, so hundreds
+of photos open at once hold little more than their sizes. What a file opened to stays until you leave
+the list: for a PDF that is its whole file, however many of them you have come past.
 
 ## Directories
 
@@ -215,10 +226,11 @@ which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes ba
 many files says how far opening them has got (`opening photos/… 120 of 500`), and Esc stops
 it. They come in the order of their names, numbers by their value (`img2` before `img10`), letters
 regardless of case, subdirectories among the files. Hidden files are left out, and so, without a
-word, are files no backend opens, since a directory holds all sorts. A file a backend opens and
-can't show (a broken picture, a PDF that needs a password) is left out as one given by name is,
-with a warning: before anything shows for the directory given, and once the screen is back for one
-gone into. The status line names each file from the directory given (`2024/beach.jpg`).
+word, are files no backend opens, since a directory holds all sorts. A broken picture is left out as
+one given by name is, with a warning: before anything shows for the directory given, and once the
+screen is back for one gone into. A PDF that needs a password, or anything else that is only opened
+when it is reached, keeps its tile and [says why there](#several-files). The status line names each
+file from the directory given (`2024/beach.jpg`).
 
 With `-r` (`--recurse`), each subdirectory's files are tiles in the list instead of a folder, at
 its place among the names, depth first. A link to a file is followed; a link to a directory is
@@ -243,7 +255,7 @@ From a zip, nothing is unpacked to disk: a file in it is read from it when it is
 archive open holds its list of names, not its files. Hidden names are left out, as on disk, and so
 is macOS's `__MACOSX` directory. It reads deflate, deflate64, bzip2, LZMA and XZ. A file past the
 [limits](#limits), an encrypted one, or one packed in a way this build doesn't read (zstd) is left
-out with a warning, as a broken file in a directory is.
+out with a warning, as a broken picture in a directory is.
 
 A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
 `.tar.xz`, `.cbt`…), is shown the same way. A compressed tar has no list of its files and can't be

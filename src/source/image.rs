@@ -251,7 +251,7 @@ impl Picture {
             let filter = if to_width < width { FilterType::Triangle } else { FilterType::CatmullRom };
             Pixels::new(::image::imageops::resize(&*decoded, to_width, to_height, filter).into_raw())
         };
-        Ok(Frame { request, width: to_width, height: to_height, rgba, error: None, warnings: Vec::new() })
+        Ok(Frame { request, width: to_width, height: to_height, rgba, error: None, warnings: Vec::new(), again: false })
     }
 
     /// Its bytes: the ones kept, or the file's again.

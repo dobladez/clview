@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::clip;
 use crate::encode::PngEffort;
-use crate::source::{Container, Frame, Paper, Pool, Ready, Request, Source};
+use crate::source::{Container, Frame, Later, Paper, Pool, Ready, Request, Source};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -165,6 +165,7 @@ pub(super) fn run(
         level,
         parents: Vec::new(),
         reading: None,
+        going_into: None,
         levels: 1,
         later: Vec::new(),
         output: terminal.output,
@@ -217,6 +218,8 @@ pub(super) fn run(
             Duration::ZERO
         } else if pager.reading.is_some() {
             PROGRESS_EVERY.min(TICK)
+        } else if pager.going_into.is_some() {
+            POLL
         } else if let Some(wait) = pager.copier.wait() {
             wait
         } else if !pager.wanted.is_empty() && !pager.hidden {
@@ -257,7 +260,7 @@ pub(super) fn run(
                 redraw = true;
                 // Reading a container gone into: Esc (or the others that go back) stops it, and
                 // the keys that quit, quit. Nothing else moves meanwhile.
-                if pager.reading.is_some() {
+                if pager.reading.is_some() || pager.going_into.is_some() {
                     match key {
                         Key::Char('q') | Key::Interrupt => quit = true,
                         Key::Escape | Key::Backspace | Key::Char('u') => pager.stop_reading(),
@@ -295,6 +298,7 @@ pub(super) fn run(
         if pager.reading.is_some() {
             redraw |= pager.read_on(opener)?;
         }
+        redraw |= pager.go_on_into()?;
         redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
@@ -988,6 +992,8 @@ struct Pager<'a> {
     parents: Vec<Level>,
     /// A container gone into, being read or its files opened before it shows.
     reading: Option<Reading>,
+    /// A file of a list chosen, waited for until it is opened.
+    going_into: Option<GoingInto>,
     /// Levels made so far, for their ids.
     levels: u64,
     /// What the reader should know once the screen is back.
@@ -1049,6 +1055,13 @@ struct Reading {
     container: Rc<dyn Container>,
     opening: Option<Opening>,
     since: Instant,
+}
+
+/// A file of a list the reader chose to go into, waited for until it is opened.
+struct GoingInto {
+    /// From the first list.
+    name: String,
+    later: Rc<Later>,
 }
 
 /// A page ready to send.
@@ -1116,13 +1129,17 @@ impl Pager<'_> {
                 near = near.saturating_add(s.bytes());
                 continue;
             }
-            let next = match self.wanted.iter().position(|w| w.view == v) {
-                Some(at) => Ok(self.wanted.swap_remove(at)),
-                None => page_layout(&*source, v.page, v.fit, Area { cols: v.cols, rows: v.rows, cell, max_rows }, self.output).map(|layout| {
-                    self.tag = self.tag.wrapping_add(1);
-                    Wanted { view: v, layout, tag: self.tag }
-                }),
-            };
+            // Laid out each time, since a file's size may have come to be known meanwhile: then what
+            // was asked for it is no longer wanted.
+            let kept = self.wanted.iter().position(|w| w.view == v).map(|at| self.wanted.swap_remove(at));
+            let next =
+                page_layout(&*source, v.page, v.fit, Area { cols: v.cols, rows: v.rows, cell, max_rows }, self.output).map(|layout| match kept {
+                    Some(w) if w.layout == layout => w,
+                    _ => {
+                        self.tag = self.tag.wrapping_add(1);
+                        Wanted { view: v, layout, tag: self.tag }
+                    }
+                });
             match next {
                 Ok(w) => {
                     let size = source.size(v.page).unwrap_or_default();
@@ -1189,6 +1206,13 @@ impl Pager<'_> {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
                 Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
             }
+            // It may not be open yet, or be the file that turns out not to open.
+            Some(Item::Later { name, later }) => {
+                let name = format!("{}{name}", self.level.name);
+                self.going_into = Some(GoingInto { name, later: later.clone() });
+                self.go_on_into()?;
+                return Ok(());
+            }
             Some(Item::Container { name, container }) => {
                 // Read, and its files opened, which takes a while for large ones: said first.
                 let (name, container) = (format!("{}{name}", self.level.name), container.clone());
@@ -1250,8 +1274,32 @@ impl Pager<'_> {
         Ok(true)
     }
 
-    /// Stop reading the container gone into, if one is: it lets go of what it read.
+    /// Go on into the file the reader chose in a list, if there is one: into it, or no further and
+    /// why, once it is opened. Whether either happened.
+    fn go_on_into(&mut self) -> Result<bool, String> {
+        let Some(going) = &self.going_into else { return Ok(false) };
+        let Some(outcome) = going.later.outcome() else {
+            let said = format!("opening {}…", going.name);
+            return self.say(said).map(|()| false);
+        };
+        let Some(GoingInto { name, .. }) = self.going_into.take() else { return Ok(false) };
+        match outcome {
+            Ok(source) => {
+                self.level.nav.message = None;
+                let level = Level::new(self.levels, Shown { pages: Pages::all(source, name), items: Vec::new() }, Zoom::Auto, true);
+                self.enter(level);
+            }
+            Err(why) => self.level.nav.message = Some(format!("{name}: {why}")),
+        }
+        Ok(true)
+    }
+
+    /// Stop reading the container gone into, if one is: it lets go of what it read. Or waiting for a
+    /// file to go into, which, begun, goes on opening for its tile.
     fn stop_reading(&mut self) {
+        if let Some(GoingInto { name, .. }) = self.going_into.take() {
+            self.level.nav.message = Some(format!("stopped opening {name}"));
+        }
         if let Some(Reading { name, container, .. }) = self.reading.take() {
             container.release();
             self.level.nav.message = Some(format!("stopped opening {name}"));
@@ -1319,6 +1367,25 @@ impl Pager<'_> {
             Some(Item::Container { name, .. }) => {
                 self.level.nav.message = Some(format!("{name} is a folder: no picture to copy"));
                 return Ok(());
+            }
+            // Its picture depends on its size, which waits for it to open.
+            Some(Item::Later { name, later }) => {
+                let (name, later) = (name.clone(), later.clone());
+                match later.outcome() {
+                    Some(Ok(_)) => {
+                        // Laid out with its true size first, as what is listed must be.
+                        self.draw()?;
+                        name
+                    }
+                    Some(Err(why)) => {
+                        self.level.nav.message = Some(format!("{name}: {why}"));
+                        return Ok(());
+                    }
+                    None => {
+                        self.level.nav.message = Some(format!("{name} is still opening: try again in a moment"));
+                        return Ok(());
+                    }
+                }
             }
             Some(item) => item.name().to_owned(),
             // A picture, or a document of one page: by its name.
@@ -1542,7 +1609,10 @@ impl Pager<'_> {
             let row = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows);
             let into = text_rows.get_mut(usize::from(row)).unwrap_or(&mut *out);
             cursor(into, row, left.saturating_add((slot % per_row).saturating_mul(across)));
-            let name = printable(&label(item.name(), grid.cols));
+            // A tile that failed is an empty place, as one not rendered yet is: this tells them apart.
+            let broken = self.failed.iter().any(|(failed, _)| *failed == v);
+            let name = if broken { format!("! {}", item.name()) } else { item.name().to_owned() };
+            let name = printable(&label(&name, grid.cols));
             let (on, off) = if chosen == Some(v.page) { ("\x1b[7m", "\x1b[0m") } else { ("", "") };
             into.extend_from_slice(format!("{on}{name}{off}").as_bytes());
         }
@@ -1595,6 +1665,11 @@ impl Pager<'_> {
             let Some(at) = self.wanted.iter().position(|w| w.tag == page.request.tag) else { continue };
             let wanted = self.wanted.remove(at);
             any = true;
+            // Made for a size no longer true: a draw lays it out with the true one, on screen or not.
+            if page.again {
+                on_screen = true;
+                continue;
+            }
             on_screen |= self.on_screen.contains(&Some(wanted.view));
             let id = self.new_id();
             let (width, height) = (page.width, page.height);

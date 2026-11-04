@@ -17,6 +17,7 @@ mod tty;
 
 use std::io::{IsTerminal, Write};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -24,8 +25,10 @@ use crate::encode::{self, PngEffort};
 use cells::{Colours, Glyphs, Ground, Style};
 
 use crate::CliError;
-use crate::args::{OptionSpec, Parsed, page_list};
-use crate::source::{Backend, Container, Directory, Folder, Frame, Input, Joined, Listing, Opened, Paper, Part, Ready, Request, Source};
+use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};
+use crate::source::{
+    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Paper, Part, Ready, Request, Source,
+};
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
 use tty::{Tty, WindowSize};
@@ -458,7 +461,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let theme = Theme::parse(options.value("--theme").unwrap_or("auto"))?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
-    let opener = Opener { backends, options: &options };
+    let opener = Opener::new(backends, &options);
     let Given { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
     warn(&warnings, &left_out);
     // Said first, what was left out may be why there are fewer than asked for.
@@ -598,6 +601,11 @@ impl Pages {
 /// directory), shown as a folder and opened to a list of its own.
 pub(super) enum Item {
     File(Pages),
+    /// A file not opened until its tile is wanted.
+    Later {
+        name: String,
+        later: Rc<Later>,
+    },
     /// Its name ends with `/`.
     Container {
         name: String,
@@ -611,7 +619,7 @@ impl Item {
     pub(super) fn name(&self) -> &str {
         match self {
             Self::File(pages) => &pages.name,
-            Self::Container { name, .. } => name,
+            Self::Later { name, .. } | Self::Container { name, .. } => name,
         }
     }
 }
@@ -621,6 +629,7 @@ impl Item {
 fn tiles(items: &[Item]) -> Joined {
     let part = |item: &Item| match item {
         Item::File(p) => Part { name: p.name.clone(), source: p.source.clone(), pages: vec![p.pages.first().copied().unwrap_or(0)] },
+        Item::Later { name, later } => Part { name: name.clone(), source: later.clone(), pages: vec![0] },
         Item::Container { name, container } => Part { name: name.clone(), source: Rc::new(Folder(container.badge())), pages: vec![0] },
     };
     Joined::new(items.iter().map(part).collect())
@@ -663,6 +672,9 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
 pub(super) struct Opener<'o, 'a> {
     backends: &'o [&'static dyn Backend],
     options: &'o Parsed<'a>,
+    /// The options again, for the threads that open a list's files, and those threads.
+    owned: Arc<OwnedOptions>,
+    openers: Rc<Openers>,
 }
 
 /// What the files given show, and what of them couldn't be shown, with why.
@@ -673,15 +685,20 @@ struct Given {
     warnings: Vec<String>,
 }
 
-impl Opener<'_, '_> {
+impl<'o, 'a> Opener<'o, 'a> {
+    fn new(backends: &'o [&'static dyn Backend], options: &'o Parsed<'a>) -> Self {
+        Self { backends, options, owned: Arc::new(options.owned()), openers: Rc::default() }
+    }
+
     /// What `paths` show: one file's pages, or a list. A file alone that can't be shown is the
     /// error. Several files, or a container (a directory, or a file that holds files, an
     /// archive), are a list: a tile for each file, by its first page, and for each container (a
     /// container alone, its files and the containers in it); recursing, a container's files and
     /// its containers' are tiles instead. Among several, a file that can't be shown is left out,
-    /// and only nothing at all to show is an error. In a container, a file that nothing shows is
-    /// passed over. An option that none of the files' backends takes is refused, since it would
-    /// do nothing.
+    /// and only nothing at all to show is an error; but one whose backend defers opening it isn't
+    /// known not to open until its tile is wanted, which keeps its tile. In a container, a file that
+    /// nothing shows is passed over. An option that none of the files' backends takes is refused,
+    /// since it would do nothing.
     fn open(&self, paths: &[&str], recurse: bool) -> Result<Given, String> {
         let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
         let mut found = Found::default();
@@ -690,7 +707,8 @@ impl Opener<'_, '_> {
             let container: Rc<dyn Container> = if is_dir(path) {
                 Rc::new(Directory::new(path))
             } else {
-                match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name)) {
+                // A file alone is shown at once, so it is opened at once.
+                match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, paths.len() > 1)) {
                     Ok(Some((_, Item::Container { container, .. }))) => container,
                     Ok(Some((backend, Item::File(pages)))) if paths.len() == 1 => {
                         takes_all(&[backend], self.options, path)?;
@@ -731,7 +749,8 @@ impl Opener<'_, '_> {
 
     /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
     /// otherwise), each named `prefix` and its name in the container: read, listed and opened at
-    /// once, saying how far it has got on stderr while that takes a while.
+    /// once (as far as each backend opens a file before its tile is wanted), saying how far it has
+    /// got on stderr while that takes a while.
     fn list(&self, found: &mut Found, container: Rc<dyn Container>, prefix: &str, recurse: bool) {
         let mut progress = Progress::new();
         let name = file_name(container.path());
@@ -779,7 +798,7 @@ impl Opener<'_, '_> {
             if entry.container.is_none() {
                 let name = format!("{}{}", opening.prefix, entry.name);
                 let shown = opening.container.open(&entry.name).map(|input| crate::source::shown_by(input, self.backends));
-                *slot = Some(shown.and_then(|chosen| self.file(chosen, &name)));
+                *slot = Some(shown.and_then(|chosen| self.file(chosen, &name, true)));
             }
         }
         true
@@ -809,15 +828,30 @@ impl Opener<'_, '_> {
     }
 
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
-    /// its pages, or for a file that holds files, to a container of them. A file no backend
-    /// opens, `None`, is none.
-    fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str) -> Chosen {
+    /// its pages, or for a file that holds files, to a container of them; or if `defer` and the
+    /// backend says what it costs is better spent later, not opened until its tile is wanted. A file
+    /// no backend opens, `None`, is none.
+    fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str, defer: bool) -> Chosen {
         let Some((backend, input)) = chosen else { return Ok(None) };
         let path = input.path.clone();
+        let input = match input.deferred_by(backend).filter(|_| defer) {
+            Some(deferred) => match input.later() {
+                Ok(file) => {
+                    let later = Later::new(file, path, deferred.dark_form, backend, self.owned.clone(), self.openers.clone());
+                    return Ok(Some((backend, Item::Later { name: name.to_owned(), later: Rc::new(later) })));
+                }
+                // A pipe, which can't be read twice.
+                Err(input) => input,
+            },
+            None => input,
+        };
         let item = match backend.open(input, self.options)? {
             Opened::Files(container) => Item::Container { name: format!("{name}/"), container },
             Opened::Pages(source) if source.pages() == 0 => return Err(format!("{path}: no pages to show")),
-            Opened::Pages(source) => Item::File(Pages::all(Rc::from(source), name.to_owned())),
+            Opened::Pages(source) => {
+                let source: Box<dyn Source> = source;
+                Item::File(Pages::all(Rc::from(source), name.to_owned()))
+            }
         };
         Ok(Some((backend, item)))
     }
@@ -1151,6 +1185,8 @@ fn print_pages(
         let mut printed = Vec::new();
         for (slot, &page) in (0u16..).zip(chunk) {
             let place = Area { cols: grid.cols, rows: grid.page_rows, cell, max_rows };
+            // Printing waits for a file not opened yet: it is printed next.
+            source.settle(page);
             let drawn = page_layout(source, page, grid.fit, place, terminal.output).and_then(|layout| {
                 encode(&renderer.render(request(page, &layout, 0, terminal.paper)), &layout, terminal).map(|image| (layout, image))
             });
@@ -1433,6 +1469,59 @@ mod tests {
         );
     }
 
+    /// Among others or in a container, a backend's file may wait until its tile is wanted, its
+    /// backend still counted for the options it takes. Alone it is shown at once, so opened at once.
+    #[test]
+    fn a_file_is_left_unopened_only_where_a_list_may_never_come_to_it() {
+        use crate::source::tests::Fake;
+        struct Deferring(Fake);
+        impl Backend for Deferring {
+            fn name(&self) -> &'static str {
+                self.0.name()
+            }
+            fn shows(&self) -> &'static str {
+                self.0.shows()
+            }
+            fn formats(&self) -> Vec<crate::source::Format> {
+                self.0.formats()
+            }
+            fn credits(&self) -> &[&'static str] {
+                self.0.credits()
+            }
+            fn options(&self) -> &'static [OptionSpec] {
+                self.0.options()
+            }
+            fn opens(&self, path: &str, head: &[u8]) -> bool {
+                self.0.opens(path, head)
+            }
+            fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
+                self.0.open(input, options)
+            }
+            fn deferred(&self, path: &str, _head: &[u8]) -> Option<crate::source::Deferred> {
+                Some(crate::source::Deferred { dark_form: path.ends_with("dark.pdf") })
+            }
+        }
+        static LATER: Deferring = Deferring(Fake { name: "later", shows: "PDFs", magic: b"%PDF-", options: &[], holds: false });
+        let dir = std::env::temp_dir().join(format!("clview-deferred-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.pdf"), dir.join("dark.pdf"));
+        std::fs::write(&a, b"%PDF-").unwrap();
+        std::fs::write(&b, b"%PDF-").unwrap();
+        let given = args(&[]);
+        let options = parsed(&given);
+        let backends: [&'static dyn Backend; 1] = [&LATER];
+        let opener = Opener::new(&backends, &options);
+        let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
+        let is_later = |shown: &Shown| shown.items.iter().map(|item| matches!(item, Item::Later { .. })).collect::<Vec<_>>();
+        let several = opener.open(&[a, b], false).unwrap();
+        assert_eq!(is_later(&several.shown), [true, true]);
+        assert!(several.shown.pages.source.dark_form(), "said unopened");
+        assert_eq!(is_later(&opener.open(&[dir.to_str().unwrap()], false).unwrap().shown), [true, true]);
+        let alone = opener.open(&[a], false).unwrap();
+        assert!(!alone.shown.is_list());
+        assert!(!alone.shown.pages.source.dark_form());
+    }
+
     #[test]
     fn the_reader_is_told_how_many_files_were_left_out_and_the_first_ones_name() {
         let file = |name: &str| (name.to_string(), format!("dir/{name}: no"));
@@ -1452,7 +1541,8 @@ mod tests {
         let (book, c) = (dir.join("book.arc"), dir.join("c.pdf"));
         let (book, c) = (book.to_str().unwrap(), c.to_str().unwrap());
         let given = args(&[]);
-        let opener = Opener { backends: &[&PDF, &ARCHIVE], options: &parsed(&given) };
+        let options = parsed(&given);
+        let opener = Opener::new(&[&PDF, &ARCHIVE], &options);
         let names = |paths: &[&str], recurse: bool| {
             let shown = opener.open(paths, recurse).map_err(|e| e.to_string()).unwrap().shown;
             shown.items.iter().map(|item| item.name().to_owned()).collect::<Vec<_>>()
@@ -1504,7 +1594,8 @@ mod tests {
             std::fs::write(dir.join(name), b"%PDF-").unwrap();
         }
         let given = args(&[]);
-        let opener = Opener { backends: &[&PDF], options: &parsed(&given) };
+        let options = parsed(&given);
+        let opener = Opener::new(&[&PDF], &options);
         for (quickest, opened) in [(vec![2, 0, 1], ["c.pdf", "a.pdf", "b.pdf"]), (vec![0, 0, 1], ["a.pdf", "b.pdf", "c.pdf"])] {
             let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: RefCell::default() });
             let mut found = Found::default();
@@ -1649,7 +1740,15 @@ mod tests {
     fn rendered(warnings: &[&str], error: Option<&str>) -> Frame {
         let request = Request { page: 2, scale: 1.0, tag: 0, paper: Default::default() };
         let rgba = crate::source::Pixels::new(Vec::new());
-        Frame { request, width: 0, height: 0, rgba, error: error.map(String::from), warnings: warnings.iter().map(|w| w.to_string()).collect() }
+        Frame {
+            request,
+            width: 0,
+            height: 0,
+            rgba,
+            error: error.map(String::from),
+            warnings: warnings.iter().map(|w| w.to_string()).collect(),
+            again: false,
+        }
     }
 
     #[test]

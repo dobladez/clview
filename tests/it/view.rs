@@ -29,12 +29,19 @@ pub(crate) fn view(pdf: &Path, args: &[&str]) -> Output {
 
 /// [`view`], with `env` set.
 pub(crate) fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = kept_away();
+    command.arg(pdf).args(args);
+    command.envs(env.iter().copied()).output().unwrap()
+}
+
+/// `clv`, kept away as [`view`] says.
+fn kept_away() -> Command {
     let mut command = Command::new(BIN);
-    command.arg(pdf).args(args).env("TERM", "dumb");
+    command.env("TERM", "dumb");
     for name in ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "COLORTERM", "NO_COLOR"] {
         command.env_remove(name);
     }
-    command.envs(env.iter().copied()).output().unwrap()
+    command
 }
 
 pub(crate) fn text(bytes: &[u8]) -> String {
@@ -698,4 +705,76 @@ fn a_lists_tiles_print_as_text_with_their_names() {
     let names = page.lines().last().unwrap();
     assert!(names.contains("first.pdf") && names.contains("second.pdf"), "{page}");
     assert!(page.lines().next().unwrap().split_whitespace().count() == 2, "{page}");
+}
+
+/// A page far wider than tall, on the fixture's: its size the same length, so its cross-reference
+/// table still finds all. Longer on its long side than a US Letter page, so that fitted to a tile as
+/// if it were one, it would come out too wide for its place.
+pub(crate) fn wide(title: &str) -> Vec<u8> {
+    let portrait = crate::fixtures::letter(title, 1);
+    let (from, to) = (b"[0 0 612 792]", b"[0 0 999 200]");
+    let at = portrait.windows(from.len()).position(|w| w == from).unwrap();
+    [&portrait[..at], &to[..], &portrait[at + from.len()..]].concat()
+}
+
+/// What isn't reached costs nothing, however broken: a list's PDFs and documents are opened when
+/// their tiles are wanted, so `--pages 1` knows nothing of the rest. Printed, a file that turns out
+/// broken costs its own tile, and the error names it at the end.
+#[test]
+fn a_file_that_turns_out_broken_costs_only_its_tile_and_only_once_reached() {
+    let dir = tmp("later-broken", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("Fine", 1)).unwrap();
+    std::fs::write(dir.join("b.pdf"), b"%PDF-1.7 and nothing a PDF has").unwrap();
+    std::fs::write(dir.join("c.pdf"), crate::fixtures::letter("Fine too", 1)).unwrap();
+    let out = view(&dir, &["--protocol", "kitty", "--pages", "1"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 1);
+    let out = view(&dir, &["--protocol", "kitty"]);
+    assert_eq!(images(&out.stdout).len(), 2, "the others are shown");
+    assert_eq!(names(&out.stdout), [" a.pdf b.pdf c.pdf"], "its place is kept");
+    assert!(!out.status.success() && text(&out.stderr).contains("b.pdf: "), "{}", text(&out.stderr));
+    // Given by name, the same: and all of them broken is a list of them, each saying why.
+    let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+    let out = view(&b, &[b.to_str().unwrap(), "--protocol", "kitty"]);
+    assert!(!out.status.success() && images(&out.stdout).is_empty());
+    assert!(text(&out.stderr).contains("b.pdf: "), "{}", text(&out.stderr));
+    let out = view(&a, &[b.to_str().unwrap(), "--protocol", "kitty", "--pages", "1"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    // Alone, a file is opened at once, and its error is the error.
+    let out = view(&b, &["--protocol", "kitty"]);
+    assert!(!out.status.success() && text(&out.stderr).starts_with(&format!("clv: {}: ", b.display())), "{}", text(&out.stderr));
+}
+
+/// A file opened on demand is printed at its true size, not the stand-in it had until then.
+#[test]
+fn a_tile_opened_on_demand_is_printed_at_its_true_size() {
+    let dir = tmp("later-size", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wide.pdf"), wide("Wide")).unwrap();
+    std::fs::write(dir.join("tall.pdf"), crate::fixtures::letter("Tall", 1)).unwrap();
+    let out = view(&dir, &["--protocol", "kitty"]);
+    let sizes: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
+    assert_eq!(names(&out.stdout), [" tall.pdf wide.pdf"]);
+    let ([tall, wide], true) = (<[(u32, u32); 2]>::try_from(sizes.clone()).unwrap(), out.status.success()) else { panic!("{sizes:?}") };
+    assert!(tall.1 > tall.0 && wide.0 > wide.1 * 4, "{sizes:?}");
+    // Fitted to its place by its own width: at a US Letter page's scale it would come out wider.
+    assert!(wide.0 * 792 < tall.1 * 999 && wide.0 * 10 >= tall.1 * 9, "{sizes:?}");
+}
+
+/// Redirected, `/dev/stdin` is a regular file, but on macOS opening its path again goes on from where
+/// the first bytes were read to: so among others it is read as it is reached, not come back to by name.
+#[cfg(unix)]
+#[test]
+fn a_file_redirected_in_among_others_is_read_whole() {
+    let (input, other) = (tmp("later-stdin", "in.pdf"), tmp("later-stdin", "other.pdf"));
+    std::fs::write(&input, crate::fixtures::letter("Redirected", 1)).unwrap();
+    std::fs::write(&other, crate::fixtures::letter("Other", 1)).unwrap();
+    let out = kept_away()
+        .args(["/dev/stdin", other.to_str().unwrap(), "--protocol", "kitty"])
+        .stdin(std::fs::File::open(&input).unwrap())
+        .output()
+        .unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 2);
 }

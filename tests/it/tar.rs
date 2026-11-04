@@ -88,6 +88,36 @@ fn a_tar_is_a_list_of_its_files_however_it_is_compressed() {
     }
 }
 
+/// A compressed tar's PDFs are opened as their tiles are wanted, from the archive, and that goes on
+/// working however the reader goes out of the archive and back into it.
+#[test]
+fn files_opened_on_demand_are_read_from_the_archive_again_after_leaving_it() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let (one, two) = (crate::fixtures::letter("One", 1), crate::fixtures::letter("Two", 1));
+    let packed = gzip(&tar(&[("sub/", Vec::new()), ("sub/a.pdf", one.clone()), ("sub/b.pdf", two.clone()), ("c.pdf", one)]));
+    let path = write(tmp("tar-later", "t.tar.gz"), &packed);
+    let (sizes, labels) = shown(&path, &["-r"]);
+    assert_eq!((sizes.len(), labels), (3, vec![" c.pdf sub/a.pdf sub/b.pdf".to_string()]));
+    let beside = tmp("tar-later", "shelf");
+    std::fs::create_dir_all(&beside).unwrap();
+    std::fs::write(beside.join("t.tar.gz"), &packed).unwrap();
+    std::fs::write(beside.join("z.pdf"), two).unwrap();
+    let mut view = crate::view_pager::Session::start(&beside, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| t.contains(" z.pdf"));
+    for _ in 0..3 {
+        let before = view.text().len();
+        view.press("\r");
+        view.wait_until("in the archive", |t| t.get(before..).is_some_and(|t| t.contains(" c.pdf")));
+        // Straight back out, with a tile maybe still being opened, then in again.
+        view.press("\x1b");
+        view.wait_until("back", |t| t.get(before..).is_some_and(|t| t.rfind("t.tar.gz").is_some()));
+    }
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// A file compressed alone shows as the file it unpacks to: a picture, a PDF's pages. One that
 /// unpacks to what nothing shows is the error.
 #[test]

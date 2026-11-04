@@ -107,11 +107,13 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   needs the `pdf` feature. The generic tests write their PDFs by hand (`tests/it/fixtures.rs`), so
   any PDF backend reads them.
 - **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`, and text cells, which a
-  pipe takes as they are.
+  pipe takes as they are. A list's files opened as they are reached, too: at their true size, and a
+  broken one costing only its tile.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. It plays one
-  without the protocol as well, for text cells. `--help`'s icon is tested here too, since it depends
+  without the protocol as well, for text cells. A list's file opened on demand is sent at its true size,
+  and one that turns out broken keeps its tile. `--help`'s icon is tested here too, since it depends
   on stdout being a terminal.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and

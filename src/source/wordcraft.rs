@@ -29,7 +29,7 @@ use wordcraft_render::RenderOptions;
 use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
 use super::threads::Threads;
-use super::{Again, Backend, Format, Frame, Input, Opened, Paper, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Deferred, Format, Frame, Input, Opened, Paper, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Word documents, OpenDocument text, RTF, Markdown and HTML, laid out and drawn by wordcraft.
@@ -61,6 +61,11 @@ impl Backend for Wordcraft {
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
         Kind::of(path, head).is_some()
+    }
+
+    /// It lays out the whole document to open it.
+    fn deferred(&self, path: &str, head: &[u8]) -> Option<Deferred> {
+        Some(Deferred { dark_form: matches!(Kind::of(path, head)?, Kind::Markdown | Kind::Html) })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -348,7 +353,7 @@ impl Document {
             on_paper(&mut drawn.pixels, paper);
         }
         // Premultiplied RGBA, row by row, as a frame's are.
-        Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings })
+        Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings, again: false })
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.

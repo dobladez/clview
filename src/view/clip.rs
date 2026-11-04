@@ -394,6 +394,7 @@ impl Copier {
     }
 
     /// `frame` to the system's clipboard, on its thread, started the first time: its answer.
+    #[expect(clippy::result_large_err, reason = "a job refused comes straight back, and is looked at here, never passed on")]
     fn system(&mut self, frame: Frame) -> Result<Receiver<Result<(), String>>, String> {
         let system = match self.system.take() {
             Some(system) => system,
@@ -621,7 +622,7 @@ mod tests {
     /// A 2 × 1 page rendered for `request`, or failed.
     fn frame(request: Request, error: Option<&str>) -> Frame {
         let rgba = Pixels::new(vec![255u8, 0, 0, 255, 0, 0, 255, 255]);
-        Frame { request, width: 2, height: 1, rgba, error: error.map(String::from), warnings: Vec::new() }
+        Frame { request, width: 2, height: 1, rgba, error: error.map(String::from), warnings: Vec::new(), again: false }
     }
 
     const PAGE: Size = Size { w: 1.0, h: 0.5, natural: false };

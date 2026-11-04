@@ -11,6 +11,7 @@ mod head;
 #[cfg(feature = "image")]
 mod image;
 mod joined;
+mod later;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
 #[cfg(feature = "word")]
@@ -37,6 +38,7 @@ use crate::args::{OptionSpec, Parsed};
 pub(crate) use dir::Directory;
 pub(crate) use folder::{Badge, Folder};
 pub(crate) use joined::{Joined, Part};
+pub(crate) use later::{Later, Openers};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
@@ -64,8 +66,9 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
 /// anywhere in its first 1024 bytes.
 const HEAD: u64 = 1024;
 
-/// A kind of file the viewer shows, and how it opens one.
-pub(crate) trait Backend {
+/// A kind of file the viewer shows, and how it opens one. On any thread: a list's files are opened
+/// off the thread that shows them ([`Later`]).
+pub(crate) trait Backend: Sync {
     /// Its name, as messages give it.
     fn name(&self) -> &'static str;
     /// What it shows, in a word or two, for `--help` and for a file no backend opens: "PDFs",
@@ -85,6 +88,13 @@ pub(crate) trait Backend {
     /// `input` opened, with the values `options` gives its own options: its pages, or for a file
     /// that holds files (an archive), a container of them.
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String>;
+    /// What a list may know of the file at `path`, which starts with `head`, without opening it: for
+    /// a backend whose [`Backend::open`] costs more than a list of hundreds should spend on files
+    /// the reader may never come to, and which then opens to pages, never to a container. `None`
+    /// opens it as the list is listed: it costs little, or it may hold files.
+    fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
+        None
+    }
     /// Whether a document may show what it opens as a picture: its first page, drawn by this backend.
     /// Not what may hold other files or refer to pictures of its own, so that a document can't come to
     /// draw itself.
@@ -92,6 +102,13 @@ pub(crate) trait Backend {
     fn draws_pictures(&self) -> bool {
         false
     }
+}
+
+/// What a list knows of a file it hasn't opened ([`Backend::deferred`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Deferred {
+    /// Whether its pages have a dark form ([`Source::dark_form`]).
+    pub(crate) dark_form: bool,
 }
 
 /// A format a backend shows, as `--help` lists it.
@@ -123,7 +140,7 @@ pub(crate) enum Opened {
         not(any(feature = "pdf", feature = "image", feature = "svg", feature = "word", feature = "sheet", test)),
         expect(dead_code, reason = "only PDFs, images, drawings, documents and spreadsheets have pages")
     )]
-    Pages(Box<dyn Source>),
+    Pages(Box<dyn Source + Send>),
     #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives hold files"))]
     Files(Rc<dyn Container>),
 }
@@ -159,10 +176,6 @@ impl Input {
 
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
-    #[cfg_attr(
-        not(any(feature = "zip", feature = "tar", feature = "sheet", test)),
-        expect(dead_code, reason = "only archives hold files, and spreadsheets print to them")
-    )]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
         Self { path, head, rest: Rest::Held(again) }
     }
@@ -371,12 +384,20 @@ pub(crate) struct Frame {
     /// What the reader should know about the page, each once: content left out, a colour that
     /// had to be guessed. In words for the reader, without the page number.
     pub(crate) warnings: Vec<String>,
+    /// No page, as the request was made for a size that turned out otherwise ([`Later`]): the viewer
+    /// is to ask the source its size again, and ask again for the page at that.
+    pub(crate) again: bool,
 }
 
 impl Frame {
     /// No page for `request`, and why.
     pub(crate) fn failed(request: Request, error: String) -> Self {
-        Self { request, width: 0, height: 0, rgba: Pixels::new(Vec::new()), error: Some(error), warnings: Vec::new() }
+        Self { request, width: 0, height: 0, rgba: Pixels::new(Vec::new()), error: Some(error), warnings: Vec::new(), again: false }
+    }
+
+    /// No page for `request`, to be asked for again ([`Frame::again`](field@Frame::again)).
+    pub(crate) fn asked_again(request: Request) -> Self {
+        Self { request, width: 0, height: 0, rgba: Pixels::new(Vec::new()), error: None, warnings: Vec::new(), again: true }
     }
 }
 
@@ -403,6 +424,9 @@ pub(crate) trait Source {
     fn dark_form(&self) -> bool {
         false
     }
+    /// Find out page `page`'s true size, for a caller that may wait for it: printing. The pager never
+    /// waits: until it is known, [`Source::size`] may be a stand-in ([`Later`]).
+    fn settle(&self, _page: usize) {}
     /// A renderer on this thread, for pages printed one after another.
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String>;
     /// Renders on threads of their own, for the pager: keys still work while pages render, and

@@ -111,7 +111,7 @@ fn draw(request: Request, badge: Badge) -> Frame {
             rgba.push(byte(alpha * 255.0));
         }
     }
-    Frame { request, width: w, height: h, rgba: Pixels::new(rgba), error: None, warnings: Vec::new() }
+    Frame { request, width: w, height: h, rgba: Pixels::new(rgba), error: None, warnings: Vec::new(), again: false }
 }
 
 /// `colour` over a premultiplied pixel (0 to 255, and its alpha), covering `cover` of it.

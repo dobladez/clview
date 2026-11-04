@@ -30,6 +30,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0016 | [How Markdown and HTML look](0016-how-markdown-and-html-look.md) | Accepted |
 | 0017 | [HTML's style rules apply, as far as wordcraft reads them](0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md) | Accepted |
 | 0018 | [wordcraft stays before its proofing needs a checkout to build](0018-wordcraft-stays-before-its-proofing-needs-a-checkout-to-build.md) | Accepted |
+| 0019 | [A list opens its files when their tiles are wanted](0019-a-list-opens-its-files-when-their-tiles-are-wanted.md) | Accepted |
 
 ## When to write one
 

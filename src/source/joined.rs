@@ -85,6 +85,12 @@ impl Source for Joined {
         self.0.parts.iter().any(|part| part.source.dark_form())
     }
 
+    fn settle(&self, page: usize) {
+        if let Some((part, local)) = self.0.locate(page).and_then(|(part, local)| Some((self.0.parts.get(part)?, local))) {
+            part.source.settle(local);
+        }
+    }
+
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
         Ok(Box::new(Renderer { joined: &self.0, current: None }))
     }
@@ -224,7 +230,7 @@ mod tests {
     }
 
     fn frame(id: u8, request: Request) -> Frame {
-        Frame { request, width: 1, height: 1, rgba: Pixels::new(vec![id; 4]), error: None, warnings: Vec::new() }
+        Frame { request, width: 1, height: 1, rgba: Pixels::new(vec![id; 4]), error: None, warnings: Vec::new(), again: false }
     }
 
     impl Source for Fake {
