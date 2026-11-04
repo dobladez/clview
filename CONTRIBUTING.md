@@ -76,6 +76,7 @@ Each fact has one home, and the other docs link to it. When a change needs docum
 | Doc | Reader | What goes there |
 |---|---|---|
 | `README.md` | Someone deciding to try it | What clv is, how to install it, what it shows and through what, plans. Never the only home of a behaviour |
+| `CHANGELOG.md` | Someone deciding to update | A line under `## Unreleased`, in the commit that makes the change, for anything a user would notice. What changed, never how it works now: that is the manual's |
 | `docs/usage.md` | Someone using it | Anything a user would notice changing: options, keys, what each format shows, what terminals need, limits |
 | `docs/architecture.md` | Someone working on the code | Anything naming a function, an escape code or a thread, and the numbers a design rests on |
 | `docs/adr/` | Someone about to undo a choice | Why this way and not another: the alternatives rejected, and the evidence |
@@ -130,7 +131,7 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   else names its decompressors.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
-  heading. A binary of its own, so it runs without backends too.
+  heading, and that the changelog has this version. A binary of its own, so it runs without backends too.
 
 The terminal tests skip with a warning where tmux or script(1) can't run, so CI machines without
 them pass.
@@ -154,6 +155,8 @@ visible window doesn't do. Measure memory in a visible window.
 
 ## Releases
 
-Bump `version` in `Cargo.toml`, commit, tag `v<version>` and push the tag:
+Bump `version` in `Cargo.toml`, turn `CHANGELOG.md`'s `## Unreleased` into `## <version> (<date>)`
+under a new empty `## Unreleased`, commit, tag `v<version>` and push the tag:
 `.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
-as a GitHub release. It refuses a tag that disagrees with `Cargo.toml`. Run by hand, it only builds.
+as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, and
+`tests/docs.rs` fails on a version the changelog has nothing for. Run by hand, it only builds.

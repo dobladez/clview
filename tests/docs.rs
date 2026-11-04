@@ -130,6 +130,33 @@ fn help_links_to_the_manual_where_it_is() {
     assert!(Path::new(env!("CARGO_MANIFEST_DIR")).join(path).is_file(), "--help links to {path}, which isn't there");
 }
 
+/// What `changelog` says under `version`'s heading, which the release workflow makes its notes.
+fn changelog_section<'a>(changelog: &'a str, version: &str) -> Option<Vec<&'a str>> {
+    let heading = format!("## {version} ");
+    let mut lines = changelog.lines().skip_while(|line| !line.starts_with(&heading));
+    lines.next()?;
+    Some(lines.take_while(|line| !line.starts_with("## ")).filter(|line| !line.trim().is_empty()).collect())
+}
+
+/// A release publishes this section, after a long build, from a tag that can't easily be moved: so
+/// the version can't be bumped without it.
+#[test]
+fn the_changelog_says_what_this_version_changed() {
+    let changelog = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("CHANGELOG.md")).unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    let section = changelog_section(&changelog, version).unwrap_or_else(|| panic!("CHANGELOG.md has no `## {version} (date)`"));
+    assert!(!section.is_empty(), "CHANGELOG.md says nothing under {version}");
+}
+
+#[test]
+fn a_changelog_section_ends_at_the_next_heading() {
+    let changelog = "## Unreleased\n\n## 0.10.0 (date)\n\n- ten\n\n### More\n\n## 0.1.0 (date)\n\n- one\n";
+    assert_eq!(changelog_section(changelog, "0.10.0"), Some(vec!["- ten", "### More"]));
+    assert_eq!(changelog_section(changelog, "0.1.0"), Some(vec!["- one"]));
+    assert_eq!(changelog_section(changelog, "0.1"), None);
+    assert_eq!(changelog_section(changelog, "Unreleased "), None);
+}
+
 #[test]
 fn an_anchor_is_made_as_github_makes_it() {
     assert_eq!(slug("Copying to the clipboard (`clip.rs`)"), "copying-to-the-clipboard-cliprs");
