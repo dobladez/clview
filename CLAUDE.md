@@ -17,4 +17,9 @@ documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs i
   folders), `picture.rs` (the pictures a document refers to, drawn by the backends), `threads.rs` (render threads for a backend with nothing better), `head.rs` and
   `tree.rs` (what a zip's first files say, and the directories an archive's names make).
 
+## Specs
+A change larger than a commit goes through a spec in `docs/specs/` (its README has the lifecycle,
+`project.md` this project's commands): the `spec-*` skills in `.agents/skills/` write, review,
+list and implement them.
+
 @CONTRIBUTING.md

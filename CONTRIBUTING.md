@@ -2,7 +2,8 @@
 
 How to build, test and release clview, and the rules its code keeps. How it works is in
 [`docs/architecture.md`](docs/architecture.md), and why some choices were made in
-[`docs/adr/`](docs/adr/README.md).
+[`docs/adr/`](docs/adr/README.md). A change larger than a commit starts as a spec in
+[`docs/specs/`](docs/specs/README.md), written and implemented through the `spec-*` skills.
 
 ## Building
 
@@ -80,6 +81,7 @@ Each fact has one home, and the other docs link to it. When a change needs docum
 | `docs/usage.md` | Someone using it | Anything a user would notice changing: options, keys, what each format shows, what terminals need, limits |
 | `docs/architecture.md` | Someone working on the code | Anything naming a function, an escape code or a thread, and the numbers a design rests on |
 | `docs/adr/` | Someone about to undo a choice | Why this way and not another: the alternatives rejected, and the evidence |
+| `docs/specs/` | Someone about to build a change | What one change set out to do and how, before its code: a record of that moment, frozen once `Done`. Never the only home of a behaviour |
 | This file | Someone working on the code | How to build, test and release, and the rules |
 
 ## Quality gates
@@ -131,7 +133,8 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   else names its decompressors.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
-  heading, and that the changelog has this version. A binary of its own, so it runs without backends too.
+  heading, that the changelog has this version, and that the specs' Index says what their headers
+  say (through `examples/spec_list.rs`, which it builds as a module). A binary of its own, so it runs without backends too.
 
 The terminal tests skip with a warning where tmux or script(1) can't run, so CI machines without
 them pass.

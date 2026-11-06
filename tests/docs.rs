@@ -6,6 +6,20 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// The specs' list and Index, which `cargo run --example spec_list` runs; built here too, so its
+/// check runs with the tests, and its own tests with it.
+#[path = "../examples/spec_list.rs"]
+#[allow(dead_code)]
+mod spec_list;
+
+/// Each spec's header is the one home of its status: the Index in `docs/specs/README.md` is made
+/// from them, and must say what they say.
+#[test]
+fn the_specs_index_says_what_the_specs_say() {
+    let problems = spec_list::problems(&Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/specs"));
+    assert!(problems.is_empty(), "{}\n(`cargo run --no-default-features --example spec_list -- --index` rewrites the Index)", problems.join("\n"));
+}
+
 /// The Markdown files under `dir`: not `target`, nor what is hidden.
 fn markdown(dir: &Path, found: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
