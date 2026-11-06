@@ -591,11 +591,18 @@ mod tests {
         for pool in &pools {
             pool.set_queue(vec![request(1)]);
         }
-        // Those not begun are left, and the threads go quiet once those begun are done.
+        // Those not begun are left, and the threads go quiet once those begun are done: none is
+        // queued, so none begins after. Waited for rather than slept on, as a slow machine's 40 ms
+        // open outlasted a sleep of 150.
         for pool in &pools {
             pool.set_queue(Vec::new());
         }
-        std::thread::sleep(Duration::from_millis(150));
+        let busy = |later: &Later| matches!(*lock(&later.0.slot.stage), Stage::Queued | Stage::Opening);
+        let start = Instant::now();
+        while made.iter().any(busy) {
+            assert!(start.elapsed() < Duration::from_secs(5), "still opening");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let opened = BACKEND.opened.load(Ordering::Relaxed);
         assert!(opened <= THREADS, "{opened} opened: at most what the threads had begun");
         assert_eq!(made.iter().filter(|later| later.0.finished()).count(), opened);
