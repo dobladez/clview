@@ -160,3 +160,10 @@ under a new empty `## Unreleased`, commit, tag `v<version>` and push the tag:
 `.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
 as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, and
 `tests/docs.rs` fails on a version the changelog has nothing for. Run by hand, it only builds.
+
+Once the release is published, its `homebrew` job writes the formula (`.github/homebrew-formula.sh`)
+from the release's checksums and puts it in the tap, [dobladez/homebrew-tap](https://github.com/dobladez/homebrew-tap),
+as `Formula/clv.rb` ([ADR-0020](docs/adr/0020-new-versions-through-a-homebrew-tap-not-a-check-inside-clv.md)).
+It writes with the `HOMEBREW_TAP_TOKEN` secret: a fine-grained token whose only repository is the
+tap, with Contents read and write. When the token has expired, or is missing, the job fails and the
+release stands: make a new token, `gh secret set HOMEBREW_TAP_TOKEN`, and `gh run rerun <run> --failed`.

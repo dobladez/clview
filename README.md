@@ -61,7 +61,14 @@ See [`docs/usage.md`](docs/usage.md) for all options and more details.
 
 ## Installing
 
-Binaries for macOS and Linux are on the [releases page](https://github.com/dobladez/clview/releases):
+With [Homebrew](https://brew.sh), on macOS or Linux:
+
+```sh
+brew install dobladez/tap/clv
+brew upgrade clv      # when a new version is out
+```
+
+Or take a binary for macOS or Linux from the [releases page](https://github.com/dobladez/clview/releases):
 unpack one and put `clv` on your `PATH`. They aren't signed, so on macOS one downloaded by a
 browser wants `xattr -d com.apple.quarantine clv` before it runs. Or build it, with Rust 1.95 or
 later:
@@ -69,6 +76,10 @@ later:
 ```sh
 cargo install --locked --git https://github.com/dobladez/clview    # installs `clv`
 ```
+
+To hear of each new version, watch the repository's releases (Watch, then Custom, then Releases) or
+follow [their feed](https://github.com/dobladez/clview/releases.atom). What each changed is in the
+[changelog](https://github.com/dobladez/clview/blob/main/CHANGELOG.md).
 
 ## Plans
 

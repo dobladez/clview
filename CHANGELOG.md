@@ -6,6 +6,11 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+### Added
+
+- Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
+  version. No `xattr` step on macOS.
+
 ## 0.3.0 (2026-11-04)
 
 ### Changed

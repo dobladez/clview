@@ -97,3 +97,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+
+  # A job of its own: the release stands if this fails, and `gh run rerun --failed` tries it again.
+  homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: formula
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" --pattern '*.sha256' --dir sums
+          sh .github/homebrew-formula.sh "${GITHUB_REF_NAME#v}" sums > clv.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - name: tap
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::no HOMEBREW_TAP_TOKEN secret: CONTRIBUTING.md's Releases says how to make one"
+            exit 1
+          fi
+          formula=repos/dobladez/homebrew-tap/contents/Formula/clv.rb
+          sha=$(gh api "$formula" --jq .sha)
+          gh api --method PUT "$formula" --silent -f message="clv ${GITHUB_REF_NAME#v}" -f sha="$sha" \
+            -f content="$(base64 < clv.rb | tr -d '\n')"
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
