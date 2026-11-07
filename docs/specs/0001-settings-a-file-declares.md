@@ -179,13 +179,13 @@ None.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
   backend alone too (it touches `cfg` attributes).
-- [ ] Tests added, each seen failing without the change: the key and option tests in `source.rs`
+- [x] Tests added, each seen failing without the change: the key and option tests in `source.rs`
   and `mod.rs`, the step, end and count tests in `pager.rs`.
-- [ ] The assertions of the tests of `d` and `--theme` hold, gated where they need documents.
+- [x] The assertions of the tests of `d` and `--theme` hold, gated where they need documents.
 - [ ] Manual: in kitty, `d` on Markdown, on a PDF, and in a list mixing them, as before.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
   ADR, and ADR-0015 marked superseded on `--theme`.
 
 ## Changelog
