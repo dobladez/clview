@@ -55,7 +55,7 @@ impl Backend for Gridcraft {
 
     /// It prints the whole workbook to open it.
     fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
-        Some(Deferred { dark_form: false })
+        Some(Deferred { settings: &[] })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {

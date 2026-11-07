@@ -23,11 +23,14 @@ use std::time::{Duration, Instant};
 
 use crate::encode::{self, PngEffort};
 use cells::{Colours, Glyphs, Ground, Style};
+#[cfg(test)]
+pub(crate) use pager::VIEWER_KEYS;
 
 use crate::CliError;
 use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};
 use crate::source::{
-    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Paper, Part, Ready, Request, Source,
+    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Part, Ready, Request, Setting, Source, Value,
+    Values,
 };
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
@@ -40,12 +43,6 @@ const OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
     OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
     OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit" },
-    OptionSpec {
-        name: "--theme",
-        short: None,
-        value: Some("auto|light|dark"),
-        help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
-    },
     OptionSpec {
         name: "--compression",
         short: None,
@@ -259,8 +256,8 @@ struct Terminal {
     /// Whether the terminal runs on this machine, not over SSH: the system's clipboard is the
     /// reader's then.
     local: bool,
-    /// What pages start on.
-    paper: Paper,
+    /// What the settings start at.
+    values: Values,
     /// The colour of dark paper, when pages are on it or turned to it.
     dark: [u8; 3],
 }
@@ -269,38 +266,82 @@ struct Terminal {
 /// many terminals', with room below it for what is darker.
 const DARK_PAPER: [u8; 3] = [0x1E, 0x1E, 0x1E];
 
-/// What `--theme` says of pages with a dark form.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Theme {
-    Auto,
-    Light,
-    Dark,
-}
-
-impl Theme {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "light" => Ok(Self::Light),
-            "dark" => Ok(Self::Dark),
-            _ => Err(format!("--theme: expected auto, light or dark, got {}", printable(value))),
+/// The settings `backends` declare ([`Backend::settings`]), each once, as the first to declare it
+/// does, and no more than [`Values`] holds.
+pub(super) fn settings(backends: &[&dyn Backend]) -> Vec<&'static Setting> {
+    let mut settings: Vec<&'static Setting> = Vec::new();
+    for setting in backends.iter().flat_map(|backend| backend.settings()) {
+        if !settings.iter().any(|known| known.name == setting.name) {
+            settings.push(setting);
         }
     }
+    settings.truncate(crate::source::MAX_SETTINGS);
+    settings
+}
 
-    /// What pages start on, and the colour of dark paper, for a terminal whose background is
-    /// `background`, if it says. On a dark terminal that colour is its own: the page is what is behind
-    /// it, not a rectangle on it.
-    fn papers(self, background: Option<[u8; 3]>) -> (Paper, [u8; 3]) {
-        let own = background.filter(|colour| !detect::is_light(*colour));
-        let dark = own.unwrap_or(DARK_PAPER);
-        let paper = match self {
-            Self::Light => Paper::Printed,
-            Self::Dark => Paper::Dark(dark),
-            Self::Auto if own.is_some() => Paper::Dark(dark),
-            Self::Auto => Paper::Printed,
-        };
-        (paper, dark)
+/// Where a setting starts: a value, or by the terminal's background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Start {
+    Is(Value),
+    Auto,
+}
+
+/// Where each of `settings` starts: as its option says, if `options` give it, or else by the
+/// terminal's background if it goes by that, or else at its default. A value its option doesn't
+/// take is the error, saying what it does.
+fn starts(settings: &[&'static Setting], options: &Parsed<'_>) -> Result<Vec<(&'static Setting, Start)>, String> {
+    let start = |setting: &'static Setting| match options.value(setting.option.name) {
+        Some(given) => started(setting, given).map(|start| (setting, start)),
+        None if setting.auto.is_some() => Ok((setting, Start::Auto)),
+        None => Ok((setting, Start::Is(setting.default))),
+    };
+    settings.iter().copied().map(start).collect()
+}
+
+/// Where `given`, the value of `setting`'s option, has it start: `auto` where it goes by the
+/// terminal's background, one of its named values, or one of its numbers.
+fn started(setting: &'static Setting, given: &str) -> Result<Start, String> {
+    if setting.auto.is_some() && given == "auto" {
+        return Ok(Start::Auto);
     }
+    if let Some(named) = setting.named.iter().find(|named| named.name == given) {
+        return Ok(Start::Is(Value::Named(named.name)));
+    }
+    if let (Some(numbers), Ok(number)) = (setting.numbers, given.parse::<u32>())
+        && (numbers.least..=numbers.most).contains(&number)
+    {
+        return Ok(Start::Is(Value::Number(number)));
+    }
+    let auto = setting.auto.map(|_| String::from("auto"));
+    let named = setting.named.iter().map(|named| named.name.to_owned());
+    let range = setting.numbers.map(|numbers| format!("{}–{}", numbers.least, numbers.most));
+    let takes: Vec<String> = auto.into_iter().chain(named).chain(range).collect();
+    let takes = match takes.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => "nothing".into(),
+    };
+    Err(format!("{}: expected {takes}, got {}", setting.option.name, printable(given)))
+}
+
+/// What the settings start at, from where `starts` says, and the colour of dark paper, for a
+/// terminal whose background is `background`, if it says. One that goes by the background takes the
+/// value it has for a light terminal or a dark one, or its default on one that doesn't say. On a dark
+/// terminal the colour of dark paper is its own: the page is what is behind it, not a rectangle on it.
+fn starting(starts: &[(&'static Setting, Start)], background: Option<[u8; 3]>) -> (Values, [u8; 3]) {
+    let own = background.filter(|colour| !detect::is_light(*colour));
+    let mut values = Values::default();
+    for (setting, start) in starts {
+        let value = match (start, setting.auto, background) {
+            (Start::Is(value), _, _) => *value,
+            (Start::Auto, Some(auto), Some(background)) if detect::is_light(background) => Value::Named(auto.light),
+            (Start::Auto, Some(auto), Some(_)) => Value::Named(auto.dark),
+            (Start::Auto, _, _) => setting.default,
+        };
+        // There is room: `settings` keeps no more than it holds.
+        let _ = values.set(setting.name, value);
+    }
+    (values, own.unwrap_or(DARK_PAPER))
 }
 
 pub(super) fn run(args: &[String]) -> Result<(), CliError> {
@@ -352,16 +393,19 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     const BACKENDS: &str = "     ";
     let left = |indent: &str, option: &OptionSpec| format!("{indent}{}", option.shown());
     let viewers = OPTIONS.iter().map(|o| left(VIEWERS, o));
-    let width = viewers.chain(backends.iter().flat_map(|b| b.options()).map(|o| left(BACKENDS, o))).map(|o| o.len()).max().unwrap_or(0);
+    let width = viewers.chain(backends.iter().flat_map(|b| options_of(*b)).map(|o| left(BACKENDS, &o))).map(|o| o.len()).max().unwrap_or(0);
     let list = |out: &mut String, indent: &str, options: &[OptionSpec]| {
         for option in options {
             out.push_str(&format!("{:width$}  {}\n", left(indent, option), option.help));
         }
     };
     list(&mut out, VIEWERS, OPTIONS);
-    for backend in backends.iter().filter(|b| !b.options().is_empty()) {
-        out.push_str(&format!("\n   for {}:\n", backend.shows()));
-        list(&mut out, BACKENDS, backend.options());
+    for backend in backends {
+        let options = options_of(*backend);
+        if !options.is_empty() {
+            out.push_str(&format!("\n   for {}:\n", backend.shows()));
+            list(&mut out, BACKENDS, &options);
+        }
     }
     if backends.is_empty() {
         out.push_str("\nThis build has no backends, so it shows nothing.\n");
@@ -377,6 +421,11 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     }
     out.push_str(&format!("\n{MANUAL}\n{REPORT}\n"));
     out
+}
+
+/// The options `backend` takes: its own, then its settings'.
+fn options_of(backend: &dyn Backend) -> Vec<OptionSpec> {
+    backend.options().iter().copied().chain(backend.settings().iter().map(|setting| setting.option)).collect()
 }
 
 /// What backends show, as `--help` lists it: the libraries they show it through, and in which
@@ -452,13 +501,15 @@ fn capitalized(text: &str) -> String {
 
 fn view(args: &[String]) -> Result<(), CliError> {
     let backends = crate::source::BACKENDS;
-    let known: Vec<OptionSpec> = OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().collect();
+    let settings = settings(backends);
+    let known: Vec<OptionSpec> =
+        OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().chain(settings.iter().map(|s| s.option)).collect();
     let options = Parsed::parse(args, &known)?;
     let paths = file_args(&options)?;
     let zoom = options.value("--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
     let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
-    let theme = Theme::parse(options.value("--theme").unwrap_or("auto"))?;
+    let starts = starts(&settings, &options)?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
     let opener = Opener::new(backends, &options);
@@ -475,10 +526,12 @@ fn view(args: &[String]) -> Result<(), CliError> {
     // asked instead), never back in canonical mode between a question and the pager. On FreeBSD a
     // read begun in canonical mode stays a line read after raw mode returns: the reader thread,
     // its next read begun in between, would hold every key until Enter.
-    // Only what has a dark form, or may hold one, asks for the background; and not when told not to
-    // ask, or when the output is no terminal's. Asking inside tmux is why raw mode is wanted there too.
-    let may_have_dark = shown.pages.source.dark_form() || shown.is_list();
-    let asks_background = may_have_dark && protocol != Protocol::Kitty && !plain && std::io::stdout().is_terminal();
+    // Only what has a setting that goes by the background (dark paper), or may hold one, asks for
+    // it; and not when told not to ask, or when the output is no terminal's. Asking inside tmux is why
+    // raw mode is wanted there too.
+    let by_background = |name: &str| settings.iter().any(|setting| setting.name == name && setting.auto.is_some());
+    let may_go_by_background = shown.pages.source.settings().iter().any(|name| by_background(name)) || shown.is_list();
+    let asks_background = may_go_by_background && protocol != Protocol::Kitty && !plain && std::io::stdout().is_terminal();
     let _raw = match (&tty, paging && (!inside_tmux || asks_background)) {
         (Some(tty), true) => Some(tty.raw()?),
         _ => None,
@@ -500,7 +553,7 @@ fn view(args: &[String]) -> Result<(), CliError> {
                     effort: PngEffort::Fast,
                     files: false,
                     local: true,
-                    paper: Paper::Printed,
+                    values: Values::default(),
                     dark: DARK_PAPER,
                 },
                 None,
@@ -511,8 +564,8 @@ fn view(args: &[String]) -> Result<(), CliError> {
     let remote = over_ssh(env_ssh(), inside_tmux.then(tmux::attached_over_ssh).flatten());
     let (effort, files) = compression.choose(|| remote);
     let background = tty.as_ref().filter(|_| asks_background).and_then(ask_background);
-    let (paper, dark) = theme.papers(background);
-    let terminal = Terminal { effort, files, local: !remote, paper, dark, ..terminal };
+    let (values, dark) = starting(&starts, background);
+    let terminal = Terminal { effort, files, local: !remote, values, dark, ..terminal };
     // Inside tmux, what this run prints stays in the terminal after it, for tmux's placeholder
     // cells (`sweep.rs`): so it is recorded, and first the pictures no pane holds any more go.
     // Only when the output is this pane's, not a file `cat` shows later.
@@ -711,7 +764,7 @@ impl<'o, 'a> Opener<'o, 'a> {
                 match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, paths.len() > 1)) {
                     Ok(Some((_, Item::Container { container, .. }))) => container,
                     Ok(Some((backend, Item::File(pages)))) if paths.len() == 1 => {
-                        takes_all(&[backend], self.options, path)?;
+                        takes_all(self.backends, &[backend], self.options, path)?;
                         return Ok(Given { shown: Shown { pages, items: Vec::new() }, left_out: Vec::new(), warnings: Vec::new() });
                     }
                     Err(why) if paths.len() == 1 => return Err(why),
@@ -742,7 +795,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         }
         // A container not gone into yet may hold files that take it.
         if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
-            takes_all(&used, self.options, "any of these files")?;
+            takes_all(self.backends, &used, self.options, "any of these files")?;
         }
         Ok(Given { shown: Shown::list(items, String::new()), left_out, warnings })
     }
@@ -837,7 +890,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         let input = match input.deferred_by(backend).filter(|_| defer) {
             Some(deferred) => match input.later() {
                 Ok(file) => {
-                    let later = Later::new(file, path, deferred.dark_form, backend, self.owned.clone(), self.openers.clone());
+                    let later = Later::new(file, path, deferred.settings, backend, self.owned.clone(), self.openers.clone());
                     return Ok(Some((backend, Item::Later { name: name.to_owned(), later: Rc::new(later) })));
                 }
                 // A pipe, which can't be read twice.
@@ -956,9 +1009,11 @@ pub(super) fn left_out_note(files: &[(String, String)]) -> Option<String> {
 }
 
 /// Refuses an option that none of `backends` takes, nor the viewer: it would do nothing for
-/// `files`, which those backends open.
-fn takes_all(backends: &[&dyn Backend], options: &Parsed<'_>, files: &str) -> Result<(), String> {
-    let takes = |name: &str| OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).any(|o| o.name == name);
+/// `files`, which those backends open. A setting's option, of any backend `built`, is taken for any
+/// file: the value holds for the whole run, and a file that hasn't the setting is shown as ever.
+fn takes_all(built: &[&dyn Backend], backends: &[&dyn Backend], options: &Parsed<'_>, files: &str) -> Result<(), String> {
+    let setting = |name: &str| built.iter().flat_map(|b| b.settings()).any(|s| s.option.name == name);
+    let takes = |name: &str| OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).any(|o| o.name == name) || setting(name);
     let Some(name) = options.names().find(|name| !takes(name)) else { return Ok(()) };
     let names: Vec<&str> = backends.iter().map(|b| b.name()).collect();
     let (opens, verb) = match names.split_last() {
@@ -1019,7 +1074,7 @@ fn text_terminal(glyphs: Glyphs, tty: Option<&Tty>, inside_tmux: bool) -> Termin
     }
     let told = client.and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
     let cell = if inside_tmux { told } else { tty.and_then(ask_cell) };
-    Terminal { output: Output::Text(style), cell, effort: PngEffort::Fast, files: false, local: true, paper: Paper::Printed, dark: DARK_PAPER }
+    Terminal { output: Output::Text(style), cell, effort: PngEffort::Fast, files: false, local: true, values: Values::default(), dark: DARK_PAPER }
 }
 
 /// Whether the terminal's background is light, if it says.
@@ -1103,7 +1158,7 @@ fn tmux_terminal(protocol: Protocol) -> Result<Result<Terminal, String>, CliErro
         effort: PngEffort::Fast,
         files: false,
         local: true,
-        paper: Paper::Printed,
+        values: Values::default(),
         dark: DARK_PAPER,
     }))
 }
@@ -1188,7 +1243,7 @@ fn print_pages(
             // Printing waits for a file not opened yet: it is printed next.
             source.settle(page);
             let drawn = page_layout(source, page, grid.fit, place, terminal.output).and_then(|layout| {
-                encode(&renderer.render(request(page, &layout, 0, terminal.paper)), &layout, terminal).map(|image| (layout, image))
+                encode(&renderer.render(request(page, &layout, 0, terminal.values, terminal.dark)), &layout, terminal).map(|image| (layout, image))
             });
             match drawn {
                 Ok((layout, image)) => {
@@ -1378,9 +1433,10 @@ fn page_layout(source: &dyn Source, page: usize, fit: Fit, place: Area, output: 
     Ok(output.rendering(layout, size))
 }
 
-/// The render of `page` at `layout`'s scale, tagged so its result can be told from others.
-fn request(page: usize, layout: &Layout, tag: u64, paper: Paper) -> Request {
-    Request { page, scale: layout.scale, tag, paper }
+/// The render of `page` at `layout`'s scale, with the settings at `values` and dark paper `dark`,
+/// tagged so its result can be told from others.
+fn request(page: usize, layout: &Layout, tag: u64, values: Values, dark: [u8; 3]) -> Request {
+    Request { page, scale: layout.scale, tag, values, dark }
 }
 
 /// A rendered page as this terminal is sent it, a PNG or text, or why there is none. Errors name
@@ -1420,25 +1476,56 @@ fn png(p: &Frame, effort: PngEffort) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
+    /// A setting declared as the documents' paper is: `auto` by the background.
+    static PAPER: Setting = crate::source::tests::cycled("paper", 'd', "--theme");
+    /// One with numbers, and no `auto`.
+    static WIDTH: Setting = Setting {
+        numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
+        auto: None,
+        named: &[crate::source::Named { name: "page", says: "as laid out" }],
+        default: Value::Named("page"),
+        ..crate::source::tests::cycled("width", 'w', "--width")
+    };
+
+    /// `auto` goes by the terminal's background: the value for a dark one, or for a light one, or
+    /// the default where it doesn't say. Dark paper is a dark terminal's own colour.
     #[test]
-    fn the_theme_says_what_pages_start_on() {
+    fn auto_says_where_a_setting_starts_by_the_background() {
         const OWN: [u8; 3] = [0x1E, 0x2E, 0x3E];
         const LIGHT: [u8; 3] = [0xFD, 0xF6, 0xE3];
-        assert_eq!(Theme::Auto.papers(Some(OWN)), (Paper::Dark(OWN), OWN), "a dark terminal: its own colour");
-        assert_eq!(Theme::Auto.papers(Some(LIGHT)), (Paper::Printed, DARK_PAPER), "a light one");
-        assert_eq!(Theme::Auto.papers(None), (Paper::Printed, DARK_PAPER), "one that doesn't say");
-        assert_eq!(Theme::Light.papers(Some(OWN)), (Paper::Printed, OWN), "turned, it has that colour to go to");
-        assert_eq!(Theme::Dark.papers(Some(OWN)), (Paper::Dark(OWN), OWN));
-        assert_eq!(Theme::Dark.papers(Some(LIGHT)), (Paper::Dark(DARK_PAPER), DARK_PAPER), "not a light colour for dark paper");
-        assert_eq!(Theme::Dark.papers(None), (Paper::Dark(DARK_PAPER), DARK_PAPER));
+        let start = |start, background| {
+            let (values, dark) = starting(&[(&PAPER, start)], background);
+            (values.get("paper"), dark)
+        };
+        let (light, dark) = (Some(Value::Named("light")), Some(Value::Named("dark")));
+        assert_eq!(start(Start::Auto, Some(OWN)), (dark, OWN), "a dark terminal: its own colour");
+        assert_eq!(start(Start::Auto, Some(LIGHT)), (light, DARK_PAPER), "a light one");
+        assert_eq!(start(Start::Auto, None), (light, DARK_PAPER), "one that doesn't say");
+        assert_eq!(start(Start::Is(Value::Named("light")), Some(OWN)), (light, OWN), "turned, it has that colour to go to");
+        assert_eq!(start(Start::Is(Value::Named("dark")), Some(OWN)), (dark, OWN));
+        assert_eq!(start(Start::Is(Value::Named("dark")), Some(LIGHT)), (dark, DARK_PAPER), "not a light colour for dark paper");
+        assert_eq!(start(Start::Is(Value::Named("dark")), None), (dark, DARK_PAPER));
     }
 
+    /// A setting's option takes `auto` if it goes by the background, its named values and its
+    /// numbers, and refuses anything else saying what it takes, made printable.
     #[test]
-    fn a_theme_is_one_of_three() {
-        assert_eq!(Theme::parse("auto"), Ok(Theme::Auto));
-        assert_eq!(Theme::parse("light"), Ok(Theme::Light));
-        assert_eq!(Theme::parse("dark"), Ok(Theme::Dark));
-        assert!(Theme::parse("sepia").is_err_and(|e| e.contains("auto, light or dark")));
+    fn a_settings_option_takes_what_it_declares() {
+        assert_eq!(started(&PAPER, "auto"), Ok(Start::Auto));
+        assert_eq!(started(&PAPER, "light"), Ok(Start::Is(Value::Named("light"))));
+        assert_eq!(started(&PAPER, "dark"), Ok(Start::Is(Value::Named("dark"))));
+        assert_eq!(started(&PAPER, "sepia"), Err("--theme: expected auto, light or dark, got sepia".into()));
+        assert_eq!(started(&PAPER, "72"), Err("--theme: expected auto, light or dark, got 72".into()));
+        assert!(started(&PAPER, "\x1b[2J").is_err_and(|e| !e.contains('\x1b')));
+        assert_eq!(started(&WIDTH, "72"), Ok(Start::Is(Value::Number(72))));
+        assert_eq!(started(&WIDTH, "20"), Ok(Start::Is(Value::Number(20))));
+        assert_eq!(started(&WIDTH, "page"), Ok(Start::Is(Value::Named("page"))));
+        assert_eq!(started(&WIDTH, "300"), Err("--width: expected page or 20–200, got 300".into()));
+        assert!(started(&WIDTH, "19").is_err() && started(&WIDTH, "auto").is_err() && started(&WIDTH, "-4").is_err());
+        let given = args(&["a.md", "--width", "72"]);
+        let options = Parsed::parse(&given, &[PAPER.option, WIDTH.option]).unwrap();
+        let started: Vec<(&str, Start)> = starts(&[&PAPER, &WIDTH], &options).unwrap().into_iter().map(|(s, start)| (s.name, start)).collect();
+        assert_eq!(started, [("paper", Start::Auto), ("width", Start::Is(Value::Number(72)))]);
     }
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -1457,16 +1544,34 @@ mod tests {
         use crate::source::tests::{Fake, PDF};
         const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
         const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[], holds: false };
+        let built: [&dyn Backend; 3] = [&LOCKED, &PNG, &PDF];
         let given = args(&["a.pdf", "--zoom", "2", "--password", "pw"]);
-        assert_eq!(takes_all(&[&LOCKED], &parsed(&given), "a.pdf"), Ok(()));
-        assert_eq!(takes_all(&[&PDF], &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
-        assert_eq!(takes_all(&[&PDF], &parsed(&args(&["a.pdf", "--zoom", "2", "--no-pager"])), "a.pdf"), Ok(()), "the viewer's own apply to all");
+        assert_eq!(takes_all(&built, &[&LOCKED], &parsed(&given), "a.pdf"), Ok(()));
+        assert_eq!(takes_all(&built, &[&PDF], &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
+        let given_too = args(&["a.pdf", "--zoom", "2", "--no-pager"]);
+        assert_eq!(takes_all(&built, &[&PDF], &parsed(&given_too), "a.pdf"), Ok(()), "the viewer's own apply to all");
         // Among several files, it is enough that one of them takes it.
-        assert_eq!(takes_all(&[&PNG, &LOCKED], &parsed(&given), "any of these files"), Ok(()));
+        assert_eq!(takes_all(&built, &[&PNG, &LOCKED], &parsed(&given), "any of these files"), Ok(()));
         assert_eq!(
-            takes_all(&[&PNG, &PDF], &parsed(&given), "any of these files"),
+            takes_all(&built, &[&PNG, &PDF], &parsed(&given), "any of these files"),
             Err("--password doesn't apply to any of these files, which png and pdf-one open".into())
         );
+    }
+
+    /// A setting's option is taken whatever the files: a PDF given `--theme dark` is shown as ever.
+    /// Only a build without the setting refuses it, as an option it doesn't know.
+    #[test]
+    fn a_settings_option_is_taken_for_a_file_that_hasnt_the_setting() {
+        use crate::source::tests::{Declaring, PDF};
+        static DOCUMENTS: Declaring = Declaring(std::slice::from_ref(&PAPER));
+        let given = args(&["a.pdf", "--theme", "dark"]);
+        let options = Parsed::parse(&given, &[OPTIONS, &[PAPER.option]].concat()).unwrap();
+        assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF], &options, "a.pdf"), Ok(()));
+        assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF, &PDF], &options, "any of these files"), Ok(()));
+        assert!(takes_all(&[&PDF], &[&PDF], &options, "a.pdf").is_err(), "not this build's");
+        let built: [&dyn Backend; 2] = [&PDF, &DOCUMENTS];
+        assert!(usage(&built).contains("   for PDFs:\n     --theme auto|light|dark"), "listed with its backend's options");
+        assert_eq!(settings(&[&DOCUMENTS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper"], "once");
     }
 
     /// Among others or in a container, a backend's file may wait until its tile is wanted, its
@@ -1498,7 +1603,7 @@ mod tests {
                 self.0.open(input, options)
             }
             fn deferred(&self, path: &str, _head: &[u8]) -> Option<crate::source::Deferred> {
-                Some(crate::source::Deferred { dark_form: path.ends_with("dark.pdf") })
+                Some(crate::source::Deferred { settings: if path.ends_with("dark.pdf") { &["paper"] } else { &[] } })
             }
         }
         static LATER: Deferring = Deferring(Fake { name: "later", shows: "PDFs", magic: b"%PDF-", options: &[], holds: false });
@@ -1515,11 +1620,11 @@ mod tests {
         let is_later = |shown: &Shown| shown.items.iter().map(|item| matches!(item, Item::Later { .. })).collect::<Vec<_>>();
         let several = opener.open(&[a, b], false).unwrap();
         assert_eq!(is_later(&several.shown), [true, true]);
-        assert!(several.shown.pages.source.dark_form(), "said unopened");
+        assert_eq!(several.shown.pages.source.settings(), ["paper"], "said unopened");
         assert_eq!(is_later(&opener.open(&[dir.to_str().unwrap()], false).unwrap().shown), [true, true]);
         let alone = opener.open(&[a], false).unwrap();
         assert!(!alone.shown.is_list());
-        assert!(!alone.shown.pages.source.dark_form());
+        assert!(alone.shown.pages.source.settings().is_empty());
     }
 
     #[test]
@@ -1738,7 +1843,7 @@ mod tests {
 
     /// Page 3 rendered with `warnings`, or failed with `error`.
     fn rendered(warnings: &[&str], error: Option<&str>) -> Frame {
-        let request = Request { page: 2, scale: 1.0, tag: 0, paper: Default::default() };
+        let request = Request { page: 2, scale: 1.0, tag: 0, ..Default::default() };
         let rgba = crate::source::Pixels::new(Vec::new());
         Frame {
             request,

@@ -80,9 +80,15 @@ impl Source for Joined {
         self.0.locate(page).and_then(|(part, local)| Some(self.0.parts.get(part)?.source.natural(local))).unwrap_or(false)
     }
 
-    /// A list has one if any of its files does: only those change.
-    fn dark_form(&self) -> bool {
-        self.0.parts.iter().any(|part| part.source.dark_form())
+    /// A list has those any of its files has: only those files change.
+    fn settings(&self) -> Vec<&'static str> {
+        let mut settings = Vec::new();
+        for name in self.0.parts.iter().flat_map(|part| part.source.settings()) {
+            if !settings.contains(&name) {
+                settings.push(name);
+            }
+        }
+        settings
     }
 
     fn settle(&self, page: usize) {
@@ -297,7 +303,7 @@ mod tests {
     }
 
     fn request(page: usize, tag: u64) -> Request {
-        Request { page, scale: 1.0, tag, paper: Default::default() }
+        Request { page, scale: 1.0, tag, ..Default::default() }
     }
 
     #[test]

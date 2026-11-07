@@ -38,7 +38,7 @@ clv --password PW secret.pdf
 | `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
-| `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default) |
+| `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents, which `--help` lists it under |
 | `--theme light`, `--theme dark` | Markdown and HTML that way, whatever the terminal |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
@@ -66,7 +66,8 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 
 ## Keys
 
-`?` lists them in the pager too.
+`?` lists them in the pager too, a backend's after the viewer's: `d` is the documents', and does
+nothing in a `clv` built without them.
 
 In a file's pages:
 
@@ -84,8 +85,8 @@ In a file's pages:
 | `-`, `_` | zoom out: one more page to a row |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
 | `r`, `Ctrl-L` | render the pages again |
-| `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)) |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
+| `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
@@ -102,8 +103,8 @@ In a list:
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
-| `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
+| `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 

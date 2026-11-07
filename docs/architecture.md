@@ -110,9 +110,27 @@ and refuses one the chosen backend doesn't take. The backend's `open` gets the p
 and reads its own options from it, so an option that belongs to one kind of file (a PDF's
 `--password`) is the backend's, never the viewer's.
 
+A backend declares its settings the same way (`Backend::settings`): what the reader may change while
+its files are shown, each a `Setting` with its named values and what each says, its numbers
+(`Numbers`: least, most, step), its default, `auto` by the terminal's background, its keys
+(`Keys::Cycle` or `Keys::Step`), its option, its line in `?` and its message for a file that hasn't
+it. The documents' backend declares one, `paper` (`d`, `--theme`). Which a file has is its source's
+(`Source::settings`; a list's, `Joined`'s, those of any of its files). `view::settings` makes the
+build's table, each setting once. The viewer takes a setting's option for any file (`takes_all`),
+starts each at what its option says or its default, resolving `auto` by the background (`starting`),
+and asks the terminal for its background only when what is shown has a setting with `auto`, or is a
+list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
+request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
+pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
+says the setting's message if what is shown hasn't it; a value changed goes the way `r` goes. The
+values are shared by every level (`pager::Settings`). `source::tests::a_settings_keys_are_its_own_in_every_backend`
+checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
+`the_viewers_keys_are_those_listed` checks) and that a key means one setting
+([ADR-0021](adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)).
+
 A backend whose `open` costs more than a list should spend on a file the reader may never come to says
 so, going by the file's name and first bytes (`Backend::deferred`), with what a list needs unopened:
-whether its pages have a dark form. Documents, PDFs, drawings and spreadsheets do. Images don't, as
+the settings it has. Documents, PDFs, drawings and spreadsheets defer. Images don't, as
 their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
 defers promises pages, never a container
 ([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
@@ -161,10 +179,10 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and
   replace their stand-ins in the document's `media`, under a lock that pages rendering share
   ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
-  Markdown and HTML have a dark form (`Source::dark_form`): asked for `Paper::Dark` in a request, they
-  render through wordcraft's dark page, on the grey as bright as that colour, then stretched to it
-  (`on_paper`). The viewer holds the paper and puts it in each request, so `d` needs only what `r` does
-  ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
+  Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
+  through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
+  it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`
+  does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings
@@ -232,7 +250,7 @@ come back to it, by its path or its `Again`; a pipe can't be come back to, nor a
 (redirected, `/dev/stdin` is a regular file, but on macOS opening it again goes on from where it was
 read to), so those open as they are reached. A
 file named alone never defers, as it is shown at once. So what the list knows from the start is its
-tiles' number and names, each file's backend (for `takes_all`), and whether any has a dark form.
+tiles' number and names, each file's backend (for `takes_all`), and the settings each has.
 
 `Later` reports one page, as a tile. It opens on `source::Openers`, four threads for the whole run,
 each with a stack of 8 MiB, what the main thread has had to open files with. A `Later`'s pool asks for it

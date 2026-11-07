@@ -165,7 +165,7 @@ None.
 
 ## Tasks
 
-- [ ] **Settings, `d` and `--theme` the first** — the declaration, values in every request, the
+- [x] **Settings, `d` and `--theme` the first** — the declaration, values in every request, the
   viewer's table, the options taken for any file, cycling, `?`, the move to the documents' backend,
   the tests of keys and options, the docs and the ADR. One commit, as `d` must keep working.
   *Files:* as in Approach. *Verify:* the gates, each backend alone too;

@@ -1,6 +1,6 @@
 # ADR-0015: Markdown and HTML on dark paper, the terminal's own colour
 
-- **Status:** Accepted
+- **Status:** Accepted; `--theme` and `d` being the viewer's superseded by [ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)
 - **Date:** 2026-11-02
 
 ## Context
@@ -95,3 +95,12 @@ them that icon set but those screenshots too, which a white card would have spoi
   - A `<picture>` with a dark `<source>` for `prefers-color-scheme` shows its `<img>`, the light one.
 - **Follow-ups:** Markdown's own styling, seen both ways.
 - **Revisit when:** wordcraft takes a paper colour, not a grey, or can leave its paper unpainted.
+
+## Update (2026-11-07)
+
+`--theme` and `d` are no longer the viewer's but the documents' backend's `paper` setting, which a
+backend declares as it does its options; `Source::dark_form` and `Request::paper` gave way to
+`Source::settings` and `Request::values`. The option is still taken for any file, so a PDF given
+`--theme dark` is shown as ever
+([ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)). The rest of
+this decision stands.

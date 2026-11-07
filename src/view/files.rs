@@ -72,7 +72,12 @@ pub(crate) struct Files {
 
 enum Job {
     Ready(Instant),
-    Write { id: u32, page: Frame, now: Instant },
+    /// The page boxed: a frame carries its request, settings and all, and jobs go by value.
+    Write {
+        id: u32,
+        page: Box<Frame>,
+        now: Instant,
+    },
     Check(Instant),
     Forget,
     Stop,
@@ -83,7 +88,7 @@ enum Answer {
     Started(Option<Vec<u8>>),
     Ready(bool),
     /// The page comes back, for the stream when its file failed.
-    Written(Result<PathBuf, String>, Frame),
+    Written(Result<PathBuf, String>, Box<Frame>),
     Checked {
         lost: Vec<u32>,
         waiting: Vec<u32>,
@@ -95,7 +100,7 @@ enum Answer {
 pub(crate) enum Written {
     File(PathBuf),
     /// It couldn't be written, and why; the page comes back, to go in the stream.
-    Failed(String, Frame),
+    Failed(String, Box<Frame>),
     /// The thread didn't answer in time (or is gone): the page went with it, and must be
     /// rendered again.
     Stalled,
@@ -131,7 +136,7 @@ impl Files {
     /// Write `page` to a new file for image `id` ([`TempFiles::write`]).
     pub(crate) fn write(&mut self, id: u32, page: Frame, now: Instant) -> Written {
         self.waiting.push(id);
-        match self.ask(Job::Write { id, page, now }) {
+        match self.ask(Job::Write { id, page: Box::new(page), now }) {
             Some(Answer::Written(Ok(path), _)) => Written::File(path),
             Some(Answer::Written(Err(e), page)) => {
                 self.waiting.retain(|w| *w != id);
@@ -492,7 +497,7 @@ mod tests {
 
     /// A rendered page of `width` × `height` opaque grey pixels.
     fn page(width: u32, height: u32) -> Frame {
-        let request = crate::source::Request { page: 0, scale: 1.0, tag: 0, paper: Default::default() };
+        let request = crate::source::Request { page: 0, scale: 1.0, tag: 0, ..Default::default() };
         let rgba = crate::source::Pixels::new([0x80, 0x80, 0x80, 0xFF].repeat((width * height) as usize));
         Frame { request, width, height, rgba, error: None, warnings: Vec::new(), again: false }
     }

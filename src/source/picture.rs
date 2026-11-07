@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{BACKENDS, Backend, Input, Opened, Paper, Request, Source, guarded, shown_by};
+use super::{BACKENDS, Backend, Input, Opened, Request, Source, guarded, shown_by};
 use crate::args::Parsed;
 use crate::encode::{PngEffort, encode_png};
 
@@ -119,7 +119,7 @@ impl Promise {
         caught(|| {
             let source = opened(&self.path)?;
             let mut renderer = source.renderer()?;
-            let request = Request { page: 0, scale: self.scale, tag: 0, paper: Paper::Printed };
+            let request = Request { page: 0, scale: self.scale, tag: 0, ..Default::default() };
             let frame = guarded(request, || renderer.render(request));
             if let Some(error) = frame.error {
                 return Err(error);

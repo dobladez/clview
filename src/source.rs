@@ -82,6 +82,11 @@ pub(crate) trait Backend: Sync {
     fn credits(&self) -> &[&'static str];
     /// The options it takes, beyond the viewer's own.
     fn options(&self) -> &'static [OptionSpec];
+    /// The settings it declares: what the reader may change while its files are shown, with keys of
+    /// their own, and which [`Source::settings`] says a file has. None by default.
+    fn settings(&self) -> &'static [Setting] {
+        &[]
+    }
     /// Whether it opens the file at `path`, going by `head`: its first [`HEAD`] bytes, or all of
     /// a shorter file.
     fn opens(&self, path: &str, head: &[u8]) -> bool;
@@ -107,8 +112,110 @@ pub(crate) trait Backend: Sync {
 /// What a list knows of a file it hasn't opened ([`Backend::deferred`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Deferred {
-    /// Whether its pages have a dark form ([`Source::dark_form`]).
-    pub(crate) dark_form: bool,
+    /// The settings it has ([`Source::settings`]).
+    pub(crate) settings: &'static [&'static str],
+}
+
+/// Something the reader may change while a file is shown, which its backend declares
+/// ([`Backend::settings`]), as it declares its options: Markdown on dark paper. The viewer holds one
+/// value of it for the whole run, steps it by its keys, and sends it with every render
+/// ([`Request::values`]); the backend decides what it draws from it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Setting {
+    /// What it is called, in [`Values`] and in what the reader is told (`width 72`).
+    pub(crate) name: &'static str,
+    /// Its named values, in the order its [`Keys::Cycle`] goes through them.
+    pub(crate) named: &'static [Named],
+    /// The numbers it takes too, if any.
+    pub(crate) numbers: Option<Numbers>,
+    /// Where it starts, unless its option says otherwise; and with `auto`, where a terminal that
+    /// doesn't say its background starts.
+    pub(crate) default: Value,
+    /// Where it starts by the terminal's background, if it does: then its option takes `auto` too.
+    pub(crate) auto: Option<Auto>,
+    /// Its keys in the pager.
+    pub(crate) keys: Keys,
+    /// The command-line option that sets it, taken whatever the files are.
+    pub(crate) option: OptionSpec,
+    /// What its keys do, as `?` lists them.
+    pub(crate) help: &'static str,
+    /// What its keys say on a file that hasn't it.
+    pub(crate) missing: &'static str,
+}
+
+/// A named value of a [`Setting`], and what the reader is told on going to it (`light on dark`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Named {
+    pub(crate) name: &'static str,
+    pub(crate) says: &'static str,
+}
+
+/// The numbers a [`Setting`] takes: from `least` to `most`, its keys stepping to the multiples of
+/// `step`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Numbers {
+    pub(crate) least: u32,
+    pub(crate) most: u32,
+    pub(crate) step: u32,
+}
+
+/// Which of a [`Setting`]'s named values it starts at by the terminal's background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Auto {
+    pub(crate) light: &'static str,
+    pub(crate) dark: &'static str,
+}
+
+/// A [`Setting`]'s keys in the pager.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keys {
+    /// One, going to the next named value, after the last the first.
+    #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting"))]
+    Cycle(char),
+    /// Two, going a step down and a step up among the numbers.
+    #[cfg_attr(not(test), expect(dead_code, reason = "no setting has numbers yet"))]
+    Step(char, char),
+}
+
+impl Keys {
+    /// The keys, in the order they are pressed down and up.
+    pub(crate) fn chars(self) -> Vec<char> {
+        match self {
+            Self::Cycle(key) => vec![key],
+            Self::Step(down, up) => vec![down, up],
+        }
+    }
+}
+
+/// A [`Setting`]'s value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Value {
+    Named(&'static str),
+    Number(u32),
+}
+
+/// The most settings a build may declare: [`Values`] holds as many, to be `Copy` as a request is.
+pub(crate) const MAX_SETTINGS: usize = 8;
+
+/// The value of each setting, by its name, as a render is asked for with them. One not in it is at
+/// its default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Values([Option<(&'static str, Value)>; MAX_SETTINGS]);
+
+impl Values {
+    /// Setting `name`'s value, if it has one here.
+    pub(crate) fn get(&self, name: &str) -> Option<Value> {
+        self.0.iter().flatten().find(|(named, _)| *named == name).map(|(_, value)| *value)
+    }
+
+    /// Setting `name` to `value`: whether there was room, [`MAX_SETTINGS`] in all.
+    pub(crate) fn set(&mut self, name: &'static str, value: Value) -> bool {
+        let slot = match self.0.iter().position(|slot| slot.is_some_and(|(named, _)| named == name)) {
+            Some(at) => self.0.get_mut(at),
+            None => self.0.iter_mut().find(|slot| slot.is_none()),
+        };
+        slot.map(|slot| *slot = Some((name, value))).is_some()
+    }
 }
 
 /// A format a backend shows, as `--help` lists it.
@@ -336,24 +443,17 @@ fn pick<'b>(backends: &[&'b dyn Backend], path: &str, head: &[u8]) -> Result<&'b
 }
 
 /// A render asked of a source: `page` (0-based) at `scale` output pixels per unit of its
-/// [`Source::size`], on `paper`. `tag` tells the result apart from others of the same page.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// [`Source::size`], with the settings at `values`. `tag` tells the result apart from others of the
+/// same page.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Request {
     pub(crate) page: usize,
     pub(crate) scale: f32,
     pub(crate) tag: u64,
-    pub(crate) paper: Paper,
-}
-
-/// What a page is wanted on, for a source with a dark form ([`Source::dark_form`]). Any other is
-/// shown as it is, whatever is asked.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Paper {
-    /// As printed.
-    #[default]
-    Printed,
-    /// Light on dark, the page this colour.
-    Dark([u8; 3]),
+    /// The settings' values: a backend draws by those it declares, for a file that has them.
+    pub(crate) values: Values,
+    /// The colour of dark paper here: the terminal's own background where it is dark.
+    pub(crate) dark: [u8; 3],
 }
 
 /// Premultiplied RGBA, row by row, top to bottom: a backend's own buffer, read as bytes, so its
@@ -419,10 +519,11 @@ pub(crate) trait Source {
     /// to the window, it is never drawn larger, unless the reader zooms to the width. A PDF's
     /// points are a unit for any scale.
     fn natural(&self, page: usize) -> bool;
-    /// Whether it has pages to show on dark paper ([`Paper::Dark`]): a page that is just text with no
-    /// paper of its own. A PDF or a Word document is a page as printed, white in its design.
-    fn dark_form(&self) -> bool {
-        false
+    /// The settings it has, by name, of those its backend declares ([`Backend::settings`]): dark
+    /// paper for a page that is just text with no paper of its own, never for a PDF or a Word
+    /// document, a page as printed, white in its design. None by default.
+    fn settings(&self) -> Vec<&'static str> {
+        Vec::new()
     }
     /// Find out page `page`'s true size, for a caller that may wait for it: printing. The pager never
     /// waits: until it is known, [`Source::size`] may be a stand-in ([`Later`]).
@@ -617,6 +718,112 @@ pub(crate) mod tests {
                 assert!(tells(&name.to_uppercase()), "{}: .{}", backend.name(), name.to_uppercase());
             }
         }
+    }
+
+    /// A backend that declares `settings`, and opens what [`PDF`] does.
+    pub(crate) struct Declaring(pub(crate) &'static [Setting]);
+
+    impl Backend for Declaring {
+        fn name(&self) -> &'static str {
+            "declaring"
+        }
+        fn shows(&self) -> &'static str {
+            PDF.shows()
+        }
+        fn formats(&self) -> Vec<Format> {
+            PDF.formats()
+        }
+        fn credits(&self) -> &[&'static str] {
+            &[]
+        }
+        fn options(&self) -> &'static [OptionSpec] {
+            &[]
+        }
+        fn settings(&self) -> &'static [Setting] {
+            self.0
+        }
+        fn opens(&self, path: &str, head: &[u8]) -> bool {
+            PDF.opens(path, head)
+        }
+        fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
+            PDF.open(input, options)
+        }
+    }
+
+    /// A setting the tests declare, cycled by `key`, its option `option`.
+    pub(crate) const fn cycled(name: &'static str, key: char, option: &'static str) -> Setting {
+        Setting {
+            name,
+            named: &[Named { name: "light", says: "dark on light" }, Named { name: "dark", says: "light on dark" }],
+            numbers: None,
+            default: Value::Named("light"),
+            auto: Some(Auto { light: "light", dark: "dark" }),
+            keys: Keys::Cycle(key),
+            option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "" },
+            help: "",
+            missing: "not this one",
+        }
+    }
+
+    /// What is wrong with the keys `backends` give their settings: one that is the viewer's, one that
+    /// means two settings, or a setting given two sets of keys.
+    fn wrong_keys(backends: &[&dyn Backend]) -> Vec<String> {
+        let mut seen: Vec<(char, &str)> = Vec::new();
+        let mut keys: Vec<(&str, Keys)> = Vec::new();
+        let mut wrong = Vec::new();
+        for backend in backends {
+            for setting in backend.settings() {
+                match keys.iter().find(|(name, _)| *name == setting.name) {
+                    Some((_, known)) if *known != setting.keys => wrong.push(format!("{}: {} has other keys", backend.name(), setting.name)),
+                    Some(_) => {}
+                    None => keys.push((setting.name, setting.keys)),
+                }
+                for key in setting.keys.chars() {
+                    if crate::view::VIEWER_KEYS.contains(key) {
+                        wrong.push(format!("{}: {key:?}, {}'s key, is the viewer's", backend.name(), setting.name));
+                    }
+                    match seen.iter().find(|(seen, _)| *seen == key) {
+                        Some((_, other)) if *other != setting.name => wrong.push(format!("{key:?} is {other}'s and {}'s", setting.name)),
+                        Some(_) => {}
+                        None => seen.push((key, setting.name)),
+                    }
+                }
+            }
+        }
+        wrong
+    }
+
+    /// No backend's setting has one of the viewer's keys, a key means the same setting in every
+    /// backend that declares it, and the build declares no more settings than a request carries.
+    #[test]
+    fn a_settings_keys_are_its_own_in_every_backend() {
+        assert_eq!(wrong_keys(BACKENDS), Vec::<String>::new());
+        let mut names: Vec<&str> = BACKENDS.iter().flat_map(|b| b.settings()).map(|s| s.name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert!(names.len() <= MAX_SETTINGS, "{names:?}");
+        // What it would say.
+        static PAPER: Declaring = Declaring(&[cycled("paper", 'd', "--theme")]);
+        static QUITS: Declaring = Declaring(&[cycled("paper", 'q', "--theme")]);
+        static OTHER: Declaring = Declaring(&[cycled("tint", 'd', "--tint")]);
+        static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("paper", 'd', "--theme") }]);
+        assert!(wrong_keys(&[&PAPER, &PAPER]).is_empty(), "one setting in two backends");
+        assert_eq!(wrong_keys(&[&QUITS]).len(), 1, "the viewer's");
+        assert_eq!(wrong_keys(&[&PAPER, &OTHER]).len(), 1, "two settings");
+        assert_eq!(wrong_keys(&[&PAPER, &STEPS]).len(), 1, "two sets of keys");
+    }
+
+    #[test]
+    fn a_value_is_held_by_its_settings_name_and_values_hold_so_many() {
+        let mut values = Values::default();
+        assert_eq!(values.get("paper"), None);
+        assert!(values.set("paper", Value::Named("dark")) && values.set("width", Value::Number(72)));
+        assert!(values.set("paper", Value::Named("light")));
+        assert_eq!((values.get("paper"), values.get("width")), (Some(Value::Named("light")), Some(Value::Number(72))));
+        let names = ["a", "b", "c", "d", "e", "f"];
+        assert!(names.iter().all(|name| values.set(name, Value::Number(1))));
+        assert!(!values.set("g", Value::Number(1)), "past {MAX_SETTINGS}");
+        assert_eq!(values.get("g"), None);
     }
 
     #[test]

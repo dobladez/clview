@@ -11,6 +11,11 @@ works today. A version's section becomes the notes of its
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 
+### Changed
+
+- `--help` lists `--theme` among the documents' options, as it comes with them; it is still taken
+  with any file. A `clv` built without documents has no `--theme` and no `d`.
+
 ## 0.3.0 (2026-11-04)
 
 ### Changed

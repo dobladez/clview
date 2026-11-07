@@ -197,6 +197,14 @@ fn bad_arguments_say_what_is_allowed() {
     }
 }
 
+/// `--theme` is the documents' backend's setting: a build without them doesn't know it.
+#[cfg(not(feature = "word"))]
+#[test]
+fn without_documents_there_is_no_theme() {
+    let out = view(&fixture("no-theme", 1), &["--protocol", "kitty", "--theme", "dark"]);
+    assert!(!out.status.success() && text(&out.stderr).contains("unknown option --theme"), "{}", text(&out.stderr));
+}
+
 /// Nothing given at all is a call for help: what `--help` prints, and no error.
 #[test]
 fn no_arguments_print_the_help() {
@@ -378,6 +386,10 @@ fn help_and_version() {
     let headings = help.lines().zip(help.lines().skip(1)).filter(heading).count();
     assert_eq!(headings, 1 + usize::from(cfg!(feature = "word")) + usize::from(cfg!(feature = "sheet")), "{help}");
     assert!(help.contains("\n\n   for PDFs:\n     --password PW ") && !help.contains("no options"), "{help}");
+    // A setting's option is its backend's: `--theme` the documents'.
+    assert!(!help.contains("\n  --theme "), "{help}");
+    let documents = help.split("\n   for documents:\n").nth(1).map(|rest| rest.split("\n\n").next().unwrap_or_default());
+    assert_eq!(documents.is_some_and(|options| options.contains("\n     --theme auto|light|dark ")), cfg!(feature = "word"), "{help}");
     // Then the formats shown, by the libraries each backend credits: a backend's only when it is
     // built.
     let shown = |what: &str, formats: &str| {

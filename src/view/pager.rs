@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::clip;
 use crate::encode::PngEffort;
-use crate::source::{Container, Frame, Later, Paper, Pool, Ready, Request, Source};
+use crate::source::{Container, Frame, Keys, Later, Pool, Ready, Request, Setting, Source, Value, Values};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -60,8 +60,6 @@ const MAX_FILTER: usize = 256;
 const FILTER_KEYS: &str = "⏎ keep · esc cancel";
 /// What `/` says in a file's pages.
 const NO_SEARCH: &str = "no text search; / filters lists";
-/// What `d` says of what can't change: a PDF or a Word document is a page as printed.
-const NO_DARK_FORM: &str = "only Markdown and HTML go dark";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -97,6 +95,10 @@ const ANSWER_WAIT: Duration = Duration::from_millis(100);
 const LIST_KEYS: [&str; 3] = ["arrows move · ⏎ open · + - zoom · q quit", "arrows · ⏎ open · q quit", "⏎ open · q quit"];
 const OPENED_KEYS: [&str; 3] = ["esc back · space b · n p · + - zoom · q quit", "esc back · n p · q quit", "esc back · q quit"];
 const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
+/// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
+/// them (`source.rs` checks the build's).
+#[cfg(test)]
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknphl +=-_r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -111,7 +113,6 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     ("r  Ctrl-L", "render the pages again"),
-    ("d", "Markdown and HTML light on dark, or dark on light"),
     ("c", "copy the page to the clipboard"),
 ];
 /// In a list:
@@ -125,7 +126,6 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
     ("+ -", "bigger, fewer to a row; smaller, more to a row"),
     ("r  Ctrl-L", "render again"),
-    ("d", "Markdown and HTML light on dark, or dark on light"),
     ("c", "copy its picture to the clipboard"),
 ];
 /// Leaving, gone into from a list or not, and these keys themselves.
@@ -157,7 +157,8 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let mut level = Level::new(0, shown, zoom, false);
+    let settings = Rc::new(Settings { declared: super::settings(opener.backends), values: std::cell::Cell::new(terminal.values) });
+    let mut level = Level::new(0, shown, zoom, false, settings.clone());
     level.nav.message = note;
     let mut pager = Pager {
         screen: Screen::enter(tty)?,
@@ -181,7 +182,7 @@ pub(super) fn run(
         first_id,
         next_id: 0,
         tag: 0,
-        paper: terminal.paper,
+        settings,
         dark: terminal.dark,
         tmux_check: watch.as_ref().map(|_| Instant::now() + TMUX_EVERY),
         watch,
@@ -367,8 +368,10 @@ struct Nav {
     help: bool,
     /// Render the pages again even if nothing changed (`r`, Ctrl-L).
     rerender: bool,
-    /// The reader asked for pages on the other paper.
-    turn_paper: bool,
+    /// The settings this build declares, and their values, shared by every level.
+    settings: Rc<Settings>,
+    /// The settings what is shown has, by name: a key of another says so, and changes nothing.
+    has: Vec<&'static str>,
     /// A list's tiles' names, by tile, as a filter matches them ([`fold`]); none for a file's
     /// pages.
     names: Vec<String>,
@@ -392,6 +395,41 @@ struct Filter {
     /// chosen then.
     before: Option<String>,
     chosen_before: Option<usize>,
+}
+
+/// The settings this build declares ([`super::settings`]), and their values: they hold for the whole
+/// run, a list and every file opened from it alike, so every level shares them.
+#[derive(Debug, Default)]
+struct Settings {
+    declared: Vec<&'static Setting>,
+    values: std::cell::Cell<Values>,
+}
+
+/// A setting's keys, as `?` lists them.
+fn setting_keys(setting: &Setting) -> String {
+    match setting.keys {
+        Keys::Cycle(key) => key.to_string(),
+        Keys::Step(down, up) if setting.numbers.is_some() => format!("{down} {up}  12{up}"),
+        Keys::Step(down, up) => format!("{down} {up}"),
+    }
+}
+
+/// What a key of `setting`'s does to its value `now`: the value it goes to, and what the reader is
+/// told of it. A cycling key goes to the next named value, after the last the first.
+fn turned(setting: &Setting, now: Value) -> (Value, String) {
+    let says = |value: Value| match value {
+        Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
+        Value::Number(number) => format!("{} {number}", setting.name),
+    };
+    let value = match setting.keys {
+        Keys::Cycle(_) => {
+            let at = setting.named.iter().position(|named| Value::Named(named.name) == now);
+            let next = at.map_or(0, |at| at.saturating_add(1)).checked_rem(setting.named.len()).and_then(|next| setting.named.get(next));
+            next.map_or(now, |named| Value::Named(named.name))
+        }
+        Keys::Step(..) => now,
+    };
+    (value, says(value))
 }
 
 /// A name as a filter matches it: in lower case, so that case doesn't matter.
@@ -420,7 +458,8 @@ impl Nav {
             hint: true,
             help: false,
             rerender: false,
-            turn_paper: false,
+            settings: Rc::default(),
+            has: Vec::new(),
             names: Vec::new(),
             filter: None,
         }
@@ -431,11 +470,14 @@ impl Nav {
         if self.list { "tile" } else { "page" }
     }
 
-    /// What `?` shows here.
-    fn help_lines(&self) -> Vec<(&'static str, &'static str)> {
+    /// What `?` shows here: the viewer's keys, then the settings' this build declares, whatever is
+    /// shown, then how to leave.
+    fn help_lines(&self) -> Vec<(String, &'static str)> {
         let keys = if self.list { LIST_HELP } else { PAGE_HELP };
         let leave = if self.nested { BACK_HELP } else { QUIT_HELP };
-        keys.iter().chain(leave).copied().chain([HELP_HELP]).collect()
+        let settings = self.settings.declared.iter().map(|setting| (setting_keys(setting), setting.help));
+        let fixed = |lines: &[(&str, &'static str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), *what)).collect::<Vec<_>>();
+        fixed(keys).into_iter().chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
     }
 
     /// Pages to a row.
@@ -540,9 +582,8 @@ impl Nav {
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
-            Key::Char('d') => self.turn_paper = true,
             Key::Char('/') => self.message = Some(NO_SEARCH.into()),
-            _ => {}
+            _ => self.setting_key(key),
         }
         Step::Continue
     }
@@ -577,11 +618,31 @@ impl Nav {
             }
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
-            Key::Char('d') => self.turn_paper = true,
             Key::Char('/') => self.start_filter(),
-            _ => {}
+            _ => self.setting_key(key),
         }
         Step::Continue
+    }
+
+    /// A key none of the viewer's took: a setting's, if this build declares one with it. On what
+    /// hasn't the setting, its message is said and nothing changes; otherwise its value changes, the
+    /// pages are made again, and the reader is told what it is now.
+    fn setting_key(&mut self, key: Key) {
+        let Key::Char(key) = key else { return };
+        let settings = self.settings.clone();
+        let Some(setting) = settings.declared.iter().find(|setting| setting.keys.chars().contains(&key)) else { return };
+        if !self.has.contains(&setting.name) {
+            self.message = Some(setting.missing.into());
+            return;
+        }
+        let mut values = settings.values.get();
+        let now = values.get(setting.name).unwrap_or(setting.default);
+        let (value, said) = turned(setting, now);
+        if value != now && values.set(setting.name, value) {
+            settings.values.set(values);
+            self.rerender = true;
+        }
+        self.message = Some(said);
     }
 
     /// In a list, choose the tile at `index`, or the last: the screen follows it.
@@ -966,11 +1027,12 @@ struct Level {
 impl Level {
     /// What is `shown`, at `zoom`; `nested` when opened from a list. A list gone into from a list
     /// needs no reminder of the keys: they are the list's.
-    fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool) -> Self {
+    fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>) -> Self {
         let list = shown.is_list();
         let Shown { pages: Pages { source, name, pages }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
-        let nav = Nav { list, nested, hint: !(list && nested), names, ..Nav::new(pages, source.pages(), zoom) };
+        let has = source.settings();
+        let nav = Nav { list, nested, hint: !(list && nested), names, settings, has, ..Nav::new(pages, source.pages(), zoom) };
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
     }
 
@@ -1019,8 +1081,9 @@ struct Pager<'a> {
     first_id: u64,
     next_id: u64,
     tag: u64,
-    /// What pages are on now, and the colour of dark paper.
-    paper: Paper,
+    /// The settings this build declares and their values, which every level shares; and the colour
+    /// of dark paper.
+    settings: Rc<Settings>,
     dark: [u8; 3],
     /// Inside tmux: which terminals show the pane and what they missed, and when to ask again.
     watch: Option<tmux::Watch>,
@@ -1095,10 +1158,7 @@ impl Pager<'_> {
         let area_rows = size.rows.saturating_sub(1).max(1);
         let (max_cols, max_rows) = self.output.limits(size.cols);
         let mut out = Vec::new();
-        if std::mem::take(&mut self.level.nav.turn_paper) {
-            self.turn_paper();
-        }
-        // Pages made for another window or paper, or asked to be made again, go.
+        // Pages made for another window or another value of a setting, or asked to be made again, go.
         if std::mem::take(&mut self.level.nav.rerender) || self.size != Some(size) {
             for sent in self.sent.drain(..) {
                 delete(&mut out, sent.id, self.output);
@@ -1204,7 +1264,7 @@ impl Pager<'_> {
         let level = match self.level.items.get(at) {
             Some(Item::File(pages)) => {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
-                Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true)
+                Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true, self.settings.clone())
             }
             // It may not be open yet, or be the file that turns out not to open.
             Some(Item::Later { name, later }) => {
@@ -1267,7 +1327,7 @@ impl Pager<'_> {
             return Ok(true);
         }
         self.level.nav.message = None;
-        let mut level = Level::new(self.levels, Shown::list(items, name), self.level.nav.zoom, true);
+        let mut level = Level::new(self.levels, Shown::list(items, name), self.level.nav.zoom, true, self.settings.clone());
         level.nav.message = left_out_note(&left_out);
         level.from = Some(container);
         self.enter(level);
@@ -1286,7 +1346,8 @@ impl Pager<'_> {
         match outcome {
             Ok(source) => {
                 self.level.nav.message = None;
-                let level = Level::new(self.levels, Shown { pages: Pages::all(source, name), items: Vec::new() }, Zoom::Auto, true);
+                let level =
+                    Level::new(self.levels, Shown { pages: Pages::all(source, name), items: Vec::new() }, Zoom::Auto, true, self.settings.clone());
                 self.enter(level);
             }
             Err(why) => self.level.nav.message = Some(format!("{name}: {why}")),
@@ -1736,7 +1797,7 @@ impl Pager<'_> {
                 Written::File(path) => return Ok(Some(Payload::File(path))),
                 Written::Failed(e, back) => {
                     self.level.nav.message = Some(format!("{e}; sending pages in the terminal stream instead"));
-                    page = back;
+                    page = *back;
                 }
                 Written::Stalled => return Ok(None),
             }
@@ -1785,28 +1846,13 @@ impl Pager<'_> {
     }
 
     /// Tell the pool which renders are still wanted, most urgent first (a page being copied, then
-    /// the pages): it keeps those and cancels the rest. A page goes on the paper it is shown on, and
-    /// is copied as it is shown.
+    /// the pages): it keeps those and cancels the rest. A page goes with the settings' values (on
+    /// the paper it is shown on), and is copied as it is shown.
     fn requeue(&self) {
-        let copy = self.copier.request(self.level.id).map(|copy| Request { paper: self.paper, ..copy });
-        let pages = self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag, self.paper));
+        let (values, dark) = (self.settings.values.get(), self.dark);
+        let copy = self.copier.request(self.level.id).map(|copy| Request { values, dark, ..copy });
+        let pages = self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag, values, dark));
         self.level.pool.set_queue(copy.into_iter().chain(pages).collect());
-    }
-
-    /// Pages on the other paper, if what is shown has a dark form; all sent so far go, on the next draw,
-    /// as for `r`. A level gone back to has its pages made again too, on this paper.
-    fn turn_paper(&mut self) {
-        if !self.level.source.dark_form() {
-            self.level.nav.message = Some(NO_DARK_FORM.into());
-            return;
-        }
-        let (paper, said) = match self.paper {
-            Paper::Printed => (Paper::Dark(self.dark), "light on dark"),
-            Paper::Dark(_) => (Paper::Printed, "dark on light"),
-        };
-        self.paper = paper;
-        self.level.nav.rerender = true;
-        self.level.nav.message = Some(said.into());
     }
 }
 
@@ -1876,6 +1922,104 @@ mod tests {
     /// The page on screen (the first, when two are).
     fn page(nav: &Nav) -> usize {
         nav.on_screen()[0].unwrap()
+    }
+
+    /// A setting the tests declare, as a backend would: two named values, cycled by `d`.
+    const SHADE: Setting = Setting {
+        name: "shade",
+        named: &[crate::source::Named { name: "pale", says: "pale now" }, crate::source::Named { name: "deep", says: "deep now" }],
+        numbers: None,
+        default: Value::Named("pale"),
+        auto: None,
+        keys: Keys::Cycle('d'),
+        option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "" },
+        help: "pale or deep",
+        missing: "only some go deep",
+    };
+
+    /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
+    fn declaring(nav: Nav, has: bool) -> Nav {
+        let settings = Rc::new(Settings { declared: vec![&SHADE], values: std::cell::Cell::default() });
+        Nav { settings, has: if has { vec![SHADE.name] } else { Vec::new() }, ..nav }
+    }
+
+    /// The value `nav` has for [`SHADE`], if it was set.
+    fn shade(nav: &Nav) -> Option<Value> {
+        nav.settings.values.get().get(SHADE.name)
+    }
+
+    /// A setting's key, the viewer's taking none: on what has it, it goes to the next named value
+    /// and says what that is, the pages made again; on what hasn't, it says the setting's message
+    /// and changes nothing. A number typed before a setting without numbers is left as it is.
+    #[test]
+    fn a_settings_key_cycles_its_values_where_what_is_shown_has_it() {
+        for nav in [reader(0, 12, 40, 40), list(9)] {
+            let mut nav = declaring(nav, true);
+            assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
+            assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (Some(Value::Named("deep")), Some("deep now"), true));
+            nav.rerender = false;
+            press(&mut nav, &[Key::Char('d')]);
+            assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (Some(Value::Named("pale")), Some("pale now"), true));
+        }
+        let mut nav = declaring(reader(0, 12, 40, 40), false);
+        press(&mut nav, &[Key::Char('d')]);
+        assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (None, Some("only some go deep"), false));
+        let mut nav = declaring(reader(0, 12, 40, 40), true);
+        press(&mut nav, &[Key::Char('4'), Key::Char('d')]);
+        assert_eq!((nav.typed.as_str(), shade(&nav)), ("4", Some(Value::Named("deep"))), "the number is still there");
+        // Shared: a level opened from this one, and this one gone back to, have the same.
+        let other = Nav { has: vec![SHADE.name], settings: nav.settings.clone(), ..reader(0, 3, 40, 40) };
+        assert_eq!(shade(&other), Some(Value::Named("deep")));
+        // Without the setting declared, the key is nobody's.
+        let mut nav = reader(0, 12, 40, 40);
+        press(&mut nav, &[Key::Char('d')]);
+        assert_eq!((nav.message.as_deref(), nav.rerender), (None, false));
+    }
+
+    /// `?` lists the keys of the settings this build declares, after the viewer's and before the
+    /// way out, whatever is shown.
+    #[test]
+    fn the_keys_list_the_settings_after_the_viewers() {
+        for nav in [declaring(reader(0, 3, 40, 40), false), declaring(list(3), true)] {
+            let lines = nav.help_lines();
+            let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();
+            assert_eq!(lines.get(at("pale or deep")).map(|(keys, _)| keys.as_str()), Some("d"));
+            assert!(at("pale or deep") > lines.iter().position(|(keys, _)| keys.starts_with("r  Ctrl-L")).unwrap());
+            assert!(at("pale or deep") < at("quit"));
+        }
+        assert!(!reader(0, 3, 40, 40).help_lines().iter().any(|(_, said)| *said == "pale or deep"));
+    }
+
+    /// The viewer's keys are those [`VIEWER_KEYS`] lists: any other character does nothing to where
+    /// the reader is, in a file's pages or in a list, so a setting may have it.
+    #[test]
+    fn the_viewers_keys_are_those_listed() {
+        // Each somewhere it can move: a page and a tile in the middle.
+        let tiles = |count, per_row, rows| {
+            let mut nav = tiles(count, per_row, rows);
+            nav.select(4);
+            nav
+        };
+        for c in (' '..='~').chain(['\u{c}']).filter(|c| !VIEWER_KEYS.contains(*c)) {
+            for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
+                let before = format!("{nav:?}");
+                let mut nav = nav;
+                assert_eq!(nav.key(Key::Char(c)), Step::Continue, "{c:?}");
+                nav.hint = true;
+                assert_eq!(format!("{nav:?}"), before, "{c:?}");
+            }
+        }
+        // And each listed is taken by one or the other.
+        for c in VIEWER_KEYS.chars() {
+            let moved = [reader(1, 12, 20, 40), tiles(10, 3, 2)].into_iter().any(|nav| {
+                let before = format!("{nav:?}");
+                let mut nav = nav;
+                let step = nav.key(Key::Char(c));
+                nav.hint = true;
+                step != Step::Continue || format!("{nav:?}") != before
+            });
+            assert!(moved, "{c:?}");
+        }
     }
 
     /// `keys` pressed: what the first that asks more of the pager than a move asks.
@@ -2159,8 +2303,8 @@ mod tests {
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace  u", "back to the list")));
-        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C", "quit")));
+        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list")));
+        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit")));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
 
@@ -2218,12 +2362,6 @@ mod tests {
         assert_eq!((nav.zoom, nav.scroll), (Zoom::Width, 0));
         press(&mut nav, &[Key::Char('r')]);
         assert!(nav.rerender);
-        let mut nav = reader(0, 12, 40, 40);
-        assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
-        assert!(nav.turn_paper, "on a page");
-        let mut nav = list(9);
-        assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
-        assert!(nav.turn_paper, "in a list");
         assert_eq!(press(&mut nav, &[Key::Char('q')]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
         assert_eq!(press(&mut nav, &[Key::Char('x'), Key::PageUp, Key::End]), Step::Continue);
@@ -2499,13 +2637,13 @@ mod tests {
 
     #[test]
     fn while_a_filter_is_typed_every_key_that_types_a_character_is_text() {
-        let mut nav = named(&PHOTOS);
+        let mut nav = declaring(named(&PHOTOS), true);
         let zoom = nav.zoom;
         press(&mut nav, &[Key::Char('/')]);
         // Keys that quit, move, zoom, go up, show the keys or type a number, elsewhere.
         assert_eq!(type_in(&mut nav, "q j1?u gG+-/rcd"), Step::Continue);
         assert_eq!(filter_text(&nav), Some("q j1?u gG+-/rcd"));
-        assert!(!nav.turn_paper, "typed, it is a letter of the filter");
+        assert_eq!(nav.settings.values.get(), Values::default(), "typed, a setting's key is a letter of the filter");
         assert_eq!((nav.help, nav.zoom, nav.typed.as_str(), nav.rerender, typing(&nav)), (false, zoom, "", false, true));
         // A control character isn't: Ctrl-L renders again, and Ctrl-C still quits.
         press(&mut nav, &[Key::Char('\u{c}'), Key::Char('\u{1b}')]);

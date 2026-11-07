@@ -208,7 +208,7 @@ pub(crate) struct Later(Rc<Inner>);
 
 struct Inner {
     path: String,
-    dark_form: bool,
+    settings: &'static [&'static str],
     slot: Arc<Slot>,
     openers: Rc<Openers>,
     /// Its opening, once asked for after it finished: this never changes again.
@@ -216,18 +216,18 @@ struct Inner {
 }
 
 impl Later {
-    /// The file `file`, which `backend` opens with `options`, or whose pages have a dark form if
-    /// `dark_form`, as [`Backend::deferred`] said; opened on `openers`.
+    /// The file `file`, which `backend` opens with `options`, and which has `settings`, as
+    /// [`Backend::deferred`] said; opened on `openers`.
     pub(crate) fn new(
         file: Reopen,
         path: String,
-        dark_form: bool,
+        settings: &'static [&'static str],
         backend: &'static dyn Backend,
         options: Arc<OwnedOptions>,
         openers: Rc<Openers>,
     ) -> Self {
         let slot = Arc::new(Slot { file, backend, options, stage: Mutex::new(Stage::Idle) });
-        Self(Rc::new(Inner { path, dark_form, slot, openers, outcome: OnceCell::new() }))
+        Self(Rc::new(Inner { path, settings, slot, openers, outcome: OnceCell::new() }))
     }
 
     /// Its pages, or why it can't be shown, if it has been opened. Otherwise `None`, and it opens
@@ -305,8 +305,8 @@ impl Source for Later {
         matches!(self.0.outcome.get(), Some(Ok(source)) if source.natural(page))
     }
 
-    fn dark_form(&self) -> bool {
-        self.0.dark_form
+    fn settings(&self) -> Vec<&'static str> {
+        self.0.settings.to_vec()
     }
 
     fn settle(&self, _page: usize) {
@@ -483,11 +483,11 @@ mod tests {
         let file = std::env::temp_dir().join(format!("clview-later-{}", std::process::id()));
         std::fs::write(&file, "x").unwrap();
         let path = file.to_str().unwrap().to_owned();
-        Later::new(Reopen::Disk(path.clone()), path, false, backend, Arc::new(Parsed::default().owned()), Rc::new(Openers::default()))
+        Later::new(Reopen::Disk(path.clone()), path, &[], backend, Arc::new(Parsed::default().owned()), Rc::new(Openers::default()))
     }
 
     fn request(tag: u64) -> Request {
-        Request { page: 0, scale: 1.0, tag, paper: Default::default() }
+        Request { page: 0, scale: 1.0, tag, ..Default::default() }
     }
 
     /// The next frame from `pool`, within five seconds.
@@ -585,7 +585,7 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let path = file.to_str().unwrap().to_owned();
         let made: Vec<Later> = (0..THREADS + 3)
-            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), false, &BACKEND, Arc::new(Parsed::default().owned()), openers.clone()))
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone()))
             .collect();
         let pools: Vec<Box<dyn Pool>> = made.iter().map(|later| later.pool(1)).collect();
         for pool in &pools {

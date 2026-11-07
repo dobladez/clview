@@ -46,7 +46,7 @@ impl Backend for Pdfcraft {
 
     /// It reads the whole file to open it.
     fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
-        Some(Deferred { dark_form: false })
+        Some(Deferred { settings: &[] })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -140,7 +140,7 @@ fn pdfcraft_request(r: Request) -> RenderRequest {
 
 /// A page pdfcraft rendered, its warnings put into words.
 fn frame(p: RenderedPage) -> Frame {
-    let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag, paper: Default::default() };
+    let request = Request { page: p.request.page, scale: p.request.scale, tag: p.request.tag, ..Default::default() };
     let warnings = p
         .warnings
         .iter()

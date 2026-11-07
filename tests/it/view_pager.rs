@@ -1330,9 +1330,11 @@ fn a_small_picture_gets_a_column_for_each_pixel() {
 }
 
 /// One that says it is kitty, so isn't asked if it speaks the protocol, and shows images.
+#[cfg(feature = "word")]
 const KITTY: Terminal = Terminal { term: Some("xterm-kitty"), ..PLAIN };
 
 /// A dark terminal, not grey, as many are: what a page takes from it can't be mistaken.
+#[cfg(feature = "word")]
 const DARK: &str = "rgb:1e1e/2e2e/3e3e";
 #[cfg(feature = "word")]
 const DARK_COLOUR: [u8; 3] = [0x1E, 0x2E, 0x3E];
@@ -1342,6 +1344,7 @@ const DARK_COLOUR: [u8; 3] = [0x1E, 0x2E, 0x3E];
 const DARK_PAPER: [u8; 3] = [0x1E, 0x1E, 0x1E];
 
 /// The colour at the corner of each page sent so far, in order.
+#[cfg(feature = "word")]
 fn corners(text: &str) -> Vec<[u8; 3]> {
     use base64::Engine as _;
     let mut found = Vec::new();
@@ -1374,6 +1377,7 @@ fn markdown(test: &str) -> PathBuf {
 }
 
 /// Wait until `count` pages have been sent, then the colour at the corner of the last.
+#[cfg(feature = "word")]
 fn last_corner(view: &Session, count: usize) -> [u8; 3] {
     view.wait_until("the page", |t| transmitted(t) >= count && corners(t).len() >= count);
     *corners(&view.text()).last().unwrap()
@@ -1441,7 +1445,9 @@ fn the_theme_decides_how_it_starts() {
     assert!(view.finish().success());
 }
 
-/// What has no dark form doesn't ask about the background, and `d` says so and sends nothing.
+/// What has no dark form doesn't ask about the background, and `d` says so and sends nothing: `d`
+/// is the documents' backend's.
+#[cfg(feature = "word")]
 #[test]
 fn what_has_no_dark_form_isnt_asked_and_d_says_so() {
     if !pty_works() {

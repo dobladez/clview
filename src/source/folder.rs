@@ -196,7 +196,7 @@ mod tests {
     /// What makes it a folder, so that it can be repainted or reshaped without this failing.
     #[test]
     fn a_folder_is_a_lighter_front_over_a_back_with_a_tab_and_nothing_around() {
-        let frame = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3, paper: Default::default() });
+        let frame = Folder(Badge::None).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 3, ..Default::default() });
         assert_eq!((frame.width, frame.height, frame.error.as_deref(), frame.request.tag), (100, 80, None, 3));
         let (w, h) = (frame.width, frame.height);
         // Around it, nothing.
@@ -218,7 +218,7 @@ mod tests {
     /// most of the folder shows as it is.
     #[test]
     fn a_parcel_is_a_folder_with_something_tied_round_it() {
-        let drawn = |badge| Folder(badge).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0, paper: Default::default() });
+        let drawn = |badge| Folder(badge).renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0, ..Default::default() });
         let (frame, plain) = (drawn(Badge::Parcel), drawn(Badge::None));
         let (w, h) = (frame.width, frame.height);
         assert_eq!((w, h), (plain.width, plain.height));
@@ -229,13 +229,13 @@ mod tests {
         assert!(frame.rgba.chunks(4).all(|p| p[..3].iter().all(|c| *c <= p[3])));
         // At any scale, small or large, it draws.
         for scale in [0.001, 0.3, 7.5] {
-            assert!(draw(Request { page: 0, scale, tag: 0, paper: Default::default() }, Badge::Parcel).error.is_none(), "{scale}");
+            assert!(draw(Request { page: 0, scale, tag: 0, ..Default::default() }, Badge::Parcel).error.is_none(), "{scale}");
         }
     }
 
     #[test]
     fn a_folder_is_drawn_at_any_scale_it_can_be_and_refuses_the_rest() {
-        let draw = |scale: f32, page: usize| draw(Request { page, scale, tag: 0, paper: Default::default() }, Badge::None);
+        let draw = |scale: f32, page: usize| draw(Request { page, scale, tag: 0, ..Default::default() }, Badge::None);
         assert_eq!((draw(0.25, 0).width, draw(0.25, 0).height), (25, 20));
         assert_eq!((draw(0.001, 0).width, draw(0.001, 0).height), (1, 1));
         for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 1000.0] {

@@ -395,7 +395,7 @@ mod tests {
     }
 
     fn render(image: &Image, scale: f32) -> Frame {
-        image.renderer().unwrap().render(Request { page: 0, scale, tag: 7, paper: Default::default() })
+        image.renderer().unwrap().render(Request { page: 0, scale, tag: 7, ..Default::default() })
     }
 
     #[test]
@@ -544,7 +544,7 @@ mod tests {
         for scale in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert!(size(scale).0.is_some_and(|e| e.contains("can't render at scale")), "{scale}");
         }
-        let second = image.renderer().unwrap().render(Request { page: 1, scale: 1.0, tag: 7, paper: Default::default() });
+        let second = image.renderer().unwrap().render(Request { page: 1, scale: 1.0, tag: 7, ..Default::default() });
         assert!(second.error.is_some_and(|e| e.contains("one page")));
         assert_eq!(image.size(1), None);
     }
@@ -581,10 +581,10 @@ mod tests {
         let image = Image::on_disk(&path, File::open(&path).unwrap(), Format::Image(ImageFormat::Png)).unwrap();
         let mut first = image.renderer().unwrap();
         let pixel = |frame: Frame| frame.rgba.first().copied();
-        assert_eq!(pixel(first.render(Request { page: 0, scale: 1.0, tag: 1, paper: Default::default() })), Some(10));
+        assert_eq!(pixel(first.render(Request { page: 0, scale: 1.0, tag: 1, ..Default::default() })), Some(10));
         std::fs::write(&path, coloured(200)).unwrap();
         // The first renderer has the picture as it decoded it; a new one reads the file anew.
-        assert_eq!(pixel(first.render(Request { page: 0, scale: 2.0, tag: 2, paper: Default::default() })), Some(10));
+        assert_eq!(pixel(first.render(Request { page: 0, scale: 2.0, tag: 2, ..Default::default() })), Some(10));
         assert_eq!(pixel(render(&image, 1.0)), Some(200));
         std::fs::remove_file(&path).unwrap();
         assert!(render(&image, 1.0).error.is_some_and(|e| e.starts_with("reading the file again: ")));

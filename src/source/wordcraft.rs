@@ -29,7 +29,10 @@ use wordcraft_render::RenderOptions;
 use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
 use super::threads::Threads;
-use super::{Again, Backend, Deferred, Format, Frame, Input, Opened, Paper, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{
+    Again, Auto, Backend, Deferred, Format, Frame, Input, Keys, Named, Opened, Pixels, Pool, Render, Reopenable, Request, Setting, Source, Value,
+    guarded,
+};
 use crate::args::{OptionSpec, Parsed};
 
 /// Word documents, OpenDocument text, RTF, Markdown and HTML, laid out and drawn by wordcraft.
@@ -37,6 +40,35 @@ pub(super) struct Wordcraft;
 
 const OPTIONS: &[OptionSpec] =
     &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected Word document" }];
+
+/// Markdown and HTML on dark paper, light on dark, or as printed, dark on light: they have no paper
+/// of their own ([ADR-0015](../../docs/adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
+const PAPER: Setting = Setting {
+    name: "paper",
+    named: &[Named { name: LIGHT, says: "dark on light" }, Named { name: DARK, says: "light on dark" }],
+    numbers: None,
+    default: Value::Named(LIGHT),
+    auto: Some(Auto { light: LIGHT, dark: DARK }),
+    keys: Keys::Cycle('d'),
+    option: OptionSpec {
+        name: "--theme",
+        short: None,
+        value: Some("auto|light|dark"),
+        help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
+    },
+    help: "Markdown and HTML light on dark, or dark on light",
+    missing: "only Markdown and HTML go dark",
+};
+const LIGHT: &str = "light";
+const DARK: &str = "dark";
+
+/// The settings a document of `kind` has: paper, for Markdown and HTML.
+fn settings_of(kind: Kind) -> &'static [&'static str] {
+    match kind {
+        Kind::Markdown | Kind::Html => &[PAPER.name],
+        _ => &[],
+    }
+}
 
 impl Backend for Wordcraft {
     fn name(&self) -> &'static str {
@@ -59,13 +91,17 @@ impl Backend for Wordcraft {
         OPTIONS
     }
 
+    fn settings(&self) -> &'static [Setting] {
+        &[PAPER]
+    }
+
     fn opens(&self, path: &str, head: &[u8]) -> bool {
         Kind::of(path, head).is_some()
     }
 
     /// It lays out the whole document to open it.
     fn deferred(&self, path: &str, head: &[u8]) -> Option<Deferred> {
-        Some(Deferred { dark_form: matches!(Kind::of(path, head)?, Kind::Markdown | Kind::Html) })
+        Some(Deferred { settings: settings_of(Kind::of(path, head)?) })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -292,8 +328,8 @@ impl Source for Paged {
     }
 
     /// Markdown and HTML have no paper of their own, unlike what is laid out to be printed.
-    fn dark_form(&self) -> bool {
-        matches!(self.0.kind, Kind::Markdown | Kind::Html)
+    fn settings(&self) -> Vec<&'static str> {
+        settings_of(self.0.kind).to_vec()
     }
 
     fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
@@ -339,10 +375,8 @@ impl Document {
         let mut options = RenderOptions::default();
         // A printed page: headers and footers dimmed only while the body is being edited.
         options.display.dim_header = false;
-        let dark = match request.paper {
-            Paper::Dark(paper) if matches!(self.kind, Kind::Markdown | Kind::Html) => Some(paper),
-            _ => None,
-        };
+        let dark = settings_of(self.kind).contains(&PAPER.name) && request.values.get(PAPER.name) == Some(Value::Named(DARK));
+        let dark = dark.then_some(request.dark);
         if let Some(paper) = dark {
             options.dark = true;
             options.dark_paper = grey_of(paper);
@@ -948,6 +982,26 @@ mod tests {
         assert_eq!(grey, [0x1E, 0x1E, 0x1E, 255, 80, 90, 100, 255], "a grey terminal: nothing to do");
     }
 
+    /// What a page is asked on, in the tests: the paper setting's value, and dark paper's colour.
+    #[derive(Clone, Copy, Debug)]
+    enum Paper {
+        Printed,
+        Dark([u8; 3]),
+    }
+
+    impl Paper {
+        /// Page `page` at `scale`, on this paper.
+        fn asked(self, page: usize, scale: f32) -> Request {
+            let mut values = crate::source::Values::default();
+            let (value, dark) = match self {
+                Self::Printed => (LIGHT, [0x1E; 3]),
+                Self::Dark(dark) => (DARK, dark),
+            };
+            assert!(values.set(PAPER.name, Value::Named(value)));
+            Request { page, scale, tag: 0, values, dark }
+        }
+    }
+
     /// The page's corner, drawn through `backend` on `paper`, from a file of `contents` named `name`.
     fn corner(name: &str, contents: &[u8], paper: Paper) -> (bool, [u8; 3]) {
         let dir = std::env::temp_dir().join(format!("clview-word-corner-{}", std::process::id()));
@@ -956,9 +1010,9 @@ mod tests {
         std::fs::write(&path, contents).unwrap();
         let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
         let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages: {name}") };
-        let frame = source.renderer().unwrap().render(Request { page: 0, scale: 1.0, tag: 0, paper });
+        let frame = source.renderer().unwrap().render(paper.asked(0, 1.0));
         assert_eq!(frame.error, None);
-        (source.dark_form(), [frame.rgba[0], frame.rgba[1], frame.rgba[2]])
+        (source.settings().contains(&PAPER.name), [frame.rgba[0], frame.rgba[1], frame.rgba[2]])
     }
 
     /// Markdown and HTML go on the paper asked for; what is laid out to be printed stays as printed.
@@ -988,7 +1042,7 @@ mod tests {
         std::fs::write(&path, markdown).unwrap();
         let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
         let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
-        let frame = source.renderer().unwrap().render(Request { page: 0, scale: SCALE, tag: 0, paper });
+        let frame = source.renderer().unwrap().render(paper.asked(0, SCALE));
         assert_eq!(frame.error, None);
         assert_eq!(frame.width, PAGE_WIDTH);
         std::fs::remove_file(&path).unwrap();
@@ -1277,8 +1331,7 @@ mod tests {
             let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
             assert!(source.pages() >= usize::from(pages));
             let pool = source.pool(4);
-            let requests: Vec<Request> =
-                (0..usize::from(pages)).map(|page| Request { page, scale: 0.5, tag: 0, paper: Default::default() }).collect();
+            let requests: Vec<Request> = (0..usize::from(pages)).map(|page| Request { page, scale: 0.5, ..Request::default() }).collect();
             let started = std::time::Instant::now();
             let mut done = vec![false; requests.len()];
             while done.iter().any(|page| !page) {
