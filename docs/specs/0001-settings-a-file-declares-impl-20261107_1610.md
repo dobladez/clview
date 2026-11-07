@@ -54,3 +54,20 @@ surprises, and what a later reader would want.
 - **A surprise, not the code's:** the disk filled during the per-feature gates; afterwards `word`
   alone failed to link (undefined `.llvm.` symbols) from incremental output left half-written.
   Removing `target/debug/incremental/clv-*` fixed it.
+
+## Task 2: numbers
+
+- **From a named value**, which the spec leaves open, `Step` goes up to the least and down to the
+  most. Spec-0002 replaces this with `page` among the steps at its own width.
+- **A count out of the range** sets the nearer end and says so as an end does (`width 200, the
+  most`); in it, `width 72`. Nine digits at most are typed (`MAX_TYPED`), so a count fits a `u32`.
+- **A step that reaches an end** (198 up to 200) says `width 200`; only a step that can't move says
+  `the most`, and changes nothing, so nothing is rendered again.
+- **`?`** gives a numbered setting's keys as `[ ]  12]`.
+- **No docs for users:** no shipped setting has numbers until Spec-0002. `docs/architecture.md` says
+  what `turned` does.
+- **Tests seen failing**, the same way as task 1:
+  - `step_keys_go_to_the_next_multiple_and_stay_at_the_ends`: up by the step rather than to its next
+    multiple; and the arm that stays at the most taken out.
+  - `a_count_sets_a_numbered_setting_and_is_used_up`: no count taken; the count kept on a file
+    without the setting; the count not clamped.

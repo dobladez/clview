@@ -173,7 +173,7 @@ None.
   `clv --pager --theme light README.md`, press `d` (`light on dark`) and `d` (`dark on light`);
   `clv --pager --theme dark report.pdf` (any PDF), shown as ever, and `d` says
   `only Markdown and HTML go dark`.
-- [ ] **Numbers** — `Step` keys, their multiples and ends, the count before a setting's key, used up
+- [x] **Numbers** — `Step` keys, their multiples and ends, the count before a setting's key, used up
   or left, in `Nav`, with a setting the tests declare. *Files:* `src/source.rs`,
   `src/view/pager.rs`. *Verify:* `cargo test -j 2 --bin clv view::pager`.
 

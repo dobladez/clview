@@ -122,7 +122,10 @@ and asks the terminal for its background only when what is shown has a setting w
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
 request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
 pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
-says the setting's message if what is shown hasn't it; a value changed goes the way `r` goes. The
+says the setting's message if what is shown hasn't it; a value changed goes the way `r` goes. A `Cycle` key goes to the next named
+value; `Step` keys to the next multiple of the step down or up, staying at the least or the most and
+saying so; and a number typed before a numbered setting's key sets it, clamped to its range, used up
+whatever happens (`turned`). The
 values are shared by every level (`pager::Settings`). `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
 `the_viewers_keys_are_those_listed` checks) and that a key means one setting

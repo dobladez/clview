@@ -414,20 +414,48 @@ fn setting_keys(setting: &Setting) -> String {
     }
 }
 
-/// What a key of `setting`'s does to its value `now`: the value it goes to, and what the reader is
-/// told of it. A cycling key goes to the next named value, after the last the first.
-fn turned(setting: &Setting, now: Value) -> (Value, String) {
+/// What `key`, one of `setting`'s, does to its value `now`, with `count` typed before it: the value
+/// it goes to, and what the reader is told of it. A number typed sets a setting with numbers to it,
+/// within their range. Otherwise a cycling key goes to the next named value, after the last the first;
+/// a stepping key to the next multiple of the step down or up, within the range, from a named value
+/// to the least going up and the most going down. At an end the value stays, and the line says so.
+fn turned(setting: &Setting, now: Value, key: char, count: Option<&str>) -> (Value, String) {
     let says = |value: Value| match value {
         Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
         Value::Number(number) => format!("{} {number}", setting.name),
     };
-    let value = match setting.keys {
-        Keys::Cycle(_) => {
+    let at_end = |number: u32, end: &str| (Value::Number(number), format!("{} {number}, the {end}", setting.name));
+    if let (Some(numbers), Some(count)) = (setting.numbers, count) {
+        // At most `MAX_TYPED` digits, so it fits; past the most, it is the most anyway.
+        let wanted = count.parse::<u32>().unwrap_or(u32::MAX);
+        let number = wanted.clamp(numbers.least, numbers.most.max(numbers.least));
+        return if wanted > number {
+            at_end(number, "most")
+        } else if wanted < number {
+            at_end(number, "least")
+        } else {
+            (Value::Number(number), says(Value::Number(number)))
+        };
+    }
+    let value = match (setting.keys, setting.numbers, now) {
+        (Keys::Cycle(_), ..) => {
             let at = setting.named.iter().position(|named| Value::Named(named.name) == now);
             let next = at.map_or(0, |at| at.saturating_add(1)).checked_rem(setting.named.len()).and_then(|next| setting.named.get(next));
             next.map_or(now, |named| Value::Named(named.name))
         }
-        Keys::Step(..) => now,
+        (Keys::Step(..), None, _) => now,
+        (Keys::Step(down, _), Some(numbers), _) => {
+            let (least, most, step) = (numbers.least, numbers.most.max(numbers.least), numbers.step.max(1));
+            let up = key != down;
+            match now {
+                Value::Number(number) if up && number >= most => return at_end(most, "most"),
+                Value::Number(number) if !up && number <= least => return at_end(least, "least"),
+                Value::Number(number) if up => Value::Number((number / step).saturating_add(1).saturating_mul(step).clamp(least, most)),
+                Value::Number(number) => Value::Number((number.saturating_sub(1) / step).saturating_mul(step).clamp(least, most)),
+                Value::Named(_) if up => Value::Number(least),
+                Value::Named(_) => Value::Number(most),
+            }
+        }
     };
     (value, says(value))
 }
@@ -624,20 +652,22 @@ impl Nav {
         Step::Continue
     }
 
-    /// A key none of the viewer's took: a setting's, if this build declares one with it. On what
-    /// hasn't the setting, its message is said and nothing changes; otherwise its value changes, the
-    /// pages are made again, and the reader is told what it is now.
+    /// A key none of the viewer's took: a setting's, if this build declares one with it. A number
+    /// typed before it is used up by a setting with numbers, whatever happens, and left as it is by
+    /// one without. On what hasn't the setting, its message is said and nothing changes; otherwise
+    /// its value changes, the pages are made again, and the reader is told what it is now.
     fn setting_key(&mut self, key: Key) {
         let Key::Char(key) = key else { return };
         let settings = self.settings.clone();
         let Some(setting) = settings.declared.iter().find(|setting| setting.keys.chars().contains(&key)) else { return };
+        let count = setting.numbers.and_then(|_| (!self.typed.is_empty()).then(|| std::mem::take(&mut self.typed)));
         if !self.has.contains(&setting.name) {
             self.message = Some(setting.missing.into());
             return;
         }
         let mut values = settings.values.get();
         let now = values.get(setting.name).unwrap_or(setting.default);
-        let (value, said) = turned(setting, now);
+        let (value, said) = turned(setting, now, key, count.as_deref());
         if value != now && values.set(setting.name, value) {
             settings.values.set(values);
             self.rerender = true;
@@ -1974,6 +2004,91 @@ mod tests {
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('d')]);
         assert_eq!((nav.message.as_deref(), nav.rerender), (None, false));
+    }
+
+    /// A setting with numbers the tests declare: `page`, or 20 to 200 in steps of 4, by `[` and `]`.
+    const WIDTH: Setting = Setting {
+        name: "width",
+        named: &[crate::source::Named { name: "page", says: "as laid out" }],
+        numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
+        default: Value::Named("page"),
+        keys: Keys::Step('[', ']'),
+        help: "narrower or wider",
+        missing: "only some are as wide",
+        ..SHADE
+    };
+
+    /// `nav` in a build that declares [`SHADE`] and [`WIDTH`], showing what has `has` of them.
+    fn declaring_both(nav: Nav, has: &[&'static str]) -> Nav {
+        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], values: std::cell::Cell::default() });
+        Nav { settings, has: has.to_vec(), ..nav }
+    }
+
+    /// The width `nav` has, and what the status line says.
+    fn width(nav: &Nav) -> (Option<Value>, Option<&str>) {
+        (nav.settings.values.get().get(WIDTH.name), nav.message.as_deref())
+    }
+
+    /// `Step` keys go to the next multiple of the step down or up; at the least or the most the value
+    /// stays and the line says so. From a named value, up is the least and down the most.
+    #[test]
+    fn step_keys_go_to_the_next_multiple_and_stay_at_the_ends() {
+        let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20")), "from page, up is the least");
+        assert!(nav.rerender);
+        press(&mut nav, &[Key::Char('['), Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20, the least")));
+        press(&mut nav, &[Key::Char('7'), Key::Char('3'), Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(73)), Some("width 73")));
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(76)), Some("width 76")), "73 up: the next multiple of 4");
+        press(&mut nav, &[Key::Char('7'), Key::Char('3'), Key::Char(']'), Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Number(72)), Some("width 72")), "73 down");
+        press(&mut nav, &[Key::Char('[')]);
+        assert_eq!(width(&nav).0, Some(Value::Number(68)), "from a multiple, the one before");
+        press(&mut nav, &[Key::Char('1'), Key::Char('9'), Key::Char('8'), Key::Char(']')]);
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200")), "198 up: the most, not past it");
+        nav.rerender = false;
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200, the most")));
+        assert!(!nav.rerender, "nothing changed");
+        let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
+        press(&mut nav, &[Key::Char('[')]);
+        assert_eq!(width(&nav).0, Some(Value::Number(200)), "from page, down is the most");
+    }
+
+    /// Digits typed before a numbered setting's key set it to that number, within its range, and are
+    /// used up whatever happens; before a setting without numbers they stay, and before `g` or Enter
+    /// they still go to a page.
+    #[test]
+    fn a_count_sets_a_numbered_setting_and_is_used_up() {
+        let mut nav = declaring_both(reader(0, 12, 40, 40), &["shade", "width"]);
+        press(&mut nav, &[Key::Char('7'), Key::Char('2'), Key::Char(']')]);
+        assert_eq!((width(&nav), nav.typed.as_str()), ((Some(Value::Number(72)), Some("width 72")), ""));
+        press(&mut nav, &[Key::Char('4'), Key::Char('0'), Key::Char('[')]);
+        assert_eq!(width(&nav).0, Some(Value::Number(40)), "either key sets it");
+        press(&mut nav, &[Key::Char('3'), Key::Char('0'), Key::Char('0'), Key::Char(']')]);
+        assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200, the most")));
+        press(&mut nav, &[Key::Char('5'), Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20, the least")));
+        press(&mut nav, &[Key::Char('9'); 12]);
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!((width(&nav).0, nav.typed.as_str()), (Some(Value::Number(200)), ""), "as long as can be typed");
+        // Before a setting without numbers, the count stays, and goes to a page after.
+        press(&mut nav, &[Key::Char('3'), Key::Char('d')]);
+        assert_eq!(nav.typed, "3");
+        press(&mut nav, &[Key::Char('g')]);
+        assert_eq!((page(&nav), width(&nav).0), (2, Some(Value::Number(200))));
+        press(&mut nav, &[Key::Char('5'), Key::Enter]);
+        assert_eq!(page(&nav), 4, "Enter too");
+        // On what hasn't the setting, the count is used up all the same, and nothing changes.
+        let mut nav = declaring_both(reader(0, 12, 40, 40), &["shade"]);
+        press(&mut nav, &[Key::Char('7'), Key::Char('2'), Key::Char(']')]);
+        assert_eq!((width(&nav), nav.typed.as_str(), nav.rerender), ((None, Some("only some are as wide")), "", false));
+        // `?` gives a count's form too.
+        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "narrower or wider")));
     }
 
     /// `?` lists the keys of the settings this build declares, after the viewer's and before the
