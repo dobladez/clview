@@ -1,6 +1,6 @@
 # Spec-0001: Let a file declare its settings and their keys
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-07
 - **Related:** [Spec-0002](0002-reflow-markdown-and-html-to-a-width.md), which builds on it;
   [ADR-0015](../adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) (dark paper,
@@ -184,7 +184,7 @@ None.
 - [x] Tests added, each seen failing without the change: the key and option tests in `source.rs`
   and `mod.rs`, the step, end and count tests in `pager.rs`.
 - [x] The assertions of the tests of `d` and `--theme` hold, gated where they need documents.
-- [ ] Manual: in kitty, `d` on Markdown, on a PDF, and in a list mixing them, as before.
+- [x] Manual: in kitty, `d` on Markdown, on a PDF, and in a list mixing them, as before.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
   ADR, and ADR-0015 marked superseded on `--theme`.
 
@@ -195,3 +195,4 @@ None.
   the build's settings before the file's, defaults and what each value says, counts and steps
   defined, every place a request is made, docs and an ADR.
 - 2026-11-07 — Implementing ([notes](0001-settings-a-file-declares-impl-20261107_1610.md)).
+- 2026-11-07 — Done.
