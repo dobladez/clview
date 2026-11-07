@@ -1,6 +1,6 @@
 # Spec-0001: Let a file declare its settings and their keys
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-07
 - **Related:** [Spec-0002](0002-reflow-markdown-and-html-to-a-width.md), which builds on it;
   [ADR-0015](../adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) (dark paper,
@@ -194,3 +194,4 @@ None.
 - 2026-11-07 — Revised after a review: a setting's option taken for any file, keys looked up among
   the build's settings before the file's, defaults and what each value says, counts and steps
   defined, every place a request is made, docs and an ADR.
+- 2026-11-07 — Implementing ([notes](0001-settings-a-file-declares-impl-20261107_1610.md)).
