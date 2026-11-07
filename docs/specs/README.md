@@ -34,6 +34,8 @@ fails while it disagrees with them.
 
 | # | Title | Status |
 |---|---|---|
+| 0001 | [Let a file declare its settings and their keys](0001-settings-a-file-declares.md) | Ready |
+| 0002 | [Reflow Markdown and HTML to a width in columns](0002-reflow-markdown-and-html-to-a-width.md) | Ready |
 
 ## Lifecycle
 
