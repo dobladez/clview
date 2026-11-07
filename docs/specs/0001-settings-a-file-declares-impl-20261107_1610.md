@@ -71,3 +71,13 @@ surprises, and what a later reader would want.
     multiple; and the arm that stays at the most taken out.
   - `a_count_sets_a_numbered_setting_and_is_used_up`: no count taken; the count kept on a file
     without the setting; the count not clamped.
+
+## Codex review fixes
+
+- **A value changed in a level left before the draw.** `setting_key` set the `rerender` of the
+  level's own `Nav`; `d` then `u`, read in one batch, dropped that level before the draw, so the list
+  kept tiles made on the old paper while new pages and `c` used the new one (on `main` the whole turn
+  was lost with the child, paper and all). The change is now a flag in the shared `pager::Settings`,
+  which the draw takes through `Nav::wants_rerender` whichever level is current.
+  `a_value_changed_in_a_level_left_before_the_draw_still_renders_again` failed with `setting_key` setting
+  the `Nav`'s `rerender` again.

@@ -157,7 +157,8 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let settings = Rc::new(Settings { declared: super::settings(opener.backends), values: std::cell::Cell::new(terminal.values) });
+    let settings =
+        Rc::new(Settings { declared: super::settings(opener.backends), values: std::cell::Cell::new(terminal.values), changed: Default::default() });
     let mut level = Level::new(0, shown, zoom, false, settings.clone());
     level.nav.message = note;
     let mut pager = Pager {
@@ -403,6 +404,10 @@ struct Filter {
 struct Settings {
     declared: Vec<&'static Setting>,
     values: std::cell::Cell<Values>,
+    /// A value changed since the last draw: every page sent goes, whichever level draws next. Kept
+    /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`d`
+    /// then `u`, read together) doesn't lose it.
+    changed: std::cell::Cell<bool>,
 }
 
 /// A setting's keys, as `?` lists them.
@@ -491,6 +496,13 @@ impl Nav {
             names: Vec::new(),
             filter: None,
         }
+    }
+
+    /// Whether the pages are to be made again: asked for here (`r`), or a setting's value changed,
+    /// here or in a level left since. Taken: the next ask says no until either happens again.
+    fn wants_rerender(&mut self) -> bool {
+        let asked = std::mem::take(&mut self.rerender);
+        self.settings.changed.take() || asked
     }
 
     /// What `pages` are called here: a list's are its tiles.
@@ -670,7 +682,7 @@ impl Nav {
         let (value, said) = turned(setting, now, key, count.as_deref());
         if value != now && values.set(setting.name, value) {
             settings.values.set(values);
-            self.rerender = true;
+            settings.changed.set(true);
         }
         self.message = Some(said);
     }
@@ -1189,7 +1201,7 @@ impl Pager<'_> {
         let (max_cols, max_rows) = self.output.limits(size.cols);
         let mut out = Vec::new();
         // Pages made for another window or another value of a setting, or asked to be made again, go.
-        if std::mem::take(&mut self.level.nav.rerender) || self.size != Some(size) {
+        if self.level.nav.wants_rerender() || self.size != Some(size) {
             for sent in self.sent.drain(..) {
                 delete(&mut out, sent.id, self.output);
             }
@@ -1969,7 +1981,7 @@ mod tests {
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
     fn declaring(nav: Nav, has: bool) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE], values: std::cell::Cell::default() });
+        let settings = Rc::new(Settings { declared: vec![&SHADE], values: std::cell::Cell::default(), changed: Default::default() });
         Nav { settings, has: if has { vec![SHADE.name] } else { Vec::new() }, ..nav }
     }
 
@@ -1986,14 +1998,13 @@ mod tests {
         for nav in [reader(0, 12, 40, 40), list(9)] {
             let mut nav = declaring(nav, true);
             assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
-            assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (Some(Value::Named("deep")), Some("deep now"), true));
-            nav.rerender = false;
+            assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (Some(Value::Named("deep")), Some("deep now".to_owned()), true));
             press(&mut nav, &[Key::Char('d')]);
-            assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (Some(Value::Named("pale")), Some("pale now"), true));
+            assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (Some(Value::Named("pale")), Some("pale now".to_owned()), true));
         }
         let mut nav = declaring(reader(0, 12, 40, 40), false);
         press(&mut nav, &[Key::Char('d')]);
-        assert_eq!((shade(&nav), nav.message.as_deref(), nav.rerender), (None, Some("only some go deep"), false));
+        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only some go deep".to_owned()), false));
         let mut nav = declaring(reader(0, 12, 40, 40), true);
         press(&mut nav, &[Key::Char('4'), Key::Char('d')]);
         assert_eq!((nav.typed.as_str(), shade(&nav)), ("4", Some(Value::Named("deep"))), "the number is still there");
@@ -2003,7 +2014,21 @@ mod tests {
         // Without the setting declared, the key is nobody's.
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('d')]);
-        assert_eq!((nav.message.as_deref(), nav.rerender), (None, false));
+        assert_eq!((nav.message.clone(), nav.wants_rerender()), (None, false));
+    }
+
+    /// A value changed in a file opened from a list, and the file left before the next draw (`d`
+    /// then `u`, read together): the list, drawn next, still makes its tiles again with the new value,
+    /// rather than keeping those made with the old. Once.
+    #[test]
+    fn a_value_changed_in_a_level_left_before_the_draw_still_renders_again() {
+        let mut list = declaring(list(9), true);
+        let mut opened = Nav { nested: true, has: vec![SHADE.name], settings: list.settings.clone(), ..reader(0, 3, 40, 40) };
+        assert_eq!(press(&mut opened, &[Key::Char('d'), Key::Char('u')]), Step::Back);
+        drop(opened);
+        assert_eq!(shade(&list), Some(Value::Named("deep")));
+        assert!(list.wants_rerender(), "the list's tiles were made on the old value");
+        assert!(!list.wants_rerender(), "once");
     }
 
     /// A setting with numbers the tests declare: `page`, or 20 to 200 in steps of 4, by `[` and `]`.
@@ -2020,7 +2045,7 @@ mod tests {
 
     /// `nav` in a build that declares [`SHADE`] and [`WIDTH`], showing what has `has` of them.
     fn declaring_both(nav: Nav, has: &[&'static str]) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], values: std::cell::Cell::default() });
+        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], values: std::cell::Cell::default(), changed: Default::default() });
         Nav { settings, has: has.to_vec(), ..nav }
     }
 
@@ -2036,7 +2061,7 @@ mod tests {
         let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20")), "from page, up is the least");
-        assert!(nav.rerender);
+        assert!(nav.wants_rerender());
         press(&mut nav, &[Key::Char('['), Key::Char('[')]);
         assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20, the least")));
         press(&mut nav, &[Key::Char('7'), Key::Char('3'), Key::Char(']')]);
@@ -2050,10 +2075,10 @@ mod tests {
         press(&mut nav, &[Key::Char('1'), Key::Char('9'), Key::Char('8'), Key::Char(']')]);
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200")), "198 up: the most, not past it");
-        nav.rerender = false;
+        assert!(nav.wants_rerender());
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200, the most")));
-        assert!(!nav.rerender, "nothing changed");
+        assert!(!nav.wants_rerender(), "nothing changed");
         let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
         press(&mut nav, &[Key::Char('[')]);
         assert_eq!(width(&nav).0, Some(Value::Number(200)), "from page, down is the most");
@@ -2086,7 +2111,8 @@ mod tests {
         // On what hasn't the setting, the count is used up all the same, and nothing changes.
         let mut nav = declaring_both(reader(0, 12, 40, 40), &["shade"]);
         press(&mut nav, &[Key::Char('7'), Key::Char('2'), Key::Char(']')]);
-        assert_eq!((width(&nav), nav.typed.as_str(), nav.rerender), ((None, Some("only some are as wide")), "", false));
+        assert!(!nav.wants_rerender());
+        assert_eq!((width(&nav), nav.typed.as_str()), ((None, Some("only some are as wide")), ""));
         // `?` gives a count's form too.
         assert!(nav.help_lines().contains(&("[ ]  12]".into(), "narrower or wider")));
     }

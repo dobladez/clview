@@ -126,7 +126,8 @@ says the setting's message if what is shown hasn't it; a value changed goes the 
 value; `Step` keys to the next multiple of the step down or up, staying at the least or the most and
 saying so; and a number typed before a numbered setting's key sets it, clamped to its range, used up
 whatever happens (`turned`). The
-values are shared by every level (`pager::Settings`). `source::tests::a_settings_keys_are_its_own_in_every_backend`
+values are shared by every level (`pager::Settings`), and so is the change, so a level left before
+the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
 `the_viewers_keys_are_those_listed` checks) and that a key means one setting
 ([ADR-0021](adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)).
