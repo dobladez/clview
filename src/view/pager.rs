@@ -31,12 +31,13 @@ use std::time::{Duration, Instant};
 
 use super::clip;
 use crate::encode::PngEffort;
-use crate::source::{Container, Effect, Frame, Keys, Later, Named, Numbers, Pool, Ready, Request, Setting, Source, Value, Values};
+use crate::source::{Container, Effect, Frame, Handle, Keys, Later, Named, Numbers, Openers, Pool, Ready, Request, Setting, Source, Value, Values};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
+use super::relayout::{self, Ended, Relayout};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
     FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, cell_lines, chars, checked,
@@ -199,6 +200,8 @@ pub(super) fn run(
         placed_at: None,
         on_glass: Vec::new(),
         copier: clip::Copier::new(terminal.local, terminal.effort, terminal.output.wrap()),
+        openers: opener.openers(),
+        relayout: Relayout::new(),
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -223,7 +226,7 @@ pub(super) fn run(
             Duration::ZERO
         } else if pager.reading.is_some() {
             PROGRESS_EVERY.min(TICK)
-        } else if pager.going_into.is_some() {
+        } else if pager.going_into.is_some() || pager.relayout.is_under_way() {
             POLL
         } else if let Some(wait) = pager.copier.wait() {
             wait
@@ -440,7 +443,7 @@ fn setting_keys(setting: &Setting) -> String {
 }
 
 /// What `setting` at `value` is said as: a named value's own words, or `width 72`.
-fn said(setting: &Setting, value: Value) -> String {
+pub(super) fn said(setting: &Setting, value: Value) -> String {
     match value {
         Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
         Value::Number(number) => format!("{} {number}", setting.name),
@@ -1238,6 +1241,10 @@ struct Pager<'a> {
     on_glass: Vec<Vec<u8>>,
     /// Copies to the clipboard (`c`), and what the terminal said of its clipboard.
     copier: clip::Copier,
+    /// The threads a list's files open on, which lay a document out again too.
+    openers: Rc<Openers>,
+    /// The document on screen being laid out again, if it is ([`Pager::relayout`]).
+    relayout: Relayout<Handle>,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1516,6 +1523,7 @@ impl Pager<'_> {
         // which for a PDF is the document parsed again.
         self.level.pool = self.level.source.pool(THREADS);
         self.wanted.clear();
+        self.relayout.forget();
         let parent = std::mem::replace(&mut self.level, level);
         if let Some(said) = self.copier.left(parent.id) {
             self.level.nav.message.get_or_insert(said);
@@ -1527,6 +1535,7 @@ impl Pager<'_> {
     /// terminal: going back to it opens it anew.
     fn back(&mut self) -> Result<(), String> {
         let Some(parent) = self.parents.pop() else { return Ok(()) };
+        self.relayout.forget();
         let left = std::mem::replace(&mut self.level, parent);
         // What it read its files with goes; what they render with, with its pool.
         if let Some(container) = &left.from {
@@ -1555,62 +1564,65 @@ impl Pager<'_> {
         self.tty.write_all(&out)
     }
 
-    /// The values to lay the document on screen out at, when a relayout setting it has is wanted at
-    /// another value than its layout is at: after its keys, or on going into it after a change. None
-    /// in a list, whose tiles keep their layout, with `--pages`, which picks pages as laid out, and
-    /// when they agree.
-    fn relayout_wanted(&self) -> Option<Values> {
-        let nav = &self.level.nav;
-        if nav.list || nav.picked {
-            return None;
-        }
-        let (wanted, laid) = (self.settings.values.get(), self.level.source.laid_at());
-        let mut relayout = self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name));
-        let differs = |setting: &&Setting| wanted.get(setting.name).unwrap_or(setting.default) != laid.get(setting.name).unwrap_or(setting.default);
-        relayout.any(differs).then_some(wanted)
-    }
-
-    /// What the relayout settings the document on screen has are wanted at, said as their keys say it.
-    fn relayout_said(&self, wanted: &Values) -> String {
-        let nav = &self.level.nav;
-        let relayout = self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name));
-        let said = relayout.map(|setting| said(setting, wanted.get(setting.name).unwrap_or(setting.default)));
-        said.reduce(|all, one| format!("{all} · {one}")).unwrap_or_default()
-    }
-
-    /// Lay the document on screen out again, if a relayout setting is wanted at another value than it
-    /// is laid out at ([`Pager::relayout_wanted`]): here and now, the status line saying so meanwhile.
-    /// A new level for the new source takes this one's place, at the reader's page; the old one goes
-    /// as a level gone back from does. A failure keeps the old level, says why, and puts the value back
-    /// to what is on screen, so the next step starts from it. Whether the screen changed.
+    /// Lay the document on screen out again when a relayout setting it has is wanted at another value
+    /// than its layout is at ([`relayout::wanted`]): after its keys, or on going into it after a change;
+    /// never in a list, whose tiles keep their layout, nor with `--pages`, which picks pages as laid out.
+    /// The job runs on the openers' threads, polled here on each pass, the status line saying the value
+    /// wanted with `…` meanwhile and the old pages on screen until the new ones are ready. At most one
+    /// job is under way: a change meanwhile waits in the shared values and starts when it ends, and a
+    /// result for values no longer wanted is dropped. One for the values wanted makes a new level in
+    /// place of this one ([`Pager::replace`]); a failure keeps this one, says why, and puts the values
+    /// back to what is on screen, so the next step starts from it. Whether the screen changed.
     fn relayout(&mut self) -> Result<bool, String> {
-        let Some(wanted) = self.relayout_wanted() else { return Ok(false) };
-        self.level.nav.relaying = Some(self.relayout_said(&wanted));
-        let said = self.level.nav.message.clone().unwrap_or_default();
-        self.say(said)?;
-        let job = self.level.source.relayout(wanted).ok_or_else(|| "it can't be laid out again".to_owned());
-        // A panic in it costs the relayout, not the viewer.
-        let run = |job: crate::source::Job| std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-        let laid = job.and_then(|job| run(job).unwrap_or_else(|_| Err("the layout failed".into())));
-        self.level.nav.relaying = None;
-        match laid {
-            Ok(source) => self.replace(source)?,
-            Err(why) => {
-                self.level.nav.message = Some(printable(&why));
-                self.put_back();
+        if self.level.nav.list || self.level.nav.picked {
+            return Ok(false);
+        }
+        let (declared, has) = (self.settings.declared.clone(), self.level.nav.has.clone());
+        let laid = self.level.source.laid_at();
+        let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid);
+        let mut changed = false;
+        if let Some(handle) = self.relayout.handle() {
+            let Some(done) = handle.try_take() else {
+                // Still running: the status line says what is wanted now, which may have moved on.
+                let saying = wanted.map(|values| relayout::describe(&declared, &has, values));
+                let changed = self.level.nav.relaying != saying;
+                self.level.nav.relaying = saying;
+                return Ok(changed);
+            };
+            if self.relayout.ended(wanted) == Ended::Taken {
+                match done {
+                    Ok(source) => {
+                        self.replace(source)?;
+                        return Ok(true);
+                    }
+                    Err(why) => {
+                        self.level.nav.message = Some(printable(&why));
+                        self.put_back(laid);
+                        wanted = None;
+                        changed = true;
+                    }
+                }
             }
         }
+        let Some(values) = wanted else {
+            self.level.nav.relaying = None;
+            return Ok(changed);
+        };
+        let Some(job) = self.level.source.relayout(values) else {
+            self.level.nav.message = Some("it can't be laid out again".into());
+            self.put_back(laid);
+            self.level.nav.relaying = None;
+            return Ok(true);
+        };
+        self.relayout.start(values, self.openers.run(job));
+        self.level.nav.relaying = Some(relayout::describe(&declared, &has, values));
         Ok(true)
     }
 
-    /// The shared values of the relayout settings back to what the document on screen is laid out at.
-    fn put_back(&self) {
-        let nav = &self.level.nav;
-        let (mut values, laid) = (self.settings.values.get(), self.level.source.laid_at());
-        for setting in self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name)) {
-            // There is room: the name is in it already.
-            let _ = values.set(setting.name, laid.get(setting.name).unwrap_or(setting.default));
-        }
+    /// The shared values of the relayout settings back to `laid`, what the document on screen is laid
+    /// out at.
+    fn put_back(&self, laid: Values) {
+        let values = relayout::put_back(&self.settings.declared, &self.level.nav.has, self.settings.values.get(), laid);
         self.settings.values.set(values);
     }
 
@@ -1624,7 +1636,9 @@ impl Pager<'_> {
         self.levels = self.levels.wrapping_add(1);
         level.nav.at = self.level.nav.at.min(level.nav.pages.len().saturating_sub(1));
         level.nav.hint = false;
+        level.nav.help = self.level.nav.help;
         level.nav.message.clone_from(&self.level.nav.message);
+        self.relayout.forget();
         let gone = std::mem::replace(&mut self.level, level);
         let id = gone.id;
         drop(gone);

@@ -1618,6 +1618,65 @@ fn a_document_gone_into_after_a_change_is_laid_out_at_the_new_width_and_its_tile
     assert!(view.finish().success());
 }
 
+/// The layout runs on a thread: keys work meanwhile (`?` shows the keys before the new layout is
+/// ready), the status line says the width wanted with `…` after it, and the new pages show with no key
+/// once it is done.
+#[cfg(feature = "word")]
+#[test]
+fn keys_work_while_the_document_is_laid_out_again_and_the_new_pages_show_with_no_key() {
+    if !pty_works() {
+        return;
+    }
+    // Enough text to take a while to lay out: about a second and a half here.
+    let path = crate::view::tmp("reflow-threads", "big.md");
+    let paragraph = "Words enough in a paragraph to fill a few lines of a page, over and over again. ".repeat(12);
+    let big: String = (1..=2800).map(|n| format!("Paragraph {n}. {paragraph}\n\n")).collect();
+    std::fs::write(&path, big).unwrap();
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/") || t.contains("  pages 1"));
+    view.press("40]");
+    view.wait_until("under way", |t| t.contains("width 40…"));
+    view.press("?");
+    const KEYS: &str = "these keys: any key goes back";
+    view.wait_until("the keys", |t| t.contains(KEYS));
+    view.wait_until("laid out", |t| bar(t).contains("· width 40 ·"));
+    let text = view.text();
+    // The slot on the right, padded, once the layout is done: the key's own message says `width 40` too.
+    let (keys, done) = (text.find(KEYS).unwrap(), text.find("width 40    ·").expect("the slot without …"));
+    assert!(keys < done, "the keys were shown only after the layout");
+    // The keys stay up, over the new layout, until a key; then the narrow pages are there.
+    view.press("n");
+    view.wait_until("the pages", |t| t.get(done..).is_some_and(|t| t.contains("a=p,q=1,")) && last_sent_shaped(t, NARROW, 792.0));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A layout that fails keeps the pages as they are, says why, and puts the value back to what is on
+/// screen: the next `]` steps from there, not from the value that failed.
+#[cfg(feature = "word")]
+#[test]
+fn a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("reflow-fails", "gone.md");
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    std::fs::remove_file(&path).unwrap();
+    view.press("40]");
+    view.wait_until("why", |t| bar(t).contains("reading the file again"));
+    std::thread::sleep(Duration::from_millis(300));
+    let text = view.text();
+    let letter = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - LETTER.0 / LETTER.1).abs() < 0.01;
+    assert!(!bar(&text).contains("· width 40 ·") && sizes_sent(&text).iter().all(letter), "{:?}", last_draw(&text));
+    // From `page` again, not from 40.
+    view.press("]");
+    view.wait_until("from page again", |t| bar(t).contains("width 84"));
+    assert!(!view.text().contains("width 44"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// HTML through a pipe lays out again from the bytes kept, since it can't be read again.
 #[cfg(feature = "word")]
 #[test]
@@ -1645,7 +1704,7 @@ fn with_pages_the_width_keys_are_refused() {
         return;
     }
     let mut view = Session::start_on(KITTY, &long_markdown("reflow-pages", "long.md"), &["--pager", "--pages", "2-3"], 100, 60);
-    view.wait_until("page 2", |t| t.contains("  page 2/"));
+    view.wait_until("page 2, and page 3 ahead", |t| t.contains("  page 2/") && transmitted(t) == 2);
     let sent = transmitted(&view.text());
     view.press("]");
     view.wait_until("said", |t| bar(t).contains("--pages picks pages as laid out: no reflow"));

@@ -63,3 +63,35 @@ changes from its plan, surprises, and what a later reader would want.
     (`tests/it/view_pager.rs`): `Pager::relayout` doing nothing, with the reverts above.
   - `on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow`: the setting's `missing` message
     changed (its only fix is the declaration).
+
+## Task 2: on the openers' threads
+
+- **No "waiting" set of values.** The spec has the level keep one job under way and one set of values
+  waiting. The shared `Settings` already are what waits: on each pass the pager compares them with the
+  source's `laid_at`, so `relayout.rs` keeps only the job under way and the values it is for
+  (`Relayout<H>`), and `ended(wanted)` says whether its result is for the values wanted now. A change
+  while one runs is nothing to record; it starts when the job ends, by the same comparison.
+- **Compared by the relayout settings alone.** `relayout::of` takes the relayout settings a document
+  has out of the shared values (at their default where they say nothing), so `d` during a layout
+  doesn't make its result stale, and `page` said or unsaid is one value.
+- **`Openers` runs a job as `Work::Run`**, pushed to the front; the worker takes the job out of its
+  `Mutex<Option<Job>>` to run it, so a `Handle` dropped before that takes it instead and the job never
+  runs. The result waits in the `Running` until `try_take`. The thread catches a panic as it does for
+  an opening.
+- **The help screen survives a relayout**: `replace` copies `help` along with the message, so `?` while
+  a layout runs isn't thrown off when the new level arrives (the threaded test presses it then).
+- **Not in *Files*:** `src/view/mod.rs` (`Opener::openers`, the threads handed to the pager, and
+  `mod relayout`), `src/source.rs` (`Handle` re-exported).
+- **Tests seen failing**, by copying aside, reverting, running, restoring and `cmp`:
+  - `a_job_runs_first_and_its_panic_is_caught` (`source::later`): the job queued last, and run without
+    `catch_unwind`.
+  - `a_layout_is_wanted_when_a_relayout_setting_differs_and_a_redraw_one_doesnt_count` and
+    `a_result_is_taken_for_the_values_still_wanted_and_dropped_otherwise` (`view::relayout`): whole
+    values compared, and every result taken.
+  - `keys_work_while_the_document_is_laid_out_again_and_the_new_pages_show_with_no_key`
+    (`tests/it/view_pager.rs`): the pager waiting on the handle where it starts the job.
+  - `a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back`: `put_back` doing nothing.
+  - The `--pages` test from task 1 raced the page worked ahead (it counted a transmission that wasn't
+    the key's); it now waits for both pages first.
+- **The manual check** (in kitty, the costliest file of *Cost*, `]` three times quickly: keys and
+  scrolling keep working, `width 96…` then `width 96`) is left to the owner.

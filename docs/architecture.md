@@ -270,10 +270,18 @@ settings the source has (`Pager::relayout_wanted`), and when they differ asks th
 gives a new source laid out at them). So `]` then `u`, read together, reflows nothing in the list, and
 the next document gone into is laid out at the new value as it shows.
 
-The pager runs the job (`Pager::relayout`), the status line saying the value with `…` after it
-(`Nav::relaying`) meanwhile, and a panic in it costing the relayout alone. A new source makes a new
-`Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom and
-`nested`, at the reader's page or the last if there are fewer, its parents untouched; the old level
+The job runs on `Openers`' threads (`Openers::run`, first in their queue, since the reader is waiting
+on it), a panic in it costing the relayout alone, and the pager polls its `Handle` on each pass
+(`Pager::relayout`; `Handle::try_take` never blocks), waking every `POLL` while one runs, so the new
+pages show without a key and the keys work meanwhile. `view/relayout.rs` keeps the bookkeeping, with no
+IO: which values want a layout (`relayout::wanted`, the relayout settings' alone, so a redraw setting's
+change tells no two apart), the values the job under way is for (`Relayout`), and whether its result,
+when it ends, is for the values wanted now (`Ended::Taken`) or stale, dropped whether it succeeded or
+failed. At most one job is under way: a change meanwhile waits in the shared values and starts when it
+ends, and the status line says the value wanted with `…` after it (`Nav::relaying`) until then. Leaving
+the level (`enter`, `back`) forgets the job, which runs to its end for nobody. A new source makes a new
+`Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom, `nested`
+and help screen, at the reader's page or the last if there are fewer, its parents untouched; the old level
 goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
 pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
 wanted dropped. A failure keeps the old level, says why through `printable`, and puts the shared value

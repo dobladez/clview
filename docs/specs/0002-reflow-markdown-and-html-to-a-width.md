@@ -224,7 +224,7 @@ task, not only by tests.
   `tests/it/view_pager.rs`. *Verify:* `cargo test -j 2 --bin clv view::pager`,
   `cargo test -j 2 --test it wordcraft`, `cargo test -j 2 --test it view_pager`; manual: in kitty,
   `target/debug/clv --pager --width 40 README.md`: narrow tall pages, two to a row; `]` widens them.
-- [ ] **On the openers' threads** — `Openers` runs jobs; `relayout.rs`; the old level on screen
+- [x] **On the openers' threads** — `Openers` runs jobs; `relayout.rs`; the old level on screen
   until the new one is ready, `…` meanwhile, polled with no key; only the latest; a failure keeping
   the old and putting the value back; a copy still rendering stopped, as in task 1. *Files:*
   `src/source/later.rs`, `src/view/relayout.rs`, `src/view/pager.rs`, `tests/it/view_pager.rs`.

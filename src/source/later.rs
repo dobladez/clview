@@ -11,14 +11,15 @@
 //!
 //! Files are opened on [`Openers`]' threads, so that keys keep working. What they open stays open
 //! here, as what a source holds while idle is little: what opening one found isn't spent twice when
-//! the reader comes back, or goes into it.
+//! the reader comes back, or goes into it. The same threads run a job that lays a document out again
+//! ([`Openers::run`]), first, since the reader is waiting on it.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-use super::{Again, Backend, Frame, Input, Opened, Pool, Render, Request, Rest, Source};
+use super::{Again, Backend, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Source};
 use crate::args::OwnedOptions;
 
 /// The most files opened at once. A document's first layout takes a core, and a large PDF is read
@@ -92,9 +93,49 @@ struct Shared {
 #[derive(Default)]
 struct Queue {
     /// The most urgent first.
-    waiting: VecDeque<Arc<Slot>>,
+    waiting: VecDeque<Work>,
     started: bool,
     stop: bool,
+}
+
+/// What a thread takes from the queue: a file to open, or a job to run.
+enum Work {
+    Open(Arc<Slot>),
+    Run(Arc<Running>),
+}
+
+impl Work {
+    /// Whether this is `slot`'s opening.
+    fn opens(&self, slot: &Arc<Slot>) -> bool {
+        matches!(self, Self::Open(waiting) if Arc::ptr_eq(waiting, slot))
+    }
+}
+
+/// A job given to the threads, and its result once it has run: shared by the thread and the
+/// [`Handle`] that polls it.
+struct Running {
+    /// Taken by the thread that runs it, or by the handle dropped before one did.
+    job: Mutex<Option<Job>>,
+    /// Its result, until the handle takes it.
+    done: Mutex<Option<Result<Box<dyn Source + Send>, String>>>,
+}
+
+/// A job on the threads ([`Openers::run`]), polled for its result, never waited for. Dropped before
+/// the job has begun, the job never runs; begun, it runs to its end and its result is dropped.
+pub(crate) struct Handle(Arc<Running>);
+
+impl Handle {
+    /// The job's result, once, when it has run. Never blocks.
+    pub(crate) fn try_take(&self) -> Option<Result<Box<dyn Source + Send>, String>> {
+        lock(&self.0.done).take()
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        // Not begun: the thread finds nothing to run.
+        drop(lock(&self.0.job).take());
+    }
 }
 
 impl Openers {
@@ -105,13 +146,26 @@ impl Openers {
         match *stage {
             Stage::Idle => *stage = Stage::Queued,
             // Not begun: it moves up.
-            Stage::Queued if first => queue.waiting.retain(|waiting| !Arc::ptr_eq(waiting, slot)),
+            Stage::Queued if first => queue.waiting.retain(|waiting| !waiting.opens(slot)),
             Stage::Queued | Stage::Opening | Stage::Done(_) => return,
         }
         drop(stage);
+        self.queue(queue, Work::Open(slot.clone()), first);
+    }
+
+    /// Run `job` on the threads, before any file waiting: the reader is waiting on it. Its result
+    /// comes through the handle.
+    pub(crate) fn run(&self, job: Job) -> Handle {
+        let running = Arc::new(Running { job: Mutex::new(Some(job)), done: Mutex::new(None) });
+        self.queue(lock(&self.0.state), Work::Run(running.clone()), true);
+        Handle(running)
+    }
+
+    /// `item` into the queue, first or last, the threads started if they aren't yet.
+    fn queue(&self, mut queue: MutexGuard<'_, Queue>, item: Work, first: bool) {
         match first {
-            true => queue.waiting.push_front(slot.clone()),
-            false => queue.waiting.push_back(slot.clone()),
+            true => queue.waiting.push_front(item),
+            false => queue.waiting.push_back(item),
         }
         if !std::mem::replace(&mut queue.started, true) {
             for _ in 0..THREADS {
@@ -121,6 +175,7 @@ impl Openers {
                 let _ = std::thread::Builder::new().name("open".into()).stack_size(STACK).spawn(move || work(&shared));
             }
         }
+        drop(queue);
         self.0.wake.notify_one();
     }
 
@@ -130,7 +185,7 @@ impl Openers {
         let mut stage = lock(&slot.stage);
         if matches!(*stage, Stage::Queued) {
             *stage = Stage::Idle;
-            queue.waiting.retain(|waiting| !Arc::ptr_eq(waiting, slot));
+            queue.waiting.retain(|waiting| !waiting.opens(slot));
         }
     }
 }
@@ -145,21 +200,34 @@ impl Drop for Openers {
 
 fn work(shared: &Shared) {
     loop {
-        let slot = {
+        let work = {
             let mut queue = lock(&shared.state);
             loop {
                 if queue.stop {
                     return;
                 }
-                if let Some(slot) = queue.waiting.pop_front() {
-                    *lock(&slot.stage) = Stage::Opening;
-                    break slot;
+                if let Some(work) = queue.waiting.pop_front() {
+                    if let Work::Open(slot) = &work {
+                        *lock(&slot.stage) = Stage::Opening;
+                    }
+                    break work;
                 }
                 queue = shared.wake.wait(queue).unwrap_or_else(PoisonError::into_inner);
             }
         };
-        let opened = slot.open();
-        *lock(&slot.stage) = Stage::Done(Some(opened));
+        match work {
+            Work::Open(slot) => {
+                let opened = slot.open();
+                *lock(&slot.stage) = Stage::Done(Some(opened));
+            }
+            Work::Run(running) => {
+                // Its handle dropped before now took the job: nothing to run. A panic in it costs
+                // the job, not the viewer, as an opening's does.
+                let Some(job) = lock(&running.job).take() else { continue };
+                let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|_| Err("the layout failed".into()));
+                *lock(&running.done) = Some(done);
+            }
+        }
     }
 }
 
@@ -656,6 +724,75 @@ mod tests {
         let again: Again = Arc::new(|| Ok(b"whole".to_vec()));
         let Ok(held) = Input::held("a.zip/b".into(), b"wh".to_vec(), again).later() else { panic!("held") };
         assert_eq!(held.input().unwrap().bytes().unwrap(), b"whole");
+    }
+
+    /// A job runs on the threads before the files waiting, its result taken once through its handle;
+    /// one that panics costs itself alone; a handle dropped before its job began leaves it unrun.
+    #[test]
+    fn a_job_runs_first_and_its_panic_is_caught() {
+        static BACKEND: Test = Test { opened: AtomicUsize::new(0), millis: 60, size: (1.0, 1.0), broken: false };
+        let openers = Rc::new(Openers::default());
+        let file = std::env::temp_dir().join(format!("clview-later-job-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        let path = file.to_str().unwrap().to_owned();
+        // More files than threads: the last of them wait.
+        let made: Vec<Later> = (0..THREADS + 3)
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone()))
+            .collect();
+        let pools: Vec<Box<dyn Pool>> = made.iter().map(|later| later.pool(1)).collect();
+        for pool in &pools {
+            pool.set_queue(vec![request(1)]);
+        }
+        let ran = Arc::new(AtomicUsize::new(0));
+        let counted = ran.clone();
+        let handle = openers.run(Box::new(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(Fake((7.0, 7.0))) as Box<dyn Source + Send>)
+        }));
+        let start = Instant::now();
+        let source = loop {
+            if let Some(done) = handle.try_take() {
+                break done.unwrap();
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "no result");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!((source.size(0), ran.load(Ordering::Relaxed)), (Some((7.0, 7.0)), 1));
+        assert!(BACKEND.opened.load(Ordering::Relaxed) <= THREADS, "the job went before the files waiting");
+        assert!(handle.try_take().is_none(), "taken once");
+        let panics = openers.run(Box::new(|| panic!("a bug in the layout")));
+        let start = Instant::now();
+        while panics.try_take().is_none_or(|done| {
+            assert_eq!(done.err().as_deref(), Some("the layout failed"));
+            false
+        }) {
+            assert!(start.elapsed() < Duration::from_secs(5), "no result");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Queued while every thread opens a slow file, and dropped before it begins: never run.
+        static SLOW: Test = Test { opened: AtomicUsize::new(0), millis: 300, size: (1.0, 1.0), broken: false };
+        let slow: Vec<Later> = (0..THREADS)
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &SLOW, Arc::new(Parsed::default().owned()), openers.clone()))
+            .collect();
+        let slow_pools: Vec<Box<dyn Pool>> = slow.iter().map(|later| later.pool(1)).collect();
+        for pool in &slow_pools {
+            pool.set_queue(vec![request(1)]);
+        }
+        let start = Instant::now();
+        while SLOW.opened.load(Ordering::Relaxed) < THREADS {
+            assert!(start.elapsed() < Duration::from_secs(5), "the slow files never began");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let never = Arc::new(AtomicUsize::new(0));
+        let counted = never.clone();
+        let dropped = openers.run(Box::new(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Err("ran".into())
+        }));
+        drop(dropped);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(never.load(Ordering::Relaxed), 0);
+        drop((pools, slow_pools));
     }
 
     #[test]

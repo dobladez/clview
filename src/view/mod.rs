@@ -11,6 +11,7 @@ mod icon;
 mod keys;
 mod kitty;
 mod pager;
+mod relayout;
 mod sweep;
 mod tmux;
 mod tty;
@@ -861,6 +862,11 @@ impl<'o, 'a> Opener<'o, 'a> {
 
     /// Into `found`, in the order listed, the files `opening` opened and the containers in it,
     /// and what it left out.
+    /// The threads a list's files open on, which run a relayout too ([`Openers::run`]).
+    pub(super) fn openers(&self) -> Rc<Openers> {
+        self.openers.clone()
+    }
+
     pub(super) fn finish(&self, found: &mut Found, opening: Opening) {
         let Opening { container, prefix, listing, opened, .. } = opening;
         let path = container.path();

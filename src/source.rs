@@ -38,7 +38,7 @@ use crate::args::{OptionSpec, Parsed};
 pub(crate) use dir::Directory;
 pub(crate) use folder::{Badge, Folder};
 pub(crate) use joined::{Joined, Part};
-pub(crate) use later::{Later, Openers};
+pub(crate) use later::{Handle, Later, Openers};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
