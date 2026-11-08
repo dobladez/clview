@@ -441,7 +441,9 @@ it sits: from `page`, `]` goes to 84 and `[` to 80. A number, then `]` or `[`, g
 margins, and as tall as Letter's; a code block, indented a little on each side, holds about 3 characters
 fewer; tables and pictures fit the width. Pages narrower than Letter go two to a row when the window
 takes them, as any page does. The status line shows the width while it isn't a page's (`width 72`),
-and `c` copies the page as it is laid out. Laying out again costs what opening did: the old pages stay
+and `c` copies the page as it is laid out. You keep your place: the paragraph at the top of the screen
+is on the page you land on, and at the top of it where a page scrolls (as wide as the window). Laying
+out again costs what opening did: the old pages stay
 until the new ones are ready, the status line shows the width to come with `…` after it (`width 84…`),
 and the keys keep working meanwhile. Another step while one runs waits its turn, and only the last is
 laid out. While it runs, the old layout is held too (see [Limits](#limits)); a layout that fails keeps

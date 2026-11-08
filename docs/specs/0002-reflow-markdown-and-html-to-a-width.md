@@ -232,7 +232,7 @@ task, not only by tests.
   (a job run, its panic caught), `cargo test -j 2 --test it view_pager` (the new pages show with no
   key after `]`); manual: in kitty, on the costliest file of *Cost*, `]` three times quickly: keys
   and scrolling keep working, `width 96…` and then `width 96`.
-- [ ] **Keeping the place** — anchors. *Files:* `src/source.rs`, `src/source/wordcraft.rs`,
+- [x] **Keeping the place** — anchors. *Files:* `src/source.rs`, `src/source/wordcraft.rs`,
   `src/view/pager.rs`, `tests/it/view_pager.rs`. *Verify:* a pager test with a known paragraph at
   the top before `[` and on screen after.
 

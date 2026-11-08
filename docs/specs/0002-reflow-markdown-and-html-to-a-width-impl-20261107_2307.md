@@ -95,3 +95,26 @@ changes from its plan, surprises, and what a later reader would want.
     the key's); it now waits for both pages first.
 - **The manual check** (in kitty, the costliest file of *Cost*, `]` three times quickly: keys and
   scrolling keep working, `width 96…` then `width 96`) is left to the owner.
+
+## Task 3: keeping the place
+
+- **An `Anchor` is a paragraph's index** in the body's order (`para_paths`), kept per page as
+  `(index, top, height)` from the layout's `Placed::Lines` when a document opens or lays out again,
+  for Markdown and HTML only: 12 bytes a placed paragraph, so the costliest file (13,887 pages) keeps a
+  few megabytes. `Paged` keeps no layout, so this is what the spec meant by "what its layout keeps for
+  it".
+- **Where `find` fails**, the pager keeps the reader's page (clamped), not the first page: the two
+  sources come from the same bytes, so an unknown anchor would be a bug, and the page number is the
+  better guess. The spec's "first page" was for a source that knows nothing; only such a source gives
+  no anchor at all, and then too the page is kept, as task 1 had it.
+- **Scrolling to the paragraph** goes through `Nav::scroll_to`, a share of the page's height, taken
+  by `shown` once the draw knows the page's rows: the pager doesn't learn to start a screen part-way
+  down a page, as the spec says, since only a page as wide as the window scrolls.
+- **The anchor is taken at `replace`**, not when the job starts, so scrolling while it runs counts.
+- **Tests seen failing**, by copying aside, reverting, running, restoring and `cmp`:
+  - `a_paragraph_at_a_place_is_found_again_in_another_layout` (`source::wordcraft`): `paragraphs_of`
+    keeping nothing.
+  - `a_scroll_asked_for_as_a_share_of_the_page_is_taken_once_the_rows_are_known` (`view::pager`):
+    `shown` ignoring `scroll_to`.
+  - `the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_relayout`
+    (`tests/it/view_pager.rs`): `replace` keeping the page number, as task 1 did.

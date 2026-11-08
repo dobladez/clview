@@ -281,7 +281,16 @@ failed. At most one job is under way: a change meanwhile waits in the shared val
 ends, and the status line says the value wanted with `…` after it (`Nav::relaying`) until then. Leaving
 the level (`enter`, `back`) forgets the job, which runs to its end for nobody. A new source makes a new
 `Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom, `nested`
-and help screen, at the reader's page or the last if there are fewer, its parents untouched; the old level
+and help screen, its parents untouched. It opens where the reader was: the old source says which
+paragraph is at the top of the screen (`Source::anchor`, from the first page on screen and how far
+down it is scrolled, as a share of its rows; an `Anchor` the viewer only hands back), the new says
+where that paragraph starts in its layout (`Source::find`: the page, and how far down), and the level
+goes to that page, scrolled there once the draw knows the page's rows (`Nav::scroll_to`), which only a
+page as wide as the window has to scroll; a source that doesn't say leaves the reader's page, or the
+last if there are fewer. The documents' backend keeps each page's body paragraphs for it, by their
+order in the document, with their top and height on the page (`paragraphs_of`, from the layout's
+`Placed::Lines`), for Markdown and HTML alone; a paragraph split across pages is found on the one it
+starts on, and below a page's last paragraph the anchor is that one. The old level
 goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
 pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
 wanted dropped. A failure keeps the old level, says why through `printable`, and puts the shared value

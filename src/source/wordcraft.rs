@@ -14,6 +14,7 @@
 //! `source/picture.rs`, when a page they are on first renders.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -30,8 +31,8 @@ use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
 use super::threads::Threads;
 use super::{
-    Again, Auto, Backend, Deferred, Effect, Format, Frame, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request,
-    Setting, Source, Value, Values, guarded,
+    Again, Anchor, Auto, Backend, Deferred, Effect, Format, Frame, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable,
+    Request, Setting, Source, Value, Values, guarded,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -203,9 +204,11 @@ impl Backend for Wordcraft {
                 (Stored::Held(again), read_as(&bytes, None))
             }
         };
-        // Only the pages' sizes are kept: the document goes, and a render reads it again.
-        let sizes = sizes_of(&laid.map_err(error)?);
-        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, width })))))
+        // Only the pages' sizes are kept, and where their paragraphs are: the document goes, and a render
+        // reads it again.
+        let laid = laid.map_err(error)?;
+        let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, kind));
+        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, width, paragraphs })))))
     }
 }
 
@@ -324,11 +327,41 @@ struct Document {
     sizes: Vec<(f32, f32)>,
     /// What it is laid out at; Markdown and HTML lay out again at another ([`Source::relayout`]).
     width: Width,
+    /// Each page's paragraphs, for Markdown and HTML, which lay out again: where the reader is, found
+    /// again in the new layout ([`Source::anchor`]). Empty for the rest.
+    paragraphs: Vec<Vec<Para>>,
+}
+
+/// A paragraph on a page: which, in the document's order, and where.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Para {
+    index: u32,
+    /// Its top on the page, and its height there, in points.
+    y: f32,
+    height: f32,
 }
 
 /// Each page's size, in points, of a document laid out.
 fn sizes_of(laid: &Laid) -> Vec<(f32, f32)> {
     laid.layout.pages.iter().map(|page| (page.w, page.h)).collect()
+}
+
+/// Each page's paragraphs of `laid`, in the order they are placed, for a document of `kind` that lays
+/// out again: the body's, by their order in the document, with the lines each has on the page.
+fn paragraphs_of(laid: &Laid, kind: Kind) -> Vec<Vec<Para>> {
+    if !settings_of(kind).contains(&WIDTH.name) {
+        return Vec::new();
+    }
+    let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+    let order: HashMap<_, u32> = document.para_paths(StoryRef::Body).into_iter().zip(0u32..).collect();
+    let placed = |item: &Placed| match item {
+        Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } => {
+            let height = para.lines.get(*l0..*l1).unwrap_or_default().iter().map(|line| line.height).sum();
+            order.get(path).map(|index| Para { index: *index, y: *y, height })
+        }
+        _ => None,
+    };
+    laid.layout.pages.iter().map(|page| page.items.iter().filter_map(placed).collect()).collect()
 }
 
 /// Where a document's bytes are.
@@ -446,6 +479,23 @@ impl Source for Paged {
         let document = self.0.clone();
         Some(Box::new(move || document.at(width).map(|paged| Box::new(paged) as Box<dyn Source + Send>)))
     }
+
+    /// The paragraph at `y` down `page`: the first that reaches below it, or the page's last.
+    fn anchor(&self, page: usize, y: f32) -> Option<Anchor> {
+        let paragraphs = self.0.paragraphs.get(page)?;
+        let at = paragraphs.iter().find(|para| para.y + para.height > y).or(paragraphs.last())?;
+        Some(Anchor(u64::from(at.index)))
+    }
+
+    /// The first page `anchor`'s paragraph is on, and its top there.
+    fn find(&self, anchor: &Anchor) -> Option<(usize, f32)> {
+        let index = u32::try_from(anchor.0).ok()?;
+        self.0
+            .paragraphs
+            .iter()
+            .enumerate()
+            .find_map(|(page, paragraphs)| paragraphs.iter().find(|para| para.index == index).map(|para| (page, para.y.max(0.0))))
+    }
 }
 
 struct Renderer {
@@ -502,7 +552,8 @@ impl Document {
         let laid = caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), width))?;
         let Self { stored, kind, password, path, .. } = self;
         let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
-        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes: sizes_of(&laid), width })))
+        let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, *kind));
+        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes, width, paragraphs })))
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
@@ -1234,6 +1285,52 @@ mod tests {
         for narrow in [markdown(table.as_bytes(), &nowhere, Width::Columns(40)), html(cells.as_bytes(), &nowhere, Width::Columns(40))] {
             assert!((grid(&narrow.unwrap()) - 40.0 * 5.64).abs() < 0.01);
         }
+    }
+
+    /// A page's paragraphs are kept, by their order in the document, so that the one at a place on a page
+    /// is found again in another layout: on the page it starts on, split or not; past the page's last
+    /// paragraph, that one; a page without any, or a document that doesn't lay out again, gives none.
+    #[test]
+    fn a_paragraph_at_a_place_is_found_again_in_another_layout() {
+        let dir = std::env::temp_dir().join(format!("clview-word-anchor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = |name: &str, contents: &str, width: Option<&str>| {
+            let path = dir.join(name);
+            std::fs::write(&path, contents).unwrap();
+            let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+            let Ok(Opened::Pages(source)) = Wordcraft.open(input, &given(width)) else { panic!("not pages: {name}") };
+            source
+        };
+        // Paragraphs of a line or two on Letter, several at 40, then one long enough to split across
+        // pages, then more of the short ones.
+        let long = "A long paragraph, many words of it, so long that it runs from one page on to the next. ".repeat(60);
+        let short =
+            |n: u32| format!("Paragraph {n}, with words enough in it to take a line or two of a page as printed, and more of a narrow one.\n\n");
+        let text: String = (1..=80).map(short).chain([format!("{long}\n\n")]).chain((81..=160).map(short)).collect();
+        let letter = open("a.md", &text, None);
+        let narrow = open("b.md", &text, Some("40"));
+        assert!(letter.pages() >= 3 && narrow.pages() > letter.pages(), "{} and {} pages", letter.pages(), narrow.pages());
+        // The top of page 2 of Letter, found further on in the narrow layout, whose page 2 starts earlier.
+        let top = letter.anchor(1, 0.0).expect("a paragraph");
+        let (page, y) = narrow.find(&top).expect("found");
+        assert!(page > 1 || (page == 1 && y > 100.0), "page {page}, {y} pt down");
+        assert!(narrow.anchor(1, 0.0).unwrap().0 < top.0);
+        assert_eq!(letter.find(&top), Some((1, letter.find(&top).unwrap().1)), "found where it is");
+        // Further down the same page, a later paragraph; past the last, the last.
+        let lower = letter.anchor(1, 400.0).unwrap();
+        assert!(lower.0 > top.0 && letter.find(&lower).is_some_and(|(page, y)| page == 1 && y >= 380.0));
+        let bottom = letter.anchor(1, 10_000.0).unwrap();
+        assert!(bottom.0 >= lower.0 && letter.find(&bottom).unwrap().0 == 1);
+        // The long paragraph: on whichever page it ends, the anchor at its top is found on the page it starts.
+        let split = Anchor(80);
+        let (starts, _) = letter.find(&split).unwrap();
+        let ends = letter.anchor(starts.saturating_add(1), 0.0).unwrap();
+        assert_eq!(ends, split, "it goes on at the top of the next page");
+        assert_eq!(letter.find(&ends).unwrap().0, starts);
+        assert_eq!(letter.find(&Anchor(u64::MAX)), None, "one it doesn't know");
+        assert_eq!(letter.anchor(99, 0.0), None, "no such page");
+        let rtf = open("a.rtf", "{\\rtf1\\ansi One\\par Two}", None);
+        assert_eq!((rtf.anchor(0, 0.0), rtf.find(&Anchor(0))), (None, None));
     }
 
     /// Markdown and HTML say the width they were laid out at, and give a job that lays them out again at

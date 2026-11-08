@@ -366,6 +366,9 @@ struct Nav {
     max_scroll: u16,
     /// Image rows scrolled off the top. Past the bottom until the next draw clamps it.
     scroll: u16,
+    /// Where to scroll to once the page's rows are known, as a share of its height: the paragraph the
+    /// reader was at, after the document is laid out again.
+    scroll_to: Option<f32>,
     /// A page number being typed.
     typed: String,
     /// Shown in the status line until the next key.
@@ -545,6 +548,7 @@ impl Nav {
             visible: 1,
             max_scroll: 0,
             scroll: 0,
+            scroll_to: None,
             typed: String::new(),
             message: None,
             hint: true,
@@ -941,10 +945,14 @@ impl Nav {
     }
 
     /// After a draw: `visible` of the first page's `rows` image rows are on screen. Keeps `scroll`
-    /// in range.
+    /// in range, after taking it where `scroll_to` asked, now that the rows are known.
     fn shown(&mut self, visible: u16, rows: u16) {
         self.visible = visible;
         self.max_scroll = rows.saturating_sub(visible);
+        if let Some(share) = self.scroll_to.take() {
+            // A share of the rows, so within them.
+            self.scroll = (share.clamp(0.0, 1.0) * f32::from(rows)).round() as u16;
+        }
         self.scroll = self.scroll.min(self.max_scroll);
     }
 
@@ -1627,14 +1635,24 @@ impl Pager<'_> {
     }
 
     /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
-    /// the reader's page, or the last if there are fewer now, at the same zoom, gone into from a list if
-    /// this one was. This one goes as a level gone back from does ([`Pager::let_go`]).
+    /// the page where the paragraph at the top of the screen now is, scrolled to it where a page scrolls
+    /// ([`Source::anchor`]), or at the reader's page where the sources don't say; at the same zoom, gone
+    /// into from a list if this one was. This one goes as a level gone back from does ([`Pager::let_go`]).
     fn replace(&mut self, source: Box<dyn Source + Send>) -> Result<(), String> {
+        let place = self.place_on_screen().and_then(|anchor| source.find(&anchor));
         let source: Box<dyn Source> = source;
         let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone()), items: Vec::new() };
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone());
         self.levels = self.levels.wrapping_add(1);
-        level.nav.at = self.level.nav.at.min(level.nav.pages.len().saturating_sub(1));
+        let last = level.nav.pages.len().saturating_sub(1);
+        match place {
+            Some((page, y)) => {
+                level.nav.at = page.min(last);
+                let height = level.source.size(page).map_or(0.0, |(_, h)| h);
+                level.nav.scroll_to = (height > 0.0).then(|| y / height);
+            }
+            None => level.nav.at = self.level.nav.at.min(last),
+        }
         level.nav.hint = false;
         level.nav.help = self.level.nav.help;
         level.nav.message.clone_from(&self.level.nav.message);
@@ -1643,6 +1661,18 @@ impl Pager<'_> {
         let id = gone.id;
         drop(gone);
         self.let_go(id)
+    }
+
+    /// Where the reader is, as the source on screen knows it: the paragraph at the top of the screen, on
+    /// the first page there, as far down it as the page is scrolled.
+    fn place_on_screen(&self) -> Option<crate::source::Anchor> {
+        let nav = &self.level.nav;
+        let view = self.on_screen.first().copied().flatten();
+        let page = view.map_or_else(|| nav.pages.get(nav.first()).copied(), |view| Some(view.page))?;
+        let rows = view.and_then(|view| self.rows(&view)).filter(|rows| *rows > 0);
+        let height = self.level.source.size(page).map_or(0.0, |(_, h)| h);
+        let y = rows.map_or(0.0, |rows| f32::from(nav.scroll.min(rows)) / f32::from(rows) * height);
+        self.level.source.anchor(page, y)
     }
 
     /// `c`: copy page `page` of this level's source to the clipboard: the page, or in a list the
@@ -2503,6 +2533,26 @@ mod tests {
         assert_eq!(page(&nav), 2);
         press(&mut nav, &[Key::Char('b')]);
         assert_eq!(page(&nav), 1);
+    }
+
+    /// Where to scroll to is a share of the page, taken once the draw knows the rows, and kept in range.
+    #[test]
+    fn a_scroll_asked_for_as_a_share_of_the_page_is_taken_once_the_rows_are_known() {
+        let mut nav = reader(0, 2, 30, 100);
+        nav.scroll_to = Some(0.5);
+        nav.shown(30, 100);
+        assert_eq!((nav.scroll, nav.scroll_to), (50, None));
+        nav.shown(30, 100);
+        assert_eq!(nav.scroll, 50, "once");
+        nav.scroll_to = Some(0.9);
+        nav.shown(30, 100);
+        assert_eq!(nav.scroll, 70, "within the rows the page has");
+        nav.scroll_to = Some(0.5);
+        nav.shown(40, 40);
+        assert_eq!(nav.scroll, 0, "a page that fits doesn't scroll");
+        nav.scroll_to = Some(f32::NAN);
+        nav.shown(30, 100);
+        assert_eq!(nav.scroll, 0);
     }
 
     #[test]

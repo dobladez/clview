@@ -1677,6 +1677,51 @@ fn a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back() {
     assert!(view.finish().success());
 }
 
+/// Where the reader is, by the last status line drawn: the first page on screen, of how many.
+#[cfg(feature = "word")]
+fn place_now(text: &str) -> Option<(usize, usize)> {
+    let line = bar(last_draw(text));
+    let at = line.get(line.rfind(" page")?..)?.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let (first, count) = at.split_once('/')?;
+    let first = first.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+    Some((first, count.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?))
+}
+
+/// The paragraph at the top of the screen stays on the reader's page across a relayout: narrower pages
+/// hold fewer of them, so from page 9 the reader lands further on (two narrow pages to a row, the pair
+/// shown starts at an even page), and back on a page again, near 9.
+#[cfg(feature = "word")]
+#[test]
+fn the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_relayout() {
+    if !pty_works() {
+        return;
+    }
+    let path = crate::view::tmp("reflow-place", "place.md");
+    let text: String = (1..=200)
+        .map(|n| format!("Paragraph {n}, with words enough in it to take a line or two of a page as printed, and more of a narrow one.\n\n"))
+        .collect();
+    std::fs::write(&path, text).unwrap();
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    let letter_pages = place_now(&view.text()).unwrap().1;
+    assert!(letter_pages >= 8, "{letter_pages} pages");
+    view.press("9g");
+    view.wait_until("page 9", |t| t.contains("  page 9/"));
+    view.press("40]");
+    view.wait_until("laid out at 40", |t| bar(t).contains("· width 40 ·"));
+    let (page, pages) = place_now(&view.text()).unwrap();
+    assert!(pages > letter_pages && page >= 11 && page < pages, "page {page} of {pages}, from page 9 of {letter_pages}");
+    view.press("80]]");
+    view.wait_until("a page again", |t| {
+        let line = bar(last_draw(t));
+        line.contains("width page") && !line.contains("· width")
+    });
+    let (back, _) = place_now(&view.text()).unwrap();
+    assert!((7..=10).contains(&back), "page {back}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// HTML through a pipe lays out again from the bytes kept, since it can't be read again.
 #[cfg(feature = "word")]
 #[test]

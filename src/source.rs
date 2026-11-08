@@ -564,7 +564,23 @@ pub(crate) trait Source {
     fn relayout(&self, _values: Values) -> Option<Job> {
         None
     }
+    /// Where the reader is, for a source laid out again to find it: the paragraph at `y` points down
+    /// page `page`, or the page's last if `y` is below them all. `None` where there is no paragraph to
+    /// go by (a page of pictures, a source that doesn't lay out again).
+    fn anchor(&self, _page: usize, _y: f32) -> Option<Anchor> {
+        None
+    }
+    /// Where `anchor`, from this source or one it was laid out again from, is in this layout: the page
+    /// it starts on, and how far down it, in points. `None` for one this source doesn't know.
+    fn find(&self, _anchor: &Anchor) -> Option<(usize, f32)> {
+        None
+    }
 }
+
+/// A place in a document as its source knows it ([`Source::anchor`]), meaning nothing to the viewer,
+/// which only hands it back ([`Source::find`]) to a source laid out again from the same document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Anchor(pub(crate) u64);
 
 /// A source laid out again ([`Source::relayout`]), once run: the new source, or why there is none.
 pub(crate) type Job = Box<dyn FnOnce() -> Result<Box<dyn Source + Send>, String> + Send>;
