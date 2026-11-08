@@ -1,6 +1,6 @@
 # Spec-0002: Reflow Markdown and HTML to a width in columns
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-07
 - **Related:** [Spec-0001](0001-settings-a-file-declares.md), `Done`, whose settings this builds on
   ([ADR-0021](../adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md));
@@ -271,3 +271,4 @@ task, not only by tests.
   checks made measurable.
 - 2026-11-07 — Ready after a review: the width given to the fragment's import, so tables fit it;
   a copy under way stopped from the first task.
+- 2026-11-07 — Implementing ([notes](0002-reflow-markdown-and-html-to-a-width-impl-20261107_2307.md)).

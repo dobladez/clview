@@ -35,7 +35,7 @@ fails while it disagrees with them.
 | # | Title | Status |
 |---|---|---|
 | 0001 | [Let a file declare its settings and their keys](0001-settings-a-file-declares.md) | Done |
-| 0002 | [Reflow Markdown and HTML to a width in columns](0002-reflow-markdown-and-html-to-a-width.md) | Ready |
+| 0002 | [Reflow Markdown and HTML to a width in columns](0002-reflow-markdown-and-html-to-a-width.md) | Implementing |
 | 0003 | [Lay Markdown and HTML out to the window's size](0003-lay-markdown-and-html-out-to-the-window.md) | Ready |
 
 ## Lifecycle
