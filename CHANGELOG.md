@@ -8,6 +8,11 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- Markdown and HTML reflow to a width: `[` and `]` lay the document out again 4 characters a line
+  narrower or wider, `72]` to 72, from 20 to 200, with `page` (US Letter, as before) among the steps;
+  `--width page|N` says where to start. The status line shows the width when it isn't a page's. Only
+  the document on screen reflows: a list's tiles keep their layout, and a document opened from the
+  list after a change is laid out at the new width.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 

@@ -30,8 +30,8 @@ use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
 use super::threads::Threads;
 use super::{
-    Again, Auto, Backend, Deferred, Format, Frame, Input, Keys, Named, Opened, Pixels, Pool, Render, Reopenable, Request, Setting, Source, Value,
-    guarded,
+    Again, Auto, Backend, Deferred, Effect, Format, Frame, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request,
+    Setting, Source, Value, Values, guarded,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -45,7 +45,7 @@ const OPTIONS: &[OptionSpec] =
 /// of their own ([ADR-0015](../../docs/adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 const PAPER: Setting = Setting {
     name: "paper",
-    named: &[Named { name: LIGHT, says: "dark on light" }, Named { name: DARK, says: "light on dark" }],
+    named: &[Named { name: LIGHT, says: "dark on light", at: None }, Named { name: DARK, says: "light on dark", at: None }],
     numbers: None,
     default: Value::Named(LIGHT),
     auto: Some(Auto { light: LIGHT, dark: DARK }),
@@ -58,15 +58,92 @@ const PAPER: Setting = Setting {
     },
     help: "Markdown and HTML light on dark, or dark on light",
     missing: "only Markdown and HTML go dark",
+    effect: Effect::Redraw,
 };
 const LIGHT: &str = "light";
 const DARK: &str = "dark";
 
-/// The settings a document of `kind` has: paper, for Markdown and HTML.
+/// How wide a line of Markdown or HTML is: as printed, on US Letter, or a number of characters of the
+/// code face, from 20 to 200, which lays the document out again
+/// ([ADR-0022](../../docs/adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
+const WIDTH: Setting = Setting {
+    name: "width",
+    named: &[Named { name: PAGE, says: "width page", at: Some(PAGE_COLUMNS) }],
+    numbers: Some(Numbers { least: 20, most: 200, step: 4 }),
+    default: Value::Named(PAGE),
+    auto: None,
+    keys: Keys::Step('[', ']'),
+    option: OptionSpec {
+        name: "--width",
+        short: None,
+        value: Some("page|N"),
+        help: "Markdown and HTML laid out to lines of N characters of code (20-200), or as printed (page)",
+    },
+    help: "Markdown and HTML 4 characters a line narrower, or wider; 72] sets 72",
+    missing: "only Markdown and HTML reflow",
+    effect: Effect::Relayout,
+};
+const PAGE: &str = "page";
+
+/// The characters of the code face a line holds as printed: US Letter's 468 pt of text, 82.98 of them,
+/// where `page` sits among the widths.
+const PAGE_COLUMNS: u32 = 83;
+
+/// The settings a document of `kind` has: paper and width, for Markdown and HTML.
 fn settings_of(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::Markdown | Kind::Html => &[PAPER.name],
+        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name],
         _ => &[],
+    }
+}
+
+/// How wide Markdown and HTML are laid out ([`WIDTH`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Width {
+    /// US Letter, as printed.
+    Page,
+    /// Lines of so many characters of the code face, within [`WIDTH`]'s numbers.
+    Columns(u32),
+}
+
+impl Width {
+    /// The width `values` ask for: [`WIDTH`]'s, or `page` where they say nothing.
+    fn wanted(values: &Values) -> Self {
+        match values.get(WIDTH.name) {
+            Some(Value::Number(columns)) => Self::columns(columns),
+            _ => Self::Page,
+        }
+    }
+
+    /// The width `--width` gives, if given: the viewer refuses one out of the range before any file
+    /// opens, and anything else is `page`.
+    fn given(option: Option<&str>) -> Self {
+        option.and_then(|given| given.parse().ok()).map_or(Self::Page, Self::columns)
+    }
+
+    /// `columns` characters, within the range.
+    fn columns(columns: u32) -> Self {
+        let Some(numbers) = WIDTH.numbers else { return Self::Page };
+        Self::Columns(columns.clamp(numbers.least, numbers.most.max(numbers.least)))
+    }
+
+    /// As a setting's value.
+    fn value(self) -> Value {
+        match self {
+            Self::Page => Value::Named(PAGE),
+            Self::Columns(columns) => Value::Number(columns),
+        }
+    }
+
+    /// The page to lay out on: US Letter, with less above and below than as printed, for more on a
+    /// screen; or as wide as the characters take between the same side margins, and as tall.
+    fn page(self) -> wordcraft_doc::SectionProps {
+        let mut page = wordcraft_doc::SectionProps { margin_top: 54.0, margin_bottom: 54.0, ..Default::default() };
+        if let Self::Columns(columns) = self {
+            // At most 200, so exact.
+            page.page_w = page.margin_left + page.margin_right + columns as f32 * CODE_SIZE * CODE_ADVANCE;
+        }
+        page
     }
 }
 
@@ -92,7 +169,7 @@ impl Backend for Wordcraft {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER]
+        &[PAPER, WIDTH]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
@@ -109,7 +186,8 @@ impl Backend for Wordcraft {
         let error = |e: String| format!("{path}: {e}");
         let kind = Kind::of(&path, &input.head).ok_or_else(|| error("not a document this reads".into()))?;
         let password = options.value("--password").map(String::from);
-        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside));
+        let width = Width::given(options.value(WIDTH.option.name));
+        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, width));
         let (stored, laid) = match input.reopenable()? {
             Reopenable::Disk(file) => {
                 let bytes = read(file).map_err(error)?;
@@ -126,8 +204,8 @@ impl Backend for Wordcraft {
             }
         };
         // Only the pages' sizes are kept: the document goes, and a render reads it again.
-        let sizes = laid.map_err(error)?.layout.pages.iter().map(|page| (page.w, page.h)).collect();
-        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes })))))
+        let sizes = sizes_of(&laid.map_err(error)?);
+        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, width })))))
     }
 }
 
@@ -244,9 +322,17 @@ struct Document {
     path: String,
     /// Each page's, in points.
     sizes: Vec<(f32, f32)>,
+    /// What it is laid out at; Markdown and HTML lay out again at another ([`Source::relayout`]).
+    width: Width,
+}
+
+/// Each page's size, in points, of a document laid out.
+fn sizes_of(laid: &Laid) -> Vec<(f32, f32)> {
+    laid.layout.pages.iter().map(|page| (page.w, page.h)).collect()
 }
 
 /// Where a document's bytes are.
+#[derive(Clone)]
 enum Stored {
     /// In a file on disk, read again to render.
     Disk(PathBuf),
@@ -340,6 +426,26 @@ impl Source for Paged {
         let (document, laid) = (self.0.clone(), Arc::new(Cache::new()));
         Box::new(Threads::new(threads, Arc::new(move |request| document.render(request, &laid))))
     }
+
+    /// Markdown and HTML say their width; the rest have a page of their own.
+    fn laid_at(&self) -> Values {
+        let mut values = Values::default();
+        if settings_of(self.0.kind).contains(&WIDTH.name) {
+            // There is room: nothing else is in it.
+            let _ = values.set(WIDTH.name, self.0.width.value());
+        }
+        values
+    }
+
+    /// Markdown and HTML at another width: read again from where their bytes are, and laid out at it.
+    fn relayout(&self, values: Values) -> Option<Job> {
+        let width = Width::wanted(&values);
+        if !settings_of(self.0.kind).contains(&WIDTH.name) || width == self.0.width {
+            return None;
+        }
+        let document = self.0.clone();
+        Some(Box::new(move || document.at(width).map(|paged| Box::new(paged) as Box<dyn Source + Send>)))
+    }
 }
 
 struct Renderer {
@@ -362,7 +468,7 @@ impl Document {
         let laid = laid
             .get_or_init(|| {
                 let bytes = self.bytes()?;
-                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside())).map(Arc::new)
+                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), self.width)).map(Arc::new)
             })
             .clone()?;
         let page = laid.layout.pages.get(request.page).ok_or_else(|| format!("the document has no page {}", request.page.saturating_add(1)))?;
@@ -388,6 +494,15 @@ impl Document {
         }
         // Premultiplied RGBA, row by row, as a frame's are.
         Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings, again: false })
+    }
+
+    /// This document laid out again at `width`, from its bytes: a new one, this one as it is.
+    fn at(&self, width: Width) -> Result<Paged, String> {
+        let bytes = self.bytes()?;
+        let laid = caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), width))?;
+        let Self { stored, kind, password, path, .. } = self;
+        let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
+        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes: sizes_of(&laid), width })))
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
@@ -450,9 +565,9 @@ fn pixels(size: f32, scale: f32) -> Result<u64, String> {
 }
 
 /// The document in `bytes`, of `kind`, read with `password` if it is protected, and laid out into
-/// pages. `path` is the file's, for the fields that show it, and `beside` the directory it is in, for
-/// the pictures it refers to.
-fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>) -> Result<Laid, String> {
+/// pages: Markdown and HTML at `width`, the rest on pages of their own. `path` is the file's, for the
+/// fields that show it, and `beside` the directory it is in, for the pictures it refers to.
+fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>, width: Width) -> Result<Laid, String> {
     let pictures = Pictures::beside(beside);
     let read = match kind {
         Kind::Package => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
@@ -460,8 +575,8 @@ fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside
         Kind::Compound => wordcraft_docbin::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Odt => imported("odt", bytes),
         Kind::Rtf => imported("rtf", bytes),
-        Kind::Markdown => markdown(bytes, &pictures),
-        Kind::Html => html(bytes, &pictures),
+        Kind::Markdown => markdown(bytes, &pictures, width),
+        Kind::Html => html(bytes, &pictures, width),
     };
     let mut document = read.map_err(|e| match e == wordcraft_docx::PASSWORD_REQUIRED {
         true => format!("{e}: give it with --password"),
@@ -485,14 +600,14 @@ fn imported(extension: &str, bytes: &[u8]) -> Result<wordcraft_doc::Document, St
 }
 
 /// The Markdown in `bytes`, where any punctuation or line may start a run, a cell or a paragraph.
-fn markdown(bytes: &[u8], pictures: &Pictures<'_>) -> Result<wordcraft_doc::Document, String> {
+fn markdown(bytes: &[u8], pictures: &Pictures<'_>, width: Width) -> Result<wordcraft_doc::Document, String> {
     let as_html = |bytes: &[u8]| markdown_as_html(&wordcraft_formats::txt::decode(bytes));
-    marked_up(|b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes, as_html, pictures)
+    marked_up(|b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes, as_html, pictures, width)
 }
 
 /// The HTML in `bytes`, where a tag or, in a `pre`, a line may.
-fn html(bytes: &[u8], pictures: &Pictures<'_>) -> Result<wordcraft_doc::Document, String> {
-    marked_up(|b| matches!(b, b'<' | b'\r' | b'\n'), bytes, wordcraft_formats::html::decode, pictures)
+fn html(bytes: &[u8], pictures: &Pictures<'_>, width: Width) -> Result<wordcraft_doc::Document, String> {
+    marked_up(|b| matches!(b, b'<' | b'\r' | b'\n'), bytes, wordcraft_formats::html::decode, pictures, width)
 }
 
 /// `text`, Markdown, as HTML for wordcraft's importer to read
@@ -580,12 +695,13 @@ fn numbers_in_their_footnotes(html: &str) -> String {
 /// ([ADR-0012](../../docs/adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
 /// `mark` says which bytes may start something of its own, counted before it is imported, since
 /// importing them is what costs; its text, what laying it out costs, can only be told after, since
-/// a page's scripts and styles aren't text.
+/// a page's scripts and styles aren't text. Laid out on the page `width` gives.
 fn marked_up(
     mark: impl Fn(&u8) -> bool,
     bytes: &[u8],
     as_html: impl FnOnce(&[u8]) -> String,
     pictures: &Pictures<'_>,
+    width: Width,
 ) -> Result<wordcraft_doc::Document, String> {
     if bytes.len() > MAX_MARKED_UP {
         return Err(format!("the document is more than {} MiB", MAX_MARKED_UP >> 20));
@@ -593,15 +709,16 @@ fn marked_up(
     if bytes.iter().filter(|b| mark(b)).count() > MAX_MARKS {
         return Err(format!("the document has more than {MAX_MARKS} lines and marks"));
     }
-    // US Letter, as nothing says otherwise. Less above and below than as printed, for more on a screen.
-    let page = wordcraft_doc::SectionProps { margin_top: 54.0, margin_bottom: 54.0, ..Default::default() };
+    let page = width.page();
     let fit = (page.text_width(), page.text_height());
-    // As a fragment, which takes the document's own formatting, here `styled`'s. `import_on` reads a web
-    // page, as Word opens one: Times New Roman, and no code style. Only the top and bottom differ from
-    // the default page, and tables size to its width, so they can be set after
-    // ([ADR-0017](../../docs/adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)).
-    let mut document = wordcraft_formats::html::import_with(&as_html(bytes), &|source: &str| pictures.measured(source, fit));
-    document.last_section = page;
+    // As a fragment, which takes the document's own formatting, here `styled`'s: `import_on` reads a web
+    // page, as Word opens one, Times New Roman and no code style
+    // ([ADR-0017](../../docs/adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)). The
+    // page goes into the conversion, since tables size to its width there; `import_with` would give them
+    // the default page's. (What that entry point does first, `begin_import`, only starts wordcraft's log of
+    // what an import dropped afresh, and is the crate's own.)
+    let flow = wordcraft_formats::html::parse_with(&as_html(bytes), &|source: &str| pictures.measured(source, fit));
+    let mut document = wordcraft_formats::model::to_doc_in(&flow, page);
     fit_to_the_page(&mut document.body, fit.1);
     styled(&mut document);
     let body = StoryRef::Body;
@@ -621,6 +738,9 @@ const CODE_FACE: &str = "JetBrains Mono";
 /// The size of its text, and of a code block's, at which 80 columns fit on a line of the block.
 const TEXT_SIZE: f32 = 11.0;
 const CODE_SIZE: f32 = 9.4;
+
+/// How wide a character of the code face is, in ems: a column is this much of [`CODE_SIZE`].
+const CODE_ADVANCE: f32 = 0.6;
 
 /// The room below a paragraph of text.
 const TEXT_AFTER: f32 = 9.0;
@@ -945,8 +1065,8 @@ mod tests {
     #[test]
     fn markdown_and_html_are_refused_past_their_limits() {
         let nowhere = Pictures::beside(None);
-        let markdown = |bytes: &[u8]| markdown(bytes, &nowhere);
-        let html = |bytes: &[u8]| html(bytes, &nowhere);
+        let markdown = |bytes: &[u8]| markdown(bytes, &nowhere, Width::Page);
+        let html = |bytes: &[u8]| html(bytes, &nowhere, Width::Page);
         let refused = |what: &str, read: &dyn Fn(&[u8]) -> Result<wordcraft_doc::Document, String>, bytes: &[u8]| {
             assert!(read(bytes).is_err_and(|e| e.contains(what)), "{what}");
         };
@@ -1032,8 +1152,15 @@ mod tests {
     const MARGIN: u32 = 144;
     const PAGE_WIDTH: u32 = 1224;
 
-    /// The first page of this Markdown on `paper`.
+    /// The first page of this Markdown on `paper`, as printed.
     fn looked_at(markdown: &str, paper: Paper) -> Frame {
+        let frame = looked_at_on(markdown, paper, None);
+        assert_eq!(frame.width, PAGE_WIDTH);
+        frame
+    }
+
+    /// The first page of this Markdown on `paper`, laid out at `width` if given (`--width`'s value).
+    fn looked_at_on(markdown: &str, paper: Paper, width: Option<&str>) -> Frame {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let at = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("clview-word-looks-{}", std::process::id()));
@@ -1041,12 +1168,110 @@ mod tests {
         let path = dir.join(format!("{at}.md"));
         std::fs::write(&path, markdown).unwrap();
         let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
-        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
+        let Ok(Opened::Pages(source)) = Wordcraft.open(input, &given(width)) else { panic!("not pages") };
         let frame = source.renderer().unwrap().render(paper.asked(0, SCALE));
         assert_eq!(frame.error, None);
-        assert_eq!(frame.width, PAGE_WIDTH);
         std::fs::remove_file(&path).unwrap();
         frame
+    }
+
+    /// The options, with `--width` at `width` if given.
+    fn given(width: Option<&str>) -> Parsed<'static> {
+        let args: &'static [String] = width.map_or(&[], |width| Box::leak(vec!["--width".to_owned(), width.to_owned()].into_boxed_slice()));
+        Parsed::parse(args, &[WIDTH.option]).unwrap()
+    }
+
+    /// `page` is US Letter as printed, less above and below; a number is that many characters of the code
+    /// face between the same side margins, as tall as Letter. `page` sits among the numbers at the nearest.
+    #[test]
+    fn a_width_is_so_many_characters_of_the_code_face_and_page_is_letter() {
+        let page = Width::Page.page();
+        assert_eq!((page.page_w, page.page_h, page.text_width(), page.text_height()), (612.0, 792.0, 468.0, 684.0));
+        assert_eq!((page.margin_left, page.margin_right, page.margin_top, page.margin_bottom), (72.0, 72.0, 54.0, 54.0));
+        let narrow = Width::Columns(40).page();
+        assert!((narrow.text_width() - 40.0 * 5.64).abs() < 0.01, "{}", narrow.text_width());
+        assert_eq!((narrow.page_h, narrow.margin_left, narrow.margin_right, narrow.text_height()), (792.0, 72.0, 72.0, 684.0));
+        assert_eq!((468.0 / (CODE_SIZE * CODE_ADVANCE)).round() as u32, PAGE_COLUMNS);
+        assert_eq!(WIDTH.named.iter().find(|named| named.name == PAGE).and_then(|named| named.at), Some(PAGE_COLUMNS));
+        // From the option, and from the values: within the range either way.
+        assert_eq!((Width::given(None), Width::given(Some("page")), Width::given(Some("40"))), (Width::Page, Width::Page, Width::Columns(40)));
+        assert_eq!((Width::given(Some("300")), Width::given(Some("x"))), (Width::Columns(200), Width::Page));
+        let values = |value: Option<Value>| {
+            let mut values = Values::default();
+            if let Some(value) = value {
+                assert!(values.set(WIDTH.name, value));
+            }
+            Width::wanted(&values)
+        };
+        assert_eq!((values(None), values(Some(Value::Named(PAGE))), values(Some(Value::Number(72)))), (Width::Page, Width::Page, Width::Columns(72)));
+        assert_eq!(values(Some(Value::Number(7))), Width::Columns(20));
+        // A code block, indented 8 pt on each side, holds about 3 characters fewer than the width.
+        let lines =
+            |columns: usize| lines_of(&looked_at_on(&format!("```\n{}\n```", "0".repeat(columns)), Paper::Printed, Some("40")), dark_ink).len();
+        assert_eq!((lines(37), lines(38)), (1, 2));
+        let frame = looked_at_on("One", Paper::Printed, Some("40"));
+        assert_eq!(frame.width, ((144.0 + 40.0 * 5.64) * SCALE).ceil() as u32);
+    }
+
+    /// A table is as wide as the text at any width, since the page goes into the import: at `page`, as
+    /// wordcraft's own import gives it on the default page, which is as wide.
+    #[test]
+    fn a_table_is_as_wide_as_the_text_at_any_width() {
+        let nowhere = Pictures::beside(None);
+        let grid = |document: &wordcraft_doc::Document| -> f32 {
+            let table = document.body.iter().find_map(|block| match &**block {
+                Block::Table(table) => Some(table),
+                _ => None,
+            });
+            table.expect("a table").grid.iter().sum()
+        };
+        let table = "| One | Two |\n|---|---|\n| Three | Four |\n";
+        let own = wordcraft_formats::html::import_with(&markdown_as_html(table), &|_| None);
+        assert_eq!(grid(&own), 468.0);
+        assert_eq!(grid(&markdown(table.as_bytes(), &nowhere, Width::Page).unwrap()), 468.0, "as now");
+        let cells = "<table><tr><td>One</td><td>Two</td></tr></table>";
+        assert_eq!(grid(&html(cells.as_bytes(), &nowhere, Width::Page).unwrap()), 468.0);
+        for narrow in [markdown(table.as_bytes(), &nowhere, Width::Columns(40)), html(cells.as_bytes(), &nowhere, Width::Columns(40))] {
+            assert!((grid(&narrow.unwrap()) - 40.0 * 5.64).abs() < 0.01);
+        }
+    }
+
+    /// Markdown and HTML say the width they were laid out at, and give a job that lays them out again at
+    /// another, from their bytes, as a source of its own at that width; at the same width, none. What
+    /// has a page of its own says nothing and lays out again at nothing.
+    #[test]
+    fn markdown_and_html_say_their_width_and_lay_out_again_at_another() {
+        let dir = std::env::temp_dir().join(format!("clview-word-relayout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = |name: &str, contents: &str, width: Option<&str>| {
+            let path = dir.join(name);
+            std::fs::write(&path, contents).unwrap();
+            let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+            let Ok(Opened::Pages(source)) = Wordcraft.open(input, &given(width)) else { panic!("not pages: {name}") };
+            source
+        };
+        let at = |columns: u32| {
+            let mut values = Values::default();
+            assert!(values.set(WIDTH.name, Value::Number(columns)));
+            values
+        };
+        let long: String = (1..=120).map(|n| format!("Paragraph {n}, with some words in it to fill a line or two.\n\n")).collect();
+        let source = open("a.md", &long, Some("40"));
+        assert_eq!((source.laid_at().get(WIDTH.name), source.settings().contains(&WIDTH.name)), (Some(Value::Number(40)), true));
+        assert!((source.size(0).unwrap().0 - (144.0 + 40.0 * 5.64)).abs() < 0.01);
+        assert!(source.relayout(at(40)).is_none(), "at it already");
+        let wider = source.relayout(at(80)).expect("a job")().unwrap();
+        assert_eq!(wider.laid_at().get(WIDTH.name), Some(Value::Number(80)));
+        assert!((wider.size(0).unwrap().0 - (144.0 + 80.0 * 5.64)).abs() < 0.01);
+        assert!(wider.pages() < source.pages(), "{} pages at 80, {} at 40", wider.pages(), source.pages());
+        let page = wider.relayout(Values::default()).expect("a job")().unwrap();
+        assert_eq!((page.laid_at().get(WIDTH.name), page.size(0)), (Some(Value::Named(PAGE)), Some((612.0, 792.0))));
+        assert_eq!(page.renderer().unwrap().render(Paper::Printed.asked(0, 1.0)).width, 612);
+        let html = open("a.html", "<p>One</p>", None);
+        assert_eq!(html.laid_at().get(WIDTH.name), Some(Value::Named(PAGE)));
+        assert!(html.relayout(at(20)).is_some() && html.relayout(Values::default()).is_none());
+        let rtf = open("a.rtf", "{\\rtf1\\ansi One}", Some("40"));
+        assert_eq!((rtf.laid_at(), rtf.relayout(at(20)).is_none(), rtf.settings().contains(&WIDTH.name)), (Values::default(), true, false));
     }
 
     fn colour_at(frame: &Frame, x: u32, y: u32) -> [u8; 3] {
@@ -1100,7 +1325,7 @@ mod tests {
     #[test]
     fn only_markdown_and_html_are_given_this_look() {
         let font = |bytes: &[u8], kind| {
-            let laid = laid_out(bytes, kind, None, "a", None).unwrap();
+            let laid = laid_out(bytes, kind, None, "a", None, Width::Page).unwrap();
             let document = laid.document.read().unwrap();
             document.styles.default_chr.font.clone().unwrap()
         };
@@ -1114,7 +1339,8 @@ mod tests {
     #[test]
     fn text_and_headings_take_this_look_not_a_web_pages() {
         let nowhere = Pictures::beside(None);
-        let documents = [markdown(b"# Head\n\nText", &nowhere).unwrap(), html(b"<h1>Head</h1><p>Text</p>", &nowhere).unwrap()];
+        let documents =
+            [markdown(b"# Head\n\nText", &nowhere, Width::Page).unwrap(), html(b"<h1>Head</h1><p>Text</p>", &nowhere, Width::Page).unwrap()];
         for document in &documents {
             let paragraphs = document.para_paths(StoryRef::Body);
             assert_eq!(paragraphs.len(), 2);
@@ -1233,7 +1459,7 @@ mod tests {
     /// Only a bullet goes, since a numbered task keeps its number; and what is in a table is styled too.
     #[test]
     fn a_tasks_box_takes_the_place_of_its_bullet() {
-        let laid = laid_out(b"- one\n- [x] two\n\n1. [x] three\n\n| [`a`](b) |\n|---|\n", Kind::Markdown, None, "a", None).unwrap();
+        let laid = laid_out(b"- one\n- [x] two\n\n1. [x] three\n\n| [`a`](b) |\n|---|\n", Kind::Markdown, None, "a", None, Width::Page).unwrap();
         let document = laid.document.read().unwrap();
         let paras: Vec<&wordcraft_doc::Paragraph> =
             document.para_paths(StoryRef::Body).iter().filter_map(|path| document.para(StoryRef::Body, path)).collect();

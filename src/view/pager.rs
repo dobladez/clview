@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::clip;
 use crate::encode::PngEffort;
-use crate::source::{Container, Frame, Keys, Later, Pool, Ready, Request, Setting, Source, Value, Values};
+use crate::source::{Container, Effect, Frame, Keys, Later, Named, Numbers, Pool, Ready, Request, Setting, Source, Value, Values};
 
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
@@ -60,6 +60,9 @@ const MAX_FILTER: usize = 256;
 const FILTER_KEYS: &str = "⏎ keep · esc cancel";
 /// What `/` says in a file's pages.
 const NO_SEARCH: &str = "no text search; / filters lists";
+/// What a relayout setting's keys say in a list, and while `--pages` picks the pages.
+const REFLOW_IN_LIST: &str = "open a document to reflow it";
+const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -301,6 +304,7 @@ pub(super) fn run(
             redraw |= pager.read_on(opener)?;
         }
         redraw |= pager.go_on_into()?;
+        redraw |= pager.relayout()?;
         redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
@@ -378,6 +382,13 @@ struct Nav {
     names: Vec<String>,
     /// A list's filter by name (`/`), while it has one: `pages` are then the tiles that match.
     filter: Option<Filter>,
+    /// Whether `pages` were picked by `--pages`: then no relayout, which would lay out other pages.
+    picked: bool,
+    /// What the document on screen is laid out at, for the status line (`width 72`): a relayout
+    /// setting's value, said as its key says it, when it isn't the default. None in a list.
+    laid: Option<String>,
+    /// The value a relayout under way is for, said the same way, while it is.
+    relaying: Option<String>,
 }
 
 /// A list narrowed to the tiles whose names hold some text, typed after `/`. The list is whole
@@ -410,6 +421,15 @@ struct Settings {
     changed: std::cell::Cell<bool>,
 }
 
+/// The relayout settings `source` has (`has`) and is laid out at a value of that isn't the default: for
+/// the status line, said as the keys say the value. None otherwise.
+fn laid_at(settings: &Settings, source: &dyn Source, has: &[&str]) -> Option<String> {
+    let laid = source.laid_at();
+    let relayout = settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && has.contains(&setting.name));
+    let shown = relayout.filter_map(|setting| laid.get(setting.name).filter(|value| *value != setting.default).map(|value| said(setting, value)));
+    shown.reduce(|all, one| format!("{all} · {one}"))
+}
+
 /// A setting's keys, as `?` lists them.
 fn setting_keys(setting: &Setting) -> String {
     match setting.keys {
@@ -419,16 +439,21 @@ fn setting_keys(setting: &Setting) -> String {
     }
 }
 
+/// What `setting` at `value` is said as: a named value's own words, or `width 72`.
+fn said(setting: &Setting, value: Value) -> String {
+    match value {
+        Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
+        Value::Number(number) => format!("{} {number}", setting.name),
+    }
+}
+
 /// What `key`, one of `setting`'s, does to its value `now`, with `count` typed before it: the value
 /// it goes to, and what the reader is told of it. A number typed sets a setting with numbers to it,
 /// within their range. Otherwise a cycling key goes to the next named value, after the last the first;
-/// a stepping key to the next multiple of the step down or up, within the range, from a named value
-/// to the least going up and the most going down. At an end the value stays, and the line says so.
+/// a stepping key to the next among the steps down or up ([`stepped`]). At an end the value stays,
+/// and the line says so.
 fn turned(setting: &Setting, now: Value, key: char, count: Option<&str>) -> (Value, String) {
-    let says = |value: Value| match value {
-        Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
-        Value::Number(number) => format!("{} {number}", setting.name),
-    };
+    let says = |value: Value| said(setting, value);
     let at_end = |number: u32, end: &str| (Value::Number(number), format!("{} {number}, the {end}", setting.name));
     if let (Some(numbers), Some(count)) = (setting.numbers, count) {
         // At most `MAX_TYPED` digits, so it fits; past the most, it is the most anyway.
@@ -450,19 +475,50 @@ fn turned(setting: &Setting, now: Value, key: char, count: Option<&str>) -> (Val
         }
         (Keys::Step(..), None, _) => now,
         (Keys::Step(down, _), Some(numbers), _) => {
-            let (least, most, step) = (numbers.least, numbers.most.max(numbers.least), numbers.step.max(1));
             let up = key != down;
-            match now {
-                Value::Number(number) if up && number >= most => return at_end(most, "most"),
-                Value::Number(number) if !up && number <= least => return at_end(least, "least"),
-                Value::Number(number) if up => Value::Number((number / step).saturating_add(1).saturating_mul(step).clamp(least, most)),
-                Value::Number(number) => Value::Number((number.saturating_sub(1) / step).saturating_mul(step).clamp(least, most)),
-                Value::Named(_) if up => Value::Number(least),
-                Value::Named(_) => Value::Number(most),
+            let (end, name) = if up { (numbers.most.max(numbers.least), "most") } else { (numbers.least, "least") };
+            match (stepped(setting.named, numbers, now, up), now) {
+                (Some(value), _) => value,
+                (None, Value::Number(_)) => return at_end(end, name),
+                (None, named) => return (named, format!("{}, the {name}", says(named))),
             }
         }
     };
     (value, says(value))
+}
+
+/// The value after `now` among a setting's steps, `up` or down, or `None` past the last: the multiples
+/// of the step from the least to the most (the ends among them), and each of `named` that has an `at`
+/// set among them, after the number equal to it, in their order. A number typed between two multiples
+/// steps to either. A named value without an `at` steps to the least going up, the most going down.
+fn stepped(named: &[Named], numbers: Numbers, now: Value, up: bool) -> Option<Value> {
+    let (least, most, step) = (numbers.least, numbers.most.max(numbers.least), numbers.step.max(1));
+    // Where `now` sits: at which number, and for a named value, which among those set at it.
+    let (number, here) = match now {
+        Value::Number(number) => (number, None),
+        Value::Named(name) => match named.iter().position(|n| n.name == name).map(|i| (i, named.get(i).and_then(|n| n.at))) {
+            Some((i, Some(at))) => (at, Some(i)),
+            _ => return Some(Value::Number(if up { least } else { most })),
+        },
+    };
+    let set = || named.iter().enumerate().filter_map(|(i, n)| n.at.map(|at| (at, i)));
+    let as_named = |(_, i): (u32, usize)| named.get(i).map(|n| Value::Named(n.name));
+    if up {
+        let next = (number < most).then(|| (number / step).saturating_add(1).saturating_mul(step).clamp(least, most));
+        // Those set at this number after `now`, then those set before the next number, then it.
+        let same = set().filter(|(at, i)| *at == number && here.is_none_or(|here| *i > here)).min();
+        let between = set().filter(|(at, _)| *at > number && next.is_none_or(|next| *at < next)).min();
+        same.or(between).and_then(as_named).or(next.map(Value::Number))
+    } else {
+        let previous = (number > least).then(|| (number.saturating_sub(1) / step).saturating_mul(step).clamp(least, most));
+        // Those set at this number before `now`; the number itself, from a named value set at one of
+        // the steps; those set since the previous number, the last first; then it.
+        let same = here.and_then(|here| set().filter(|(at, i)| *at == number && *i < here).max());
+        let on_a_step = number == least || number == most || number % step == 0;
+        let itself = (here.is_some() && on_a_step).then_some(Value::Number(number));
+        let between = set().filter(|(at, _)| *at < number && previous.is_none_or(|previous| *at >= previous)).max();
+        same.and_then(as_named).or(itself).or(between.and_then(as_named)).or(previous.map(Value::Number))
+    }
 }
 
 /// A name as a filter matches it: in lower case, so that case doesn't matter.
@@ -495,6 +551,9 @@ impl Nav {
             has: Vec::new(),
             names: Vec::new(),
             filter: None,
+            picked: false,
+            laid: None,
+            relaying: None,
         }
     }
 
@@ -666,8 +725,11 @@ impl Nav {
 
     /// A key none of the viewer's took: a setting's, if this build declares one with it. A number
     /// typed before it is used up by a setting with numbers, whatever happens, and left as it is by
-    /// one without. On what hasn't the setting, its message is said and nothing changes; otherwise
-    /// its value changes, the pages are made again, and the reader is told what it is now.
+    /// one without. On what hasn't the setting, its message is said and nothing changes; a relayout
+    /// setting's in a list, or with `--pages`, says why nothing changes either. Otherwise its value
+    /// changes and the reader is told what it is now: a redraw setting's pages are made again, and a
+    /// document whose layout isn't at a relayout setting's value is laid out again when it is on screen
+    /// ([`Pager::relayout`]).
     fn setting_key(&mut self, key: Key) {
         let Key::Char(key) = key else { return };
         let settings = self.settings.clone();
@@ -677,12 +739,18 @@ impl Nav {
             self.message = Some(setting.missing.into());
             return;
         }
+        if setting.effect == Effect::Relayout && (self.list || self.picked) {
+            self.message = Some(if self.list { REFLOW_IN_LIST } else { REFLOW_WITH_PAGES }.into());
+            return;
+        }
         let mut values = settings.values.get();
         let now = values.get(setting.name).unwrap_or(setting.default);
         let (value, said) = turned(setting, now, key, count.as_deref());
         if value != now && values.set(setting.name, value) {
             settings.values.set(values);
-            settings.changed.set(true);
+            if setting.effect == Effect::Redraw {
+                settings.changed.set(true);
+            }
         }
         self.message = Some(said);
     }
@@ -880,23 +948,29 @@ impl Nav {
     /// The status line for a window `cols` wide: exactly that many characters, none of them a
     /// control character (the name and the messages may come from anywhere). The right side is
     /// at the same place whatever the reader does: where the reader is, padded to the widest it
-    /// gets in this document, the zoom, and the key for the keys; `…` before them while pages
-    /// render. A narrow window drops the zoom, then the key. On the left, the name, cut short in
-    /// its middle to leave room for a message, which ends two spaces before the right side.
-    /// Until the first key, the message is the reminder of the keys, as much of it as fits. A
-    /// list's filter takes the message's place: always while it is typed, otherwise when there is
-    /// no message.
+    /// gets in this document, what the document is laid out at when that isn't the default
+    /// (`width 72`, with `…` after it while it is laid out again), the zoom, and the key for the
+    /// keys; `…` before them while pages render. A narrow window drops the layout, then the zoom,
+    /// then the key. On the left, the name, cut short in its middle to leave room for a message,
+    /// which ends two spaces before the right side. Until the first key, the message is the
+    /// reminder of the keys, as much of it as fits. A list's filter takes the message's place:
+    /// always while it is typed, otherwise when there is no message.
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
         let width = usize::from(cols);
         let (place, widest) = self.place();
         let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
         let slot = if rendering { '…' } else { ' ' };
-        let rights = [
-            format!("{slot} {place:<widest$} · {zoom:<ZOOM_WIDTH$} · {HELP} "),
-            format!("{slot} {place:<widest$} · {HELP} "),
-            format!("{slot} {place} "),
-        ];
-        let right = rights.iter().find(|r| chars(r) <= width).cloned().unwrap_or_else(|| rights[2].chars().take(width).collect());
+        let laid = self.relaying.as_ref().map(|wanted| format!("{wanted}…")).or_else(|| self.laid.clone());
+        let laid = laid.map(|laid| format!("{laid:<width$} · ", width = self.laid_width()));
+        let mut rights = Vec::new();
+        if let Some(laid) = laid {
+            rights.push(format!("{slot} {place:<widest$} · {laid}{zoom:<ZOOM_WIDTH$} · {HELP} "));
+        }
+        rights.push(format!("{slot} {place:<widest$} · {zoom:<ZOOM_WIDTH$} · {HELP} "));
+        rights.push(format!("{slot} {place:<widest$} · {HELP} "));
+        rights.push(format!("{slot} {place} "));
+        let shortest = rights.last().cloned().unwrap_or_default();
+        let right = rights.iter().find(|r| chars(r) <= width).cloned().unwrap_or_else(|| shortest.chars().take(width).collect());
         let room = width.saturating_sub(chars(&right));
         let said = match (&self.message, self.typed.is_empty()) {
             (Some(message), _) => message.clone(),
@@ -932,6 +1006,18 @@ impl Nav {
         let gap = room.saturating_sub(1usize.saturating_add(chars(&name)).saturating_add(chars(&tail)));
         let left: String = format!(" {name}{}{tail}", " ".repeat(gap)).chars().chain(std::iter::repeat(' ')).take(room).collect();
         printable(&format!("{left}{right}"))
+    }
+
+    /// The widest a relayout setting's value is said on the status line, `…` included (`width 200…`), so
+    /// the right side stays put as it steps.
+    fn laid_width(&self) -> usize {
+        let digits = |n: u32| n.to_string().len();
+        let widest = |setting: &&Setting| {
+            let numbers = setting.numbers.map_or(0, |numbers| digits(numbers.most).max(digits(numbers.least)));
+            let named = setting.named.iter().map(|named| chars(named.says)).max().unwrap_or(0);
+            named.max(chars(setting.name).saturating_add(1).saturating_add(numbers)).saturating_add(1)
+        };
+        self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout).map(widest).max().unwrap_or(0)
     }
 
     /// Where the reader is, for the status line, and the most characters it takes in this
@@ -1071,10 +1157,11 @@ impl Level {
     /// needs no reminder of the keys: they are the list's.
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>) -> Self {
         let list = shown.is_list();
-        let Shown { pages: Pages { source, name, pages }, items } = shown;
+        let Shown { pages: Pages { source, name, pages, picked }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
-        let nav = Nav { list, nested, hint: !(list && nested), names, settings, has, ..Nav::new(pages, source.pages(), zoom) };
+        let laid = (!list).then(|| laid_at(&settings, &*source, &has)).flatten();
+        let nav = Nav { list, nested, hint: !(list && nested), names, settings, has, picked, laid, ..Nav::new(pages, source.pages(), zoom) };
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
     }
 
@@ -1447,6 +1534,12 @@ impl Pager<'_> {
         }
         let gone = left.id;
         drop(left);
+        self.let_go(gone)
+    }
+
+    /// The level `gone` is no more: a copy still rendering on its pool stops, and says so, and its
+    /// pages go from the terminal.
+    fn let_go(&mut self, gone: u64) -> Result<(), String> {
         if let Some(said) = self.copier.left(gone) {
             self.level.nav.message = Some(said);
         }
@@ -1460,6 +1553,82 @@ impl Pager<'_> {
         self.wanted.clear();
         self.wrote(0);
         self.tty.write_all(&out)
+    }
+
+    /// The values to lay the document on screen out at, when a relayout setting it has is wanted at
+    /// another value than its layout is at: after its keys, or on going into it after a change. None
+    /// in a list, whose tiles keep their layout, with `--pages`, which picks pages as laid out, and
+    /// when they agree.
+    fn relayout_wanted(&self) -> Option<Values> {
+        let nav = &self.level.nav;
+        if nav.list || nav.picked {
+            return None;
+        }
+        let (wanted, laid) = (self.settings.values.get(), self.level.source.laid_at());
+        let mut relayout = self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name));
+        let differs = |setting: &&Setting| wanted.get(setting.name).unwrap_or(setting.default) != laid.get(setting.name).unwrap_or(setting.default);
+        relayout.any(differs).then_some(wanted)
+    }
+
+    /// What the relayout settings the document on screen has are wanted at, said as their keys say it.
+    fn relayout_said(&self, wanted: &Values) -> String {
+        let nav = &self.level.nav;
+        let relayout = self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name));
+        let said = relayout.map(|setting| said(setting, wanted.get(setting.name).unwrap_or(setting.default)));
+        said.reduce(|all, one| format!("{all} · {one}")).unwrap_or_default()
+    }
+
+    /// Lay the document on screen out again, if a relayout setting is wanted at another value than it
+    /// is laid out at ([`Pager::relayout_wanted`]): here and now, the status line saying so meanwhile.
+    /// A new level for the new source takes this one's place, at the reader's page; the old one goes
+    /// as a level gone back from does. A failure keeps the old level, says why, and puts the value back
+    /// to what is on screen, so the next step starts from it. Whether the screen changed.
+    fn relayout(&mut self) -> Result<bool, String> {
+        let Some(wanted) = self.relayout_wanted() else { return Ok(false) };
+        self.level.nav.relaying = Some(self.relayout_said(&wanted));
+        let said = self.level.nav.message.clone().unwrap_or_default();
+        self.say(said)?;
+        let job = self.level.source.relayout(wanted).ok_or_else(|| "it can't be laid out again".to_owned());
+        // A panic in it costs the relayout, not the viewer.
+        let run = |job: crate::source::Job| std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+        let laid = job.and_then(|job| run(job).unwrap_or_else(|_| Err("the layout failed".into())));
+        self.level.nav.relaying = None;
+        match laid {
+            Ok(source) => self.replace(source)?,
+            Err(why) => {
+                self.level.nav.message = Some(printable(&why));
+                self.put_back();
+            }
+        }
+        Ok(true)
+    }
+
+    /// The shared values of the relayout settings back to what the document on screen is laid out at.
+    fn put_back(&self) {
+        let nav = &self.level.nav;
+        let (mut values, laid) = (self.settings.values.get(), self.level.source.laid_at());
+        for setting in self.settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && nav.has.contains(&setting.name)) {
+            // There is room: the name is in it already.
+            let _ = values.set(setting.name, laid.get(setting.name).unwrap_or(setting.default));
+        }
+        self.settings.values.set(values);
+    }
+
+    /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
+    /// the reader's page, or the last if there are fewer now, at the same zoom, gone into from a list if
+    /// this one was. This one goes as a level gone back from does ([`Pager::let_go`]).
+    fn replace(&mut self, source: Box<dyn Source + Send>) -> Result<(), String> {
+        let source: Box<dyn Source> = source;
+        let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone()), items: Vec::new() };
+        let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone());
+        self.levels = self.levels.wrapping_add(1);
+        level.nav.at = self.level.nav.at.min(level.nav.pages.len().saturating_sub(1));
+        level.nav.hint = false;
+        level.nav.message.clone_from(&self.level.nav.message);
+        let gone = std::mem::replace(&mut self.level, level);
+        let id = gone.id;
+        drop(gone);
+        self.let_go(id)
     }
 
     /// `c`: copy page `page` of this level's source to the clipboard: the page, or in a list the
@@ -1969,7 +2138,7 @@ mod tests {
     /// A setting the tests declare, as a backend would: two named values, cycled by `d`.
     const SHADE: Setting = Setting {
         name: "shade",
-        named: &[crate::source::Named { name: "pale", says: "pale now" }, crate::source::Named { name: "deep", says: "deep now" }],
+        named: &[Named { name: "pale", says: "pale now", at: None }, Named { name: "deep", says: "deep now", at: None }],
         numbers: None,
         default: Value::Named("pale"),
         auto: None,
@@ -1977,6 +2146,7 @@ mod tests {
         option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "" },
         help: "pale or deep",
         missing: "only some go deep",
+        effect: Effect::Redraw,
     };
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
@@ -2031,15 +2201,17 @@ mod tests {
         assert!(!list.wants_rerender(), "once");
     }
 
-    /// A setting with numbers the tests declare: `page`, or 20 to 200 in steps of 4, by `[` and `]`.
+    /// A setting with numbers the tests declare: `page`, set at 83 among them, or 20 to 200 in steps of
+    /// 4, by `[` and `]`; a relayout setting.
     const WIDTH: Setting = Setting {
         name: "width",
-        named: &[crate::source::Named { name: "page", says: "as laid out" }],
-        numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
+        named: &[Named { name: "page", says: "width page", at: Some(83) }],
+        numbers: Some(Numbers { least: 20, most: 200, step: 4 }),
         default: Value::Named("page"),
         keys: Keys::Step('[', ']'),
         help: "narrower or wider",
         missing: "only some are as wide",
+        effect: Effect::Relayout,
         ..SHADE
     };
 
@@ -2054,15 +2226,22 @@ mod tests {
         (nav.settings.values.get().get(WIDTH.name), nav.message.as_deref())
     }
 
-    /// `Step` keys go to the next multiple of the step down or up; at the least or the most the value
-    /// stays and the line says so. From a named value, up is the least and down the most.
+    /// `Step` keys go to the next multiple of the step down or up, through the named value set among
+    /// them where it sits; at the least or the most the value stays and the line says so. A relayout
+    /// setting's change asks for no redraw.
     #[test]
     fn step_keys_go_to_the_next_multiple_and_stay_at_the_ends() {
         let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
         press(&mut nav, &[Key::Char(']')]);
-        assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20")), "from page, up is the least");
-        assert!(nav.wants_rerender());
-        press(&mut nav, &[Key::Char('['), Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Number(84)), Some("width 84")), "from page, set at 83, up is 84");
+        assert!(!nav.wants_rerender(), "laid out again, not drawn again");
+        press(&mut nav, &[Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Named("page")), Some("width page")), "and back down to it");
+        press(&mut nav, &[Key::Char('[')]);
+        assert_eq!(width(&nav), (Some(Value::Number(80)), Some("width 80")), "from page, down is 80");
+        press(&mut nav, &[Key::Char(']')]);
+        assert_eq!(width(&nav).0, Some(Value::Named("page")), "and back up to it");
+        press(&mut nav, &[Key::Char('2'), Key::Char('0'), Key::Char(']'), Key::Char('['), Key::Char('[')]);
         assert_eq!(width(&nav), (Some(Value::Number(20)), Some("width 20, the least")));
         press(&mut nav, &[Key::Char('7'), Key::Char('3'), Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(73)), Some("width 73")));
@@ -2072,16 +2251,149 @@ mod tests {
         assert_eq!(width(&nav), (Some(Value::Number(72)), Some("width 72")), "73 down");
         press(&mut nav, &[Key::Char('[')]);
         assert_eq!(width(&nav).0, Some(Value::Number(68)), "from a multiple, the one before");
+        press(&mut nav, &[Key::Char('8'), Key::Char('3'), Key::Char(']'), Key::Char(']')]);
+        assert_eq!(width(&nav).0, Some(Value::Named("page")), "83 typed: the number comes before the value set at it");
+        press(&mut nav, &[Key::Char('8'), Key::Char('3'), Key::Char(']'), Key::Char('[')]);
+        assert_eq!(width(&nav).0, Some(Value::Number(80)));
         press(&mut nav, &[Key::Char('1'), Key::Char('9'), Key::Char('8'), Key::Char(']')]);
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200")), "198 up: the most, not past it");
-        assert!(nav.wants_rerender());
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!(width(&nav), (Some(Value::Number(200)), Some("width 200, the most")));
-        assert!(!nav.wants_rerender(), "nothing changed");
-        let mut nav = declaring_both(reader(0, 12, 40, 40), &["width"]);
-        press(&mut nav, &[Key::Char('[')]);
-        assert_eq!(width(&nav).0, Some(Value::Number(200)), "from page, down is the most");
+        assert!(!nav.wants_rerender());
+    }
+
+    /// Where a named value sits among the steps: after the number equal to it, in the order declared;
+    /// one set at no number steps to the least going up and the most going down; a value set past the
+    /// ends stays, saying so.
+    #[test]
+    fn named_values_sit_among_the_steps_where_they_are_set() {
+        let numbers = Numbers { least: 20, most: 200, step: 4 };
+        let named = |at: &[Option<u32>]| -> Vec<Named> {
+            at.iter().enumerate().map(|(i, at)| Named { name: ["a", "b", "c"][i], says: "", at: *at }).collect()
+        };
+        let step = |named: &[Named], now: Value, up: bool| stepped(named, numbers, now, up);
+        let (a, b, c) = (Value::Named("a"), Value::Named("b"), Value::Named("c"));
+        let (n, up, down) = (Value::Number, true, false);
+        // Set at a step, 84: 80, 84, a, 88.
+        let on_step = named(&[Some(84)]);
+        assert_eq!(
+            (step(&on_step, n(84), up), step(&on_step, a, up), step(&on_step, a, down), step(&on_step, n(88), down)),
+            (Some(a), Some(n(88)), Some(n(84)), Some(a))
+        );
+        assert_eq!((step(&on_step, n(80), up), step(&on_step, n(85), up), step(&on_step, n(85), down)), (Some(n(84)), Some(n(88)), Some(a)));
+        // Two between steps, in their order: 80, a, b, 84; and one at a step after them.
+        let between = named(&[Some(81), Some(83), Some(84)]);
+        assert_eq!(
+            (step(&between, n(80), up), step(&between, a, up), step(&between, b, up), step(&between, n(84), up)),
+            (Some(a), Some(b), Some(n(84)), Some(c))
+        );
+        assert_eq!(
+            (step(&between, c, down), step(&between, n(84), down), step(&between, b, down), step(&between, a, down)),
+            (Some(n(84)), Some(b), Some(a), Some(n(80)))
+        );
+        // Two at one number, in their order; one set nowhere; the ends.
+        let twice = named(&[Some(100), Some(100), None]);
+        assert_eq!(
+            (step(&twice, n(100), up), step(&twice, a, up), step(&twice, b, up), step(&twice, b, down), step(&twice, a, down)),
+            (Some(a), Some(b), Some(n(104)), Some(a), Some(n(100)))
+        );
+        assert_eq!((step(&twice, c, up), step(&twice, c, down)), (Some(n(20)), Some(n(200))));
+        let ends = named(&[Some(200), Some(20)]);
+        assert_eq!((step(&ends, n(200), up), step(&ends, a, up), step(&ends, b, down), step(&ends, n(20), down)), (Some(a), None, Some(n(20)), None));
+        assert_eq!((step(&ends, n(20), up), step(&ends, b, up), step(&ends, n(24), down)), (Some(b), Some(n(24)), Some(b)));
+        let setting = Setting { named: &[Named { name: "top", says: "at the top", at: Some(200) }], ..WIDTH };
+        assert_eq!(turned(&setting, Value::Named("top"), ']', None), (Value::Named("top"), "at the top, the most".into()));
+        assert_eq!(turned(&setting, Value::Number(200), ']', None), (Value::Named("top"), "at the top".into()));
+    }
+
+    /// A relayout setting's keys change nothing in a list, or while `--pages` picks the pages, and say
+    /// why; on a document they change the value without asking for a redraw, so `]` then `u`, read
+    /// together, leaves the list as it is, the value set for the next document gone into.
+    #[test]
+    fn a_relayout_key_is_refused_in_a_list_and_with_pages_and_asks_for_no_redraw() {
+        let mut tiles = declaring_both(list(9), &["width"]);
+        press(&mut tiles, &[Key::Char('7'), Key::Char('2'), Key::Char(']')]);
+        assert_eq!((width(&tiles), tiles.typed.as_str()), ((None, Some(REFLOW_IN_LIST)), ""));
+        assert!(!tiles.wants_rerender());
+        let mut none_has_it = declaring_both(list(9), &[]);
+        press(&mut none_has_it, &[Key::Char(']')]);
+        assert_eq!(width(&none_has_it), (None, Some("only some are as wide")), "the setting's own message first");
+        let mut picked = Nav { picked: true, ..declaring_both(reader(0, 12, 40, 40), &["width"]) };
+        press(&mut picked, &[Key::Char(']')]);
+        assert_eq!(width(&picked), (None, Some(REFLOW_WITH_PAGES)));
+        assert!(!picked.wants_rerender());
+        let mut opened = Nav { nested: true, has: vec![WIDTH.name], settings: tiles.settings.clone(), ..reader(0, 3, 40, 40) };
+        assert_eq!(press(&mut opened, &[Key::Char(']'), Key::Char('u')]), Step::Back);
+        assert_eq!(width(&opened).0, Some(Value::Number(84)));
+        drop(opened);
+        assert!(!tiles.wants_rerender(), "the list's tiles keep their layout");
+        // A redraw setting still asks for one.
+        let mut both = declaring_both(reader(0, 12, 40, 40), &["shade", "width"]);
+        press(&mut both, &[Key::Char('d')]);
+        assert!(both.wants_rerender());
+    }
+
+    /// A source laid out at something, for the status line's sake.
+    struct LaidAt(Values);
+
+    impl Source for LaidAt {
+        fn pages(&self) -> usize {
+            1
+        }
+        fn size(&self, _page: usize) -> Option<(f32, f32)> {
+            Some((1.0, 1.0))
+        }
+        fn natural(&self, _page: usize) -> bool {
+            false
+        }
+        fn renderer(&self) -> Result<Box<dyn crate::source::Render + '_>, String> {
+            Err("none".into())
+        }
+        fn pool(&self, _threads: usize) -> Box<dyn Pool> {
+            Box::new(Idle)
+        }
+        fn laid_at(&self) -> Values {
+            self.0
+        }
+    }
+
+    /// A pool that renders nothing.
+    struct Idle;
+
+    impl Pool for Idle {
+        fn set_queue(&self, _requests: Vec<Request>) {}
+        fn try_recv(&self) -> Option<Frame> {
+            None
+        }
+    }
+
+    /// The status line says what the document is laid out at, when that isn't the default, before the
+    /// zoom, with `…` after the value it is being laid out at again; a narrow window drops it first.
+    #[test]
+    fn the_status_line_shows_what_the_document_is_laid_out_at() {
+        let at = |value: Option<Value>| {
+            let mut values = Values::default();
+            if let Some(value) = value {
+                assert!(values.set("width", value));
+            }
+            let nav = declaring_both(reader(0, 3, 40, 40), &["width"]);
+            laid_at(&nav.settings, &LaidAt(values), &nav.has)
+        };
+        assert_eq!(at(Some(Value::Number(72))), Some("width 72".into()));
+        assert_eq!((at(Some(Value::Named("page"))), at(None)), (None, None), "the default");
+        let mut nav = declaring_both(reader(0, 3, 40, 40), &["width"]);
+        nav.laid = Some("width 72".into());
+        nav.hint = false;
+        assert_eq!(squeezed(&nav.status("a.md", 80, false)), " a.md page 1/3 · width 72 · 1 per row · ? help ");
+        nav.relaying = Some("width 76".into());
+        assert_eq!(squeezed(&nav.status("a.md", 80, true)), " a.md … page 1/3 · width 76… · 1 per row · ? help ");
+        assert!(nav.status("a.md", 80, true).contains("width 76…   · 1 per row"), "padded to the widest, `width page`, so the right side stays put");
+        nav.relaying = None;
+        let (wide, narrow) = (nav.status("a.md", 70, false), nav.status("a.md", 46, false));
+        assert!(wide.contains("width 72") && !narrow.contains("width 72") && narrow.contains("1 per row"), "{wide:?} {narrow:?}");
+        let tiles = declaring_both(list(3), &["width"]);
+        assert!(!tiles.status("shelf", 80, false).contains("width"));
     }
 
     /// Digits typed before a numbered setting's key set it to that number, within its range, and are

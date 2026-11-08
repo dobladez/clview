@@ -141,6 +141,19 @@ pub(crate) struct Setting {
     pub(crate) help: &'static str,
     /// What its keys say on a file that hasn't it.
     pub(crate) missing: &'static str,
+    /// What a change of its value takes.
+    pub(crate) effect: Effect,
+}
+
+/// What a change of a [`Setting`]'s value takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// The pages drawn again with it, wherever they are shown, a list's tiles too: a request
+    /// carries it ([`Request::values`]).
+    Redraw,
+    /// The document on screen laid out again at it, as a new source ([`Source::relayout`]); a
+    /// list's tiles keep the layout they were opened with, and a request's value does nothing.
+    Relayout,
 }
 
 /// A named value of a [`Setting`], and what the reader is told on going to it (`light on dark`).
@@ -148,6 +161,10 @@ pub(crate) struct Setting {
 pub(crate) struct Named {
     pub(crate) name: &'static str,
     pub(crate) says: &'static str,
+    /// Where it sits among the setting's numbers, for its [`Keys::Step`]: a page's width, at the
+    /// characters a page holds, so that stepping up from it goes on to the next number, and the
+    /// steps pass through it. Without one, up from it goes to the least and down to the most.
+    pub(crate) at: Option<u32>,
 }
 
 /// The numbers a [`Setting`] takes: from `least` to `most`, its keys stepping to the multiples of
@@ -172,8 +189,9 @@ pub(crate) enum Keys {
     /// One, going to the next named value, after the last the first.
     #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting"))]
     Cycle(char),
-    /// Two, going a step down and a step up among the numbers.
-    #[cfg_attr(not(test), expect(dead_code, reason = "no setting has numbers yet"))]
+    /// Two, going a step down and a step up among the numbers, and the named values set among them
+    /// ([`Named::at`]).
+    #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting with numbers"))]
     Step(char, char),
 }
 
@@ -534,7 +552,22 @@ pub(crate) trait Source {
     /// a page that takes too long is given up on. The pool holds what it needs of the source,
     /// so the pager can keep both.
     fn pool(&self, threads: usize) -> Box<dyn Pool>;
+    /// The values of the relayout settings ([`Effect::Relayout`]) it was laid out at: a document's
+    /// width. None for what is laid out once and for all.
+    fn laid_at(&self) -> Values {
+        Values::default()
+    }
+    /// A job that lays this out again at `values`, for a source laid out at others: it owns what it
+    /// needs (the bytes the source keeps, the values), nothing of the viewer's, and gives a new source
+    /// laid out at them, or why not. It may run on any thread, and a panic in it costs the relayout
+    /// alone. `None` when the layout is at `values` already, or nothing here lays out again.
+    fn relayout(&self, _values: Values) -> Option<Job> {
+        None
+    }
 }
+
+/// A source laid out again ([`Source::relayout`]), once run: the new source, or why there is none.
+pub(crate) type Job = Box<dyn FnOnce() -> Result<Box<dyn Source + Send>, String> + Send>;
 
 /// Renders on the caller's thread.
 pub(crate) trait Render {
@@ -754,7 +787,7 @@ pub(crate) mod tests {
     pub(crate) const fn cycled(name: &'static str, key: char, option: &'static str) -> Setting {
         Setting {
             name,
-            named: &[Named { name: "light", says: "dark on light" }, Named { name: "dark", says: "light on dark" }],
+            named: &[Named { name: "light", says: "dark on light", at: None }, Named { name: "dark", says: "light on dark", at: None }],
             numbers: None,
             default: Value::Named("light"),
             auto: Some(Auto { light: "light", dark: "dark" }),
@@ -762,6 +795,7 @@ pub(crate) mod tests {
             option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "" },
             help: "",
             missing: "not this one",
+            effect: Effect::Redraw,
         }
     }
 

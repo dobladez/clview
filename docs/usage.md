@@ -40,6 +40,8 @@ clv --password PW secret.pdf
 | `--no-pager` | never page: print the pages and exit |
 | `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents, which `--help` lists it under |
 | `--theme light`, `--theme dark` | Markdown and HTML that way, whatever the terminal |
+| `--width page` | Markdown and HTML on US Letter pages (the default); taken whatever the files, like `--theme`. With documents |
+| `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200 ([Documents](#documents)) |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
@@ -87,6 +89,7 @@ In a file's pages:
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
+| `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
@@ -105,6 +108,7 @@ In a list:
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
+| `[`, `]` | nothing: only a document opened from the list reflows, and they say so |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
@@ -148,8 +152,10 @@ signal (`kill`, a closed SSH session) can leave the terminal in raw mode; `reset
 ### The status line
 
 The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
-`pages 3–4/12`), padded to the widest it gets in the document, the zoom, and `? help`, with `…`
-before them while the pages on screen render. A narrow window drops the zoom, then `? help`. The
+`pages 3–4/12`), padded to the widest it gets in the document, what a Markdown or HTML file is laid
+out to when it isn't a page (`width 72`, with `…` after the width it is being laid out to again), the
+zoom, and `? help`, with `…` before them while the pages on screen render. A narrow window drops the
+width, then the zoom, then `? help`. The
 name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
 at the end still differ), and a message (a page that failed, `fully zoomed in`, a page number
 being typed) sits just left of the right side, cutting the name shorter while it is there. Until
@@ -381,8 +387,8 @@ them, and otherwise in the ones wordcraft substitutes, its own included (Source 
 Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens
 with `--password`; without it, clv says it needs one.
 
-Markdown and HTML are laid out the same way, on US Letter pages, since they give no page size.
-Markdown is read as GitHub writes it, with its tables, task lists, strikethrough, footnotes and alerts
+Markdown and HTML are laid out the same way, on US Letter pages, since they give no page size, or
+to a width of your own. Markdown is read as GitHub writes it, with its tables, task lists, strikethrough, footnotes and alerts
 (`> [!NOTE]`), and the HTML in it ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md));
 front matter (`---`) is left out. HTML is read for its text and what its tags and CSS say of it
 (headings, lists, tables, colours, margins): its `style` attributes, and the simple rules of its `style`
@@ -426,6 +432,23 @@ Opening a document reads and lays it out whole, to know its pages: a quarter of 
 pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 500 pages hold about
 200 MB. Why it is read this way, and not through wordcraft's engine, is in
 [ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md).
+
+**A width of your own.** A Letter page holds some 83 characters of code to a line, however wide the
+window. `]` and `[` lay a Markdown or HTML file out again to lines 4 characters wider or narrower,
+counted in the code face (JetBrains Mono at 9.4 pt), from 20 to 200, with `page` among the steps where
+it sits: from `page`, `]` goes to 84 and `[` to 80. A number, then `]` or `[`, goes straight to it
+(`72]`), and `--width page|72` says where to start. The text area is that wide, between the same side
+margins, and as tall as Letter's; a code block, indented a little on each side, holds about 3 characters
+fewer; tables and pictures fit the width. Pages narrower than Letter go two to a row when the window
+takes them, as any page does. The status line shows the width while it isn't a page's (`width 72`),
+and `c` copies the page as it is laid out. Laying out again costs what opening did, and the old pages
+stay until the new ones are ready; while it runs, the old layout is held too (see [Limits](#limits)).
+
+Only the document on screen reflows. A list's tiles keep the layout they were opened with, `[` and `]`
+say so there, and a document opened from the list after a change is laid out at the new width as it
+opens. With `--pages`, which picks pages as laid out, the keys say so and change nothing. A Word
+document, an RTF or a PDF has a page of its own, and the keys say so on one
+([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
 
 ### Spreadsheets
 
@@ -593,7 +616,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
 | What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
-| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 5 GB and 15 seconds |
+| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as on a page; laid out again (`]`), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |

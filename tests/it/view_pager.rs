@@ -121,7 +121,12 @@ impl Session {
     fn start_on(terminal: Terminal, pdf: &Path, args: &[&str], cols: u16, rows: u16) -> Self {
         let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
         let command = [BIN, pdf.to_str().unwrap()].iter().chain(args).map(|a| quote(a)).collect::<Vec<_>>().join(" ");
-        let mut script = script(&format!("stty rows {rows} cols {cols} && exec {command}"));
+        Self::start_command(terminal, &format!("exec {command}"), cols, rows)
+    }
+
+    /// `clv` as `command` runs it, a shell line, on a `cols` × `rows` pseudo-terminal of `terminal`.
+    fn start_command(terminal: Terminal, command: &str, cols: u16, rows: u16) -> Self {
+        let mut script = script(&format!("stty rows {rows} cols {cols} && {command}"));
         if let Some(dir) = terminal.tmpdir {
             script.env("TMPDIR", dir);
         }
@@ -1482,6 +1487,170 @@ fn in_a_list_only_what_has_a_dark_form_turns() {
     view.press("d");
     view.wait_until("both again", |t| corners(t).len() >= 4);
     assert_eq!(corners(&view.text())[2..], [[255; 3], [255; 3]]);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A long Markdown file for a test: several pages at any width.
+#[cfg(feature = "word")]
+fn long_markdown(test: &str, name: &str) -> PathBuf {
+    let path = crate::view::tmp(test, name);
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    std::fs::write(&path, format!("# Long\n\n{long}")).unwrap();
+    path
+}
+
+/// Whether the last page sent is shaped like one `w` × `h` points large.
+#[cfg(feature = "word")]
+fn last_sent_shaped(text: &str, w: f32, h: f32) -> bool {
+    sizes_sent(text).last().is_some_and(|(x, y)| (*x as f32 / *y as f32 - w / h).abs() < 0.01)
+}
+
+/// How many pages the document has, by the last status line drawn: `page 1/12`, `pages 1–2/12`.
+#[cfg(feature = "word")]
+fn page_count(text: &str) -> Option<usize> {
+    let line = bar(last_draw(text));
+    let count = line.get(line.rfind(" page")?..)?.split_once('/')?.1;
+    count.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// A page 40 characters wide, and US Letter.
+#[cfg(feature = "word")]
+const NARROW: f32 = 144.0 + 40.0 * 5.64;
+#[cfg(feature = "word")]
+const LETTER: (f32, f32) = (612.0, 792.0);
+
+/// `40]` lays the document out again at 40 characters a line, the new pages narrower and the status
+/// line saying `width 40` on its right; `]` steps on to 44; `80]` then `]` is `page` again, Letter, and
+/// nothing on the right. Each time, the pages before stay until the new ones are ready.
+#[cfg(feature = "word")]
+#[test]
+fn the_width_keys_lay_the_document_out_again_and_the_status_line_says_what_it_is_at() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("reflow", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    assert!(last_sent_shaped(&view.text(), LETTER.0, LETTER.1));
+    view.press("40]");
+    view.wait_until("narrow pages, said", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    let narrow_pages = page_count(&view.text()).unwrap();
+    view.press("]");
+    view.wait_until("stepped", |t| bar(t).contains("· width 44 ·") && last_sent_shaped(t, 144.0 + 44.0 * 5.64, 792.0));
+    view.press("80]]");
+    view.wait_until("a page again", |t| bar(t).contains("width page") && last_sent_shaped(t, LETTER.0, LETTER.1));
+    view.wait_until("fewer pages", |t| page_count(t).is_some_and(|count| count < narrow_pages));
+    assert!(!bar(&view.text()).rsplit_once("width page").unwrap().1.contains("width"), "{:?}", last_draw(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// On a PDF the width keys say so, and nothing is sent again.
+#[cfg(feature = "word")]
+#[test]
+fn on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 80, 40);
+    view.wait_until("page 1", |t| drawn(t, "page 1/1"));
+    view.press("]");
+    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML reflow"));
+    view.press("72[");
+    view.wait_until("said again", |t| bar(t).matches("only Markdown and HTML reflow").count() >= 2);
+    assert_eq!(transmitted(&view.text()), 1);
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A copy still rendering when the document is laid out again stops, and says so: it was of the old
+/// layout's pool.
+#[cfg(feature = "word")]
+#[test]
+fn a_copy_still_rendering_stops_when_the_document_is_laid_out_again() {
+    if !pty_works() {
+        return;
+    }
+    let terminal = Terminal { clipboard: Some(true), ..KITTY };
+    let mut view = Session::start_on(terminal, &long_markdown("reflow-copy", "notes.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("c40]");
+    view.wait_until("stopped", |t| bar(t).contains("stopped copying page 1"));
+    view.wait_until("laid out again", |t| last_sent_shaped(t, NARROW, 792.0));
+    assert!(!view.text().contains("copied page 1"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In a list the width keys say to open a document; a document opened from it, and changed, is laid
+/// out again, and its tile isn't; back in the list, the next document gone into is laid out at the
+/// new width as it opens, the keys untouched.
+#[cfg(feature = "word")]
+#[test]
+fn a_document_gone_into_after_a_change_is_laid_out_at_the_new_width_and_its_tile_is_not() {
+    if !pty_works() {
+        return;
+    }
+    let dir = crate::view::tmp("reflow-list", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    long_markdown("reflow-list", "shelf/a.md");
+    long_markdown("reflow-list", "shelf/b.md");
+    let mut view = Session::start_on(KITTY, &dir, &[], 100, 60);
+    view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
+    assert_eq!(sizes_sent(&view.text()).len(), 2);
+    view.press("]");
+    view.wait_until("said", |t| bar(t).contains("open a document to reflow it"));
+    view.press("\r");
+    view.wait_until("a opened", |t| t.contains("  page 1/") && bar(t).contains(" a.md "));
+    view.press("40]");
+    view.wait_until("a laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.press("u");
+    view.wait_until("back in the list", |t| bar(last_draw(t)).contains(" 1/2 ·"));
+    let sent = sizes_sent(&view.text()).len();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(sizes_sent(&view.text()).len(), sent, "the tiles are as they were");
+    assert!(!bar(last_draw(&view.text())).contains("width"), "{:?}", last_draw(&view.text()));
+    view.press("\x1b[C");
+    view.wait_until("b chosen", |t| chosen(t).as_deref() == Some("b.md"));
+    view.press("\r");
+    view.wait_until("b opened at 40", |t| bar(t).contains(" b.md ") && bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// HTML through a pipe lays out again from the bytes kept, since it can't be read again.
+#[cfg(feature = "word")]
+#[test]
+fn html_through_a_pipe_lays_out_again_too() {
+    if !pty_works() {
+        return;
+    }
+    let path = crate::view::tmp("reflow-pipe", "page.html");
+    let long: String = (1..=60).map(|n| format!("<p>Paragraph {n}, with words enough in it to fill a line or two of a page.</p>\n")).collect();
+    std::fs::write(&path, format!("<!doctype html><title>Long</title>{long}")).unwrap();
+    let command = format!("cat '{}' | {BIN} /dev/stdin --pager", path.display());
+    let mut view = Session::start_command(KITTY, &command, 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("40]");
+    view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// With `--pages`, which picks pages as laid out, the width keys say so and change nothing.
+#[cfg(feature = "word")]
+#[test]
+fn with_pages_the_width_keys_are_refused() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("reflow-pages", "long.md"), &["--pager", "--pages", "2-3"], 100, 60);
+    view.wait_until("page 2", |t| t.contains("  page 2/"));
+    let sent = transmitted(&view.text());
+    view.press("]");
+    view.wait_until("said", |t| bar(t).contains("--pages picks pages as laid out: no reflow"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(transmitted(&view.text()), sent);
     view.press("q");
     assert!(view.finish().success());
 }

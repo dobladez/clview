@@ -214,7 +214,7 @@ say `only Markdown and HTML reflow`. A page the window's size is
 Each task's commit passes the quality gates alone: what it adds is called by the viewer in that
 task, not only by tests.
 
-- [ ] **A width, laid out again while the reader waits** — `width` declared, with `effect` and
+- [x] **A width, laid out again while the reader waits** — `width` declared, with `effect` and
   `at`; `turned`'s order; `--width` printed and in the pager; `laid_at` and `relayout`; in the
   pager, `[` and `]` on a document run the job on the main thread and replace the level, the page
   number kept (clamped), the old level let go of as `back()` does, a copy still rendering on it

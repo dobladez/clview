@@ -584,6 +584,25 @@ fn what_would_cost_too_much_is_refused_and_what_a_page_skips_is_not_counted() {
     assert_eq!(drawn(&write(tmp("word-cost", "page.html"), script.as_bytes()), &[]).len(), 1);
 }
 
+/// `--width` lays Markdown and HTML out to lines of that many characters of code: narrower pages,
+/// as tall as Letter, and more of them; `page` is Letter, as without it. It is taken whatever the
+/// files, doing nothing to a PDF, and refused out of its range, saying what it takes.
+#[test]
+fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
+        let path = write(tmp("word-width", name), document.as_bytes());
+        let (letter, narrow) = (drawn(&path, &[]), drawn(&path, &["--width", "40"]));
+        assert!(shaped(&letter, 612.0, 792.0) && shaped(&narrow, 144.0 + 40.0 * 5.64, 792.0), "{name}: {letter:?} {narrow:?}");
+        assert!(narrow.len() > letter.len(), "{name}: {} pages at 40, {} on a page", narrow.len(), letter.len());
+        assert_eq!(drawn(&path, &["--width", "page"]), letter, "{name}");
+        let out = view(&path, &["--protocol", "kitty", "--width", "300"]);
+        assert!(!out.status.success() && text(&out.stderr).contains("--width: expected page or 20–200, got 300"), "{}", text(&out.stderr));
+    }
+    let pdf = write(tmp("word-width", "a.pdf"), &crate::fixtures::letter("One", 1));
+    assert!(shaped(&drawn(&pdf, &["--width", "40"]), 612.0, 792.0));
+}
+
 /// A protected Word document opens with its password, says it needs one without, and refuses a
 /// wrong one.
 #[test]

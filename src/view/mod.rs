@@ -626,7 +626,7 @@ impl Shown {
         let Some(given) = given else { return Ok(self) };
         let count = self.pages.source.pages();
         let Some(missing) = given.iter().find(|page| **page >= count) else {
-            return Ok(Self { pages: Pages { pages: given.to_vec(), ..self.pages }, ..self });
+            return Ok(Self { pages: Pages { pages: given.to_vec(), picked: true, ..self.pages }, ..self });
         };
         let (unit, whole) = if self.is_list() { ("tile", "the list") } else { ("page", self.pages.name.as_str()) };
         Err(format!("no {unit} {} ({whole} has {})", missing.saturating_add(1), counted(count, unit)))
@@ -640,13 +640,15 @@ pub(super) struct Pages {
     /// What the status line calls the file.
     pub(super) name: String,
     pub(super) pages: Vec<usize>,
+    /// Whether `--pages` picked them: pages as laid out, so the document isn't laid out again.
+    pub(super) picked: bool,
 }
 
 impl Pages {
     /// All of `source`'s pages, in order, called `name`.
-    fn all(source: Rc<dyn Source>, name: String) -> Self {
+    pub(super) fn all(source: Rc<dyn Source>, name: String) -> Self {
         let pages = (0..source.pages()).collect();
-        Self { source, name, pages }
+        Self { source, name, pages, picked: false }
     }
 }
 
@@ -1482,7 +1484,7 @@ mod tests {
     static WIDTH: Setting = Setting {
         numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
         auto: None,
-        named: &[crate::source::Named { name: "page", says: "as laid out" }],
+        named: &[crate::source::Named { name: "page", says: "as laid out", at: Some(83) }],
         default: Value::Named("page"),
         ..crate::source::tests::cycled("width", 'w', "--width")
     };

@@ -111,10 +111,13 @@ and reads its own options from it, so an option that belongs to one kind of file
 `--password`) is the backend's, never the viewer's.
 
 A backend declares its settings the same way (`Backend::settings`): what the reader may change while
-its files are shown, each a `Setting` with its named values and what each says, its numbers
-(`Numbers`: least, most, step), its default, `auto` by the terminal's background, its keys
-(`Keys::Cycle` or `Keys::Step`), its option, its line in `?` and its message for a file that hasn't
-it. The documents' backend declares one, `paper` (`d`, `--theme`). Which a file has is its source's
+its files are shown, each a `Setting` with its named values and what each says (and where each sits
+among the numbers, `Named::at`, if it does), its numbers (`Numbers`: least, most, step), its default,
+`auto` by the terminal's background, its keys (`Keys::Cycle` or `Keys::Step`), its option, its line in
+`?`, its message for a file that hasn't it, and its `Effect`: `Redraw`, the pages drawn again with the
+value, or `Relayout`, the document laid out again at it ([Relayout](#relayout)). The documents'
+backend declares two, `paper` (`d`, `--theme`, a redraw) and `width` (`[` and `]`, `--width`, a
+relayout). Which a file has is its source's
 (`Source::settings`; a list's, `Joined`'s, those of any of its files). `view::settings` makes the
 build's table, each setting once. The viewer takes a setting's option for any file (`takes_all`),
 starts each at what its option says or its default, resolving `auto` by the background (`starting`),
@@ -122,10 +125,12 @@ and asks the terminal for its background only when what is shown has a setting w
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
 request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
 pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
-says the setting's message if what is shown hasn't it; a value changed goes the way `r` goes. A `Cycle` key goes to the next named
-value; `Step` keys to the next multiple of the step down or up, staying at the least or the most and
-saying so; and a number typed before a numbered setting's key sets it, clamped to its range, used up
-whatever happens (`turned`). The
+says the setting's message if what is shown hasn't it; a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
+value; `Step` keys to the next among the steps down or up (`stepped`): the multiples of the step from
+the least to the most, and each named value with an `at` among them, after the number equal to it
+(`page` at 83: from it `]` goes to 84 and `[` to 80, and from 80 `]` comes back to it), staying at the
+least or the most and saying so; and a number typed before a numbered setting's key sets it, clamped
+to its range, used up whatever happens (`turned`). The
 values are shared by every level (`pager::Settings`), and so is the change, so a level left before
 the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
@@ -186,7 +191,14 @@ files, and `cargo clippy --no-default-features` builds the viewer with no backen
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`
-  does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
+  does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). They have
+  the `width` setting too, which is the source's own (`Width`, from `--width` when it opens, `page` or
+  a number of characters): the page it gives (`Width::page`, Letter, or as wide as the characters take
+  at `CODE_SIZE` × `CODE_ADVANCE` each between Letter's side margins) goes into wordcraft's conversion
+  of the fragment (`html::parse_with`, then `model::to_doc_in`), where tables take their widths from it.
+  `Source::laid_at` says the width, and `Source::relayout` gives a job that reads the bytes again from
+  where they are kept (`Document::at`) and lays out at another, as a new `Paged`
+  ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings
@@ -244,6 +256,32 @@ A list shows once all its files are found, whether or not they are opened yet, s
 under a filter later. For the filter, `keys.rs` decodes UTF-8: a character past ASCII is one key, one cut between reads waits
 for the rest as an escape sequence does, and bytes that aren't UTF-8, or a control character,
 are dropped.
+
+### Relayout
+
+A relayout setting ([`Effect::Relayout`](#backends)) applies only to a document on screen: a level
+that shows one file's pages, opened alone or gone into from a list. Its keys don't set the shared
+`changed` flag, which is for redraw settings and deletes every page sent; in a list they change nothing
+and say to open a document, and with `--pages` (`Pages::picked`) that pages are picked as laid out.
+Instead, on each pass of its loop, after the keys and after a file gone into shows, the pager compares
+what the level's source is laid out at (`Source::laid_at`) with the values wanted, for the relayout
+settings the source has (`Pager::relayout_wanted`), and when they differ asks the source for a job
+(`Source::relayout`, a `Job`: a `Send` closure owning the bytes the source keeps and the values, which
+gives a new source laid out at them). So `]` then `u`, read together, reflows nothing in the list, and
+the next document gone into is laid out at the new value as it shows.
+
+The pager runs the job (`Pager::relayout`), the status line saying the value with `…` after it
+(`Nav::relaying`) meanwhile, and a panic in it costing the relayout alone. A new source makes a new
+`Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom and
+`nested`, at the reader's page or the last if there are fewer, its parents untouched; the old level
+goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
+pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
+wanted dropped. A failure keeps the old level, says why through `printable`, and puts the shared value
+back to the document's `laid_at` (`Pager::put_back`), so the next step starts from what is on screen.
+The status line's right side shows the value the document is laid out at when it isn't the default
+(`Nav::laid`, from `laid_at` when the level is made), padded to the widest it is said, dropped first
+in a narrow window
+([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
 
 ### Files opened when their tiles are wanted
 
