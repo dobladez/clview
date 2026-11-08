@@ -134,3 +134,13 @@ changes from its plan, surprises, and what a later reader would want.
   until then.
 - **Discoveries:** none beyond ADR-0022's follow-ups (the width kept between runs; a width for other
   backends that lay text out), which are its to hold.
+
+## Codex review fixes
+
+- **The anchor's page came from the last draw.** `place_on_screen` took the first page on screen from
+  `self.on_screen`, which the draw fills; a jump (`9g`) read in the pass a layout's result arrives
+  had moved `nav.at` but not the draw, so the new level anchored on the page before the jump. Now
+  `place` (a function, tested with a `Nav` alone) takes the page from the navigation as it is, and uses
+  the last draw's rows for the scroll only when that draw placed this page of this level; otherwise
+  the page's top. `a_relayout_anchors_on_the_page_the_reader_is_on_now_not_the_one_last_drawn` failed
+  with the page taken from the drawn view again.

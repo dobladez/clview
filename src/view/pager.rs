@@ -1664,14 +1664,10 @@ impl Pager<'_> {
     }
 
     /// Where the reader is, as the source on screen knows it: the paragraph at the top of the screen, on
-    /// the first page there, as far down it as the page is scrolled.
+    /// the first page there, as far down it as the page is scrolled ([`place`]).
     fn place_on_screen(&self) -> Option<crate::source::Anchor> {
-        let nav = &self.level.nav;
-        let view = self.on_screen.first().copied().flatten();
-        let page = view.map_or_else(|| nav.pages.get(nav.first()).copied(), |view| Some(view.page))?;
-        let rows = view.and_then(|view| self.rows(&view)).filter(|rows| *rows > 0);
-        let height = self.level.source.size(page).map_or(0.0, |(_, h)| h);
-        let y = rows.map_or(0.0, |rows| f32::from(nav.scroll.min(rows)) / f32::from(rows) * height);
+        let drawn = self.on_screen.first().copied().flatten().and_then(|view| Some((view, self.rows(&view)?)));
+        let (page, y) = place(&self.level.nav, self.level.id, drawn, |page| self.level.source.size(page).map_or(0.0, |(_, h)| h))?;
         self.level.source.anchor(page, y)
     }
 
@@ -2111,6 +2107,17 @@ impl Pager<'_> {
     }
 }
 
+/// The place to anchor a relayout on: the first page on screen as `nav` has it now, and how far down
+/// it, in points, by the page's height from `height_of`. The rows come from the last draw (`drawn`:
+/// the first view it placed, and its rows), and count only when it drew this page of level `level`: a
+/// key read in the same pass may have moved the reader since, and then the place is that page's top.
+fn place(nav: &Nav, level: u64, drawn: Option<(View, u16)>, height_of: impl Fn(usize) -> f32) -> Option<(usize, f32)> {
+    let page = nav.pages.get(nav.first()).copied()?;
+    let rows = drawn.filter(|(view, rows)| view.level == level && view.page == page && *rows > 0).map(|(_, rows)| rows);
+    let y = rows.map_or(0.0, |rows| f32::from(nav.scroll.min(rows)) / f32::from(rows) * height_of(page));
+    Some((page, y))
+}
+
 /// Room in the terminal for a page of `incoming` bytes: the least recently shown pages not
 /// `on_screen` go while keeping them would make more than `most` pages, or more than `budget`
 /// bytes. The ids of the ones that go.
@@ -2533,6 +2540,29 @@ mod tests {
         assert_eq!(page(&nav), 2);
         press(&mut nav, &[Key::Char('b')]);
         assert_eq!(page(&nav), 1);
+    }
+
+    /// The place a relayout anchors on is the page the reader is on now, not the one last drawn: a jump
+    /// read in the pass the new layout arrives counts. The last draw's rows give how far down the page
+    /// only when they are this page's, of this level.
+    #[test]
+    fn a_relayout_anchors_on_the_page_the_reader_is_on_now_not_the_one_last_drawn() {
+        let view = |level, page| View { level, page, fit: Fit::Page, cols: 10, rows: 20, size: FALLBACK_SIZE };
+        let height = |_page: usize| 1000.0;
+        // Drawn at page 1 of level 3, scrolled 25 of 100 rows; then `9g`, before the draw.
+        let mut nav = reader(0, 20, 30, 100);
+        nav.scroll = 25;
+        assert_eq!(place(&nav, 3, Some((view(3, 0), 100)), height), Some((0, 250.0)), "as drawn");
+        nav.go(8);
+        assert_eq!(place(&nav, 3, Some((view(3, 0), 100)), height), Some((8, 0.0)), "the jump counts, at its top");
+        nav.go(0);
+        nav.scroll = 25;
+        assert_eq!(place(&nav, 3, Some((view(4, 0), 100)), height), Some((0, 0.0)), "another level's rows don't count");
+        assert_eq!(place(&nav, 3, Some((view(3, 0), 0)), height), Some((0, 0.0)), "nor none");
+        assert_eq!(place(&nav, 3, None, height), Some((0, 0.0)));
+        nav.scroll = 300;
+        assert_eq!(place(&nav, 3, Some((view(3, 0), 100)), height), Some((0, 1000.0)), "within the page");
+        assert_eq!(place(&list(0), 3, None, height), None, "nothing on screen");
     }
 
     /// Where to scroll to is a share of the page, taken once the draw knows the rows, and kept in range.

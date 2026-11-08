@@ -282,8 +282,9 @@ ends, and the status line says the value wanted with `…` after it (`Nav::relay
 the level (`enter`, `back`) forgets the job, which runs to its end for nobody. A new source makes a new
 `Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom, `nested`
 and help screen, its parents untouched. It opens where the reader was: the old source says which
-paragraph is at the top of the screen (`Source::anchor`, from the first page on screen and how far
-down it is scrolled, as a share of its rows; an `Anchor` the viewer only hands back), the new says
+paragraph is at the top of the screen (`Source::anchor`, from the first page on screen as the reader
+has it now, a jump read in the same pass counted, and how far down it is scrolled, as a share of the
+rows the last draw gave that page, `place`; an `Anchor` the viewer only hands back), the new says
 where that paragraph starts in its layout (`Source::find`: the page, and how far down), and the level
 goes to that page, scrolled there once the draw knows the page's rows (`Nav::scroll_to`), which only a
 page as wide as the window has to scroll; a source that doesn't say leaves the reader's page, or the
