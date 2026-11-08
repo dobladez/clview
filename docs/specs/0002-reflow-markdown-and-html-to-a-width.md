@@ -238,10 +238,10 @@ task, not only by tests.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, after each
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, after each
   task, each backend alone too (`cfg` attributes change).
-- [ ] Tests added, each seen failing without the change: name them.
-- [ ] **Cost:** the files and commands ADR-0012 measured with, under `/usr/bin/time -l` on a release
+- [x] Tests added, each seen failing without the change: name them.
+- [x] **Cost:** the files and commands ADR-0012 measured with, under `/usr/bin/time -l` on a release
   build, printed with `--width 20` and with `--width page`: at 20, time and peak memory stay within
   what [Limits](../usage.md#limits) says a Markdown or HTML file costs at most (about 5 GB and 20
   seconds); otherwise the least is raised until they do. And the costliest of them in the pager,
@@ -251,7 +251,7 @@ task, not only by tests.
   a long Markdown file; on HTML through a pipe (`cat page.html | target/debug/clv --pager
   /dev/stdin`); `]` on a PDF; in a list mixing them, `]` refused, and a Markdown file gone into after
   `]` in another shown at the new width; `--pages 2-3` with `]` refused.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
   ADR.
 
 ## Changelog

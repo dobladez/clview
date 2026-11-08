@@ -118,3 +118,19 @@ changes from its plan, surprises, and what a later reader would want.
     `shown` ignoring `scroll_to`.
   - `the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_relayout`
     (`tests/it/view_pager.rs`): `replace` keeping the page number, as task 1 did.
+
+## Done items
+
+- All checked but the manual one, which is the owner's: the gates after each task (each backend alone
+  after task 1, which changed `cfg` attributes, and once more on the finished branch); the tests named
+  above, each seen failing; the cost at 20 and in the pager, in Limits and ADR-0022; the docs by *Where
+  a fact goes*. README's Plans had no bullet for this.
+- **Left to the owner**, with `target/debug/clv` built by a plain `cargo build`: in kitty, `[`, `]` and
+  `72]` on a long Markdown file; HTML through a pipe (`cat page.html | target/debug/clv --pager
+  /dev/stdin`); `]` on a PDF; in a list mixing them, `]` refused, and a Markdown file gone into after
+  `]` in another shown at the new width; `--pages 2-3` with `]` refused; `--width 40 README.md`,
+  narrow tall pages two to a row, `]` widening them; and the costliest file of *Cost*, `]` three times
+  quickly, keys and scrolling working, `width 96…` then `width 96`. The spec stays `Implementing`
+  until then.
+- **Discoveries:** none beyond ADR-0022's follow-ups (the width kept between runs; a width for other
+  backends that lay text out), which are its to hold.
