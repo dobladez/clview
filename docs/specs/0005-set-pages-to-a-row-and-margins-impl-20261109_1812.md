@@ -65,7 +65,7 @@ surprises, and what a later reader would want.
   pass; `refresh_bounds` now runs after `relayout` too.
 - **Seen meanwhile, left as it is:** a count's key changes the grid at once, so until the new layout
   lands the old pages are drawn N to a row, shrunk (and rendered again for that). Holding the grid's
-  count until the layout lands would be another change; noted here only.
+  count until the layout lands would be another change: in README's Plans since, at the owner's word.
 - **`?`** says columns on a reflowed document (`COLUMNS_HELP`).
 - **The ADR** is ADR-0024, linked from ADR-0023 and the architecture's room section. Margins' place in
   the order of the bounds goes in with task 3.

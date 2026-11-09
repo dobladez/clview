@@ -225,12 +225,13 @@ a margin setting on `{` and `}`.
 - [x] Tests added, each seen failing without the change: name them. (Named in the
   [notes](0005-set-pages-to-a-row-and-margins-impl-20261109_1812.md), task by task, with what was
   reverted.)
-- [ ] Manual, with a fresh `cargo build` and `target/debug/clv`: in kitty, `--pager README.md`:
+- [x] Manual, with a fresh `cargo build` and `target/debug/clv`: in kitty, `--pager README.md`:
   `3.` three columns as tall as the window, text at the font size; `,` four; `.` back to one, then
   `1 per row, the least`; `3.` then `72]`, the count back to `auto`; `0.`; `}` wider margins, `0}`
   back to 3; `+` with three columns; on a PDF `,` and `.` as `-` and `+`; in a list, tiles to a
   row, `.` stopping at one; resized, laid out again once. `target/debug/clv --zoom 2 x.pdf` works
-  and warns. The same in a private tmux (`tmux -L x`).
+  and warns. The same in a private tmux (`tmux -L x`). (Run by the owner on 2026-11-09: all as
+  above.)
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog

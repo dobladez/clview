@@ -85,6 +85,8 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 - Let go of a list's files once the reader has moved on: a PDF opened holds its whole file until
   the list is left.
+- Hold the grid's count to a row until a Markdown or HTML document's new layout lands: after `3.`
+  the old pages are drawn three to a row, shrunk, until the columns are ready.
 - More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
 - More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
