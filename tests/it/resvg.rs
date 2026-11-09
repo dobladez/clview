@@ -1,6 +1,7 @@
 //! The SVG backend, `src/source/svg.rs`, through the viewer: what resvg draws for a drawing, the
-//! limits a drawing is held to, and the rule that nothing else names resvg or what it renders
-//! with, so it can be swapped for another renderer. Its own tests read drawings directly.
+//! limits a drawing is held to, its HTML labels (`src/source/svg/html.rs`), and the rule that
+//! nothing else names resvg, Blitz or what they render with, so either can be swapped for
+//! another. Its own tests read drawings directly.
 #![cfg(all(unix, feature = "svg"))]
 
 use std::io::Write as _;
@@ -170,6 +171,122 @@ fn a_broken_drawing_is_refused_with_why() {
     assert!(text(&out.stderr).contains("isn't <svg> in the SVG namespace"), "{}", text(&out.stderr));
 }
 
+/// A `<foreignObject>`, 20 × 10, holding `html` in an XHTML `div`, with `attributes`.
+fn label(attributes: &str, html: &str) -> String {
+    format!("<foreignObject width='20' height='10' {attributes}><div xmlns='http://www.w3.org/1999/xhtml'>{html}</div></foreignObject>")
+}
+
+/// What `clv` warned of `body`, a 40 × 20 drawing, printed: each warning after `page 1: `.
+fn warned(test: &str, body: &str) -> Vec<String> {
+    let path = written(test, "labels.svg", svg(40, 20, body));
+    let out = view(&path, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{body}: {}", text(&out.stderr));
+    // One line, its warnings joined by "; ".
+    text(&out.stderr)
+        .lines()
+        .flat_map(|l| l.strip_prefix("warning: page 1: ").unwrap_or(l).split("; ").map(str::to_string).collect::<Vec<_>>())
+        .collect()
+}
+
+/// How many HTML labels `clv` said it didn't draw, of `body`.
+fn undrawn(test: &str, body: &str) -> usize {
+    let warnings = warned(test, body);
+    let line = warnings.iter().find(|l| l.contains("(<foreignObject>)") && l.ends_with("not drawn"));
+    line.map_or(0, |l| l.split(' ').next().unwrap().parse().unwrap())
+}
+
+/// One rule says which labels a browser draws, and the warning counts those this build doesn't:
+/// none in a definition, a hidden one, or one a `<switch>` doesn't take, as usvg takes its
+/// conditions (`requiredFeatures` met); those a `<use>` repeats are counted too, as left out.
+#[test]
+fn the_labels_a_browser_draws_are_told_by_one_rule() {
+    let fo = label("", "a");
+    let cases: Vec<(String, usize)> = vec![
+        (fo.clone(), 1),
+        (format!("<g>{fo}{fo}</g>"), 2),
+        (format!("<defs>{fo}</defs>"), 0),
+        (format!("<symbol id='s'>{fo}</symbol>"), 0),
+        (format!("<clipPath id='c'>{fo}</clipPath>"), 0),
+        (format!("<mask id='m'>{fo}</mask>"), 0),
+        (format!("<pattern id='p'>{fo}</pattern>"), 0),
+        (format!("<marker id='k'>{fo}</marker>"), 0),
+        (label("display='none'", "a"), 0),
+        (label("style='color: red; display : none'", "a"), 0),
+        (format!("<g visibility='hidden'>{fo}</g>"), 0),
+        (format!("<g style='visibility:collapse'>{fo}</g>"), 0),
+        (format!("<switch>{fo}<rect width='1' height='1'/></switch>"), 1),
+        (format!("<switch>{}{fo}</switch>", label("systemLanguage='fr'", "a")), 1),
+        (format!("<switch>{}{fo}</switch>", label("systemLanguage='en-GB, fr'", "a")), 1),
+        (format!("<switch>{}<rect width='1' height='1'/></switch>", label("requiredExtensions='http://example.com/x'", "a")), 0),
+        (
+            format!(
+                "<switch>{}<rect width='1' height='1'/></switch>",
+                label("requiredFeatures='http://www.w3.org/TR/SVG11/feature#Extensibility'", "a")
+            ),
+            1,
+        ),
+        (format!("<switch><g requiredFeatures='http://www.w3.org/TR/SVG11/feature#Extensibility'/>{fo}</switch>"), 0),
+        (format!("<switch><g><switch>{fo}</switch></g>{fo}</switch>"), 1),
+        (format!("<switch><rect width='1' height='1'/><g>{fo}</g></switch>"), 0),
+        (format!("<defs><g id='l'>{fo}</g></defs><use href='#l'/>"), 1),
+        (label("", &format!("<svg xmlns='http://www.w3.org/2000/svg'>{fo}</svg>")), 1),
+    ];
+    for (body, expected) in cases {
+        assert_eq!(undrawn("svg-labels", &body), expected, "{body}");
+    }
+}
+
+/// A `<switch>`'s fallback after the label a browser takes (draw.io's "[Not supported by
+/// viewer]"), or after a child asking for `requiredFeatures` usvg lacks (newer draw.io's "Text is
+/// not SVG"), isn't drawn where labels are, and is where they aren't, as it was.
+#[test]
+fn a_fallback_is_drawn_only_where_labels_are_not() {
+    let red = "<rect width='40' height='20' fill='red'/>";
+    for first in [label("", "a"), "<g requiredFeatures='http://www.w3.org/TR/SVG11/feature#Extensibility'/>".to_string()] {
+        let path = written("svg-fallback", "fallback.svg", svg(40, 20, &format!("<switch>{first}{red}</switch>")));
+        let out = view(&path, &["--protocol", "kitty"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let picture = image::load_from_memory(&images(&out.stdout)[0].png).unwrap().into_rgba8();
+        let expected = if cfg!(feature = "svg-html") { [0, 0, 0, 0] } else { [255, 0, 0, 255] };
+        assert_eq!(picture.get_pixel(10, 10).0, expected, "{first}");
+    }
+}
+
+/// The fallbacks are taken out of a drawing already bounded: entities a fallback holds, past what
+/// a drawing may expand to, refuse it before anything is parsed.
+#[test]
+fn entities_in_a_fallback_are_refused_before_it_is_parsed() {
+    let big = "x".repeat(64 << 10);
+    let fallback = format!("<text>{}</text>", "&big;".repeat(2100));
+    let body = format!("<switch>{}{fallback}</switch>", label("", "a"));
+    let drawing = format!("<!DOCTYPE svg [<!ENTITY big '{big}'>]>{}", svg(40, 20, &body));
+    let out = view(&written("svg-entities", "fallback.svg", drawing), &["--protocol", "kitty"]);
+    assert!(!out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("its entities expand to more than 128 MiB"), "{}", text(&out.stderr));
+}
+
+/// What a drawing's labels may cost is bounded as they are found and written out: past a limit,
+/// that label or the rest are left out, and said.
+#[cfg(feature = "svg-html")]
+#[test]
+fn labels_past_their_limits_are_left_out_and_said() {
+    let said = |body: &str, why: &str, n: usize| {
+        let warnings = warned("svg-limits", body);
+        let one = if n == 1 { "1 HTML label (<foreignObject>) was".to_string() } else { format!("{n} HTML labels (<foreignObject>) were") };
+        let expected = format!("{one} left out, {why}");
+        assert!(warnings.contains(&expected), "{expected}: {warnings:?}");
+    };
+    let deep = |n: usize| label("", &format!("{}x{}", "<div>".repeat(n), "</div>".repeat(n)));
+    // The label's own div is its first level.
+    said(&format!("{}{}{}", deep(63), deep(64), deep(63)), "nested more than 64 deep", 1);
+    assert!(!warned("svg-limits", &deep(63)).iter().any(|w| w.contains("left out")));
+    said(&label("", "x").repeat(1026), "past 1024 of them", 2);
+    said(&format!("{}{}", label("", &"y".repeat((1 << 20) + 1)), label("", "z")), "past 1 MiB of text", 2);
+    said(&label("", &"<i/>".repeat(100_000)), "past 100000 elements", 1);
+    let title = "t".repeat(1000);
+    said(&label("", &format!("<i title='{title}'/>").repeat(9000)), "past 8 MiB of markup", 1);
+}
+
 /// The libraries that parse and render SVG.
 const LIBRARIES: [&str; 6] = ["resvg", "usvg", "tiny_skia", "tiny-skia", "roxmltree", "fontdb"];
 
@@ -190,5 +307,28 @@ fn the_render_estimate_is_for_the_resvg_this_builds() {
         let version = lock[at..].lines().nth(2).unwrap();
         let expected = if library == "tiny-skia" { "version = \"0.12.0\"" } else { "version = \"0.49.0\"" };
         assert_eq!(version, expected, "{library} moved: check the estimate against it");
+    }
+}
+
+/// What draws an SVG's HTML labels: Blitz, and what it lays out and paints with.
+const HTML_LIBRARIES: [&str; 7] = ["blitz", "anyrender", "kurbo", "stylo", "parley", "taffy", "wuff"];
+
+/// Only the labels' painter and these tests name Blitz and what it paints with: the SVG backend
+/// would read the same with another HTML engine.
+#[test]
+fn nothing_but_svg_html_names_blitz() {
+    crate::fixtures::named_only_in(&["src/source/svg/html.rs", "tests/it/resvg.rs"], &[], &HTML_LIBRARIES);
+}
+
+/// The limits on what a drawing's labels cost were measured with these versions (ADR-0024):
+/// moving any of them means measuring again, then this.
+#[test]
+fn the_label_limits_are_for_the_blitz_this_builds() {
+    let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap();
+    let blitz = ["blitz-dom", "blitz-html", "blitz-paint", "blitz-traits"].map(|library| (library, "0.3.0-beta.4"));
+    for (library, expected) in blitz.into_iter().chain([("anyrender", "0.14.0"), ("anyrender_vello_cpu", "0.18.0")]) {
+        let at = lock.find(&format!("[[package]]\nname = \"{library}\"\n")).unwrap_or_else(|| panic!("{library} isn't locked"));
+        let version = lock[at..].lines().nth(2).unwrap();
+        assert_eq!(version, format!("version = \"{expected}\""), "{library} moved: measure the labels' limits again");
     }
 }

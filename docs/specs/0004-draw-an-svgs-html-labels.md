@@ -247,7 +247,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   spec's table set to the numbers, Decided to the design that held. *Files:* `docs/adr/0024-…`,
   `docs/adr/README.md`, this spec. *Verify:* the ADR's commands, under `/usr/bin/time -l` on a release
   build, give its numbers again.
-- [ ] **Labels found, behind `svg-html`, off by default** — the dependencies and the feature; the
+- [x] **Labels found, behind `svg-html`, off by default** — the dependencies and the feature; the
   XML bounded before every parse; the eligibility rule and the fallbacks removed; the viewport
   stack; markup written from the tree, in its context, and its budgets; the warning without the
   feature; the naming test and the version guard; CI. *Files:* `Cargo.toml`, `src/source/svg.rs`,

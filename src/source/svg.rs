@@ -32,6 +32,9 @@ use super::threads::Threads;
 use super::{Again, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
 use crate::args::{OptionSpec, Parsed};
 
+#[cfg(feature = "svg-html")]
+mod html;
+
 /// SVG drawings, rendered by resvg.
 pub(super) struct Svg;
 
@@ -388,26 +391,45 @@ fn guarded_parse(bytes: &[u8]) -> Result<Drawn, String> {
 /// as what it draws reaches from its origin, as usvg sizes it, and 100 × 100 if it draws nothing.
 fn parse(bytes: &[u8]) -> Result<Drawn, String> {
     let notes = Notes::default();
-    let tree = parse_at(bytes, 0, &notes)?;
+    let (tree, found) = parse_at(bytes, 0, &notes)?;
     let size = (tree.size().width(), tree.size().height());
     if !(size.0.is_finite() && size.1.is_finite() && size.0 > 0.0 && size.1 > 0.0) {
         return Err(format!("the drawing has no size to show ({} × {})", size.0, size.1));
     }
+    #[cfg(feature = "svg-html")]
+    if !found.labels.is_empty() && !html::prepare(&found.css, &found.labels) {
+        notes.undrawn.fetch_add(found.labels.len(), Ordering::Relaxed);
+    }
+    #[cfg(not(feature = "svg-html"))]
+    let Found {} = found;
     Ok(Drawn { tree, size, warnings: notes.warnings() })
 }
 
+/// Refuses `text` if its entities could expand it past [`MAX_EXPANDED`]: checked before every
+/// parse.
+fn bounded(text: &str) -> Result<(), String> {
+    match entities_bound(text) > MAX_EXPANDED {
+        true => Err(format!("its entities expand to more than {} MiB", MAX_EXPANDED >> 20)),
+        false => Ok(()),
+    }
+}
+
+/// `text`, parsed as XML within [`MAX_NODES`], once [`bounded`].
+fn xml(text: &str) -> Result<roxmltree::Document<'_>, String> {
+    bounded(text)?;
+    let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: MAX_NODES, entity_resolver: None };
+    roxmltree::Document::parse_with_options(text, options).map_err(|e| format!("not a well-formed SVG: {e}"))
+}
+
 /// `bytes` parsed by usvg, `depth` SVGs down from the file's own: once checked within this
-/// backend's limits, with `notes` told what was left out.
-fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<usvg::Tree, String> {
+/// backend's limits, with `notes` told what was left out. With the HTML labels to draw over it,
+/// found in the file's own drawing only: in a build that draws them, what follows the child a
+/// browser takes in a `<switch>` is taken out before usvg parses it.
+fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<(usvg::Tree, Found), String> {
     let unpacked = unpacked(bytes)?;
     let text = std::str::from_utf8(&unpacked).map_err(|_| "the drawing isn't UTF-8 text (only UTF-8 SVGs are read)".to_string())?;
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
-    let expanded = entities_bound(text);
-    if expanded > MAX_EXPANDED {
-        return Err(format!("its entities expand to more than {} MiB", MAX_EXPANDED >> 20));
-    }
-    let options = roxmltree::ParsingOptions { allow_dtd: true, nodes_limit: MAX_NODES, entity_resolver: None };
-    let doc = roxmltree::Document::parse_with_options(text, options).map_err(|e| format!("not a well-formed SVG: {e}"))?;
+    let doc = xml(text)?;
     let root = doc.root_element();
     if root.tag_name().name() != "svg" || root.tag_name().namespace() != Some(SVG_NS) {
         return Err("not an SVG drawing: its root element isn't <svg> in the SVG namespace".into());
@@ -429,7 +451,25 @@ fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<usvg::Tree, Str
         }
         fonts
     };
-    usvg::Tree::from_xmltree(&doc, &options_for(notes, depth, fonts)).map_err(|e| e.to_string())
+    drop(scan);
+    let options = options_for(notes, depth, fonts);
+    #[cfg(feature = "svg-html")]
+    if depth == 0 {
+        let mut found = found_labels(&doc, notes);
+        let tree = match without_fallbacks(&doc, text) {
+            Some(cut) => {
+                drop(doc);
+                usvg::Tree::from_xmltree(&xml(&cut)?, &options)
+            }
+            None => usvg::Tree::from_xmltree(&doc, &options),
+        }
+        .map_err(|e| e.to_string())?;
+        found.place(&tree);
+        return Ok((tree, found));
+    }
+    notes.undrawn.fetch_add(label_count(&doc), Ordering::Relaxed);
+    let tree = usvg::Tree::from_xmltree(&doc, &options).map_err(|e| e.to_string())?;
+    Ok((tree, Found::default()))
 }
 
 /// `bytes`, unpacked if they are gzipped (an svgz), to at most [`MAX_FILE`].
@@ -474,6 +514,568 @@ fn entity_value(declaration: &str) -> Option<&str> {
     let quote = declaration.get(start..)?.chars().next()?;
     let value = declaration.get(start + 1..)?;
     value.get(..value.find(quote)?)
+}
+
+// HTML labels (Spec-0004): the `<foreignObject>`s a browser would draw, found, placed and written
+// out for the painter in `svg/html.rs`, which draws them over what resvg draws.
+
+/// The XHTML namespace, a label's HTML's.
+#[cfg(feature = "svg-html")]
+const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+
+/// The most HTML labels drawn: painting each one walks every label's box (ADR-0024).
+#[cfg(feature = "svg-html")]
+const MAX_LABELS: usize = 1_024;
+
+/// The most elements all of a drawing's labels hold, within its [`MAX_ELEMENTS`]: the painter
+/// holds some 1.7 KB an element (ADR-0024).
+#[cfg(feature = "svg-html")]
+const MAX_LABEL_ELEMENTS: u64 = 100_000;
+
+/// The most markup written out for a drawing's labels, its stylesheets included.
+#[cfg(feature = "svg-html")]
+const MAX_LABEL_MARKUP: usize = 8 << 20;
+
+/// The most text in a drawing's labels: 1 MiB lays out in 0.4 seconds (ADR-0024).
+#[cfg(feature = "svg-html")]
+const MAX_LABEL_TEXT: usize = 1 << 20;
+
+/// The deepest a label's elements nest, from its `<foreignObject>` down: the painter recurses
+/// once a level, and 64 of the costliest (nested grids) hold with a margin of 3.75 on its
+/// thread's 8 MiB in a debug build (ADR-0024).
+#[cfg(feature = "svg-html")]
+const MAX_LABEL_DEPTH: usize = 64;
+
+/// The XLink namespace, of SVG 1.1's `xlink:href`.
+const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+
+/// The languages usvg takes a `systemLanguage` to ask for: its default.
+const LANGUAGES: &[&str] = &["en"];
+
+/// Elements whose content isn't drawn where it is, only when something refers to it.
+const UNSHOWN: &[&str] = &["defs", "symbol", "clipPath", "mask", "pattern", "marker"];
+
+/// Whether `node` is an SVG element named `name`.
+fn svg_element(node: roxmltree::Node, name: &str) -> bool {
+    node.has_tag_name((SVG_NS, name))
+}
+
+/// The `<foreignObject>`s of `doc` a browser draws, in document order, and the ids its drawn
+/// `<use>`s refer to, found in one walk from its root: none in a definition (`defs`, `symbol`,
+/// …) or in another label; none that is, or whose ancestor is, hidden by its attributes or its
+/// `style`; and in each `<switch>`, only in the child it takes.
+fn drawn<'a, 'input>(doc: &'a roxmltree::Document<'input>) -> (Vec<roxmltree::Node<'a, 'input>>, Vec<&'a str>) {
+    let (mut labels, mut uses, mut walk) = (Vec::new(), Vec::new(), vec![doc.root_element()]);
+    while let Some(node) = walk.pop() {
+        if hidden(node) || UNSHOWN.iter().any(|name| svg_element(node, name)) {
+            continue;
+        }
+        if svg_element(node, "foreignObject") {
+            labels.push(node);
+            continue;
+        }
+        if svg_element(node, "use")
+            && let Some(id) = node.attribute("href").or_else(|| node.attribute((XLINK_NS, "href"))).and_then(|h| h.trim().strip_prefix('#'))
+        {
+            uses.push(id);
+        }
+        let next = walk.len();
+        match svg_element(node, "switch") {
+            true => walk.extend(taken(node)),
+            false => walk.extend(node.children().filter(roxmltree::Node::is_element)),
+        }
+        // Walked in document order.
+        if let Some(children) = walk.get_mut(next..) {
+            children.reverse();
+        }
+    }
+    (labels, uses)
+}
+
+/// Whether `node` is hidden by its own attributes or `style`: `display: none`, `visibility:
+/// hidden` or `collapse`. A stylesheet's rules aren't read.
+fn hidden(node: roxmltree::Node) -> bool {
+    let says = |property: &str, value: &str| match property.trim() {
+        "display" => value.trim().eq_ignore_ascii_case("none"),
+        "visibility" => ["hidden", "collapse"].iter().any(|v| value.trim().eq_ignore_ascii_case(v)),
+        _ => false,
+    };
+    let by_attribute = ["display", "visibility"].iter().any(|p| node.attribute(*p).is_some_and(|v| says(p, v)));
+    by_attribute || declarations(node.attribute("style").unwrap_or_default()).any(|(p, v)| says(p, v.trim_end_matches("!important")))
+}
+
+/// The declarations of the `style` attribute `style`, each a property and its value.
+fn declarations(style: &str) -> impl Iterator<Item = (&str, &str)> {
+    style.split(';').filter_map(|d| d.split_once(':'))
+}
+
+/// The child of `switch` a browser draws: its first element that asks for no extension
+/// (`requiredExtensions`) and a language usvg takes (`systemLanguage`), as usvg evaluates them;
+/// what it asks of `requiredFeatures` is taken as met, as browsers do.
+fn taken<'a, 'input>(switch: roxmltree::Node<'a, 'input>) -> Option<roxmltree::Node<'a, 'input>> {
+    switch.children().filter(roxmltree::Node::is_element).find(|child| {
+        let language = child.attribute("systemLanguage").is_none_or(|languages| {
+            languages.split(',').map(str::trim).any(|l| LANGUAGES.iter().any(|ours| l == *ours || l.split_once('-').is_some_and(|(p, _)| p == *ours)))
+        });
+        !child.has_attribute("requiredExtensions") && language
+    })
+}
+
+/// How many labels of `doc` a browser would draw: those [`drawn`] finds, and those its `<use>`s
+/// repeat.
+fn label_count(doc: &roxmltree::Document) -> usize {
+    let (labels, uses) = drawn(doc);
+    labels.len().saturating_add(used_labels(doc, &uses))
+}
+
+/// The `<foreignObject>`s in what the `<use>`s of `doc` that refer to `uses` repeat: usvg copies
+/// the `<use>`, not the label, so they are left out.
+fn used_labels(doc: &roxmltree::Document, uses: &[&str]) -> usize {
+    if uses.is_empty() {
+        return 0;
+    }
+    let ids: HashMap<&str, roxmltree::Node> = doc.descendants().filter_map(|n| Some((n.attribute("id")?, n))).collect();
+    // Each target counted once, however many uses repeat it.
+    let mut counted: HashMap<&str, usize> = HashMap::new();
+    let mut sum = 0usize;
+    for id in uses {
+        let Some(target) = ids.get(id) else { continue };
+        let n = *counted.entry(id).or_insert_with(|| target.descendants().filter(|n| svg_element(*n, "foreignObject")).count());
+        sum = sum.saturating_add(n);
+    }
+    sum
+}
+
+/// A drawing's labels to draw: its stylesheets, and each label written out.
+#[derive(Default)]
+struct Found {
+    #[cfg(feature = "svg-html")]
+    css: String,
+    #[cfg(feature = "svg-html")]
+    labels: Vec<Label>,
+    /// The root's `viewBox` and `preserveAspectRatio`, which usvg applies and doesn't say.
+    #[cfg(feature = "svg-html")]
+    view: Option<(svgtypes::ViewBox, svgtypes::AspectRatio)>,
+}
+
+/// A label, written out for the painter.
+#[cfg(feature = "svg-html")]
+#[cfg_attr(not(test), expect(dead_code, reason = "painted by Spec-0004's third task"))]
+struct Label {
+    /// XHTML: copies of its ancestors (their ids, classes, styles, and font and colour
+    /// attributes as styles, `display: contents`), then of the `<foreignObject>` made its box,
+    /// `width` × `height` CSS pixels at its top left, the containing block of what it holds.
+    markup: String,
+    width: f32,
+    height: f32,
+    /// Whether what it holds is drawn past its box (`overflow: visible`).
+    visible: bool,
+    /// From its box (its CSS pixels, from its top left) to the drawing's size as shown.
+    place: Transform,
+}
+
+#[cfg(feature = "svg-html")]
+impl Found {
+    /// Each label placed on the drawing, at the size usvg gave `tree`.
+    fn place(&mut self, tree: &usvg::Tree) {
+        let size = (tree.size().width(), tree.size().height());
+        let view = self.view.map_or(Transform::identity(), |(view_box, aspect)| fitted(view_box, aspect, size));
+        for label in &mut self.labels {
+            label.place = view.pre_concat(label.place);
+        }
+    }
+}
+
+/// What the labels of a drawing have cost so far, as they are written out.
+#[cfg(feature = "svg-html")]
+#[derive(Clone, Copy, Default)]
+struct Spent {
+    markup: usize,
+    text: usize,
+    elements: u64,
+}
+
+/// Why a label wasn't written out.
+#[cfg(feature = "svg-html")]
+enum Past {
+    /// It nests too deep: it alone is left out.
+    Nesting,
+    /// The labels have spent a budget: it and the rest are left out.
+    Budget(String),
+}
+
+/// `doc`'s labels a browser would draw ([`drawn`]), placed and written out within their
+/// budgets; what is left out is told to `notes`.
+#[cfg(feature = "svg-html")]
+fn found_labels(doc: &roxmltree::Document, notes: &Notes) -> Found {
+    let root = doc.root_element();
+    let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
+    let aspect = root.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
+    let css: String = doc.descendants().filter(|n| svg_element(*n, "style")).filter_map(|n| n.text()).collect::<Vec<_>>().join("\n");
+    let viewport = match view_box {
+        // Within f32: a viewBox's numbers are a drawing's.
+        Some(v) => (v.w as f32, v.h as f32),
+        None => (length(root, "width", 0.0).filter(|w| *w > 0.0).unwrap_or(100.0), length(root, "height", 0.0).filter(|h| *h > 0.0).unwrap_or(100.0)),
+    };
+    let mut spent = Spent { markup: css.len(), ..Spent::default() };
+    let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)) };
+    let mut spent_out: Option<String> = (spent.markup > MAX_LABEL_MARKUP).then(|| format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20));
+    let (labels, uses) = drawn(doc);
+    for fo in labels {
+        if spent_out.is_none() && found.labels.len() >= MAX_LABELS {
+            spent_out = Some(format!("past {MAX_LABELS} of them"));
+        }
+        if let Some(why) = &spent_out {
+            notes.left_out_label(why);
+            continue;
+        }
+        let Some((place, width, height)) = placed(fo, viewport) else { continue };
+        let before = spent;
+        match written_label(fo, width, height, &mut spent) {
+            Ok((markup, visible)) => found.labels.push(Label { markup, width, height, visible, place }),
+            Err(Past::Nesting) => {
+                spent = before;
+                notes.left_out_label(&format!("nested more than {MAX_LABEL_DEPTH} deep"));
+            }
+            Err(Past::Budget(why)) => {
+                notes.left_out_label(&why);
+                spent_out = Some(why);
+            }
+        }
+    }
+    notes.undrawn.fetch_add(used_labels(doc, &uses), Ordering::Relaxed);
+    found
+}
+
+/// `node`'s length `name` in user units, a percentage of `of` (the side of the viewport it
+/// measures), in the units usvg takes (96 pixels an inch, `em` its nearest `font-size`); `None`
+/// when it has none or it doesn't parse.
+#[cfg(feature = "svg-html")]
+fn length(node: roxmltree::Node, name: &str, of: f32) -> Option<f32> {
+    let l = node.attribute(name)?.parse::<svgtypes::Length>().ok()?;
+    // A length's number is an f64 for svgtypes, an f32 for usvg.
+    let n = l.number as f32;
+    use svgtypes::LengthUnit as U;
+    let font_size = || node.ancestors().find_map(|a| a.attribute("font-size")?.parse::<svgtypes::Length>().ok()).map_or(12.0, absolute);
+    let user = match l.unit {
+        U::Percent => n * of / 100.0,
+        U::Em => n * font_size(),
+        U::Ex => n * font_size() / 2.0,
+        _ => absolute(l),
+    };
+    user.is_finite().then_some(user)
+}
+
+/// An absolute length in user units (a relative one as if it were pixels).
+#[cfg(feature = "svg-html")]
+fn absolute(l: svgtypes::Length) -> f32 {
+    use svgtypes::LengthUnit as U;
+    let n = l.number as f32;
+    match l.unit {
+        U::In => n * 96.0,
+        U::Cm => n * 96.0 / 2.54,
+        U::Mm => n * 96.0 / 25.4,
+        U::Pt => n * 96.0 / 72.0,
+        U::Pc => n * 96.0 / 6.0,
+        _ => n,
+    }
+}
+
+/// `node`'s `transform`, or none when it doesn't parse.
+#[cfg(feature = "svg-html")]
+fn transform_of(node: roxmltree::Node) -> Transform {
+    match node.attribute("transform").map(str::parse::<svgtypes::Transform>) {
+        Some(Ok(t)) => Transform::from_row(t.a as f32, t.b as f32, t.c as f32, t.d as f32, t.e as f32, t.f as f32),
+        _ => Transform::identity(),
+    }
+}
+
+/// The transform from `view_box`'s user units to `size`, by `aspect`, as SVG fits a viewport.
+#[cfg(feature = "svg-html")]
+fn fitted(view_box: svgtypes::ViewBox, aspect: svgtypes::AspectRatio, size: (f32, f32)) -> Transform {
+    use svgtypes::Align;
+    let (x, y, w, h) = (view_box.x as f32, view_box.y as f32, view_box.w as f32, view_box.h as f32);
+    if !(w > 0.0 && h > 0.0) {
+        return Transform::identity();
+    }
+    let (sx, sy) = (size.0 / w, size.1 / h);
+    let (ax, ay) = match aspect.align {
+        Align::None => return Transform::from_row(sx, 0.0, 0.0, sy, -x * sx, -y * sy),
+        Align::XMinYMin => (0.0, 0.0),
+        Align::XMidYMin => (0.5, 0.0),
+        Align::XMaxYMin => (1.0, 0.0),
+        Align::XMinYMid => (0.0, 0.5),
+        Align::XMidYMid => (0.5, 0.5),
+        Align::XMaxYMid => (1.0, 0.5),
+        Align::XMinYMax => (0.0, 1.0),
+        Align::XMidYMax => (0.5, 1.0),
+        Align::XMaxYMax => (1.0, 1.0),
+    };
+    let s = if aspect.slice { sx.max(sy) } else { sx.min(sy) };
+    Transform::from_row(s, 0.0, 0.0, s, -x * s + (size.0 - w * s) * ax, -y * s + (size.1 - h * s) * ay)
+}
+
+/// Where the label `fo` is: the transform from its box to the root's user units, and its box's
+/// width and height. Through a stack of viewports, as SVG places it: each nested `<svg>`'s `x`,
+/// `y`, `width` and `height` (`100%` when left out), `viewBox` and `preserveAspectRatio`, and
+/// between them the ancestors' `transform`s, the root's own left out as usvg leaves it out.
+/// Lengths in percent are of the nearest viewport, `root` (the root's) at first. `None` for a box
+/// with nothing inside, or one that can't be placed.
+#[cfg(feature = "svg-html")]
+fn placed(fo: roxmltree::Node, root: (f32, f32)) -> Option<(Transform, f32, f32)> {
+    let mut chain: Vec<roxmltree::Node> = fo.ancestors().skip(1).filter(roxmltree::Node::is_element).collect();
+    chain.reverse();
+    let (mut place, mut viewport) = (Transform::identity(), root);
+    for svg in chain.iter().skip(1) {
+        place = place.pre_concat(transform_of(*svg));
+        if !svg_element(*svg, "svg") {
+            continue;
+        }
+        let (x, y) = (length(*svg, "x", viewport.0).unwrap_or(0.0), length(*svg, "y", viewport.1).unwrap_or(0.0));
+        let (w, h) = (length(*svg, "width", viewport.0).unwrap_or(viewport.0), length(*svg, "height", viewport.1).unwrap_or(viewport.1));
+        place = place.pre_translate(x, y);
+        let view_box = svg.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
+        viewport = match view_box {
+            Some(view_box) => {
+                let aspect = svg.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
+                place = place.pre_concat(fitted(view_box, aspect, (w, h)));
+                (view_box.w as f32, view_box.h as f32)
+            }
+            None => (w, h),
+        };
+    }
+    place = place.pre_concat(transform_of(fo));
+    let (x, y) = (length(fo, "x", viewport.0).unwrap_or(0.0), length(fo, "y", viewport.1).unwrap_or(0.0));
+    let (w, h) = (length(fo, "width", viewport.0)?, length(fo, "height", viewport.1)?);
+    let place = place.pre_translate(x, y);
+    let finite = [place.sx, place.kx, place.ky, place.sy, place.tx, place.ty].iter().all(|v| v.is_finite());
+    (finite && w > 0.0 && h > 0.0).then_some((place, w, h))
+}
+
+/// `s`, escaped for XML text or an attribute value in double quotes, onto `out`.
+#[cfg(feature = "svg-html")]
+fn escaped(s: &str, out: &mut String) {
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
+}
+
+/// `s` as a CSS string, quoted: nothing in it ends the string or the declaration.
+#[cfg(feature = "svg-html")]
+fn css_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() => out.push_str(&format!("\\{:x} ", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `node`'s font and colour attributes (`font-family`, `font-size`, `font-weight`,
+/// `font-style`, `color`), as CSS declarations: each parsed or quoted, never pasted, so a
+/// drawing can't write declarations of its own here. One that doesn't parse is left out.
+#[cfg(feature = "svg-html")]
+fn presentation(node: roxmltree::Node) -> String {
+    let mut out = String::new();
+    if let Some(families) = node.attribute("font-family").and_then(|v| svgtypes::parse_font_families(v).ok()) {
+        let names: Vec<String> = families
+            .iter()
+            .map(|f| match f {
+                svgtypes::FontFamily::Named(name) => css_string(name),
+                generic => generic.to_string(),
+            })
+            .collect();
+        if !names.is_empty() {
+            out.push_str(&format!("font-family:{};", names.join(",")));
+        }
+    }
+    if let Some(size) = node.attribute("font-size").and_then(|v| v.parse::<svgtypes::Length>().ok()) {
+        let n = size.number;
+        if n.is_finite() && n >= 0.0 {
+            match size.unit {
+                svgtypes::LengthUnit::Percent => out.push_str(&format!("font-size:{n}%;")),
+                svgtypes::LengthUnit::Em => out.push_str(&format!("font-size:{n}em;")),
+                svgtypes::LengthUnit::Ex => out.push_str(&format!("font-size:{n}ex;")),
+                _ => out.push_str(&format!("font-size:{}px;", absolute(size))),
+            }
+        }
+    }
+    const WEIGHTS: &[&str] = &["normal", "bold", "bolder", "lighter", "100", "200", "300", "400", "500", "600", "700", "800", "900"];
+    if let Some(weight) = node.attribute("font-weight").map(str::trim).filter(|w| WEIGHTS.contains(w)) {
+        out.push_str(&format!("font-weight:{weight};"));
+    }
+    if let Some(style) = node.attribute("font-style").map(str::trim).filter(|s| ["normal", "italic", "oblique"].contains(s)) {
+        out.push_str(&format!("font-style:{style};"));
+    }
+    if let Some(c) = node.attribute("color").and_then(|v| v.trim().parse::<svgtypes::Color>().ok()) {
+        out.push_str(&format!("color:rgba({},{},{},{});", c.red, c.green, c.blue, f32::from(c.alpha) / 255.0));
+    }
+    out
+}
+
+/// The copy of the element `node` that opens around a label, named `name`, its `style` before
+/// `extra`.
+#[cfg(feature = "svg-html")]
+fn copy_of(node: roxmltree::Node, name: &str, extra: &str, out: &mut String) {
+    out.push('<');
+    out.push_str(name);
+    for attribute in ["id", "class"] {
+        if let Some(value) = node.attribute(attribute) {
+            out.push_str(&format!(" {attribute}=\""));
+            escaped(value, out);
+            out.push('"');
+        }
+    }
+    out.push_str(" style=\"");
+    escaped(&presentation(node), out);
+    escaped(node.attribute("style").unwrap_or_default(), out);
+    out.push(';');
+    out.push_str(extra);
+    out.push_str("\">");
+}
+
+/// The label `fo`, `width` × `height`, written out, within what is left of `spent`'s budgets, and
+/// counted in it: its markup, and whether its overflow is visible.
+#[cfg(feature = "svg-html")]
+fn written_label(fo: roxmltree::Node, width: f32, height: f32, spent: &mut Spent) -> Result<(String, bool), Past> {
+    let visible = fo.attribute("overflow").is_some_and(|v| v.trim() == "visible")
+        || declarations(fo.attribute("style").unwrap_or_default()).any(|(p, v)| p.trim() == "overflow" && v.trim().starts_with("visible"));
+    let mut chain: Vec<roxmltree::Node> = fo.ancestors().skip(1).filter(roxmltree::Node::is_element).collect();
+    chain.reverse();
+    let mut label =
+        Spent { markup: spent.markup, text: spent.text, elements: spent.elements.saturating_add(u64::try_from(chain.len()).unwrap_or(u64::MAX)) };
+    let mut out = String::new();
+    // An `<svg>`'s copy is a `div`: an element named `svg` would be taken for a drawing.
+    fn name<'a>(node: &roxmltree::Node<'a, '_>) -> &'a str {
+        if svg_element(*node, "svg") { "div" } else { node.tag_name().name() }
+    }
+    for ancestor in &chain {
+        copy_of(*ancestor, name(ancestor), "display:contents !important", &mut out);
+        // An ancestor's style may be as long as the drawing: one past the budget ends it.
+        affordable(&label, &out)?;
+    }
+    let overflow = if visible { "visible" } else { "hidden" };
+    let box_style = format!(
+        "display:block !important;position:absolute !important;left:0 !important;top:0 !important;width:{width}px !important;\
+         height:{height}px !important;margin:0 !important;box-sizing:border-box !important;overflow:{overflow} !important"
+    );
+    copy_of(fo, "foreignObject", &box_style, &mut out);
+    for child in fo.children() {
+        written(child, Some(XHTML_NS), 1, &mut label, &mut out)?;
+    }
+    out.push_str("</foreignObject>");
+    for ancestor in chain.iter().rev() {
+        out.push_str("</");
+        out.push_str(name(ancestor));
+        out.push('>');
+    }
+    affordable(&label, &out)?;
+    *spent = Spent { markup: spent.markup.saturating_add(out.len()), ..label };
+    Ok((out, visible))
+}
+
+/// Whether `spent`, and `out` written so far, are within the labels' budgets.
+#[cfg(feature = "svg-html")]
+fn affordable(spent: &Spent, out: &str) -> Result<(), Past> {
+    if spent.markup.saturating_add(out.len()) > MAX_LABEL_MARKUP {
+        return Err(Past::Budget(format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20)));
+    }
+    if spent.text > MAX_LABEL_TEXT {
+        return Err(Past::Budget(format!("past {} MiB of text", MAX_LABEL_TEXT >> 20)));
+    }
+    if spent.elements > MAX_LABEL_ELEMENTS {
+        return Err(Past::Budget(format!("past {MAX_LABEL_ELEMENTS} elements")));
+    }
+    Ok(())
+}
+
+/// `node`, `depth` levels below its label's `<foreignObject>`, inside an element in the
+/// namespace `parent`, written out from the parsed tree onto `out`, counted in `spent`: elements
+/// in the namespaces the drawing binds, declared where they change; attributes without a
+/// namespace; text, its entities expanded; each escaped. Comments and processing instructions
+/// are left out.
+#[cfg(feature = "svg-html")]
+fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mut Spent, out: &mut String) -> Result<(), Past> {
+    if node.is_text() {
+        let text = node.text().unwrap_or_default();
+        spent.text = spent.text.saturating_add(text.len());
+        affordable(spent, out)?;
+        escaped(text, out);
+        return affordable(spent, out);
+    }
+    if !node.is_element() {
+        return Ok(());
+    }
+    if depth > MAX_LABEL_DEPTH {
+        return Err(Past::Nesting);
+    }
+    spent.elements = spent.elements.saturating_add(1);
+    let (name, namespace) = (node.tag_name().name(), node.tag_name().namespace());
+    out.push('<');
+    out.push_str(name);
+    if namespace != parent {
+        out.push_str(" xmlns=\"");
+        escaped(namespace.unwrap_or_default(), out);
+        out.push('"');
+    }
+    for attribute in node.attributes().filter(|a| a.namespace().is_none()) {
+        out.push(' ');
+        out.push_str(attribute.name());
+        out.push_str("=\"");
+        escaped(attribute.value(), out);
+        out.push('"');
+    }
+    out.push('>');
+    affordable(spent, out)?;
+    for child in node.children() {
+        written(child, namespace, depth.saturating_add(1), spent, out)?;
+    }
+    out.push_str("</");
+    out.push_str(name);
+    out.push('>');
+    affordable(spent, out)
+}
+
+/// The text of `doc` without what follows the child a browser takes in each `<switch>` (draw.io's
+/// "[Not supported by viewer]" after its label, and its "Text is not SVG - cannot display" after
+/// an empty `requiredFeatures` group), or `None` when there is none: usvg would draw them.
+#[cfg(feature = "svg-html")]
+fn without_fallbacks(doc: &roxmltree::Document, text: &str) -> Option<String> {
+    let mut cut: Vec<std::ops::Range<usize>> = Vec::new();
+    for switch in doc.descendants().filter(|n| svg_element(*n, "switch")) {
+        if let Some(child) = taken(switch) {
+            // `next_siblings` starts at the node itself.
+            cut.extend(child.next_siblings().skip(1).filter(roxmltree::Node::is_element).map(|n| n.range()));
+        }
+    }
+    if cut.is_empty() {
+        return None;
+    }
+    cut.sort_by_key(|r| r.start);
+    let (mut kept, mut at) = (String::with_capacity(text.len()), 0);
+    for range in cut {
+        // One inside another already cut.
+        if range.start < at {
+            continue;
+        }
+        kept.push_str(text.get(at..range.start)?);
+        at = range.end;
+    }
+    kept.push_str(text.get(at..)?);
+    Some(kept)
 }
 
 /// What usvg will repeat of a document as it turns it into a tree, counted before it does, from
@@ -860,6 +1462,10 @@ struct Notes {
     fallbacks: AtomicUsize,
     /// Why the text was left out, if it was.
     text: Mutex<Option<String>>,
+    /// HTML labels a browser would draw that this build doesn't, or couldn't.
+    undrawn: AtomicUsize,
+    /// HTML labels left out past a limit, by why.
+    left_out_labels: Mutex<Vec<(String, usize)>>,
 }
 
 impl Notes {
@@ -873,6 +1479,16 @@ impl Notes {
             let mut hasher = std::hash::DefaultHasher::new();
             std::hash::Hash::hash(link, &mut hasher);
             seen.insert(std::hash::Hasher::finish(&hasher));
+        }
+    }
+
+    /// Notes an HTML label as left out, for `why`.
+    #[cfg(feature = "svg-html")]
+    fn left_out_label(&self, why: &str) {
+        let mut left_out = self.left_out_labels.lock().unwrap_or_else(PoisonError::into_inner);
+        match left_out.iter_mut().find(|(w, _)| w == why) {
+            Some((_, n)) => *n = n.saturating_add(1),
+            None => left_out.push((why.to_string(), 1)),
         }
     }
 
@@ -904,6 +1520,13 @@ impl Notes {
                 "{} left out (broken, or more than {MAX_NESTED} deep)",
                 plural(n, "drawing embedded in it", "drawings embedded in it")
             )),
+        }
+        match count(&self.undrawn) {
+            0 => {}
+            n => out.push(format!("{} not drawn", plural(n, "HTML label (<foreignObject>)", "HTML labels (<foreignObject>)"))),
+        }
+        for (why, n) in self.left_out_labels.lock().unwrap_or_else(PoisonError::into_inner).iter() {
+            out.push(format!("{} left out, {why}", plural(*n, "HTML label (<foreignObject>)", "HTML labels (<foreignObject>)")));
         }
         if count(&self.fallbacks) > MAX_FALLBACKS {
             out.push(format!(
@@ -949,7 +1572,7 @@ fn embedded(mime: &str, data: Arc<Vec<u8>>, depth: usize, notes: &Notes) -> Opti
         Ok(imagesize::ImageType::Webp) => usvg::ImageKind::WEBP,
         _ if matches!(mime, "image/svg+xml" | "text/plain") => {
             let nested = depth.saturating_add(1);
-            let tree = (nested <= MAX_NESTED).then(|| parse_at(&data, nested, notes).ok()).flatten();
+            let tree = (nested <= MAX_NESTED).then(|| parse_at(&data, nested, notes).ok()).flatten().map(|(tree, _)| tree);
             if tree.is_none() {
                 notes.drawings.fetch_add(1, Ordering::Relaxed);
             }
@@ -1352,6 +1975,105 @@ mod tests {
     fn pixel(frame: &Frame, x: u32, y: u32) -> [u8; 4] {
         let at = ((y * frame.width + x) * 4) as usize;
         frame.rgba[at..at + 4].try_into().unwrap()
+    }
+
+    /// Which labels are drawn is found in one walk of the drawing, whatever its shape: 50,000
+    /// labels a `<switch>` doesn't take, each asking which child it takes, would be 2.5 billion
+    /// steps. Labels a drawn `<use>` repeats are counted, each target once; those in a definition,
+    /// not drawn, are not.
+    #[test]
+    fn labels_are_found_in_one_walk() {
+        let not_taken = "<foreignObject width='1' height='1' requiredExtensions='x'/>".repeat(50_000);
+        let group = format!("<defs><g id='g'>{}</g><use href='#g'/></defs>", "<foreignObject width='1' height='1'/>".repeat(1_000));
+        let used = "<use xlink:href='#g'/>".repeat(500);
+        let text = svg(10, 10, &format!("<switch>{not_taken}<rect width='1' height='1'/></switch>{group}{used}"));
+        let started = std::time::Instant::now();
+        let warnings = guarded_parse(text.as_bytes()).unwrap().warnings;
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert_eq!(warnings, ["500000 HTML labels (<foreignObject>) were not drawn"]);
+    }
+
+    /// The labels found in `text`, placed on the drawing.
+    #[cfg(feature = "svg-html")]
+    fn labels(text: &str) -> Vec<Label> {
+        parse_at(text.as_bytes(), 0, &Notes::default()).unwrap().1.labels
+    }
+
+    /// A label is written out from the parsed tree, never copied from the file: its namespaces
+    /// as the drawing binds them (a prefix declared on the root), its entities expanded, its
+    /// text and attributes escaped, comments left out.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_label_is_written_out_from_the_tree() {
+        let text = r#"<!DOCTYPE svg [<!ENTITY who "World &amp; all">]>
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml" xmlns:m="http://www.w3.org/1998/Math/MathML" width="10" height="10">
+            <foreignObject width="10" height="10"><h:div title='a "b" &lt;c&gt;'>Hello &who;<!-- not this --><![CDATA[ <i>raw</i> ]]><m:math/></h:div></foreignObject></svg>"#;
+        let found = labels(text);
+        let markup = &found[0].markup;
+        let inner = r#"<div title="a &quot;b&quot; &lt;c&gt;">Hello World &amp; all &lt;i&gt;raw&lt;/i&gt; <math xmlns="http://www.w3.org/1998/Math/MathML"></math></div></foreignObject>"#;
+        assert!(markup.contains(inner), "{markup}");
+        assert!(!markup.contains("not this") && !markup.contains("<h:"), "{markup}");
+    }
+
+    /// A label is written inside copies of its context: its ancestors (the root's an `svg`
+    /// made a `div`) with their ids, classes, styles and font and colour attributes as styles,
+    /// shown as their contents; then the `<foreignObject>` itself, made its box. Each attribute is
+    /// parsed or quoted: none writes a declaration of its own.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_label_is_written_inside_its_context() {
+        let text = svg(
+            40,
+            20,
+            r##"<g id="n1" class="node a" style="opacity: 1" font-family="'Courier New', monospace" font-size="2mm" font-weight="bold" font-style="italic" color="#f00">
+            <foreignObject class="label" style="overflow: visible" x="1" y="2" width="20" height="10" font-family="'x;color:blue'" color="red;background:blue"><div xmlns="http://www.w3.org/1999/xhtml">a</div></foreignObject></g>"##,
+        );
+        let found = labels(&text);
+        let label = &found[0];
+        let g = r#"<g id="n1" class="node a" style="font-family:&quot;Courier New&quot;,monospace;font-size:7.5590553px;font-weight:bold;font-style:italic;color:rgba(255,0,0,1);opacity: 1;display:contents !important">"#;
+        assert!(label.markup.starts_with(&format!(r#"<div style=";display:contents !important">{g}<foreignObject class="label" style="font-family:&quot;x;color:blue&quot;;overflow: visible;display:block !important;"#)), "{}", label.markup);
+        assert!(
+            label.markup.contains("width:20px !important;height:10px !important;") && label.markup.contains("overflow:visible !important"),
+            "{}",
+            label.markup
+        );
+        assert!(label.markup.ends_with("</foreignObject></g></div>"), "{}", label.markup);
+        assert!(label.visible && (label.width, label.height) == (20.0, 10.0));
+    }
+
+    /// A label is placed through the stack of viewports: the root's `viewBox` fitted to its size,
+    /// each nested `<svg>`'s `x`, `y`, `width`, `height`, `viewBox` and `preserveAspectRatio`, and
+    /// the ancestors' transforms between them, but the root's own; percentages of the nearest
+    /// viewport, and units at 96 pixels an inch.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_label_is_placed_through_the_viewports_it_is_in() {
+        let at = |body: &str| {
+            let text =
+                format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 100 50" transform="scale(3)">{body}</svg>"#);
+            let found = labels(&text);
+            let l = &found[0];
+            let mut corners = [resvg::tiny_skia::Point::from_xy(0.0, 0.0), resvg::tiny_skia::Point::from_xy(l.width, l.height)];
+            l.place.map_points(&mut corners);
+            (l.width, l.height, [corners[0].x, corners[0].y, corners[1].x, corners[1].y].map(|v| (v * 1000.0).round() / 1000.0))
+        };
+        let fo = r#"<foreignObject x="1" y="2" width="3" height="4"/>"#;
+        // The root's viewBox doubles it.
+        assert_eq!(at(fo), (3.0, 4.0, [2.0, 4.0, 8.0, 12.0]));
+        assert_eq!(at(&format!(r#"<g transform="translate(10 5)">{fo}</g>"#)), (3.0, 4.0, [22.0, 14.0, 28.0, 22.0]));
+        // A nested svg at (10, 10), 50 × 50, showing 10 × 10: five times larger.
+        let nested = format!(r#"<svg x="10" y="10" width="50" height="50" viewBox="0 0 10 10">{fo}</svg>"#);
+        assert_eq!(at(&nested), (3.0, 4.0, [30.0, 40.0, 60.0, 80.0]));
+        // Showing 10 × 20 in 50 × 50, centred: 2.5 times larger, 12.5 in from the left.
+        let centred = format!(r#"<svg width="50" height="50" viewBox="0 0 10 20">{fo}</svg>"#);
+        assert_eq!(at(&centred), (3.0, 4.0, [30.0, 10.0, 45.0, 30.0]));
+        let stretched = format!(r#"<svg width="50" height="50" viewBox="0 0 10 20" preserveAspectRatio="none">{fo}</svg>"#);
+        assert_eq!(at(&stretched), (3.0, 4.0, [10.0, 10.0, 40.0, 30.0]));
+        // Percentages: of the root's viewBox, then of a nested svg's own size.
+        assert_eq!(at(r#"<foreignObject x="10%" width="100%" height="100%"/>"#), (100.0, 50.0, [20.0, 0.0, 220.0, 100.0]));
+        assert_eq!(at(r#"<svg width="40" height="20"><foreignObject width="50%" height="50%"/></svg>"#), (20.0, 10.0, [0.0, 0.0, 40.0, 20.0]));
+        assert_eq!(at(r#"<foreignObject x="1in" width="10mm" height="1pt"/>"#).0, 37.795277);
+        assert!(labels(&svg(10, 10, r#"<foreignObject width="0" height="4"/><foreignObject width="4"/>"#)).is_empty());
     }
 
     #[test]

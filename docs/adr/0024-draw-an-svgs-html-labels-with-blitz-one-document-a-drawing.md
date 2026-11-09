@@ -69,7 +69,8 @@ Measured 2026-11-09 on an Apple M3 Max (14 cores, 36 GiB), macOS 26.6.2, Rust 1.
 measuring tool [`0024-measure/`](0024-measure/src/main.rs) beside this ADR: a crate of its own, in
 its own workspace, outside clv's build, with blitz-dom, blitz-html, blitz-paint and blitz-traits
 0.3.0-beta.4, anyrender 0.14.0, anyrender_vello_cpu 0.18.0 (vello_cpu 0.3.0), stylo 0.22.0, taffy
-0.15.1, parley 0.12.0, wuff 0.2.10 and image 0.25.10 (its `Cargo.lock`). `measure gen <kind> …`
+0.15.1, parley 0.12.0, wuff 0.2.9 and image 0.25.10: its `Cargo.lock` is clv's, so every crate the two
+share is at the version clv builds. `measure gen <kind> …`
 writes each drawing, synthetic; `measure run <x.svg>` finds its labels as the spec says
 (simplified: no `<switch>` or nested `<svg>`), lays them out in one document (or one a label,
 `--each`), records each and replays it into the page at `--scale` (1 unless said), printing each

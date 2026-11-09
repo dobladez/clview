@@ -44,6 +44,22 @@ zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2
 resvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"], optional = true }
 flate2 = { version = "1.1", optional = true }
 imagesize = { version = "0.15", optional = true }
+# An SVG's HTML labels (`<foreignObject>`: tldraw, draw.io, Mermaid), laid out and painted by
+# Blitz (Stylo's styles, Taffy's layout, Parley's text) through anyrender into vello_cpu, in Rust:
+# `source/svg/html.rs`, ADR-0024. Pinned, as the limits there were measured with them. Without
+# Blitz's default features, which bring its own SVG (usvg, without this backend's bounds); with
+# WOFF fonts and the system's. No JavaScript, no network.
+blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff", "system-fonts"], optional = true }
+blitz-html = { version = "=0.3.0-beta.4", optional = true }
+blitz-paint = { version = "=0.3.0-beta.4", default-features = false, optional = true }
+blitz-traits = { version = "=0.3.0-beta.4", optional = true }
+anyrender = { version = "=0.14.0", optional = true }
+anyrender_vello_cpu = { version = "=0.18.0", optional = true }
+# The transforms anyrender takes; Blitz builds it already.
+kurbo = { version = "0.13", optional = true }
+# SVG's lengths, transforms, viewBoxes and colours, to place a label as usvg places what it draws;
+# usvg builds it already.
+svgtypes = { version = "0.16", optional = true }
 # Tar archives and compressed files, read in Rust: gzip through flate2 (zlib-rs), bzip2 through
 # libbz2-rs-sys, xz through lzma-rust2 (the decoders the zip backend already builds), with a tar
 # reader of `source/tar.rs`'s own. Not zstd (the zstd C library), as for zip.
@@ -80,6 +96,20 @@ pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
 image = ["dep:image", "dep:jxl-oxide"]
 # SVG drawings, and svgz (gzipped SVG): `source/svg.rs`, which renders them through resvg.
 svg = ["dep:resvg", "dep:flate2", "dep:imagesize"]
+# An SVG's HTML labels, drawn by Blitz over what resvg draws: `source/svg/html.rs`. It brings the
+# image crate for the pictures a label embeds, whether or not the image backend is built.
+svg-html = [
+    "svg",
+    "dep:image",
+    "dep:blitz-dom",
+    "dep:blitz-html",
+    "dep:blitz-paint",
+    "dep:blitz-traits",
+    "dep:anyrender",
+    "dep:anyrender_vello_cpu",
+    "dep:kurbo",
+    "dep:svgtypes",
+]
 # Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: `source/zip.rs`.
 zip = ["dep:zip"]
 # Tar archives, plain or compressed (gzip, bzip2, xz), as directories, and a file compressed

@@ -11,7 +11,8 @@ How to build, test and release clview, and the rules its code keeps. How it work
 cargo install --path .      # installs `clv`
 ```
 
-It takes Rust 1.95 or later, the `rust-version`. All seven features are on by default;
+It takes Rust 1.95 or later, the `rust-version`. Seven of its eight features are on by default, all
+but `svg-html` (an SVG's HTML labels, while [Spec-0004](docs/specs/0004-draw-an-svgs-html-labels.md) is built);
 `cargo build --no-default-features --features image` builds the viewer with images alone, and
 `--no-default-features` alone without any backend.
 [Backends](docs/architecture.md#backends) lists the features.
@@ -61,8 +62,10 @@ it prints, never by name.
   checks it) and `Cargo.toml`; bzip2 and lzma-rust2 only in `src/source/tar.rs`, `tests/it/tar.rs`
   (which checks it) and `Cargo.toml` (flate2 there and in the SVG backend, for svgz); wordcraft and
   pulldown-cmark only in `src/source/wordcraft.rs`, `tests/it/wordcraft.rs` (which checks it) and
-  `Cargo.toml`; gridcraft
-  only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks it) and `Cargo.toml`.
+  `Cargo.toml`; gridcraft only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks
+  it) and `Cargo.toml`; Blitz and what it paints an SVG's HTML labels with (blitz, anyrender,
+  kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
+  checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend
   with nothing better (images, drawings) lends its render function to `source/threads.rs`.
@@ -105,7 +108,8 @@ cargo test --no-default-features -j 2
 ```
 
 After touching `cfg` attributes, each backend alone too (`--no-default-features --features image`,
-then `pdf`, then `svg`, then `zip`, then `tar`, then `word`, then `sheet`). The PDF backend is a
+then `pdf`, then `svg`, then `svg-html`, then `zip`, then `tar`, then `word`, then `sheet`), and
+`pdf,svg`, so the integration tests run the SVG backend without its HTML labels. The PDF backend is a
 large build: keep `-j 2` unless the machine is free. CI (`.github/workflows/ci.yml`) runs them all
 on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 
@@ -133,7 +137,8 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
   XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/resvg.rs`**: the SVG backend through the viewer: what it draws, the limits a drawing is
-  held to, and that nothing else names its libraries.
+  held to, its HTML labels, the versions their limits were measured with, and that nothing else
+  names its libraries or Blitz's.
 - **`tests/it/wordcraft.rs`** and **`tests/it/gridcraft.rs`**: documents and workbooks as pages, a
   protected one opened with its password, their pins, and that nothing else names their libraries.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as

@@ -58,6 +58,15 @@ jobs:
         run: |
           cargo clippy --locked --no-default-features --features svg --all-targets -- -D warnings
           cargo test --locked --no-default-features --features svg
+      - name: svg-html alone
+        run: |
+          cargo clippy --locked --no-default-features --features svg-html --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features svg-html
+      # The integration tests need the PDF backend: the SVG backend's, without its HTML labels.
+      - name: pdf and svg
+        run: |
+          cargo clippy --locked --no-default-features --features pdf,svg --all-targets -- -D warnings
+          cargo test --locked --no-default-features --features pdf,svg
       - name: zip alone
         run: |
           cargo clippy --locked --no-default-features --features zip --all-targets -- -D warnings
