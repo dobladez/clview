@@ -1823,6 +1823,43 @@ fn a_terminal_without_pixels_gets_a_second_layout_at_the_cell_it_says() {
     assert!(view.finish().success());
 }
 
+/// On a Markdown file `+` and `-` are the font size: the document is laid out again at it, with fewer
+/// pages at a larger size, the status line saying `font 110%` on its right; `0+` goes back to 100%, and
+/// nothing on the right. The page still fills the window: the same pixels, larger text. On a PDF they
+/// are the zoom, as ever.
+#[cfg(feature = "word")]
+#[test]
+fn the_zoom_keys_are_the_font_size_on_a_markdown_file_and_the_zoom_on_a_pdf() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("font", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    let at_100 = page_count(&view.text()).unwrap();
+    view.press("+");
+    view.wait_until("larger, said", |t| bar(t).contains("· font 110% ·"));
+    assert!(view.text().contains("font 110%…"), "laid out again, the status line saying so meanwhile");
+    assert!(last_sent_shaped(&view.text(), WINDOW.0, WINDOW.1), "the page is the window still");
+    assert!(bar(&view.text()).contains("1 per row"), "the zoom didn't move");
+    view.press("150+");
+    view.wait_until("150%, more pages", |t| bar(t).contains("· font 150% ·") && page_count(t).is_some_and(|count| count > at_100));
+    view.press("-");
+    view.wait_until("140%", |t| bar(t).contains("· font 140% ·"));
+    view.press("0+");
+    view.wait_until("100% again", |t| bar(t).contains("font 100%") && page_count(t) == Some(at_100));
+    assert!(!bar(last_draw(&view.text())).contains("· font"), "{:?}", last_draw(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+    // A PDF: the zoom.
+    let mut view = Session::start_on(KITTY, &fixture("font-pdf", 3), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/3") || t.contains("  pages 1–2/3"));
+    view.press("+");
+    view.wait_until("zoomed", |t| bar(t).contains("· 1 per row ·") || bar(t).contains("· width ·"));
+    assert!(!view.text().contains("font"), "no font on a PDF");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// Each image sent, its size: what kitty is told in the stream.
 pub(crate) fn sizes_sent(text: &str) -> Vec<(u32, u32)> {
     use base64::Engine as _;

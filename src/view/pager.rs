@@ -467,6 +467,7 @@ fn setting_keys(setting: &Setting) -> String {
         Keys::Cycle(key) => key.to_string(),
         Keys::Step(down, up) if setting.numbers.is_some() => format!("{down} {up}  12{up}"),
         Keys::Step(down, up) => format!("{down} {up}"),
+        Keys::Zoom => "+ -  150+".to_owned(),
     }
 }
 
@@ -474,7 +475,7 @@ fn setting_keys(setting: &Setting) -> String {
 pub(super) fn said(setting: &Setting, value: Value) -> String {
     match value {
         Value::Named(name) => setting.named.iter().find(|named| named.name == name).map_or(name, |named| named.says).to_owned(),
-        Value::Number(number) => format!("{} {number}", setting.name),
+        Value::Number(number) => format!("{} {number}{}", setting.name, setting.numbers.map_or("", |numbers| numbers.unit)),
     }
 }
 
@@ -486,7 +487,7 @@ fn said_in(setting: &Setting, value: Value, bounds: Option<Bounds>) -> String {
     match (value, bounds.and_then(|bounds| bounds.most)) {
         (Value::Number(number), Some(most)) if number > most => match setting.named.first() {
             Some(named) => format!("{said} ({})", named.name),
-            None => format!("{said} ({most})"),
+            None => format!("{said} ({most}{})", setting.numbers.map_or("", |numbers| numbers.unit)),
         },
         _ => said,
     }
@@ -523,9 +524,9 @@ fn turned(setting: &Setting, bounds: Option<Bounds>, now: Value, key: char, coun
             let next = at.map_or(0, |at| at.saturating_add(1)).checked_rem(setting.named.len()).and_then(|next| setting.named.get(next));
             next.map_or(now, |named| Value::Named(named.name))
         }
-        (Keys::Step(..), None, _) => now,
-        (Keys::Step(down, _), Some(numbers), _) => {
-            let up = key != down;
+        (Keys::Step(..) | Keys::Zoom, None, _) => now,
+        (keys @ (Keys::Step(..) | Keys::Zoom), Some(numbers), _) => {
+            let up = keys.up(key).unwrap_or(true);
             // The most here: the room's, where it is under the setting's own.
             let (most, here) = match bounds.and_then(|bounds| bounds.most).filter(|most| *most < numbers.most) {
                 Some(most) => (most.max(numbers.least), " here"),
@@ -628,13 +629,30 @@ impl Nav {
     }
 
     /// What `?` shows here: the viewer's keys, then the settings' this build declares, whatever is
-    /// shown, then how to leave.
+    /// shown, then how to leave. One `+ -` line: the zoom's, or on a document that has a setting on
+    /// those keys ([`Keys::Zoom`]), that setting's in its place.
     fn help_lines(&self) -> Vec<(String, &'static str)> {
         let keys = if self.list { LIST_HELP } else { PAGE_HELP };
         let leave = if self.nested { BACK_HELP } else { QUIT_HELP };
-        let settings = self.settings.declared.iter().map(|setting| (setting_keys(setting), setting.help));
+        let zoomed = self.zoom_setting();
+        let settings =
+            self.settings.declared.iter().filter(|setting| setting.keys != Keys::Zoom).map(|setting| (setting_keys(setting), setting.help));
         let fixed = |lines: &[(&str, &'static str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), *what)).collect::<Vec<_>>();
-        fixed(keys).into_iter().chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
+        let keys = fixed(keys).into_iter().map(|(chars, what)| match zoomed {
+            Some(setting) if chars == "+ -" => (setting_keys(setting), setting.help),
+            _ => (chars, what),
+        });
+        keys.chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
+    }
+
+    /// The setting the zoom keys go to here, if one does ([`Keys::Zoom`]): one this build declares,
+    /// which what is shown has, on a document shown by itself (not a list, and not pages picked by
+    /// `--pages`, as laid out).
+    fn zoom_setting(&self) -> Option<&'static Setting> {
+        if self.list || self.picked {
+            return None;
+        }
+        self.settings.declared.iter().copied().find(|setting| setting.keys == Keys::Zoom && self.has.contains(&setting.name))
     }
 
     /// Pages to a row.
@@ -736,6 +754,8 @@ impl Nav {
             Key::Char('g') | Key::Home => self.go(0),
             Key::Char('G') | Key::End => self.go(usize::MAX),
             // `=` and `_` are the same keys as `+` and `-`, with Shift or without.
+            // A document's font size, where it has one; the zoom everywhere else.
+            Key::Char('+' | '=' | '-' | '_') if self.zoom_setting().is_some() => self.setting_key(key),
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char('r' | '\u{c}') => self.rerender = true,
@@ -1045,7 +1065,12 @@ impl Nav {
                     (false, true) => &OPENED_KEYS,
                     (false, false) => &KEYS,
                 };
-                keys.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned())
+                let hint = keys.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned());
+                // The zoom keys are a setting's here: the hint says which.
+                match self.zoom_setting() {
+                    Some(setting) => hint.replace("+ - zoom", &format!("+ - {}", setting.name)),
+                    None => hint,
+                }
             }
             (None, true) => String::new(),
         };
@@ -1075,7 +1100,7 @@ impl Nav {
     fn laid_width(&self) -> usize {
         let digits = |n: u32| n.to_string().len();
         let widest = |setting: &&Setting| {
-            let numbers = setting.numbers.map_or(0, |numbers| digits(numbers.most).max(digits(numbers.least)));
+            let numbers = setting.numbers.map_or(0, |numbers| digits(numbers.most).max(digits(numbers.least)).saturating_add(chars(numbers.unit)));
             let named = setting.named.iter().map(|named| chars(named.says)).max().unwrap_or(0);
             // A number past the most here says what it is laid out at too (`said_in`).
             let past = setting.named.first().map_or(numbers, |named| chars(named.name)).saturating_add(3);
@@ -2348,7 +2373,7 @@ mod tests {
     const WIDTH: Setting = Setting {
         name: "width",
         named: &[Named { name: "window", says: "width window" }],
-        numbers: Some(Numbers { least: 20, most: 200, step: 4 }),
+        numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }),
         default: Value::Named("window"),
         zero: Value::Named("window"),
         keys: Keys::Step('[', ']'),
@@ -2418,7 +2443,7 @@ mod tests {
     /// ends stays, saying so.
     #[test]
     fn named_values_sit_among_the_steps_where_they_are_set() {
-        let numbers = Numbers { least: 20, most: 200, step: 4 };
+        let numbers = Numbers { least: 20, most: 200, step: 4, unit: "" };
         let named = |count: usize| -> Vec<Named> { ["a", "b", "c"][..count].iter().map(|name| Named { name, says: "" }).collect() };
         let step = |named: &[Named], at: Option<u32>, now: Value, up: bool| stepped(named, at, numbers, now, up);
         let (a, b, c) = (Value::Named("a"), Value::Named("b"), Value::Named("c"));
@@ -2544,6 +2569,94 @@ mod tests {
         let mut both = declaring_both(reader(0, 12, 40, 40), &["shade", "width"]);
         press(&mut both, &[Key::Char('d')]);
         assert!(both.wants_rerender());
+    }
+
+    /// A setting on the zoom keys the tests declare, as the documents' font size is: 50 to 400 in steps
+    /// of 10, said with `%`; a relayout setting.
+    const FONT: Setting = Setting {
+        name: "font",
+        named: &[],
+        numbers: Some(Numbers { least: 50, most: 400, step: 10, unit: "%" }),
+        default: Value::Number(100),
+        zero: Value::Number(100),
+        keys: Keys::Zoom,
+        help: "larger or smaller text",
+        missing: "only some have a font size",
+        effect: Effect::Relayout,
+        ..SHADE
+    };
+
+    /// `nav` in a build that declares [`SHADE`], [`WIDTH`] and [`FONT`], showing what has `has` of them,
+    /// the font's most in the room `most`.
+    fn declaring_font(nav: Nav, has: &[&'static str], most: Option<u32>) -> Nav {
+        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH, &FONT], values: std::cell::Cell::default(), changed: Default::default() });
+        let bounds = if has.contains(&FONT.name) { vec![(FONT.name, Bounds { named_at: None, most })] } else { Vec::new() };
+        Nav { settings, has: has.to_vec(), bounds, ..nav }
+    }
+
+    /// The font `nav` has, and what the status line says.
+    fn font(nav: &Nav) -> (Option<Value>, Option<&str>) {
+        (nav.settings.values.get().get(FONT.name), nav.message.as_deref())
+    }
+
+    /// On a document that has a setting on the zoom keys, `+`, `=`, `-` and `_` step it, said with its
+    /// unit, a count sets it (`0+` back to 100) and the room's most holds it (`the most here`); the zoom
+    /// doesn't move. In a list, on what hasn't the setting and with `--pages`, they are the zoom.
+    #[test]
+    fn the_zoom_keys_are_a_documents_font_size_where_it_has_one_and_the_zoom_elsewhere() {
+        let mut nav = declaring_font(reader(0, 12, 40, 40), &["font"], Some(170));
+        press(&mut nav, &[Key::Char('+')]);
+        assert_eq!((font(&nav), nav.zoom), ((Some(Value::Number(110)), Some("font 110%")), Zoom::Auto));
+        assert!(!nav.wants_rerender(), "laid out again, not drawn again");
+        press(&mut nav, &[Key::Char('='), Key::Char('_')]);
+        assert_eq!(font(&nav), (Some(Value::Number(110)), Some("font 110%")));
+        press(&mut nav, &[Key::Char('1'), Key::Char('5'), Key::Char('0'), Key::Char('+')]);
+        assert_eq!(font(&nav), (Some(Value::Number(150)), Some("font 150%")));
+        press(&mut nav, &[Key::Char('+'), Key::Char('+')]);
+        assert_eq!(font(&nav), (Some(Value::Number(170)), Some("font 170%")));
+        press(&mut nav, &[Key::Char('+')]);
+        assert_eq!(font(&nav), (Some(Value::Number(170)), Some("font 170%, the most here")));
+        press(&mut nav, &[Key::Char('3'), Key::Char('0'), Key::Char('0'), Key::Char('-')]);
+        assert_eq!(font(&nav), (Some(Value::Number(300)), Some("font 300% (170%)")), "typed past the most here: kept");
+        press(&mut nav, &[Key::Char('0'), Key::Char('+')]);
+        assert_eq!(font(&nav), (Some(Value::Number(100)), Some("font 100%")));
+        press(&mut nav, &[Key::Char('5'), Key::Char('+'), Key::Char('-')]);
+        assert_eq!(font(&nav), (Some(Value::Number(50)), Some("font 50%, the least")));
+        press(&mut nav, &[Key::Char('9'), Key::Char('0'), Key::Char('0'), Key::Char('+')]);
+        assert_eq!(font(&nav).1, Some("font 400% (170%), the most"));
+        assert_eq!(nav.zoom, Zoom::Auto, "the zoom never moved");
+        // The hint and `?` say so: one `+ -` line, the font's, and no second line for it.
+        nav.hint = true;
+        nav.message = None;
+        assert!(nav.status("a.md", 120, false).contains("+ - font ·"), "{:?}", nav.status("a.md", 120, false));
+        let lines = nav.help_lines();
+        let plus: Vec<&(String, &str)> = lines.iter().filter(|(keys, _)| keys.starts_with("+ -")).collect();
+        assert_eq!(plus.len(), 1, "{lines:?}");
+        assert_eq!((plus[0].0.as_str(), plus[0].1), ("+ -  150+", "larger or smaller text"));
+        assert!(!lines.iter().any(|(_, what)| *what == PAGE_HELP[6].1), "the zoom's line is gone");
+        // Elsewhere, the zoom: a list, a document without the setting, pages picked by `--pages`.
+        for mut nav in [declaring_font(list(9), &["font"], Some(170)), declaring_font(reader(4, 20, 40, 40), &["shade"], None)] {
+            nav.grid(2, 1, 8);
+            press(&mut nav, &[Key::Char('-')]);
+            assert_eq!((font(&nav).0, nav.zoom), (None, Zoom::PerRow(3)));
+            assert!(nav.help_lines().iter().any(|(_, what)| *what == PAGE_HELP[6].1 || *what == LIST_HELP[7].1));
+            assert!(!nav.help_lines().iter().any(|(_, what)| *what == FONT.help), "no line for the font elsewhere: {:?}", nav.help_lines());
+            nav.hint = true;
+            nav.message = None;
+            assert!(nav.status("a.pdf", 120, false).contains("+ - zoom ·"));
+        }
+        let mut picked = Nav { picked: true, ..declaring_font(reader(4, 20, 40, 40), &["font"], Some(170)) };
+        picked.grid(2, 1, 8);
+        press(&mut picked, &[Key::Char('+')]);
+        assert_eq!((font(&picked).0, picked.zoom), (None, Zoom::PerRow(1)));
+        // Said with its unit on the status line, when it isn't the default.
+        let mut values = Values::default();
+        assert!(values.set("font", Value::Number(120)));
+        let nav = declaring_font(reader(0, 3, 40, 40), &["font"], Some(170));
+        assert_eq!(laid_at(&nav.settings, &LaidAt(values), &nav.has, &nav.bounds), Some("font 120%".into()));
+        let mut values = Values::default();
+        assert!(values.set("font", Value::Number(100)));
+        assert_eq!(laid_at(&nav.settings, &LaidAt(values), &nav.has, &nav.bounds), None, "the default");
     }
 
     /// A source laid out at something, for the status line's sake.

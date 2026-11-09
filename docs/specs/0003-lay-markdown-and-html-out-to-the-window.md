@@ -288,7 +288,7 @@ Each task's commit passes the quality gates alone.
   `tests/it/view_pager.rs`, `tests/it/view_tmux.rs`. *Verify:*
   `cargo test -j 2 --bin clv view::relayout`, `cargo test -j 2 --test it view_`; manual: in kitty,
   resize the window: one layout once it settles, `laying out…` meanwhile.
-- [ ] **The font size** — `font`, `Numbers.unit`, `Keys::Zoom` and the keys test, `0+`, `--font`,
+- [x] **The font size** — `font`, `Numbers.unit`, `Keys::Zoom` and the keys test, `0+`, `--font`,
   its most in a small room, `?`, the hints and the status line; the cost at the font's extremes,
   printed and in the pager. *Files:* `src/source.rs`,
   `src/source/wordcraft.rs`, `src/view/pager.rs`, `src/view/mod.rs`, `tests/it/view_pager.rs`.

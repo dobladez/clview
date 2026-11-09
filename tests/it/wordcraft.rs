@@ -647,9 +647,14 @@ fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
         assert_eq!(drawn(&path, &["--width", "window"]), wide, "{name}");
         let out = view(&path, &["--protocol", "kitty", "--width", "300"]);
         assert!(!out.status.success() && text(&out.stderr).contains("--width: expected window or 20–200, got 300"), "{}", text(&out.stderr));
+        // The font size: the same page, larger text, so more pages; refused out of its range, with its unit.
+        let larger = drawn(&path, &["--font", "150"]);
+        assert!(shaped(&larger, window.w, window.h) && larger.len() > wide.len(), "{name}: {} pages at 150%, {} at 100%", larger.len(), wide.len());
+        let out = view(&path, &["--protocol", "kitty", "--font", "500"]);
+        assert!(!out.status.success() && text(&out.stderr).contains("--font: expected 50–400%, got 500"), "{}", text(&out.stderr));
     }
     let pdf = write(tmp("word-width", "a.pdf"), &crate::fixtures::letter("One", 1));
-    assert!(shaped(&drawn(&pdf, &["--width", "40"]), 612.0, 792.0));
+    assert!(shaped(&drawn(&pdf, &["--width", "40", "--font", "200"]), 612.0, 792.0));
 }
 
 /// A protected Word document opens with its password, says it needs one without, and refuses a

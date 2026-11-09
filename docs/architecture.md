@@ -146,12 +146,13 @@ documents' backend overrides, for the files that have no page of their own.
 
 A backend declares its settings the same way (`Backend::settings`): what the reader may change while
 its files are shown, each a `Setting` with its named values and what each says, its numbers
-(`Numbers`: least, most, step), its default, where a count of 0 sends it (`zero`: `0]` is `window`),
-`auto` by the terminal's background, its keys (`Keys::Cycle` or `Keys::Step`), its option, its line in
-`?`, its message for a file that hasn't it, and its `Effect`: `Redraw`, the pages drawn again with the
-value, or `Relayout`, the document laid out again at it ([Relayout](#relayout)). The documents'
-backend declares two, `paper` (`d`, `--theme`, a redraw) and `width` (`[` and `]`, `--width`, a
-relayout). Which a file has is its source's
+(`Numbers`: least, most, step, and the unit a number is said with, `%` or nothing), its default,
+where a count of 0 sends it (`zero`: `0]` is `window`, `0+` 100%), `auto` by the terminal's
+background, its keys (`Keys::Cycle`, `Keys::Step`, or `Keys::Zoom`, the viewer's own zoom keys, below),
+its option, its line in `?`, its message for a file that hasn't it, and its `Effect`: `Redraw`, the
+pages drawn again with the value, or `Relayout`, the document laid out again at it
+([Relayout](#relayout)). The documents' backend declares three, `paper` (`d`, `--theme`, a redraw),
+`width` (`[` and `]`, `--width`, a relayout) and `font` (`+` and `-`, `--font`, a relayout). Which a file has is its source's
 (`Source::settings`; a list's, `Joined`'s, those of any of its files). Where a setting's values sit
 for a file depends on the room it is shown in, so the source says (`Source::bounds`, a `Bounds`): where
 its named value sits among its numbers (`named_at`: `window`, at the characters a line of the
@@ -173,7 +174,15 @@ that holds a book, `window` sits at a page's characters and the steps go on past
 width), staying at the least or the most and saying so; a number typed before a numbered setting's
 key sets it, clamped to its range, used up whatever happens, and 0 to the setting's `zero`
 (`turned`). A number past the most here is kept, laid out at the most, and said with what it is laid
-out at, `width 120 (window)` (`said_in`): `]` from it says so, `[` goes to the last step under it.
+out at, `width 120 (window)`, `font 300% (170%)` (`said_in`): `]` from it says so, `[` goes to the last
+step under it. `Keys::Zoom` steps the same way on `+`/`=` and `-`/`_` (`Keys::up`), but those are the
+viewer's keys: `Nav::key` asks first (`zoom_setting`) whether this build declares a setting on them
+that the document shown has, shown by itself (not a list, not pages picked by `--pages`), and only then
+hands them to it; everywhere else they zoom as before, so the viewer's keys still come first but for
+these, on such a document. The one setting `?` doesn't list after the viewer's keys: `help_lines` shows
+one `+ -` line, the setting's in place of the zoom's where the keys go to it, and the status line's
+first reminder says `+ - font` there (`KEYS`, `OPENED_KEYS`). `a_settings_keys_are_its_own_in_every_backend`
+lets `Keys::Zoom` through, alone among the viewer's keys ([ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 The values are shared by every level (`pager::Settings`), and so is the change, so a level left before
 the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
@@ -237,12 +246,13 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`
   does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). They have
   the `width` setting too, which is the source's own (`Width`, from `--width` when it opens, `window`
-  or a number of characters), and are laid out for the room they are shown in (`Document::room`): the
-  page the two give (`page_in`, below) goes into wordcraft's conversion of the fragment
+  or a number of characters), and `font`, a percentage (`Document::font`, from `--font`), and are
+  laid out for the room they are shown in (`Document::room`): the page the three give (`page_in`,
+  below) goes into wordcraft's conversion of the fragment
   (`html::parse_with`, then `model::to_doc_in`), where tables take their widths from it.
-  `Source::laid_at` says the width and the room, exactly as given, and `Source::relayout` gives a job
-  that reads the bytes again from where they are kept (`Document::at`) and lays out at another width,
-  or for another room, as a new `Paged`
+  `Source::laid_at` says the width, the font size and the room, exactly as given, and `Source::relayout`
+  gives a job that reads the bytes again from where they are kept (`Document::at`) and lays out at
+  another width or font size, or for another room, as a new `Paged`
   ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md),
   [ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
@@ -288,16 +298,20 @@ change in the terminal, which changes it by more and the columns with it, does.
   `Slot` opens with it. Printing with no terminal lays out for the preview's room too. The `Opener`
   carries both rooms, and `Backend::open_at` takes the one that fits (`Opener::file`).
 - **The page** (`wordcraft.rs`'s `page_in`), in points such that a character of the code face
-  (`CODE_WIDTH`, `CODE_SIZE` × `CODE_ADVANCE` = 5.64 pt) is a cell of the room when the page is shown
-  as tall as it: a column is 5.64 pt and a row 5.64 × the cell's shape (`cell_points`, the shape taken
-  within reason, since a room is input). The page is always as tall as the room; at `window` as wide
-  as it, or half of it less the gap where each half holds `BOOK_LEAST` (60) characters of text, as an
-  open book; at a number, as wide as the characters take, never wider than the room. The margins are
-  `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and below; a page too small
-  for `LEAST_COLUMNS` × `LEAST_LINES` (20 × 10) of text loses a column of each side margin, then grows
-  past the room (and is shown smaller). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
-  answers for `width` alone: `named_at` the columns of the `window` page's text (`columns_of`), `most`
-  those of a page as wide as the room.
+  (`CODE_WIDTH`, `CODE_SIZE` × `CODE_ADVANCE` = 5.64 pt) is `font`/100 of a cell of the room when the
+  page is shown as tall as it: a cell of the room is 5.64 × 100/`font` pt wide and that × the cell's
+  shape tall (`cell_points`, the shape taken within reason, since a room is input), so at 200% the page
+  is half as large in points and its text twice as large on screen. The page is always as tall as the
+  room; at `window` as wide as it, or half of it less the gap where each half holds `BOOK_LEAST` (60)
+  characters of text, as an open book; at a number, as wide as the characters take, never wider than
+  the room. The margins are `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and
+  below, at the text's size whatever the font size (`margins`); a page too small for `LEAST_COLUMNS`
+  × `LEAST_LINES` (20 × 10) of text loses a column of each side margin, then grows past the room (and
+  is shown smaller than the font size asks). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
+  answers for `width`, at the font size the values want: `named_at` the columns of the `window` page's
+  text (`columns_of`), `most` those of a page as wide as the room; and for `font`: `most` the largest of
+  its steps at which the room holds a page without growing (`fits`, `font_most`), the least where none
+  does.
 - **Shown at its size.** `Source::largest_scale` is a default method answering `None`; the documents'
   backend answers, for Markdown and HTML, with the scale at which a page is as tall as its room
   (`rows × cell_h / page_h`). `fit::layout` takes it in `Size::largest` as it takes the 1.0 a natural

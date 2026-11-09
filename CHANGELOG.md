@@ -14,6 +14,11 @@ works today. A version's section becomes the notes of its
   previews on a portrait page. When the window changes size, the document is laid out again for it
   once the size has held for half a second, the status line saying `laying out…` meanwhile; inside
   tmux, the pane is the window.
+- Markdown and HTML have a font size: `+` and `-` make the text 10% larger or smaller, from 50% to
+  400%, laying the document out again on pages still the window's size, `150+` to 150%, `0+` back to
+  100%; `--font N` says where to start. On these files the keys are the font size, not the zoom, which
+  a page the screen's size has no use for; everywhere else they zoom as before, and `?` says which. The
+  status line shows the size when it isn't 100%.
 - Markdown and HTML reflow to a width: `[` and `]` lay the document out again 4 characters a line
   narrower or wider, `72]` to 72, `0]` back to the window's, from 20 up to the longest line the window
   holds, with `window` among the steps; `--width window|N` says where to start, and a width the window

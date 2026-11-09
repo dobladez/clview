@@ -121,3 +121,30 @@ surprises, and what a later reader would want.
   was in `relayout.rs` compiled the reverted hold, which never adopted a room and spun the loop
   (seconds of system time). Rebuilt from the restored file, the numbers above.
 
+## Task 3: the font size
+
+- **The font scales the room's cell, not the margins.** At `font` percent a cell of the room is
+  `CODE_WIDTH` × 100/`font` points (`cell_points`), so the page is smaller in points and its text larger
+  on screen, while a character of code, the margins (two columns, a row: `margins`) and the least a
+  page holds stay at the text's size. So `columns_of` is the text width over `CODE_WIDTH`, whatever
+  the room.
+- **The font's most in a room** is the largest of its steps at which the room holds 20 × 10 of text
+  without the page growing (`fits`, `font_most`): 170% at 80 × 24, 370% at 200 × 51, the least (50%)
+  in a room that holds none. An 80-column window at 50% holds two pages of 74 characters, so `window`
+  is a book there, which a test first got wrong.
+- **`Keys::up`** says which way a key steps, for `Step` and `Zoom` alike, so `turned` has one arm for
+  both. `Nav::zoom_setting` is the one check (declared with `Keys::Zoom`, the document has it, not a
+  list, not `--pages`); `key`'s `+`/`-` arms ask it first, `help_lines` puts the setting's line where the
+  zoom's was and lists it nowhere else, and the status line's first reminder says `+ - font` from it.
+  `wrong_keys` lets `Keys::Zoom` through alone; the same keys as a `Step` are still refused.
+- **Not in *Files*:** `src/view/relayout.rs` (its test's `Numbers` literal), `docs/adr/0021-…` and
+  `docs/adr/README.md` (ADR-0021's order set aside for these keys), `docs/adr/0023-…`, `CHANGELOG.md`,
+  `docs/usage.md`, `docs/architecture.md`, `tests/it/wordcraft.rs` (`--font` printed and refused).
+- **A flaky test, not this spec's:** `source::later::tests::a_job_runs_first_and_its_panic_is_caught`
+  fails now and then at "the job went before the files waiting" (the four 60 ms opens finish together,
+  and a fifth may begin before the job's result is polled); it fails on `main`'s own test binary too,
+  one run in five here. Left as it is: a discovery for the owner.
+- **Tests seen failing**, by copying `pager.rs`, `wordcraft.rs`, `source.rs` and `mod.rs` aside,
+  reverting (`zoom_setting` never a setting's, the unit unsaid, the page ignoring the font, `font_most`
+  the setting's own, the keys test refusing `Keys::Zoom`, the option's message without the unit),
+  running, restoring and `cmp`: see the run recorded below.

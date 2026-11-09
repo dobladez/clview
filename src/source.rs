@@ -223,12 +223,13 @@ pub(crate) struct Named {
 }
 
 /// The numbers a [`Setting`] takes: from `least` to `most`, its keys stepping to the multiples of
-/// `step`.
+/// `step`, each said with `unit` after it (`%`; nothing for a count of characters).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Numbers {
     pub(crate) least: u32,
     pub(crate) most: u32,
     pub(crate) step: u32,
+    pub(crate) unit: &'static str,
 }
 
 /// Which of a [`Setting`]'s named values it starts at by the terminal's background.
@@ -248,6 +249,13 @@ pub(crate) enum Keys {
     /// ([`Bounds::named_at`]).
     #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting with numbers"))]
     Step(char, char),
+    /// The viewer's zoom keys, `+` and `=` up, `-` and `_` down, stepping among the numbers as
+    /// [`Keys::Step`] does, with a count setting the number: a font size. They go to the setting only
+    /// on a document that has it, shown by itself without `--pages`; everywhere else they zoom, as
+    /// they always did. The one place a setting takes the viewer's keys
+    /// ([ADR-0023](../docs/adr/0023-the-window-is-the-page-of-markdown-and-html.md)). Named by the
+    /// viewer, which asks a setting whether it is on these keys, so live in every build.
+    Zoom,
 }
 
 impl Keys {
@@ -256,6 +264,16 @@ impl Keys {
         match self {
             Self::Cycle(key) => vec![key],
             Self::Step(down, up) => vec![down, up],
+            Self::Zoom => vec!['-', '_', '+', '='],
+        }
+    }
+
+    /// Whether `key` steps up (`true`), down (`false`), or isn't one of these keys.
+    pub(crate) fn up(self, key: char) -> Option<bool> {
+        match self {
+            Self::Cycle(_) => None,
+            Self::Step(down, up) => (key == up).then_some(true).or((key == down).then_some(false)),
+            Self::Zoom => matches!(key, '+' | '=').then_some(true).or(matches!(key, '-' | '_').then_some(false)),
         }
     }
 }
@@ -903,7 +921,8 @@ pub(crate) mod tests {
                     None => keys.push((setting.name, setting.keys)),
                 }
                 for key in setting.keys.chars() {
-                    if crate::view::VIEWER_KEYS.contains(key) {
+                    // The zoom keys alone may be a setting's: they are the viewer's where the setting isn't.
+                    if crate::view::VIEWER_KEYS.contains(key) && setting.keys != Keys::Zoom {
                         wrong.push(format!("{}: {key:?}, {}'s key, is the viewer's", backend.name(), setting.name));
                     }
                     match seen.iter().find(|(seen, _)| *seen == key) {
@@ -931,8 +950,14 @@ pub(crate) mod tests {
         static QUITS: Declaring = Declaring(&[cycled("paper", 'q', "--theme")]);
         static OTHER: Declaring = Declaring(&[cycled("tint", 'd', "--tint")]);
         static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("paper", 'd', "--theme") }]);
+        static ZOOMS: Declaring = Declaring(&[Setting { keys: Keys::Zoom, ..cycled("font", '+', "--font") }]);
+        static PLUS: Declaring = Declaring(&[Setting { keys: Keys::Step('-', '+'), ..cycled("font", '+', "--font") }]);
         assert!(wrong_keys(&[&PAPER, &PAPER]).is_empty(), "one setting in two backends");
         assert_eq!(wrong_keys(&[&QUITS]).len(), 1, "the viewer's");
+        assert!(wrong_keys(&[&PAPER, &ZOOMS]).is_empty(), "the zoom keys, as Keys::Zoom alone");
+        assert_eq!(wrong_keys(&[&PLUS]).len(), 2, "the zoom keys as a Step are the viewer's");
+        assert_eq!((Keys::Zoom.up('+'), Keys::Zoom.up('='), Keys::Zoom.up('_'), Keys::Zoom.up('x')), (Some(true), Some(true), Some(false), None));
+        assert_eq!((Keys::Step('[', ']').up(']'), Keys::Step('[', ']').up('['), Keys::Cycle('d').up('d')), (Some(true), Some(false), None));
         assert_eq!(wrong_keys(&[&PAPER, &OTHER]).len(), 1, "two settings");
         assert_eq!(wrong_keys(&[&PAPER, &STEPS]).len(), 1, "two sets of keys");
     }

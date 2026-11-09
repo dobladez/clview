@@ -187,7 +187,7 @@ mod tests {
     static WIDTH: Setting = Setting {
         name: "width",
         named: &[Named { name: "window", says: "width window" }],
-        numbers: Some(Numbers { least: 20, most: 200, step: 4 }),
+        numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }),
         default: Value::Named("window"),
         zero: Value::Named("window"),
         auto: None,

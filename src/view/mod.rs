@@ -363,7 +363,7 @@ fn started(setting: &'static Setting, given: &str) -> Result<Start, String> {
     }
     let auto = setting.auto.map(|_| String::from("auto"));
     let named = setting.named.iter().map(|named| named.name.to_owned());
-    let range = setting.numbers.map(|numbers| format!("{}–{}", numbers.least, numbers.most));
+    let range = setting.numbers.map(|numbers| format!("{}–{}{}", numbers.least, numbers.most, numbers.unit));
     let takes: Vec<String> = auto.into_iter().chain(named).chain(range).collect();
     let takes = match takes.split_last() {
         Some((last, [])) => last.clone(),
@@ -1546,7 +1546,7 @@ mod tests {
     static PAPER: Setting = crate::source::tests::cycled("paper", 'd', "--theme");
     /// One with numbers, and no `auto`.
     static WIDTH: Setting = Setting {
-        numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
+        numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4, unit: "" }),
         auto: None,
         named: &[crate::source::Named { name: "page", says: "as laid out" }],
         default: Value::Named("page"),

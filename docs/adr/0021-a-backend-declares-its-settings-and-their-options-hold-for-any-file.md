@@ -1,6 +1,7 @@
 # ADR-0021: A backend declares its settings, and their options hold for any file
 
-- **Status:** Accepted
+- **Status:** Accepted; the viewer's keys coming first is set aside for the zoom keys alone, on a
+  document with a font size, by [ADR-0023](0023-the-window-is-the-page-of-markdown-and-html.md)
 - **Date:** 2026-11-07
 
 ## Context

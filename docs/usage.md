@@ -42,6 +42,7 @@ clv --password PW secret.pdf
 | `--theme light`, `--theme dark` | Markdown and HTML that way, whatever the terminal |
 | `--width window` | Markdown and HTML on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
 | `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
+| `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
@@ -69,7 +70,9 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 ## Keys
 
 `?` lists them in the pager too, a backend's after the viewer's: `d` is the documents', and does
-nothing in a `clv` built without them.
+nothing in a `clv` built without them. `+` and `-` are listed once, as what they do where you are:
+the font size on a Markdown or HTML file, the zoom elsewhere, and the first status line's reminder
+says which (`+ - font`, `+ - zoom`).
 
 In a file's pages:
 
@@ -84,8 +87,8 @@ In a file's pages:
 | `g`, `Home` | first page |
 | `G`, `End` | last page |
 | a number, then `Enter` or `g` | that page |
-| `-`, `_` | zoom out: one more page to a row |
-| `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window |
+| `-`, `_` | zoom out: one more page to a row. On a Markdown or HTML file, its text 10% smaller ([Documents](#documents)) |
+| `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
@@ -157,8 +160,9 @@ signal (`kill`, a closed SSH session) can leave the terminal in raw mode; `reset
 
 The status line keeps its right side in place whatever you do: where you are (`page 3/12`,
 `pages 3–4/12`), padded to the widest it gets in the document, what a Markdown or HTML file is laid
-out to when it isn't the window's width (`width 72`, with `…` after the width it is being laid out
-to again, and `width 120 (window)` for a width the window doesn't hold), the zoom, and `? help`, with
+out to when it isn't the window's width or its text isn't at 100% (`width 72`, `font 120%`, with `…`
+after the value it is being laid out to again, and `width 120 (window)` for a width the window doesn't
+hold), the zoom, and `? help`, with
 `…` before them while the pages on screen render. A narrow window drops the width, then the zoom,
 then `? help`. The
 name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
@@ -463,6 +467,21 @@ report its cells' size in pixels, the first layout takes the cell assumed, and t
 out once more as the pager starts, once `clv` has asked the terminal, where the cell it says makes
 another page.
 
+**The size of the text.** `+` and `-` make a Markdown or HTML file's text larger or smaller, in steps
+of 10% from 50% to 400%, laying the document out again: larger text puts fewer characters on a line
+and fewer lines on a page, so there are more pages, each still the window's size. At 100%, the
+default, a character of the code face is a cell wide. A number, then `+` or `-`, goes straight to it
+(`150+`), `0+` back to 100%, and `--font 150` says where to start. Scaling the picture, what `+` and
+`-` do elsewhere, has no use on a page the screen's size, so on these files they are the font size;
+on a PDF, a Word document, in a list, and with `--pages`, they zoom as they always did, and `?` says
+which where you are. A small window can't reach the larger sizes, since a page holds 20 characters a
+line and 10 lines at least: `+` stops there and says so (`font 170%, the most here`), and a size the
+window can't hold (given, or left so by a smaller window) is kept, laid out at the most it holds, and
+said as `font 300% (170%)`. The status line shows the size while it isn't 100% (`font 120%`). The
+font size is a most, not a promise: two pages share a row where each keeps 80% of its size alone, so a
+width between about half and five eighths of the window shows two pages a little smaller than the
+size asked, while `window` never does.
+
 **A width of your own.** `]` and `[` lay a Markdown or HTML file out again to lines 4 characters
 wider or narrower, counted in the code face, from 20 up to the longest line the window holds, with
 `window` among the steps where it sits: in a window of 100 columns, 92, 96, `window`; in one wide
@@ -483,9 +502,9 @@ layout that fails keeps the pages as they are, says why, and leaves the width at
 
 Only the document on screen reflows. A list's tiles are previews, laid out once on a portrait page
 of 60 × 40 cells whatever the window, since tiles are square; `[` and `]` say so there, and a
-document opened from the list is laid out for the window, at the width wanted then, as it opens.
-With `--pages`, which picks pages as laid out, the keys say so and change nothing. A Word document,
-an RTF or a PDF has a page of its own, and the keys say so on one
+document opened from the list is laid out for the window, at the width and font size wanted then, as
+it opens. With `--pages`, which picks pages as laid out, `[` and `]` say so and change nothing. A
+Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on one
 ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md),
 [ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 
@@ -658,7 +677,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
 | What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
-| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
+| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |
