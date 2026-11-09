@@ -237,7 +237,10 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   say it, and on its paragraphs and runs where they can't
   ([ADR-0016](adr/0016-how-markdown-and-html-look.md)).
   The pictures they refer to are laid out as stand-ins, PNGs saying only the size to show one at, from
-  `Source::size`, so neither reading nor laying out reads a picture's pixels. A page's own are drawn
+  `Source::size`, so neither reading nor laying out reads a picture's pixels. wordcraft's reader holds
+  a picture to a 468-point column whatever the page, and to its stand-in's whole pixels, so `fitted`
+  gives one the document gives no size to the size it was measured for (`Pictures::shown`), and
+  shrinks any other to the column and the page. A page's own are drawn
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and
   replace their stand-ins in the document's `media`, under a lock that pages rendering share
   ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).

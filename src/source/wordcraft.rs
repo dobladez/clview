@@ -1071,7 +1071,16 @@ fn marked_up(
     // what an import dropped afresh, and is the crate's own.)
     let flow = wordcraft_formats::html::parse_with(&as_html(bytes), &|source: &str| pictures.measured(source, fit));
     let mut document = wordcraft_formats::model::to_doc_in(&flow, page);
-    fit_to_the_page(&mut document.body, fit.1);
+    let measured: HashMap<&str, Measured> = document
+        .media
+        .iter()
+        .filter_map(|(key, held)| {
+            let shown = pictures.shown(held)?;
+            let read = wordcraft_formats::model::make_img(held.clone(), None, None, "")?;
+            Some((key.as_str(), Measured { read: (read.w, read.h), shown }))
+        })
+        .collect();
+    fitted(&mut document.body, &measured, fit);
     styled(&mut document);
     let body = StoryRef::Body;
     let paragraphs = document.para_paths(body);
@@ -1256,22 +1265,41 @@ fn styled_para(para: &mut wordcraft_doc::Paragraph, next_list: Option<u32>, afte
     }
 }
 
-/// Pictures taller than `height` shrunk to it, keeping their shape: laid out as they are, they would
-/// be cut off at the foot of the page. The width of one is already within the column, and the size of a
-/// picture referred to within both: this is for those a document gives a size to, or holds itself.
-fn fit_to_the_page(blocks: &mut [Arc<Block>], height: f32) {
+/// A picture a document refers to, as [`Pictures::measured`] sized it: what wordcraft's reader makes
+/// of its stand-in when the document gives it no size, and the size, in points, it was measured to be
+/// shown at.
+struct Measured {
+    read: (f32, f32),
+    shown: (f32, f32),
+}
+
+/// Every picture within the column and the page, `fit` (the text's width and height), keeping its shape.
+/// wordcraft's reader holds a picture to a US Letter column, 468 points, whatever the page, and takes
+/// its size from its stand-in's whole pixels: one the document gives no size to gets back the size it
+/// was measured for (`measured`, by key), which is within both already. Any other, one the document
+/// gives a size to or holds itself, is shrunk to fit: laid out as it is, it would be cut off at the
+/// side of the column or the foot of the page.
+fn fitted(blocks: &mut [Arc<Block>], measured: &HashMap<&str, Measured>, fit: (f32, f32)) {
     for block in blocks {
         match Arc::make_mut(block) {
             Block::Para(para) => {
                 let mut changed = false;
                 for object in &mut para.objects {
-                    if let InlineObject::Image { w, h, float, .. } = object
-                        && float.wrap == Wrap::Inline
-                        && h.is_finite()
-                        && *h > height
-                    {
-                        *w = (*w * height / *h).max(1.0);
-                        *h = height;
+                    let InlineObject::Image { media, w, h, float, .. } = object else { continue };
+                    if float.wrap != Wrap::Inline {
+                        continue;
+                    }
+                    let (width, height) = match measured.get(media.as_str()) {
+                        Some(picture) if (picture.read.0 - *w).abs() < 0.01 && (picture.read.1 - *h).abs() < 0.01 => picture.shown,
+                        _ => (*w, *h),
+                    };
+                    let shrink = (fit.0 / width).min(fit.1 / height).min(1.0);
+                    if !(shrink.is_finite() && shrink > 0.0) {
+                        continue;
+                    }
+                    let size = ((width * shrink).max(1.0), (height * shrink).max(1.0));
+                    if size != (*w, *h) {
+                        (*w, *h) = size;
                         changed = true;
                     }
                 }
@@ -1281,7 +1309,7 @@ fn fit_to_the_page(blocks: &mut [Arc<Block>], height: f32) {
             }
             Block::Table(table) => {
                 for cell in table.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
-                    fit_to_the_page(&mut cell.blocks, height);
+                    fitted(&mut cell.blocks, measured, fit);
                 }
             }
         }
@@ -1825,6 +1853,38 @@ mod tests {
         for narrow in [markdown(table.as_bytes(), &nowhere, narrow()), html(cells.as_bytes(), &nowhere, narrow())] {
             assert!(near(grid(&narrow.unwrap()), 40.0 * CODE_WIDTH));
         }
+    }
+
+    /// A picture is shown at its own size, or smaller to fit the column, exactly and whatever the
+    /// column: past wordcraft's 468 points, and in whole points or not; and one the document gives a
+    /// size to is fitted to the column too.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_picture_fits_the_column_however_wide() {
+        let dir = std::env::temp_dir().join(format!("clview-word-column-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png =
+            |w: u32, h: u32| crate::encode::encode_png(w, h, &[200, 0, 0, 255].repeat((w * h) as usize), crate::encode::PngEffort::Fast).unwrap();
+        std::fs::write(dir.join("wide.png"), png(3000, 300)).unwrap();
+        std::fs::write(dir.join("small.png"), png(40, 20)).unwrap();
+        let pictures = Pictures::beside(Some(&dir));
+        let sizes = |document: wordcraft_doc::Document| -> Vec<(f32, f32)> {
+            let objects = document.body.iter().filter_map(|block| match &**block {
+                Block::Para(para) => Some(para.objects.clone()),
+                Block::Table(_) => None,
+            });
+            objects.flatten().filter_map(|object| if let InlineObject::Image { w, h, .. } = object { Some((w, h)) } else { None }).collect()
+        };
+        let page = page_in(Width::Window, &room(120, 40, 10.0, 20.0), 100, MARGIN_DEFAULT);
+        let column = page.text_width();
+        assert!(column > 468.0, "{column}");
+        let shown = sizes(markdown(b"![two](wide.png)", &pictures, page).unwrap());
+        assert!(matches!(shown[..], [(w, h)] if near(w, column) && near(h, column / 10.0)), "to the column: {shown:?}, not {column}");
+
+        let page = page_in(Width::Columns(40), &room(120, 40, 10.0, 20.0), 100, MARGIN_DEFAULT);
+        let column = page.text_width();
+        let shown = sizes(html(b"<p><img src=\"small.png\" width=\"400\"></p>", &pictures, page).unwrap());
+        assert!(matches!(shown[..], [(w, h)] if near(w, column) && near(h, column / 2.0)), "given a size: {shown:?}, not {column}");
     }
 
     /// A page's paragraphs are kept, by their order in the document, so that the one at a place on a page

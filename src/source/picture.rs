@@ -90,8 +90,14 @@ impl<'a> Pictures<'a> {
         let shown = shown(size, fit)?;
         let mut promises = self.promises.borrow_mut();
         let stand_in = Arc::new(stand_in(shown, promises.len()).ok()?);
-        promises.insert(stand_in.clone(), Promise { path: path.to_owned(), scale: scale(size, natural, shown), stand_in: stand_in.clone() });
+        promises.insert(stand_in.clone(), Promise { path: path.to_owned(), scale: scale(size, natural, shown), shown, stand_in: stand_in.clone() });
         Some(stand_in)
+    }
+
+    /// The size in points `held`, a stand-in, was measured to be shown at, if it is one: exactly, where
+    /// its own pixels say it only to the nearest one.
+    pub(super) fn shown(&self, held: &Png) -> Option<(f32, f32)> {
+        self.promises.borrow().get(held).map(|promise| promise.shown)
     }
 
     /// These pictures as a document that was read holds them: `media`, by key, what it holds of
@@ -109,6 +115,8 @@ struct Promise {
     path: String,
     /// What to draw it at.
     scale: f32,
+    /// The size in points to show it at.
+    shown: (f32, f32),
     /// What a document held until now, and holds again once it lets go of the picture.
     stand_in: Png,
 }
@@ -467,7 +475,7 @@ mod tests {
         std::fs::write(&path, png).unwrap();
         let promise = |key: &&str| {
             let stand_in = Arc::new(key.as_bytes().to_vec());
-            (key.to_string(), Promise { path: path.to_str().unwrap().to_owned(), scale: 1.0, stand_in })
+            (key.to_string(), Promise { path: path.to_str().unwrap().to_owned(), scale: 1.0, shown: (1.0, 1.0), stand_in })
         };
         Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, max_held, held: Mutex::default() }
     }
