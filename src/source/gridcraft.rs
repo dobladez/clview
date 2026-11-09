@@ -26,7 +26,8 @@ use crate::args::{OptionSpec, Parsed};
 /// Spreadsheets, printed by gridcraft.
 pub(super) struct Gridcraft;
 
-const OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected workbook" }];
+const OPTIONS: &[OptionSpec] =
+    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected workbook", alias: None }];
 
 impl Backend for Gridcraft {
     fn name(&self) -> &'static str {

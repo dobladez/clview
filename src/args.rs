@@ -1,17 +1,19 @@
 //! Command-line options and page lists.
 
-/// An option: its `name` (`--zoom`), the `short` one it has too (`-r`), what its value looks like
-/// (`None` for one that takes none) and what it does, as `--help` shows them.
+/// An option: its `name` (`--per-row`), the `short` one it has too (`-r`), what its value looks like
+/// (`None` for one that takes none) and what it does, as `--help` shows them; and the `alias` it is
+/// still taken by, an old name `--help` doesn't show (`--zoom`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
     pub(crate) short: Option<&'static str>,
     pub(crate) value: Option<&'static str>,
     pub(crate) help: &'static str,
+    pub(crate) alias: Option<&'static str>,
 }
 
 impl OptionSpec {
-    /// The option as `--help` lists it: `--zoom auto|width|N`, `-r, --recurse`.
+    /// The option as `--help` lists it: `--per-row auto|width|1-8`, `-r, --recurse`; never its alias.
     pub(crate) fn shown(&self) -> String {
         let name = match self.short {
             Some(short) => format!("{short}, {}", self.name),
@@ -31,28 +33,58 @@ pub(crate) struct Parsed<'a> {
     pub(crate) operands: Vec<&'a str>,
     /// Each option given, in order, with its value if it takes one.
     given: Vec<(&'static str, Option<&'a str>)>,
+    /// The options given by their alias, by their name: `--zoom` for `--per-row`.
+    aliased: Vec<&'static str>,
 }
 
 impl<'a> Parsed<'a> {
     /// Refuses an option not in `specs`, and one left without its value. An option that takes a
     /// value takes the next argument, whatever it is: a password can be anything. An argument
-    /// that starts with `-` is an option, but for `-` alone; `./-file` names a file that does.
+    /// that starts with `-` is an option, but for `-` alone; `./-file` names a file that does. An
+    /// option given by its alias is that option, and given by both its name and its alias, refused.
     pub(crate) fn parse(args: &'a [String], specs: &[OptionSpec]) -> Result<Self, String> {
         let mut parsed = Self::default();
         let mut rest = args.iter();
+        let mut by_name = Vec::new();
         while let Some(arg) = rest.next() {
             if !arg.starts_with('-') || arg == "-" {
                 parsed.operands.push(arg);
                 continue;
             }
-            let spec = specs.iter().find(|spec| spec.name == arg || spec.short == Some(arg)).ok_or_else(|| format!("unknown option {arg}"))?;
+            let spec = specs
+                .iter()
+                .find(|spec| spec.name == arg || spec.short == Some(arg) || spec.alias == Some(arg))
+                .ok_or_else(|| format!("unknown option {arg}"))?;
             let value = match spec.value {
                 Some(_) => Some(rest.next().ok_or_else(|| format!("{arg} needs a value"))?.as_str()),
                 None => None,
             };
+            if let Some(alias) = spec.alias {
+                let (by, other) = if alias == arg { (&mut parsed.aliased, &by_name) } else { (&mut by_name, &parsed.aliased) };
+                if other.contains(&spec.name) {
+                    return Err(format!("{} and {alias} are one option: give one of them", spec.name));
+                }
+                if !by.contains(&spec.name) {
+                    by.push(spec.name);
+                }
+            }
             parsed.given.push((spec.name, value));
         }
         Ok(parsed)
+    }
+
+    /// How option `name` was given, the first time: by its name, or by its alias (`--zoom`).
+    pub(crate) fn typed(&self, name: &'static str, specs: &[OptionSpec]) -> &'static str {
+        let alias = specs.iter().find(|spec| spec.name == name).and_then(|spec| spec.alias);
+        match alias {
+            Some(alias) if self.aliased.contains(&name) => alias,
+            _ => name,
+        }
+    }
+
+    /// The options given by an alias, by their name.
+    pub(crate) fn aliased(&self) -> &[&'static str] {
+        &self.aliased
     }
 
     /// The value option `name` was given, the first time, if it was.
@@ -82,7 +114,7 @@ pub(crate) struct OwnedOptions(Vec<(&'static str, Option<String>)>);
 impl OwnedOptions {
     /// As they were read, without the files.
     pub(crate) fn parsed(&self) -> Parsed<'_> {
-        Parsed { operands: Vec::new(), given: self.0.iter().map(|(name, value)| (*name, value.as_deref())).collect() }
+        Parsed { operands: Vec::new(), given: self.0.iter().map(|(name, value)| (*name, value.as_deref())).collect(), aliased: Vec::new() }
     }
 }
 
@@ -142,9 +174,9 @@ mod tests {
     #[test]
     fn unknown_options_are_refused_and_values_taken_whatever_they_are() {
         let specs = [
-            OptionSpec { name: "--password", short: None, value: Some("PW"), help: "" },
-            OptionSpec { name: "--pager", short: None, value: None, help: "" },
-            OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "" },
+            OptionSpec { name: "--password", short: None, value: Some("PW"), help: "", alias: None },
+            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None },
+            OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "", alias: None },
         ];
         let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         let given = args(&["a.pdf", "--pager", "--password", "--anything", "b.pdf"]);
@@ -165,5 +197,31 @@ mod tests {
         assert_eq!(parsed.operands, ["dir", "-"], "`-` alone is no option");
         assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &specs).unwrap_err(), "unknown option -x");
         assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &specs).unwrap().value("--password"), Some("-r"));
+    }
+
+    /// An option is taken by its alias too, as itself, the alias remembered to warn of; given by both,
+    /// it is refused. `--help` never shows the alias.
+    #[test]
+    fn an_option_is_taken_by_its_alias_and_refused_by_both() {
+        let specs = [
+            OptionSpec { name: "--per-row", short: None, value: Some("N"), help: "", alias: Some("--zoom") },
+            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None },
+        ];
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        let given = args(&["a.pdf", "--zoom", "3", "--pager"]);
+        let parsed = Parsed::parse(&given, &specs).unwrap();
+        assert_eq!((parsed.value("--per-row"), parsed.value("--zoom")), (Some("3"), None), "the alias is the option");
+        assert_eq!((parsed.aliased(), parsed.typed("--per-row", &specs)), (&["--per-row"][..], "--zoom"));
+        let given = args(&["--per-row", "3"]);
+        let parsed = Parsed::parse(&given, &specs).unwrap();
+        assert_eq!((parsed.aliased().len(), parsed.typed("--per-row", &specs), parsed.typed("--pager", &specs)), (0, "--per-row", "--pager"));
+        for both in [["--zoom", "2", "--per-row", "3"], ["--per-row", "2", "--zoom", "3"]] {
+            assert_eq!(Parsed::parse(&args(&both), &specs).unwrap_err(), "--per-row and --zoom are one option: give one of them", "{both:?}");
+        }
+        // Twice by its alias is as twice by its name: the first holds.
+        let given = args(&["--zoom", "2", "--zoom", "3"]);
+        let parsed = Parsed::parse(&given, &specs).unwrap();
+        assert_eq!((parsed.value("--per-row"), parsed.aliased()), (Some("2"), &["--per-row"][..]));
+        assert_eq!(specs[0].shown(), "--per-row N");
     }
 }

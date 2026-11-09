@@ -722,7 +722,7 @@ fn inside_tmux_the_pager_draws_text_cells_in_the_pane() {
             std::thread::sleep(Duration::from_millis(50));
         }
     };
-    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol blocks --zoom 1", pdf.display()), "Enter"]);
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol blocks --per-row 1", pdf.display()), "Enter"]);
     until("page 1", &|c| c.contains("page 1/2") && c.contains("\x1b[48;"));
     server.tmux(&["send-keys", "-t", &pane, "n"]);
     until("page 2", &|c| c.contains("page 2/2") && c.contains("\x1b[48;"));

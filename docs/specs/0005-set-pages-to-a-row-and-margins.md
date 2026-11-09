@@ -192,7 +192,7 @@ a margin setting on `{` and `}`.
 
 ## Tasks
 
-- [ ] **`--per-row`, and `,` `.` as the zoom** — the option and its `--zoom` alias with the warning,
+- [x] **`--per-row`, and `,` `.` as the zoom** — the option and its `--zoom` alias with the warning,
   the keys on every file, in lists (stopping at one tile) and with `--pages`, `max_per_row` the
   limit, `?`, hints, status line, docs. Every `OptionSpec` literal updated here. *Files:*
   `src/args.rs`, `src/view/mod.rs`, `src/view/fit.rs`, `src/view/pager.rs`, the backends'

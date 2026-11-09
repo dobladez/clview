@@ -142,8 +142,8 @@ fn each_page_is_a_png_shown_at_the_cursor() {
 #[test]
 fn zoom_width_is_wider_than_a_page_to_a_row() {
     let pdf = fixture("fit", 1);
-    let page = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "1"]).stdout);
-    let width = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "width"]).stdout);
+    let page = images(&view(&pdf, &["--protocol", "kitty", "--per-row", "1"]).stdout);
+    let width = images(&view(&pdf, &["--protocol", "kitty", "--per-row", "width"]).stdout);
     let (cols_page, cols_width) = (key(&page[0].keys, "c"), key(&width[0].keys, "c"));
     // A portrait page fits the height of any window wider than it is tall in cells.
     assert!(cols_width >= cols_page, "{cols_width} < {cols_page}");
@@ -152,10 +152,10 @@ fn zoom_width_is_wider_than_a_page_to_a_row() {
     // taller than the window scrolls by.
     assert!(width[0].keys.starts_with("a=T,f=100,t=d,q=2,c="), "{}", width[0].keys);
     // Auto prints one page as one to a row does.
-    let auto = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "auto"]).stdout);
+    let auto = images(&view(&pdf, &["--protocol", "kitty", "--per-row", "auto"]).stdout);
     assert_eq!((key(&auto[0].keys, "c"), png_size(&auto[0].png)), (cols_page, png_size(&page[0].png)));
     // Three to a row is a size, alone or not: a page in a third of the 80 columns, 25 of them.
-    let third = images(&view(&pdf, &["--protocol", "kitty", "--zoom", "3"]).stdout);
+    let third = images(&view(&pdf, &["--protocol", "kitty", "--per-row", "3"]).stdout);
     assert_eq!(key(&third[0].keys, "c"), 25, "{}", third[0].keys);
     assert!(png_size(&third[0].png).0 < png_size(&page[0].png).0);
 }
@@ -179,12 +179,37 @@ fn page_numbers_are_checked_before_anything_is_drawn() {
     assert!(text(&out.stderr).contains("no page 3"), "{}", text(&out.stderr));
 }
 
+/// `--zoom` is `--per-row`'s old name: still taken, with the same values, and a warning once, before
+/// anything else; given with `--per-row`, refused; its errors name it as typed.
+#[test]
+fn zoom_is_still_taken_for_per_row_and_warns() {
+    let pdf = fixture("zoom-alias", 3);
+    let old = view(&pdf, &["--protocol", "kitty", "--zoom", "3"]);
+    let new = view(&pdf, &["--protocol", "kitty", "--per-row", "3"]);
+    assert!(old.status.success() && new.status.success(), "{}", text(&old.stderr));
+    assert_eq!(old.stdout, new.stdout, "the same pages, three to a row");
+    assert_eq!(text(&old.stderr), "warning: --zoom is now --per-row; --zoom will go in a later release\n");
+    assert_eq!(text(&new.stderr), "", "no warning by its own name");
+    // Before anything else: an error after it, the warning still first.
+    let out = Command::new(BIN).args(["--zoom", "2"]).output().unwrap();
+    assert_eq!(text(&out.stderr), "warning: --zoom is now --per-row; --zoom will go in a later release\nclv: missing file\n");
+    // Both: refused, before anything is drawn.
+    let both = view(&pdf, &["--protocol", "kitty", "--zoom", "2", "--per-row", "3"]);
+    assert!(!both.status.success() && both.stdout.is_empty());
+    assert!(text(&both.stderr).contains("--per-row and --zoom are one option: give one of them"), "{}", text(&both.stderr));
+    // An error names the option as it was typed.
+    for (option, said) in [("--zoom", "--zoom \"9\": use auto"), ("--per-row", "--per-row \"9\": use auto")] {
+        let out = view(&pdf, &["--protocol", "kitty", option, "9"]);
+        assert!(!out.status.success() && text(&out.stderr).contains(said), "{option}: {}", text(&out.stderr));
+    }
+}
+
 #[test]
 fn bad_arguments_say_what_is_allowed() {
     let pdf = fixture("args", 1);
     for (args, expected) in [
-        (&["--zoom", "sideways"][..], "use auto, width or a number of pages per row (1–8)"),
-        (&["--zoom", "9"], "use auto, width or a number of pages per row (1–8)"),
+        (&["--per-row", "sideways"][..], "use auto, width or a number of pages per row (1–8)"),
+        (&["--per-row", "9"], "use auto, width or a number of pages per row (1–8)"),
         (&["--protocol", "sixel"], "use auto, kitty, blocks or ascii"),
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),
@@ -307,7 +332,7 @@ fn inside_tmux_pages_go_through_passthrough_and_placeholders_draw_them() {
 #[test]
 fn inside_tmux_pages_side_by_side_share_their_lines() {
     let pdf = fixture("tmux-zoom", 2);
-    let out = view_in_tmux("tmux-zoom", &pdf, &["--protocol", "kitty", "--zoom", "2"]);
+    let out = view_in_tmux("tmux-zoom", &pdf, &["--protocol", "kitty", "--per-row", "2"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let (codes, after) = passthrough(&out.stdout);
     let codes = std::str::from_utf8(&codes).unwrap();
@@ -378,7 +403,8 @@ fn help_and_version() {
     let is = "Command-line Viewer: view graphic files without leaving your terminal";
     let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CARGO_PKG_VERSION"));
     assert!(out.status.success() && help.starts_with(&start), "{help}");
-    assert!(help.contains("\n\nGeneral Options:\n  --pages ") && help.contains("\n  --zoom auto|width|N "), "{help}");
+    assert!(help.contains("\n\nGeneral Options:\n  --pages ") && help.contains("\n  --per-row auto|width|1-8 "), "{help}");
+    assert!(!help.contains("--zoom"), "the old name is not shown: {help}");
     assert!(help.contains("\n  -r, --recurse "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
     // shows: the PDF one, and the documents' and spreadsheets' when they are built.
@@ -487,7 +513,7 @@ fn an_image_is_one_page_its_own_size_and_takes_no_pdf_options() {
     assert_eq!(png_size(&drawn[0].png), (300, 200));
     assert!(drawn[0].keys.contains(",c=30,r=10,"), "{}", drawn[0].keys);
     // As wide as the window when asked.
-    let wide = images(&view(&png, &["--protocol", "kitty", "--zoom", "width"]).stdout);
+    let wide = images(&view(&png, &["--protocol", "kitty", "--per-row", "width"]).stdout);
     assert_eq!(png_size(&wide[0].png), (800, 533));
     let out = view(&png, &["--protocol", "kitty", "--password", "pw"]);
     assert_eq!(text(&out.stderr), format!("clv: --password doesn't apply to {}, which image opens\n", png.display()));
@@ -583,7 +609,7 @@ fn a_directory_shows_each_of_its_files_by_its_first_page_and_its_subdirectories_
         assert_eq!(labels, [" 2024/b.png a9.png a10.pdf"]);
     }
     // A row of tiles at a time, names under each row.
-    let out = view(&dir, &["--protocol", "kitty", "-r", "--zoom", "2"]);
+    let out = view(&dir, &["--protocol", "kitty", "-r", "--per-row", "2"]);
     assert_eq!(names(&out.stdout), [" 2024/b.png a9.png", " a10.pdf"]);
     // Among others, a directory is a folder, and an option that a file inside it may take is no
     // error.
@@ -638,7 +664,7 @@ fn shows() -> String {
 /// Errors are said once, under the command's name.
 #[test]
 fn errors_name_the_command() {
-    let out = Command::new(BIN).arg("--zoom").arg("2").output().unwrap();
+    let out = Command::new(BIN).arg("--per-row").arg("2").output().unwrap();
     assert_eq!(text(&out.stderr), "clv: missing file\n");
     let out = Command::new(BIN).arg("--frobnicate").output().unwrap();
     assert_eq!(text(&out.stderr), "clv: unknown option --frobnicate\n");
@@ -692,7 +718,7 @@ fn blocks_take_their_colours_from_the_environment() {
 #[test]
 fn text_cells_print_in_rows_as_zoomed() {
     let pdf = fixture("ascii-rows", 3);
-    let out = view(&pdf, &["--protocol", "ascii", "--zoom", "2"]);
+    let out = view(&pdf, &["--protocol", "ascii", "--per-row", "2"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let page = text(&out.stdout);
     let lines: Vec<&str> = page.lines().collect();

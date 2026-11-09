@@ -13,7 +13,7 @@ use crate::args::{OptionSpec, Parsed};
 pub(super) struct Pdfcraft;
 
 const OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the user or the owner password of an encrypted PDF" }];
+    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the user or the owner password of an encrypted PDF", alias: None }];
 
 impl Backend for Pdfcraft {
     fn name(&self) -> &'static str {

@@ -405,6 +405,56 @@ fn minus_zooms_out_to_rows_of_pages_and_plus_in_to_the_width() {
     assert!(view.finish().success());
 }
 
+/// `,` and `.` set pages to a row as `-` and `+` zoom: one more, one fewer, then the width; a count
+/// sets that many, as far as the window takes, and `0.` goes back to `auto`. In a list they set its
+/// tiles to a row, `.` stopping at one.
+#[test]
+fn comma_and_dot_set_pages_and_tiles_to_a_row() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("per-row", 6);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 48);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/6") && bar(t).contains(" page 1/6 · 1 per row "));
+    let since = |view: &mut Session, keys: &str, what: &str, done: &dyn Fn(&str) -> bool| {
+        let before = view.text().len();
+        view.press(keys);
+        view.wait_until(what, |t| done(&t[before..]));
+    };
+    since(&mut view, ",,", "three to a row", &|t| {
+        bar(t).contains(" pages 1–6/6 · 3 per row ") && (1..=6).all(|p| t.contains(&format!(",p={p},C=1,")))
+    });
+    since(&mut view, "...", "the width", &|t| bar(t).contains(" page 1/6 · width ") && t.contains(",C=1,c=80,r=47,"));
+    since(&mut view, ".", "no further in", &|t| t.contains("fully zoomed in"));
+    since(&mut view, "2.", "two to a row", &|t| bar(t).contains(" pages 1–2/6 · 2 per row "));
+    since(&mut view, "0.", "auto: one, in a tall window", &|t| bar(t).contains(" page 1/6 · 1 per row "));
+    view.press("q");
+    assert!(view.finish().success());
+    // A window 28 columns wide takes three pages of 8 columns to a row, however many are asked for:
+    // two rows of three, never four of 4 columns.
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 28, 30);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/6"));
+    since(&mut view, "8,", "three to a row of 8 columns", &|t| (1..=6).all(|p| t.contains(&format!(",p={p},C=1,c=8,"))) && !t.contains(",C=1,c=5,"));
+    view.press("q");
+    assert!(view.finish().success());
+    // A list of three: three tiles to a row, then fewer, down to one and no further; then more.
+    let dir = std::env::temp_dir().join(format!("clview-pager-per-row-list-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let files: Vec<PathBuf> = ["a", "b", "c"].iter().map(|name| dir.join(format!("{name}.pdf"))).collect();
+    for file in &files {
+        std::fs::write(file, crate::fixtures::letter("Tile", 1)).unwrap();
+    }
+    let mut view = Session::start(&files[0], &[files[1].to_str().unwrap(), files[2].to_str().unwrap(), "--protocol", "kitty"], 100, 40);
+    view.wait_until("the list", |t| bar(t).contains(" 1/3 · 3 per row ") && drawn(t, "1/3"));
+    since(&mut view, "..", "one tile to a row", &|t| bar(t).contains(" 1/3 · 1 per row "));
+    since(&mut view, ".", "no further in", &|t| t.contains("fully zoomed in") && !t.contains("width"));
+    since(&mut view, ",", "two to a row", &|t| bar(t).contains(" 1/3 · 2 per row "));
+    since(&mut view, "0.", "auto", &|t| bar(t).contains(" 1/3 · 3 per row "));
+    view.press("q");
+    assert!(view.finish().success());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_next_screen_of_a_grid_is_in_the_terminal_before_the_key() {
     if !pty_works() {
@@ -413,7 +463,7 @@ fn the_next_screen_of_a_grid_is_in_the_terminal_before_the_key() {
     let pdf = fixture("grid", 24);
     // Three to a row in two rows: six pages a screen. The screen and the two after it are 18
     // pages, more than the pager keeps for one page to a screen, and all of them stay.
-    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--zoom", "3"], 80, 48);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--per-row", "3"], 80, 48);
     view.wait_until("the screen and two ahead sent", |t| bar(t).contains(" pages 1–6/24 · 3 per row ") && transmitted(t) == 18);
     std::thread::sleep(Duration::from_millis(200));
     let before = view.text().len();
@@ -435,7 +485,7 @@ fn a_document_shorter_than_the_screen_sits_in_its_middle() {
     let pdf = fixture("short", 3);
     // Three to a row: one row of pages 17 rows tall, where two would fit. It is in the middle of
     // the 47 rows above the status line, from row 16, not where the first of two rows would be.
-    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--zoom", "3"], 80, 48);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--per-row", "3"], 80, 48);
     view.wait_until("three pages placed", |t| bar(t).contains(" pages 1–3/3 · 3 per row ") && t.contains(",p=3,C=1,"));
     assert!(view.text().contains("\x1b[16;1H\x1b_Ga=p,q=1,"), "{:?}", view.text());
     view.press("q");
@@ -557,7 +607,7 @@ fn one_image_zoomed_out_sits_in_the_middle() {
     let png = picture("pager-middle", 800, 600);
     // Four to a row in 80 columns: an 18-column place, 7 rows tall for this picture, in the middle
     // of the 47 rows above the status line and of the 80 columns, from row 21 and column 32.
-    let mut view = Session::start(&png, &["--pager", "--protocol", "kitty", "--zoom", "4"], 80, 48);
+    let mut view = Session::start(&png, &["--pager", "--protocol", "kitty", "--per-row", "4"], 80, 48);
     view.wait_until("the image placed", |t| bar(t).contains(" page 1/1 · 4 per row ") && t.contains(",p=1,C=1,"));
     assert_eq!(first_page_size(&view.text()), ((180, 135), (18, 7)));
     assert!(view.text().contains("\x1b[21;32H\x1b_Ga=p,q=1,"), "{:?}", view.text());
@@ -858,7 +908,7 @@ fn printing_follows_the_zoom_in_rows_of_pages() {
     }
     let pdf = fixture("print-zoom", 4);
     // Three to a row at 80 × 24: pages 25 columns wide with 2 between, and 17 rows tall.
-    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--no-pager", "--zoom", "3"], 80, 24);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--no-pager", "--per-row", "3"], 80, 24);
     assert!(view.finish().success());
     let text = view.text();
     assert_eq!(printed(&text), 4, "{text:?}");
@@ -1242,7 +1292,7 @@ fn help_and_r_draw_every_row_again() {
     }
     const TOP_ROW: &str = "\x1b[1;1H\x1b[2K";
     let pdf = fixture("rows-again", 3);
-    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks", "--zoom", "3"], 80, 40);
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks", "--per-row", "3"], 80, 40);
     view.wait_until("the pages drawn", |t| drawn(t, "pages 1–3/3") && has_cells(t));
     view.press("?");
     view.wait_until("the help", |t| t.contains("Keys"));
@@ -1305,7 +1355,7 @@ fn a_page_taller_than_the_window_scrolls_its_rows() {
     const RED: &str = "\x1b[48;5;196m";
     const BLUE: &str = "\x1b[48;5;21m";
     let png = two_colours("text-scroll", 40, 400);
-    let mut view = Session::start_on(TEXT_ONLY, &png, &["--pager", "--protocol", "blocks", "--zoom", "width"], 40, 12);
+    let mut view = Session::start_on(TEXT_ONLY, &png, &["--pager", "--protocol", "blocks", "--per-row", "width"], 40, 12);
     view.wait_until("the top drawn", |t| drawn(t, "page 1/1") && t.contains(RED));
     assert!(!view.text().contains(BLUE), "the bottom half already: {:?}", view.text());
     let before = view.text().len();

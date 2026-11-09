@@ -39,24 +39,47 @@ use tty::{Tty, WindowSize};
 
 /// The viewer's own options, whatever it shows. A backend's come from the backend.
 const OPTIONS: &[OptionSpec] = &[
-    OptionSpec { name: "--pages", short: None, value: Some("1,3-5"), help: "the pages to show, in this order (default: all); of a list, its tiles" },
-    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files, not folders" },
-    OptionSpec { name: "--zoom", short: None, value: Some("auto|width|N"), help: "auto: two side by side if they fit; width; or N pages to a row" },
-    OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page" },
-    OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit" },
+    OptionSpec {
+        name: "--pages",
+        short: None,
+        value: Some("1,3-5"),
+        help: "the pages to show, in this order (default: all); of a list, its tiles",
+        alias: None,
+    },
+    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files, not folders", alias: None },
+    OptionSpec {
+        name: PER_ROW,
+        short: None,
+        value: Some("auto|width|1-8"),
+        help: "auto: two side by side if they fit; width; or N pages (a list's tiles) to a row",
+        alias: Some(ZOOM),
+    },
+    OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page", alias: None },
+    OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit", alias: None },
     OptionSpec {
         name: "--compression",
         short: None,
         value: Some("auto|fast|small"),
         help: "fast PNGs or small ones (auto: small over SSH, else fast)",
+        alias: None,
     },
     OptionSpec {
         name: "--protocol",
         short: None,
         value: Some("auto|kitty|blocks|ascii"),
         help: "kitty: don't ask the terminal first; blocks or ascii: text cells",
+        alias: None,
     },
 ];
+
+/// How many pages to a row (a list's tiles), and its old name, still taken, with a warning.
+const PER_ROW: &str = "--per-row";
+const ZOOM: &str = "--zoom";
+
+/// What an option given by its old name is told, once, before anything else.
+fn renamed(old: &str, new: &str) -> String {
+    format!("{old} is now {new}; {old} will go in a later release")
+}
 
 /// What `--help` says before the options.
 const ABOUT: &str = "\
@@ -555,8 +578,11 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     let known: Vec<OptionSpec> =
         OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().chain(settings.iter().map(|s| s.option)).collect();
     let options = Parsed::parse(args, &known)?;
+    for &name in options.aliased() {
+        note(&format!("warning: {}", renamed(options.typed(name, &known), name)));
+    }
     let paths = file_args(&options)?;
-    let zoom = options.value("--zoom").map_or(Ok(Zoom::Auto), Zoom::parse)?;
+    let zoom = options.value(PER_ROW).map_or(Ok(Zoom::Auto), |given| Zoom::parse(given, options.typed(PER_ROW, &known)))?;
     let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
     let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
     let starts = starts(&settings, &options)?;
@@ -1601,7 +1627,7 @@ mod tests {
     /// The room the tests open files for: 80 × 23 cells of the cell assumed.
     const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2 };
 
-    const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password" };
+    const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password", alias: None };
 
     /// The viewer's options, and a backend's `--password`.
     fn parsed(given: &[String]) -> Parsed<'_> {
@@ -1614,7 +1640,7 @@ mod tests {
         const LOCKED: Fake = Fake { name: "locked", shows: "PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
         const PNG: Fake = Fake { name: "png", shows: "images", magic: b"\x89PNG", options: &[], holds: false };
         let built: [&dyn Backend; 3] = [&LOCKED, &PNG, &PDF];
-        let given = args(&["a.pdf", "--zoom", "2", "--password", "pw"]);
+        let given = args(&["a.pdf", "--per-row", "2", "--password", "pw"]);
         assert_eq!(takes_all(&built, &[&LOCKED], &parsed(&given), "a.pdf"), Ok(()));
         assert_eq!(takes_all(&built, &[&PDF], &parsed(&given), "a.pdf"), Err("--password doesn't apply to a.pdf, which pdf-one opens".into()));
         let given_too = args(&["a.pdf", "--zoom", "2", "--no-pager"]);
@@ -1871,7 +1897,7 @@ mod tests {
         assert!(help.contains(&format!("\n\n   for locked PDFs:\n     {:31}  a password\n\n", "--password PW")), "{help}");
         assert!(!help.contains("for PDFs:") && !help.contains("for images:") && !help.contains("no options"), "{help}");
         // An option that needs it widens the column, its indent counted.
-        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option-indeed", short: None, value: Some("VALUE"), help: "long" };
+        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option-indeed", short: None, value: Some("VALUE"), help: "long", alias: None };
         const TAKES_IT: Fake = Fake { name: "long", shows: "long things", magic: b"%PDF-", options: &[LONG], holds: false };
         let wide = usage(&[&TAKES_IT]);
         assert!(wide.contains("\n     --a-rather-long-option-indeed VALUE  long\n"), "{wide}");

@@ -14,7 +14,7 @@ runs on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
 
 ```sh
 clv report.pdf             # page through it, like less
-clv --zoom 4 report.pdf    # four pages to a row
+clv --per-row 4 report.pdf # four pages to a row
 clv --no-pager report.pdf  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
 clv diagram.svg            # a drawing, as large as the window and sharp at that size

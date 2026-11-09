@@ -40,7 +40,7 @@ use crate::args::{OptionSpec, Parsed};
 pub(super) struct Wordcraft;
 
 const OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected Word document" }];
+    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected Word document", alias: None }];
 
 /// Markdown and HTML on dark paper, light on dark, or as printed, dark on light: they have no paper
 /// of their own ([ADR-0015](../../docs/adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
@@ -57,6 +57,7 @@ const PAPER: Setting = Setting {
         short: None,
         value: Some("auto|light|dark"),
         help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
+        alias: None,
     },
     help: "Markdown and HTML light on dark, or dark on light",
     missing: "only Markdown and HTML go dark",
@@ -82,6 +83,7 @@ const WIDTH: Setting = Setting {
         short: None,
         value: Some("window|N"),
         help: "Markdown and HTML laid out to lines of N characters of code (20-200), or as wide as the window",
+        alias: None,
     },
     help: "Markdown and HTML 4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
     missing: "only Markdown and HTML reflow",
@@ -100,7 +102,7 @@ const FONT: Setting = Setting {
     zero: Value::Number(FONT_DEFAULT),
     auto: None,
     keys: Keys::Zoom,
-    option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "Markdown and HTML text at N% of its size (50-400)" },
+    option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "Markdown and HTML text at N% of its size (50-400)", alias: None },
     help: "Markdown and HTML text larger, or smaller; 150+ sets 150%, 0+ 100%",
     missing: "only Markdown and HTML have a font size",
     effect: Effect::Relayout,

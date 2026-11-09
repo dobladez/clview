@@ -11,7 +11,7 @@ pub(crate) enum Fit {
     Width,
 }
 
-/// How far in pages are zoomed (`--zoom`, and the pager's `+` and `-`): out, more pages to a row,
+/// How far in pages are zoomed (`--per-row`, and the pager's `,` `.` and `+` `-`): out, more pages to a row,
 /// in as many rows as fit; in from one page to a row, the page as wide as the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Zoom {
@@ -25,12 +25,13 @@ pub(crate) enum Zoom {
 }
 
 impl Zoom {
-    pub(crate) fn parse(s: &str) -> Result<Self, String> {
+    /// `s`, the value of `option`, named as it was typed (`--per-row`, or its old name `--zoom`).
+    pub(crate) fn parse(s: &str, option: &str) -> Result<Self, String> {
         match (s, s.parse::<u16>()) {
             ("auto", _) => Ok(Self::Auto),
             ("width", _) => Ok(Self::Width),
             (_, Ok(n @ 1..=MAX_PER_ROW)) => Ok(Self::PerRow(n)),
-            (other, _) => Err(format!("--zoom {other:?}: use auto, width or a number of pages per row (1–{MAX_PER_ROW})")),
+            (other, _) => Err(format!("{option} {other:?}: use auto, width or a number of pages per row (1–{MAX_PER_ROW})")),
         }
     }
 
@@ -443,13 +444,17 @@ mod tests {
 
     #[test]
     fn zoom_names() {
-        assert_eq!(Zoom::parse("auto"), Ok(Zoom::Auto));
-        assert_eq!(Zoom::parse("width"), Ok(Zoom::Width));
-        assert_eq!(Zoom::parse("1"), Ok(Zoom::PerRow(1)));
-        assert_eq!(Zoom::parse("8"), Ok(Zoom::PerRow(MAX_PER_ROW)));
+        let parse = |s| Zoom::parse(s, "--per-row");
+        assert_eq!(parse("auto"), Ok(Zoom::Auto));
+        assert_eq!(parse("width"), Ok(Zoom::Width));
+        assert_eq!(parse("1"), Ok(Zoom::PerRow(1)));
+        assert_eq!(parse("8"), Ok(Zoom::PerRow(MAX_PER_ROW)));
         for wrong in ["0", "9", "65536", "-1", "page", ""] {
-            assert!(Zoom::parse(wrong).is_err_and(|e| e.contains("use auto, width or a number of pages per row (1–8)")), "{wrong:?}");
+            assert!(parse(wrong).is_err_and(|e| e.contains("use auto, width or a number of pages per row (1–8)")), "{wrong:?}");
         }
+        // The option is named as it was typed.
+        assert!(parse("9").is_err_and(|e| e.starts_with("--per-row \"9\": use auto")));
+        assert!(Zoom::parse("9", "--zoom").is_err_and(|e| e.starts_with("--zoom \"9\": use auto")));
     }
 
     #[test]

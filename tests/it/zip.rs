@@ -74,7 +74,7 @@ fn an_archive_is_a_list_of_its_files_and_its_directories_are_folders() {
     std::fs::write(&other, png(40, 30)).unwrap();
     let other = other.to_str().unwrap();
     assert_eq!(shown(&path, &[other]).1, [" photos.zip/ c.png"]);
-    assert_eq!(shown(&path, &[other, "-r", "--zoom", "2"]).1, [" photos.zip/2024/b.png photos.zip/a9.png", " photos.zip/a10.pdf c.png"]);
+    assert_eq!(shown(&path, &[other, "-r", "--per-row", "2"]).1, [" photos.zip/2024/b.png photos.zip/a9.png", " photos.zip/a10.pdf c.png"]);
 }
 
 /// In a directory an archive is a folder, even recursing: `-r` goes through directories, not

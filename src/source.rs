@@ -900,7 +900,7 @@ pub(crate) mod tests {
             zero: Value::Named("light"),
             auto: Some(Auto { light: "light", dark: "dark" }),
             keys: Keys::Cycle(key),
-            option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "" },
+            option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "", alias: None },
             help: "",
             missing: "not this one",
             effect: Effect::Redraw,

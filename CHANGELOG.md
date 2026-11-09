@@ -26,11 +26,17 @@ works today. A version's section becomes the notes of its
   the page you land on. The status line shows the width when it isn't the window's. Only the document
   on screen reflows: a list's tiles keep their layout, and a document opened from the list after a
   change is laid out at the new width.
+- `,` and `.` set the pages to a row on any file, as `-` and `+` zoom: one more, one fewer, then the
+  width; `3.` sets three, as many as the window takes, and `0.` goes back to `auto`. In a list they set
+  the tiles to a row, `.` stopping at one. They are the pages to a row on a Markdown or HTML file too,
+  where `+` and `-` are its font size.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 
 ### Changed
 
+- `--zoom` is now `--per-row auto|width|1-8`, since it sets a list's tiles to a row too. `--zoom` is
+  still taken, with a warning, and will go in a later release.
 - `--help` lists `--theme` among the documents' options, as it comes with them; it is still taken
   with any file. A `clv` built without documents has no `--theme` and no `d`.
 

@@ -52,7 +52,7 @@ fn a_drawing_fills_the_window_drawn_at_the_size_shown() {
     // The halves meet at 345 px: no pixel between them is a blend, as a picture enlarged would.
     let picture = &shown[0];
     assert_eq!((picture.get_pixel(344, 230).0, picture.get_pixel(345, 230).0), ([255, 0, 0, 255], [0, 0, 255, 255]));
-    assert_eq!(printed(&path, &["--zoom", "width"])[0].dimensions(), (800, 533));
+    assert_eq!(printed(&path, &["--per-row", "width"])[0].dimensions(), (800, 533));
     let out = view(&path, &["--protocol", "kitty", "--pages", "2"]);
     assert_eq!(text(&out.stderr), "clv: no page 2 (halves.svg has 1 page)\n");
 }
@@ -152,7 +152,7 @@ fn a_drawing_that_would_take_too_much_to_render_fails_its_page() {
     assert!(!out.status.success() && images(&out.stdout).is_empty());
     assert!(text(&out.stderr).contains("page 1: drawing it at 690 × 460 would take more than 1024 MiB"), "{}", text(&out.stderr));
     let other = written("svg-heavy", "other.svg", halves(40, 20));
-    let out = view(&path, &[other.to_str().unwrap(), "--protocol", "kitty", "--zoom", "4"]);
+    let out = view(&path, &[other.to_str().unwrap(), "--protocol", "kitty", "--per-row", "4"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(names(&out.stdout), [" layers.svg other.svg"]);
 }

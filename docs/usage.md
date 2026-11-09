@@ -25,7 +25,7 @@ A file is read once, so `cat report.pdf | clv /dev/stdin` works too.
 
 ```sh
 clv --pages 1,3-5 report.pdf # page through just these
-clv --zoom width report.pdf  # as wide as the window
+clv --per-row width report.pdf  # as wide as the window
 clv --password PW secret.pdf
 ```
 
@@ -33,9 +33,10 @@ clv --password PW secret.pdf
 |---|---|
 | `--pages 1,3-5` | the pages to show, single pages and ranges, in the order given (default: all of them); in a list, the tiles |
 | `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
-| `--zoom auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
-| `--zoom width` | one page as wide as the window; a tall page runs past the bottom |
-| `--zoom 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one |
+| `--per-row auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
+| `--per-row width` | one page as wide as the window; a tall page runs past the bottom |
+| `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row |
+| `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
 | `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents, which `--help` lists it under |
@@ -51,8 +52,8 @@ clv --password PW secret.pdf
 | `--protocol blocks` | [text cells](#text-cells) of half-blocks and colours, even where images would show |
 | `--protocol ascii` | [text cells](#text-cells) of ASCII characters |
 
-Printed without the pager, pages follow the zoom too, a row of them under another: `--zoom 3`
-prints three to a row, `--zoom width` one to a row as wide as the window, and `auto` two to a row
+Printed without the pager, pages follow the zoom too, a row of them under another: `--per-row 3`
+prints three to a row, `--per-row width` one to a row as wide as the window, and `auto` two to a row
 when the window is wide enough, as the pager first shows them.
 
 `clv --help`, or `clv` alone, lists these, then the options a backend takes of its own
@@ -72,7 +73,8 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 `?` lists them in the pager too, a backend's after the viewer's: `d` is the documents', and does
 nothing in a `clv` built without them. `+` and `-` are listed once, as what they do where you are:
 the font size on a Markdown or HTML file, the zoom elsewhere, and the first status line's reminder
-says which (`+ - font`, `+ - zoom`).
+says which (`+ - font`, `+ - zoom`). `,` and `.` set the pages to a row everywhere, on a Markdown or
+HTML file too, and the reminder says `, . per row` where it has room.
 
 In a file's pages:
 
@@ -89,6 +91,8 @@ In a file's pages:
 | a number, then `Enter` or `g` | that page |
 | `-`, `_` | zoom out: one more page to a row. On a Markdown or HTML file, its text 10% smaller ([Documents](#documents)) |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
+| `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto` |
+| `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
@@ -112,6 +116,7 @@ In a list:
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
+| `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
 | `[`, `]` | nothing: only a document opened from the list reflows, and they say so |
@@ -129,13 +134,14 @@ then 3–4, and the keys that turn a page turn both. Two pages go side by side w
 least 80% of the size it would have alone, as portrait pages in a wide window do. Until you zoom,
 the pager decides this again whenever the window changes size.
 
-`-` zooms out: one more page to a row each time, in as many rows as fit the window, so zoomed
+`-` zooms out (or `,`): one more page to a row each time, in as many rows as fit the window, so zoomed
 far out the screen is an overview of the document. It stops at 8 pages to a row, or before a page
 would be narrower than 8 columns. The zoom is a size, whatever the number of pages: at four to a
 row, a single page takes a quarter of the width, and fewer pages than a row takes sit in the middle
-of the screen. `+` zooms in: one page fewer to a row, and from one page, the page as wide as the
-window, which scrolls; that is as far in as it goes. `=` and `_` work too: the same keys, with
-Shift or without.
+of the screen. `+` zooms in (or `.`): one page fewer to a row, and from one page, the page as wide as
+the window, which scrolls; that is as far in as it goes. `=` and `_` work too: the same keys, with
+Shift or without. `3.` (or `3,`) goes straight to three to a row, as far as the window takes, and
+`0.` back to `auto`.
 
 Rows start the way a book's spreads do: at three to a row, pages 1–3, 4–6 and so on. The page
 you are on stays on screen as you zoom, and the last row of the document stops at the bottom of
@@ -203,7 +209,7 @@ Printed, a list is its tiles, in rows, each row's names under it.
 A list's tiles are all the same size, square in pixels, so moving through it moves nothing else:
 up to four to a row until you zoom (fewer when there are fewer), as many rows as fit. The screen
 moves only when the tile you choose leaves it, and the tiles show as they render, as a gallery's
-do. `--zoom` sets the list's tiles to a row; a file opened from it starts at `auto`. A Markdown or
+do. `--per-row` sets the list's tiles to a row; a file opened from it starts at `auto`. A Markdown or
 HTML file's tile is a preview on a portrait page ([Documents](#a-page-the-windows-size)).
 
 `--pages` applies to what is shown, and a list's pages are its tiles: `clv --pages 2-3 *.pdf`
@@ -357,7 +363,7 @@ fallback colour, each with a warning.
 An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a
 photo taken with the phone on its side shows upright). It is fitted to the window like a page,
 but never made larger than it is: a pixel of the picture to a pixel of the screen at most, so an
-icon shows as small as it is. `--zoom width` (and `+` to the width) still makes it as wide as the
+icon shows as small as it is. `--per-row width` (and `+` to the width) still makes it as wide as the
 window. The first frame of an animation is shown. Colour profiles are not applied yet: a picture
 in a wide-gamut space (Display P3, Adobe RGB) shows a little duller than it should. AVIF and DDS
 files are recognised and refused with their format's name: the `image` crate's AVIF decoder gets

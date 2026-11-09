@@ -642,7 +642,10 @@ keeps what was sent usable as the reader moves on a row at a time. The same page
 another size is another render (`View` has the place's size).
 
 `Zoom::Auto` is two to a row when there are two pages and `fit::two_up_fits` says each keeps 80%
-of its size alone, otherwise one, decided at every draw until a key zooms. Zooming out stops at
+of its size alone, otherwise one, decided at every draw until a key zooms. `--per-row` sets it
+(`--zoom`, its old name, through `OptionSpec::alias`, which `Parsed` records to warn of), and the
+pager's `-` and `+`, and `,` and `.` (`Nav::per_row_key`, which takes a count), step it from what the
+last draw showed. Zooming out stops at
 `MAX_PER_ROW` (8), or before a page would be under `MIN_PAGE_COLS` (8) columns, however few pages
 there are: N to a row is a size, so one page at four to a row is a quarter of the width, and a row
 with fewer pages than that, when it is the only row, is centred. A screen holds at most

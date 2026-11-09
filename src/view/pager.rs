@@ -101,13 +101,28 @@ const MAX_RESENDS: u32 = 8;
 const ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// The reminder of the keys the status line starts with, until the first key: shorter and
 /// shorter for a narrow window. In a list; in a file's pages, from a list or not.
-const LIST_KEYS: [&str; 3] = ["arrows move · ⏎ open · + - zoom · q quit", "arrows · ⏎ open · q quit", "⏎ open · q quit"];
-const OPENED_KEYS: [&str; 3] = ["esc back · space b · n p · + - zoom · q quit", "esc back · n p · q quit", "esc back · q quit"];
-const KEYS: [&str; 3] = ["space b j k · n p · g G · 12⏎ · + - zoom · q quit", "n p · + - zoom · q quit", "n p · q quit"];
+const LIST_KEYS: [&str; 4] = [
+    "arrows move · ⏎ open · + - zoom · , . per row · q quit",
+    "arrows move · ⏎ open · + - zoom · q quit",
+    "arrows · ⏎ open · q quit",
+    "⏎ open · q quit",
+];
+const OPENED_KEYS: [&str; 4] = [
+    "esc back · space b · n p · + - zoom · , . per row · q quit",
+    "esc back · space b · n p · + - zoom · q quit",
+    "esc back · n p · q quit",
+    "esc back · q quit",
+];
+const KEYS: [&str; 4] = [
+    "space b j k · n p · g G · 12⏎ · + - zoom · , . per row · q quit",
+    "space b j k · n p · g G · 12⏎ · + - zoom · q quit",
+    "n p · + - zoom · q quit",
+    "n p · q quit",
+];
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknphl +=-_r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknphl +=-_,.r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -121,6 +136,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("g G  Home End", "the first or the last page"),
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
+    (", .  3.", "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
 ];
@@ -134,6 +150,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("Enter", "open it: a file's pages, or a directory's files"),
     ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
     ("+ -", "bigger, fewer to a row; smaller, more to a row"),
+    (", .  3.", "one more tile to a row, or one fewer; 3. sets 3, 0. auto"),
     ("r  Ctrl-L", "render again"),
     ("c", "copy its picture to the clipboard"),
 ];
@@ -373,7 +390,7 @@ struct Nav {
     /// In a list, the first tile on screen, as the last move left it: the screen moves only when
     /// the tile chosen leaves it.
     top: usize,
-    /// As asked: `--zoom`, then `+` and `-`.
+    /// As asked: `--per-row`, then `+` `-` and `,` `.`.
     zoom: Zoom,
     /// From the last draw: pages to a row, rows of pages, and the most pages to a row the window
     /// takes. A zoom key sets the first two at once, so keys before the next draw step by them.
@@ -772,6 +789,8 @@ impl Nav {
             Key::Char('+' | '=' | '-' | '_') if self.zoom_setting().is_some() => self.setting_key(key),
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
+            Key::Char(',') => self.per_row_key(true),
+            Key::Char('.') => self.per_row_key(false),
             Key::Char('r' | '\u{c}') => self.rerender = true,
             Key::Char('/') => self.message = Some(NO_SEARCH.into()),
             _ => self.setting_key(key),
@@ -802,12 +821,10 @@ impl Nav {
             }
             Key::Char('g') | Key::Home => self.select(0),
             Key::Char('G') | Key::End => self.select(last),
-            // As wide as the window is one to a row: a tile never scrolls.
-            Key::Char('+' | '=') => {
-                let zoom = (self.per_row > 1).then(|| Zoom::PerRow(self.per_row.saturating_sub(1)));
-                self.zoom_to(zoom, "fully zoomed in");
-            }
-            Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
+            Key::Char('+' | '=') => self.step_per_row(false),
+            Key::Char('-' | '_') => self.step_per_row(true),
+            Key::Char(',') => self.per_row_key(true),
+            Key::Char('.') => self.per_row_key(false),
             Key::Char('r' | '\u{c}') => self.rerender = true,
             Key::Char('/') => self.start_filter(),
             _ => self.setting_key(key),
@@ -873,6 +890,38 @@ impl Nav {
         } else if first > 0 {
             self.at = first.saturating_sub(pages);
             self.scroll = u16::MAX;
+        }
+    }
+
+    /// `,` (`more`) or `.`: one page more to a row, or one fewer, as the zoom does (`-` and `+`): from
+    /// one page, the width; in a list, one tile to a row at the least, never the width. A number typed
+    /// before it sets that many, as far as the window takes, and 0 goes back to `auto`.
+    fn per_row_key(&mut self, more: bool) {
+        if !self.typed.is_empty() {
+            let typed = std::mem::take(&mut self.typed);
+            // At most `MAX_TYPED` digits: past u32, it is past the most anyway.
+            let wanted = typed.parse::<u32>().unwrap_or(u32::MAX);
+            let most = self.most_per_row.max(1);
+            let n = u16::try_from(wanted).unwrap_or(u16::MAX).min(most);
+            self.zoom_to(Some(if n == 0 { Zoom::Auto } else { Zoom::PerRow(n) }), "");
+            if wanted > u32::from(most) {
+                self.message = Some("fully zoomed out".into());
+            }
+            return;
+        }
+        self.step_per_row(more);
+    }
+
+    /// One page (or tile) more to a row (`more`), or one fewer: `-` and `+`, and `,` and `.`.
+    fn step_per_row(&mut self, more: bool) {
+        if more {
+            self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out");
+        } else if self.list {
+            // As wide as the window is one to a row: a tile never scrolls.
+            let zoom = (self.per_row > 1).then(|| Zoom::PerRow(self.per_row.saturating_sub(1)));
+            self.zoom_to(zoom, "fully zoomed in");
+        } else {
+            self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in");
         }
     }
 
@@ -2341,7 +2390,7 @@ mod tests {
         zero: Value::Named("pale"),
         auto: None,
         keys: Keys::Cycle('d'),
-        option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "" },
+        option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "", alias: None },
         help: "pale or deep",
         missing: "only some go deep",
         effect: Effect::Redraw,
@@ -2982,6 +3031,56 @@ mod tests {
         assert_eq!((nav.zoom, nav.on_screen()), (Zoom::Width, vec![Some(3)]));
     }
 
+    /// `,` and `.` set pages to a row as `-` and `+` zoom: one more, one fewer, then the width, as far
+    /// as the window takes; a count sets that many, clamped to the most the window takes, and `0.`
+    /// goes back to `auto`. On a document with a font size they are still the pages to a row.
+    #[test]
+    fn comma_and_dot_set_pages_to_a_row_as_the_zoom_does() {
+        let mut nav = reader(4, 20, 40, 40);
+        let chars = |text: &str| text.chars().map(Key::Char).collect::<Vec<_>>();
+        press(&mut nav, &chars(",,"));
+        assert_eq!((nav.zoom, nav.on_screen()), (Zoom::PerRow(3), vec![Some(3), Some(4), Some(5)]));
+        assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" pages 4–6/20 · 3 per row "));
+        // A window that takes four to a row stops there, and says so; a count past it is clamped.
+        nav.grid(3, 1, 4);
+        press(&mut nav, &chars(",,"));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(4), Some("fully zoomed out")));
+        press(&mut nav, &chars("7."));
+        assert_eq!((nav.zoom, nav.message.as_deref(), nav.typed.as_str()), (Zoom::PerRow(4), Some("fully zoomed out"), ""));
+        press(&mut nav, &chars("999999999,"));
+        assert_eq!(nav.zoom, Zoom::PerRow(4));
+        press(&mut nav, &chars("2,"));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(2), None));
+        // In: one fewer, then the width, and no further.
+        press(&mut nav, &chars(".."));
+        assert_eq!(nav.zoom, Zoom::Width);
+        press(&mut nav, &chars("."));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::Width, Some("fully zoomed in")));
+        press(&mut nav, &chars(","));
+        assert_eq!(nav.zoom, Zoom::PerRow(1));
+        // `0.` and `0,`: back to auto.
+        press(&mut nav, &chars("3.0."));
+        assert_eq!(nav.zoom, Zoom::Auto);
+        press(&mut nav, &chars("3,0,"));
+        assert_eq!(nav.zoom, Zoom::Auto);
+        // From auto, from what was drawn: a book of two.
+        let mut auto = reader(0, 20, 40, 40);
+        auto.grid(2, 1, 8);
+        press(&mut auto, &chars(","));
+        assert_eq!(auto.zoom, Zoom::PerRow(3));
+        let mut auto = reader(0, 20, 40, 40);
+        auto.grid(2, 1, 8);
+        press(&mut auto, &chars("."));
+        assert_eq!(auto.zoom, Zoom::PerRow(1));
+        // A document whose `+` and `-` are its font size: `,` and `.` are still the pages to a row.
+        let mut doc = declaring_font(reader(0, 20, 40, 40), &["font"], Some(170));
+        press(&mut doc, &chars("3."));
+        assert_eq!(doc.zoom, Zoom::PerRow(3));
+        // `?` lists them, in the pages and in a list.
+        assert!(doc.help_lines().iter().any(|(keys, _)| keys == ", .  3."));
+        assert!(tiles(10, 3, 2).help_lines().iter().any(|(keys, what)| keys == ", .  3." && what.contains("tile")));
+    }
+
     #[test]
     fn plus_and_minus_zoom_between_the_width_and_the_most_pages_to_a_row() {
         let mut nav = reader(4, 20, 40, 40);
@@ -3159,6 +3258,28 @@ mod tests {
         assert_eq!(nav.zoom, Zoom::PerRow(3));
     }
 
+    /// In a list `,` and `.` are its `-` and `+`: `.` stops at one tile to a row, never the width, and a
+    /// count sets that many tiles, as far as the window takes; `+` and `-` take no count.
+    #[test]
+    fn a_lists_comma_and_dot_set_tiles_to_a_row_down_to_one() {
+        let chars = |text: &str| text.chars().map(Key::Char).collect::<Vec<_>>();
+        let mut nav = tiles(10, 3, 2);
+        press(&mut nav, &chars(".."));
+        assert_eq!(nav.zoom, Zoom::PerRow(1));
+        press(&mut nav, &chars("."));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(1), Some("fully zoomed in")));
+        press(&mut nav, &chars(",,"));
+        assert_eq!(nav.zoom, Zoom::PerRow(3));
+        nav.grid(3, 2, 5);
+        press(&mut nav, &chars("9,"));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(5), Some("fully zoomed out")));
+        press(&mut nav, &chars("0."));
+        assert_eq!(nav.zoom, Zoom::Auto);
+        // A number before `+` stays a tile's number, as it was.
+        press(&mut nav, &chars("4+"));
+        assert_eq!(nav.typed, "4");
+    }
+
     #[test]
     fn a_lists_status_line_says_which_tile_of_how_many() {
         let mut nav = tiles(10, 3, 2);
@@ -3170,7 +3291,9 @@ mod tests {
         assert!(nav.status("z.png", 100, false).contains("  go to tile 4  "));
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
-        assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
+        assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
+        // Without the pages to a row where there isn't room for them.
+        assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[1])));
         assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list")));
         assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit")));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
@@ -3341,7 +3464,7 @@ mod tests {
         let first = nav.status("report.pdf", 120, false);
         assert!(first.contains(&format!("  {}  ", KEYS[0])) && first.ends_with(" · ? help "), "{first:?}");
         // As much of the reminder as fits, or none.
-        assert!(nav.status("report.pdf", 70, false).contains(&format!("  {}  ", KEYS[2])));
+        assert!(nav.status("report.pdf", 70, false).contains(&format!("  {}  ", KEYS[3])));
         assert!(!nav.status("report.pdf", 50, false).contains("quit"));
         nav.key(Key::Char('x'));
         let after = nav.status("report.pdf", 120, false);
