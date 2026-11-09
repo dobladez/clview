@@ -257,6 +257,11 @@ a row only at `largest_scale`, for a page that has one.
   that reports no pixels gets a second layout once its cell is known. Asking first was rejected:
   opening in raw mode, or in a mode between, leaves the terminal altered when Ctrl-C ends the run.
 - A list's documents are previewed on a fixed portrait page.
+- Printing to a pipe or a file lays out at the room the tty says, as the pager would: the page's
+  shape is the terminal the command runs in, and the 60 × 40 preview only where there is no tty. A
+  test that prints a document from a terminal gets that terminal's room, and computes it from
+  `/dev/tty` as `clv` does. The preview's room whenever stdout isn't a terminal, which would have
+  made printed pages the same anywhere, was considered and set aside (2026-11-09).
 - A change of size lays the document on screen out again, once it has held 500 ms.
 
 ## Open questions
@@ -264,10 +269,6 @@ a row only at `largest_scale`, for a page that has one.
 - 🟡 **The least lines a page holds** (10 for now), and a small room's margins: measured.
 - 🟡 **A cell of unknown size** — laid out at the assumed cell; if that proves poor on a real
   terminal, a page of the room's shape at 80 characters is the other way.
-- 🟡 **Printing to a pipe or a file** lays out at the room the tty says, as decided: so the page's
-  shape is the terminal the command runs in, and a test that prints a document from a terminal gets
-  that terminal's room (the tests compute it from `/dev/tty` as `clv` does). The other way is the
-  preview's room whenever stdout isn't a terminal, which would make printed pages the same anywhere.
 
 ## Tasks
 
@@ -338,3 +339,5 @@ Each task's commit passes the quality gates alone.
   peak measured, and the font's extremes in task 3.
 - 2026-11-09 — Implementing ([notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md)); an open
   question added: where printing to a pipe lays out.
+- 2026-11-09 — Decided: printing to a pipe or a file keeps the tty's room; the preview's only with no
+  tty. The open question closed.

@@ -153,6 +153,9 @@ of the cost either: a page of 20 × 10 at 170% holds what it does at 100%.
   text; and every document's tile laid out again on each change of size.
 - **Rounding the room's cell** to whole pixels before comparing: a text cell's sampling cell (1.25 × 2)
   would change shape.
+- **Printing to a pipe or a file at the preview's room**, so that printed pages are the same wherever
+  the command runs: set aside for the tty's room, the pages as the pager would show them in the
+  terminal the command runs in, and the preview's only where there is no tty.
 
 ## Consequences
 
