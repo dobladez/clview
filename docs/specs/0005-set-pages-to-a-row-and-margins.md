@@ -1,6 +1,6 @@
 # Spec-0005: Pages to a row on their own keys, and a document's margins
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-09
 - **Related:** [Spec-0003](0003-lay-markdown-and-html-out-to-the-window.md), `Done`, whose room,
   font size and relayout this builds on
@@ -230,3 +230,4 @@ a margin setting on `{` and `}`.
 
 - 2026-11-09 — Ready (spec-new), revised after a Codex review: the grid's most, lists, `--pages`,
   the options' conflict, the bounds' order, recovery, keys at once, margins at the font size and 3.
+- 2026-11-09 — Implementing ([notes](0005-set-pages-to-a-row-and-margins-impl-20261109_1812.md)).
