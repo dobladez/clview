@@ -744,14 +744,20 @@ mod tests {
     /// one that panics costs itself alone; a handle dropped before its job began leaves it unrun.
     #[test]
     fn a_job_runs_first_and_its_panic_is_caught() {
-        static BACKEND: Test = Test { opened: AtomicUsize::new(0), millis: 60, size: (1.0, 1.0), broken: false };
+        // The first file opens quickly and the others slowly, so its thread alone is free when the
+        // job is taken: the others, finishing together, would begin the files waiting as it ran.
+        static FIRST: Test = Test { opened: AtomicUsize::new(0), millis: 50, size: (1.0, 1.0), broken: false };
+        static BACKEND: Test = Test { opened: AtomicUsize::new(0), millis: 400, size: (1.0, 1.0), broken: false };
         let openers = Rc::new(Openers::default());
         let file = std::env::temp_dir().join(format!("clview-later-job-{}", std::process::id()));
         std::fs::write(&file, "x").unwrap();
         let path = file.to_str().unwrap().to_owned();
         // More files than threads: the last of them wait.
         let made: Vec<Later> = (0..THREADS + 3)
-            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone(), ROOM))
+            .map(|i| {
+                let backend: &'static Test = if i == 0 { &FIRST } else { &BACKEND };
+                Later::new(Reopen::Disk(path.clone()), path.clone(), &[], backend, Arc::new(Parsed::default().owned()), openers.clone(), ROOM)
+            })
             .collect();
         let pools: Vec<Box<dyn Pool>> = made.iter().map(|later| later.pool(1)).collect();
         for pool in &pools {
@@ -759,7 +765,11 @@ mod tests {
         }
         let ran = Arc::new(AtomicUsize::new(0));
         let counted = ran.clone();
+        // Counted as the job runs: once it is done, the threads are free to begin the files waiting.
+        let begun = Arc::new(AtomicUsize::new(usize::MAX));
+        let seen = begun.clone();
         let handle = openers.run(Box::new(move || {
+            seen.store(FIRST.opened.load(Ordering::SeqCst) + BACKEND.opened.load(Ordering::SeqCst), Ordering::SeqCst);
             counted.fetch_add(1, Ordering::Relaxed);
             Ok(Box::new(Fake((7.0, 7.0))) as Box<dyn Source + Send>)
         }));
@@ -772,7 +782,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         };
         assert_eq!((source.size(0), ran.load(Ordering::Relaxed)), (Some((7.0, 7.0)), 1));
-        assert!(BACKEND.opened.load(Ordering::Relaxed) <= THREADS, "the job went before the files waiting");
+        let begun = begun.load(Ordering::SeqCst);
+        assert!(begun <= THREADS, "the job went before the files waiting, yet {begun} files had begun");
         assert!(handle.try_take().is_none(), "taken once");
         let panics = openers.run(Box::new(|| panic!("a bug in the layout")));
         let start = Instant::now();
