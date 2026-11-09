@@ -190,24 +190,41 @@ struct Page {
 /// The page `clv` lays a Markdown or HTML file out on when these tests print it: the room the tty says
 /// (the controlling terminal of the tests, if they have one: its columns, its rows less the one left
 /// free, and its cell from the pixels it reports, or the 10 × 20 assumed), or with no terminal, as
-/// under CI, the preview's 60 × 40 cells. As wide as the room, or a book's page where the room holds two
-/// of 60 characters, or `width` characters between the margins, never wider than the room; as tall as
-/// the room. The rules the backend's own tests check on rooms of their choosing, here at whatever room
-/// the tests run in.
-fn printed_page(width: Option<f32>) -> Page {
+/// under CI, the preview's 60 × 40 cells), at `font` percent with side margins of `margin` characters:
+/// as wide as the room, or a book's page where the room holds two of 60 characters between their
+/// margins, or `width` characters between the margins, never wider than the room; as tall as the room.
+/// The book follows the font and the margins, so whatever the tty's width the page asked for is the one
+/// expected. The rules the backend's own tests check on rooms of their choosing, here at whatever room
+/// the tests run in, at a font the room holds.
+fn printed_page(width: Option<f32>, font: f32, margin: f32) -> Page {
     let (cols, rows, shape) = match tty_window() {
         Some((cols, rows, shape)) => (cols, rows - 1, shape),
         None => (60, 40, 2.0),
     };
-    let room = f32::from(cols) * COLUMN - 6.0 * COLUMN;
-    let half = f32::from((cols - 2) / 2) * COLUMN - 6.0 * COLUMN;
+    // A cell of the room, in points: a character of code at 100%.
+    let cell = COLUMN * 100.0 / font;
+    let side = margin * COLUMN;
+    let room = f32::from(cols) * cell - 2.0 * side;
+    let half = f32::from((cols - 2) / 2) * cell - 2.0 * side;
     let text_w = match width {
         Some(columns) => (columns * COLUMN).min(room),
         None if half >= 60.0 * COLUMN => half,
         None => room,
     };
-    let (row, text_h) = (shape * COLUMN, f32::from(rows) * shape * COLUMN - 2.0 * shape * COLUMN);
-    Page { w: text_w + 6.0 * COLUMN, h: text_h + 2.0 * row, text_w, text_h }
+    let (row, text_h) = (shape * COLUMN, f32::from(rows) * shape * cell - 2.0 * shape * COLUMN);
+    Page { w: text_w + 2.0 * side, h: text_h + 2.0 * row, text_w, text_h }
+}
+
+/// Markdown of `count` paragraphs, each of a different length, from a word to a few lines: however wide
+/// the page, shorter lines take more of them, as one length of paragraph that fits a line either way
+/// wouldn't show.
+fn varied(count: usize) -> String {
+    (1..=count).map(|n| format!("Paragraph {n}:{}\n\n", " words of it".repeat(n % 40))).collect()
+}
+
+/// [`printed_page`] at the defaults: 100%, margins of 3.
+fn default_page(width: Option<f32>) -> Page {
+    printed_page(width, 100.0, 3.0)
 }
 
 /// The window the tests' controlling terminal reports, if they have one: its columns and rows, and the
@@ -232,7 +249,7 @@ fn preview_page() -> (f32, f32) {
 /// room the tty says, or the preview's with no terminal ([`printed_page`]).
 #[test]
 fn markdown_and_html_are_laid_out_into_pages() {
-    let page = printed_page(None);
+    let page = default_page(None);
     let long = |open: &str, close: &str| -> String { (1..=200).map(|n| format!("{open}Paragraph {n}{close}\n\n")).collect() };
     for (name, document) in [("long.md", long("", "")), ("long.html", long("<p>", "</p>"))] {
         let pages = drawn(&write(tmp("word-text", name), document.as_bytes()), &[]);
@@ -359,7 +376,7 @@ fn a_drawing_or_a_pdfs_page_is_a_picture() {
     let of = |document: &str| page("word-vector", "here/a.md", document);
     let (size, red) = found(&of("![two](drawing.svg)"), RED);
     let (width, height) = red.expect("the drawing");
-    let expected = 45.0 / printed_page(None).w * size.0 as f32;
+    let expected = 45.0 / default_page(None).w * size.0 as f32;
     // Square, but for a row or column that where it falls on the pixels leaves only partly covered.
     assert!((width as f32 - expected).abs() < 3.0 && width.abs_diff(height) <= 1, "{width} × {height}, not about {expected}");
     assert_ne!(of("![two](figure.pdf)"), of("![two](missing.pdf)"), "a PDF's page");
@@ -376,7 +393,7 @@ fn a_picture_fits_the_page_and_keeps_its_shape() {
         write(dir.join(name), &picture(width, height, RED));
     }
     let of = |document: &str| found(&page("word-fit", "here/a.md", document), RED);
-    let laid = printed_page(None);
+    let laid = default_page(None);
     let ((page_w, _), small) = of("![two](small.png)");
     let points = page_w as f32 / laid.w;
     let about = |pixels: u32, wanted: f32| (pixels as f32 - wanted * points).abs() <= 2.0;
@@ -652,7 +669,7 @@ fn what_would_cost_too_much_is_refused_and_what_a_page_skips_is_not_counted() {
 /// whatever the files, doing nothing to a PDF, and refused out of its range, saying what it takes.
 #[test]
 fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
-    let (window, at_40) = (printed_page(None), printed_page(Some(40.0)));
+    let (window, at_40) = (default_page(None), default_page(Some(40.0)));
     let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
     for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
         let path = write(tmp("word-width", name), document.as_bytes());
@@ -663,8 +680,12 @@ fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
         let out = view(&path, &["--protocol", "kitty", "--width", "300"]);
         assert!(!out.status.success() && text(&out.stderr).contains("--width: expected window or 20–200, got 300"), "{}", text(&out.stderr));
         // The font size: the same page, larger text, so more pages; refused out of its range, with its unit.
-        let larger = drawn(&path, &["--font", "150"]);
-        assert!(shaped(&larger, window.w, window.h) && larger.len() > wide.len(), "{name}: {} pages at 150%, {} at 100%", larger.len(), wide.len());
+        // At 150% a book's halves hold fewer characters, so the window may hold one page where it held two.
+        let (larger, at_150) = (drawn(&path, &["--font", "150"]), printed_page(None, 150.0, 3.0));
+        assert!(shaped(&larger, at_150.w, at_150.h), "{name}: {larger:?}, not {} × {}", at_150.w, at_150.h);
+        // One to a row, where no book can change the page: more pages of larger text.
+        let (one, one_larger) = (drawn(&path, &["--per-row", "1"]), drawn(&path, &["--per-row", "1", "--font", "150"]));
+        assert!(one_larger.len() > one.len(), "{name}: {} pages at 150%, {} at 100%", one_larger.len(), one.len());
         let out = view(&path, &["--protocol", "kitty", "--font", "500"]);
         assert!(!out.status.success() && text(&out.stderr).contains("--font: expected 50–400%, got 500"), "{}", text(&out.stderr));
     }
@@ -677,16 +698,22 @@ fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
 /// length and the page grows by them. Refused out of its range; taken, and doing nothing, on a PDF.
 #[test]
 fn the_margin_shortens_the_line_or_widens_the_page() {
-    let window = printed_page(None);
-    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    // At 10, a book's halves need 80 columns where they needed 66 at 3: the window may hold one page
+    // where it held two.
+    let (window, at_ten) = (default_page(None), printed_page(None, 100.0, 10.0));
+    let long = varied(200);
     for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
         let path = write(tmp("word-margin", name), document.as_bytes());
         let (three, ten) = (drawn(&path, &[]), drawn(&path, &["--margin", "10"]));
-        assert!(shaped(&ten, window.w, window.h) && ten.len() > three.len(), "{name}: {} pages at 10, {} at 3", ten.len(), three.len());
+        assert!(shaped(&three, window.w, window.h) && shaped(&ten, at_ten.w, at_ten.h), "{name}: {three:?} {ten:?}");
         assert_eq!(drawn(&path, &["--margin", "3"]), three, "{name}: 3 is the default");
+        // One to a row, where no book can change the page: the same page, shorter lines, more pages.
+        let (one, one_ten) = (drawn(&path, &["--per-row", "1"]), drawn(&path, &["--per-row", "1", "--margin", "10"]));
+        let room = one.first().map(|&(w, h)| (w as f32, h as f32)).expect("a page");
+        assert!(shaped(&one_ten, room.0, room.1) && one_ten.len() > one.len(), "{name}: {} pages at 10, {} at 3", one_ten.len(), one.len());
         // At 40 characters, 10 at each side: 60 columns.
-        let at_40 = printed_page(Some(40.0));
-        assert!(shaped(&drawn(&path, &["--width", "40", "--margin", "10"]), at_40.w + 14.0 * COLUMN, at_40.h), "{name}");
+        let at_40 = printed_page(Some(40.0), 100.0, 10.0);
+        assert!(shaped(&drawn(&path, &["--width", "40", "--margin", "10"]), at_40.w, at_40.h), "{name}");
         let out = view(&path, &["--protocol", "kitty", "--margin", "30"]);
         assert!(!out.status.success() && text(&out.stderr).contains("--margin: expected 0–20, got 30"), "{}", text(&out.stderr));
     }
@@ -700,12 +727,12 @@ fn the_margin_shortens_the_line_or_widens_the_page() {
 /// it, and wins, with a warning; on a PDF both hold, each for what it is about.
 #[test]
 fn per_row_lays_markdown_and_html_out_in_columns() {
-    let window = printed_page(None);
+    let window = default_page(None);
     let cols = tty_window().map_or(60, |(cols, _, _)| cols);
     // Three where each holds 20 characters at 100%, else two.
     let n = if (cols.saturating_sub(4) / 3).saturating_sub(6) >= 20 { 3 } else { 2 };
     let column = f32::from((cols - 2 * (n - 1)) / n) * COLUMN;
-    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    let long = varied(200);
     for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
         let path = write(tmp("word-per-row", name), document.as_bytes());
         let (alone, columns) = (drawn(&path, &[]), drawn(&path, &["--per-row", &n.to_string()]));
@@ -717,7 +744,7 @@ fn per_row_lays_markdown_and_html_out_in_columns() {
         assert!(placed.len() >= usize::from(n) && placed.iter().all(|d| d.keys.contains(",C=1,")), "{name}: rows of {n}");
         // `--width 40` and a count disagree: the width wins, said once.
         let out = view(&path, &["--protocol", "kitty", "--width", "40", "--per-row", "3"]);
-        let at_40 = printed_page(Some(40.0));
+        let at_40 = default_page(Some(40.0));
         let sizes: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
         assert!(out.status.success() && shaped(&sizes, at_40.w, at_40.h), "{name}: {sizes:?}");
         assert_eq!(text(&out.stderr), format!("warning: --width and --per-row disagree on {name}: the width wins\n"), "{name}");

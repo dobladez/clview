@@ -150,3 +150,20 @@ surprises, and what a later reader would want.
   `tests/it/view_pager.rs` `a_number_typed_on_markdown_names_the_keys_that_take_it`,
   `a_redraw_writes_only_the_rows_that_change` and `help_and_r_draw_every_row_again`; all said
   `go to page 7`.
+
+## Codex review fixes
+
+- **Round 2's finding:** `tests/it/wordcraft.rs`'s `printed_page` chose the book with margins of 3, so on a
+  wide controlling terminal (`cargo test` from a 140 × 40 window) `--margin 10`, which rightly drops the
+  book, failed `the_margin_shortens_the_line_or_widens_the_page`. `printed_page` now takes the font size
+  and the margin, and the book and the widths follow them (`default_page` for 100% and 3). The same
+  assumption, from Spec-0003, failed `the_width_lays_markdown_and_html_out_to_so_many_characters` at
+  `--font 150` on `main` too; fixed with it. The page counts compared ("more pages") are taken at
+  `--per-row 1`, where no book can change the page, and on paragraphs of varied length (`varied`): one
+  length that fits a line at either width counted the same (`per_row_lays_markdown_and_html_out_in_columns`
+  at 200 × 50, the margin test at 80 × 24).
+- **Seen failing**, before the fix, under `script` with `stty cols 140 rows 40` (and 200 × 50, 80 × 24);
+  passing after at those sizes and with no tty.
+- **Left as it was:** `a_picture_fits_the_page_and_keeps_its_shape` fails at 140 × 40 and 200 × 50 on `main`
+  as well (a picture 2 or 3 pixels off what it expects, past the test's 2-pixel slack), unrelated to
+  margins or columns; raised to the owner.
