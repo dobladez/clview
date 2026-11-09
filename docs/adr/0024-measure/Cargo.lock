@@ -1016,8 +1016,10 @@ dependencies = [
  "image",
  "imagesize",
  "kurbo",
+ "peniko",
  "png",
  "roxmltree",
+ "stylo",
  "svgtypes",
 ]
 

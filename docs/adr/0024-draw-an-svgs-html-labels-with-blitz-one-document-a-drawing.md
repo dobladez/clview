@@ -22,7 +22,10 @@ little of it itself:
   and a compression ratio of 100.
 - **Pictures** decode at their own size, through the `image` crate's default limits (512 MiB).
 - **Styles, layout, painting:** no limits. Blitz culls what lies outside its viewport, and
-  nothing else.
+  nothing else. Painting multiplies through CSS lists and tiling: a command for each item of a
+  `box-shadow` list, each `background-image` and `mask-image` layer, and each tile of a picture
+  spaced (`background-repeat: space`); a gradient's tiles it stops at 500. A few bytes of style can
+  ask for billions of commands, and a painting can't be stopped once begun.
 - **The stack:** styles, layout and painting recurse once a level of nesting.
 
 ## Decision
@@ -34,8 +37,10 @@ little of it itself:
    as wide as all of them would be square, 8 CSS pixels apart, each placed by
    `transform: translate()` rather than `left`/`top` (Blitz culls by a box that counts an
    element's position twice, so a slot placed by `left` and `top` would not cull its neighbours).
-   It is laid out once; each label is painted once at scale 1, the viewport scrolled to its slot
-   and sized to it, into an anyrender `Scene` of its own, kept with the usvg tree. Each render
+   Its styles resolved, the pictures they ask for (a `background-image`, fetched as they resolve)
+   answered, and its styles resolved again, it is laid out once; each label is painted once at
+   scale 1, the viewport scrolled to its slot and sized to it, into an anyrender `Scene` of its own,
+   kept with the usvg tree. Each render
    replays a label's scene through its transform into the part of the page it lands on, so it
    stays sharp at any zoom and costs that part's pixels. The document is dropped once recorded.
 3. **Blitz runs on a thread of its own,** with an 8 MiB stack (as `source/later.rs`'s threads
@@ -56,10 +61,14 @@ little of it itself:
 | Requests | `data:` URLs answered | 1,024 | refused |
 | Layout | a label's laid-out size | 16,384 CSS pixels a side | that label left out |
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | cut |
-| Recording | commands recorded, all labels | 200,000 | all labels left out, with a warning |
+| Paint work | after layout, before painting: each element's shadows (6 commands each), and each background and mask layer's tiles (a gradient 500, a picture 1, or a tile an axis it spaces), 4 a layer | 20,000,000 | all labels left out, with a warning |
+| Recording | commands, all labels, counted as they are painted: a recorder keeps none past the limit | 200,000 | all labels left out, with a warning |
 | Painting | each label's part of the page, and its commands | in the page's estimate (ADR-0003's 1 GiB and 4,000 million pixels) | the page fails with why |
 
-The painting estimate counts, for each label landing on the page, its part's pixels twice
+The paint work follows blitz-paint 0.3.0-beta.4's painting (`box_shadow.rs`, `background.rs`'s
+`compute_layer_size`, `raster_axis_tiling` and `gradient_axis_tiling`, `mask.rs`), reading Stylo's
+computed values, as ADR-0003's `Estimate` follows resvg 0.49. The painting estimate counts, for
+each label landing on the page, its part's pixels twice
 (painted, then drawn over the page) and 2 KiB a command held; and as work, each command's box on
 the page within that part, and the part's pixels.
 
@@ -73,9 +82,12 @@ its own workspace, outside clv's build, with blitz-dom, blitz-html, blitz-paint 
 share is at the version clv builds. `measure gen <kind> …`
 writes each drawing, synthetic; `measure run <x.svg>` finds its labels as the spec says
 (simplified: no `<switch>` or nested `<svg>`), lays them out in one document (or one a label,
-`--each`), records each and replays it into the page at `--scale` (1 unless said), printing each
-stage's time and counts. Built with `cargo build --release` in `docs/adr/0024-measure/`; each
-line is `target/release/measure gen <kind> … > x.svg`, then
+`--each`), estimates its paint work and stops past the limit (unless `PAINT_ANYWAY=1`), records
+each label through a recorder that keeps at most 200,000 commands and counts the rest, and replays
+each into the page at `--scale` (1 unless said), past the commands' limit not at all. It prints
+each stage's time and counts, the commands painted in all, and the rules times the elements of its
+document, as ADR-0003 counts them. Built with `cargo build --release` in `docs/adr/0024-measure/`;
+each line is `target/release/measure gen <kind> … > x.svg`, then
 `/usr/bin/time -l target/release/measure run x.svg …`, its `real` time and maximum resident set.
 
 **One document, against one a label.** Their pages, written with `--out page.png --scale 2`, are
@@ -89,9 +101,8 @@ the document is dropped.
 |---|---|---|
 | tldraw, 27 labels and its 400 KB font: built | 15 ms | 239 ms |
 | tldraw, 33 labels: built | 12 ms | 292 ms |
-| `font 50 400`: 50 labels sharing a 400 KB `@font-face`, a TrueType font made by the tool | 0.06 s, 32 MB | 0.96 s, 57 MB |
-| `styles 1024 3072`: 1,024 labels under 3 MiB of styles | 2.16 s, 165 MB | stopped after 10 minutes |
-| `styles 16 3072`: 16 of them | | 27.4 s, 150 MB: 1.7 s a label |
+| `font 50 400`: 50 labels sharing a 400 KB `@font-face`, a TrueType font made by the tool | 0.07 s, 32 MB | 0.98 s, 57 MB |
+| `styles 1024 3072`: 1,024 labels under 3 MiB of styles, 8,313 rules of some 380 bytes (8,313 rules × 5,125 elements, 42.6 million, within ADR-0003's 50 million) | 0.60 s, 145 MB | 315.6 s, 435 MB |
 
 One document a label parses the styles and loads the font again for each label, as the spike did.
 
@@ -99,24 +110,44 @@ One document a label parses the styles and loads the font again for each label, 
 
 | `measure gen …`, then `run` | What it is | Time, memory |
 |---|---|---|
-| `labels 1024` | 1,024 labels, a box and a word each | 0.18 s, 73 MB: 8,192 commands |
-| `labels 10000` | 10,000 | 4.56 s, 494 MB, nearly all of it recording |
-| `visible 1024` | 1,024 `overflow: visible` labels, each with a box three boxes past its own | 0.15 s, 77 MB; the boxes drawn |
-| `text 1048576` | 1 MiB of text in one label | 0.41 s, 210 MB |
-| `text 4194304` | 4 MiB | 1.52 s, 585 MB |
-| `rules 10000 5000` | 10,000 rules matching every element (`:not(.cN)`), 5,000 elements each of its own class: 50 million | 1.57 s, 55 MB |
-| `commands 100000 16384`, `--scale 0.25 --no-replay` | 100,000 bordered boxes in a 16,384-pixel label: 200,005 commands, recorded | 0.38 s, 394 MB |
-| the same, replayed at 0.25 (4,096 × 4,096) | | 1.82 s, 726 MB |
-| `commands 1000000` | a million, in a 2,000-pixel label | 2.44 s, 1,776 MB (83,255 commands: the rest culled) |
-| `lines 200000 16384`, `--scale 0.25` | 200,000 words, a line each: 200,005 commands | 0.48 s, 503 MB |
-| `stacked 1000 4096` | 1,000 boxes each over a 4,096-pixel label: 16,800 million pixels painted | 1.63 s, 325 MB |
-| `shadows 10000` | 10,000 blurred shadows: 11,957 commands | 0.28 s, 97 MB |
-| `tile 16384`, `--scale 0.25` | a 1-pixel PNG tiled over a 16,384-pixel label | 0.08 s, 154 MB: 7 commands, a tiled brush |
-| `woff-bomb 1024` | a 1 MB WOFF whose table unpacks to 1 GiB | 0.39 s, 2,186 MB |
-| `woff-bomb 32` | one that unpacks to 32 MiB | 0.05 s, 92 MB |
-| `pictures 4 4096` | 4 PNGs of 4,096 × 4,096 (256 MiB decoded) | 0.10 s, 359 MB |
-| `pictures 16 4096` | 16 (1 GiB decoded) | 0.28 s, 1,175 MB |
-| `pictures 1024 4` | 1,024 small PNGs, as many `data:` URLs | 0.16 s, 96 MB |
+| `labels 1024` | 1,024 labels, a box and a word each | 0.18 s, 74 MB: 8,192 commands |
+| `labels 10000` | 10,000 | 5.83 s, 503 MB, nearly all of it recording |
+| `visible 1024` | 1,024 `overflow: visible` labels, each with a box three boxes past its own | 0.21 s, 76 MB; the boxes drawn |
+| `text 1048576` | 1 MiB of text in one label | 0.43 s, 210 MB |
+| `text 4194304` | 4 MiB | 1.58 s, 587 MB |
+| `rules 9900 5000` | 9,900 rules matching every element (`:not(.cN)`), 5,000 elements each of its own class: 9,900 × 5,009, 49.6 million | 1.69 s, 53 MB |
+| `commands 99990 16384`, `--scale 0.25 --no-replay` | 99,990 bordered boxes in a 16,384-pixel label: 199,985 commands, recorded | 0.41 s, 394 MB |
+| the same, replayed at 0.25 (4,096 × 4,096) | | 1.90 s, 720 MB |
+| `commands 1000000` | a million, in a 2,000-pixel label | 2.73 s, 1,779 MB (83,255 commands: the rest culled) |
+| `lines 199990 16384`, `--scale 0.25` | 199,990 words, a line each: 199,995 commands | 0.50 s, 503 MB |
+| `stacked 1000 4096` | 1,000 boxes each over a 4,096-pixel label: 16,800 million pixels painted | 1.72 s, 350 MB |
+| `shadows 10000` | 10,000 blurred shadows: 11,957 commands | 0.30 s, 97 MB |
+| `tile 16384`, `--scale 0.25` | a 1-pixel PNG tiled over a 16,384-pixel label | 0.08 s, 155 MB: 8 commands, a tiled brush |
+| `woff-bomb 1024` | a 1 MB WOFF whose table unpacks to 1 GiB | 0.43 s, 2,190 MB |
+| `woff-bomb 32` | one that unpacks to 32 MiB | 0.06 s, 92 MB |
+| `pictures 4 4096` | 4 PNGs of 4,096 × 4,096 (256 MiB decoded) | 0.12 s, 360 MB |
+| `pictures 16 4096` | 16 (1 GiB decoded) | 0.31 s, 1,175 MB |
+| `pictures 1024 4` | 1,024 small PNGs, as many `data:` URLs | 0.18 s, 96 MB |
+
+**Painting multiplied:** the work estimated, and with `PAINT_ANYWAY=1` the commands painted in all.
+
+| `measure gen …`, then `run` | What it is | Work estimated | Painted anyway | Time, memory |
+|---|---|---|---|---|
+| `shadow-list 398 500` | 398 boxes, each with the 500 shadows of one rule | 1.19 million | 199,801 | 0.49 s, 418 MB, replayed |
+| `shadow-list 500 500` | 500 of them | 1.5 million | 251,005: past 200,000, left out | 0.05 s, 115 MB |
+| `shadow-list 99000 33` | 99,000 boxes, 33 shadows each | 19.6 million | 2.06 million: left out | 0.25 s, 255 MB |
+| `shadow-list 99000 34` | 34 each | 20.2 million: left out | 2.13 million | 0.20 s, 169 MB |
+| `shadow-list 99000 50000` | 50,000 each, 850 KB of style | 29,700 million: left out | 3,125 million, in 18.3 s | 0.23 s, 182 MB |
+| `layers 1000 39` | 1,000 boxes, 39 gradient layers each | 19.66 million | 41,051 | 0.09 s, 181 MB |
+| `layers 1000 40` | 40 each | 20.16 million: left out | 42,051 | 0.04 s, 21 MB |
+| `space 4472 1` | a 1-pixel PNG spaced in 1-pixel tiles over a 4,472-pixel box | 19,998,788 | 19,998,791, in 106 ms: left out | 0.16 s, 206 MB |
+| `space 4473 1` | over 4,473 pixels | 20,007,733: left out | 20,007,736 | 0.04 s, 19 MB |
+
+"Left out" past the paint work's limit is before painting, so its time and memory are the
+drawing's without it; past the commands' limit it is after a painting the recorder kept 200,000
+of. The estimate errs high: six commands a shadow where an outset one paints one, 500 a gradient
+where one paints one tile in most boxes; a spaced picture's tiles it counts as blitz-paint does,
+to within the 4 commands around the layer.
 
 What sets each limit:
 
@@ -126,7 +157,7 @@ What sets each limit:
   (ADR-0003's) would be 1.8 GB. 100,000 boxes hold 394 MB with their recording, and are some
   twenty times a large real drawing's labels.
 - **Text, 1 MiB:** it lays out in 0.4 s and 210 MB; four times that holds 585 MB.
-- **Styles, ADR-0003's 50 million:** Stylo matches them in 1.6 s and 55 MB, so the count holds for
+- **Styles, ADR-0003's 50 million:** Stylo matches them in 1.6 s and 53 MB, so the count holds for
   Blitz as it does for usvg.
 - **Fonts, 32 MiB each and 64 MiB in all:** wuff unpacks a WOFF 1 to what its header claims. A
   font's unpacked size is read from its header before it is handed to Blitz (WOFF 1: the larger of
@@ -142,10 +173,19 @@ What sets each limit:
   it, laid out and culled as the box is; 1,024 such labels cost 0.15 s and 77 MB. Every
   `overflow: visible` label seen (older draw.io's) overflows its box by less than its own size;
   newer draw.io's labels are the drawing's size, and inside it.
-- **Recording, 200,000 commands (the spec started at a million):** 200,000 replay in about 1.5 s
-  and hold some 1 KB each while replayed, besides the page; a million would be about 7 s and 2 GB
-  a render. A real drawing's are far fewer: the tldraw drawing's 27 labels are 201 commands, 1,024
-  plain labels 8,192.
+- **Paint work, 20 million (new):** the work Blitz would do painting, estimated before it does,
+  since a painting runs to its end and a recorder that keeps nothing still lets Blitz walk every
+  command: 3,125 million shadows took 18.3 s with none kept, and the 8 MiB of markup allows some
+  500,000 in one rule, three minutes. 20 million tiles painted with nothing kept take 0.1 s
+  (`space 4472 1`); estimating takes 3 ms for 99,000 elements. Painting's other commands, a few an
+  element and some a line of text, are bounded by the elements and the text.
+- **Recording, 200,000 commands (the spec started at a million), counted as they are painted:** a
+  recorder in front of anyrender's `Scene` keeps them while the budget lasts and only counts past
+  it, so what a recording holds is bounded whatever the estimate missed: 251,005 painted cost
+  115 MB. 200,000 replay in about 1.5 s and hold some 1 KB each while replayed, besides the page;
+  a million would be about 7 s and 2 GB a render. A real drawing's are far fewer: the tldraw
+  drawing's 27 labels are 201 commands, 1,024 plain labels 8,192. Past it, what was kept isn't
+  replayed: its layers, cut off, don't balance, and vello_cpu panics on that.
 - **Painting, in the page's estimate:** a command covering a 4,096-pixel page holds about 190 KB
   while replayed, and vello_cpu fills about 10,000 million pixels a second here (`stacked`), so
   2 KiB a command and ADR-0003's 4,000 million pixels of work bound a render to well under a
@@ -174,8 +214,9 @@ nested grids being the deepest-costing kind tried: the limit is 64, on a thread 
 - **Blitz for the whole SVG:** Blitz hands an SVG to usvg with default options and paints usvg's
   tree, so it drops `<foreignObject>` too, and has none of ADR-0003's bounds.
 - **One Blitz document a label,** as the spike did: each parses the drawing's styles and loads its
-  fonts again, 16 times slower for a tldraw drawing, and 1,024 labels under 3 MiB of styles took
-  the spike 111 s and 3.1 GB. Its 32 MiB budget of documents in all left out 1,014 of them.
+  fonts again, 16 times slower for a tldraw drawing, and 530 times for 1,024 labels under 3 MiB
+  of styles (316 s and 435 MB here; 111 s and 3.1 GB for the spike's styles). Its 32 MiB budget
+  of documents in all left out 1,014 of them.
 - **Painting a whole label at the scale shown,** as the spike first did: a label is pixels the
   size it is shown at, so a large label at a large zoom is more pixels than the page, and past
   the spike's cap of 8,192 pixels a side it was lost: every label of a newer draw.io drawing, in
@@ -183,6 +224,10 @@ nested grids being the deepest-costing kind tried: the limit is 64, on a thread 
 - **Blitz on the render thread's 2 MiB,** its nesting held to 64 by what a release build holds
   (360 nested grids): a debug build overflows at 58, so the tests could not show the limit holds.
   Held to 32 instead, it would hold in debug too, and leave out the labels 33 to 64 levels deep.
+- **Counting commands only, as they are painted,** without estimating first: memory is bounded,
+  time is not (above).
+- **A recorder that stops the painting by panicking past its limit,** caught as Blitz's panics
+  are: exact, but a panic on purpose, which `CONTRIBUTING.md`'s rules forbid.
 - **Gecko** (not embeddable) and **Servo** (a browser's weight for a drawing's labels).
 - **wordcraft's HTML importer:** it lays out pages, not CSS boxes, has no flex, and is another
   backend's library.
@@ -192,8 +237,11 @@ nested grids being the deepest-costing kind tried: the limit is 64, on a thread 
 - **Positive:** a drawing's labels cost about one document; a label is sharp at any zoom and
   costs its part of the page.
 - **Accepted:**
-  - **The limits follow Blitz 0.3.0-beta.4,** anyrender 0.14 and vello_cpu 0.3: moving any of
-    them means measuring again. `tests/it/resvg.rs` fails when they move.
+  - **The limits follow Blitz 0.3.0-beta.4,** anyrender 0.14 and vello_cpu 0.3, and the paint work
+    estimate blitz-paint 0.3.0-beta.4's painting: moving any of them means reading and measuring
+    again. `tests/it/resvg.rs` fails when they move.
+  - **The estimate errs high:** a drawing of many gradients or inset shadows may have its labels
+    left out though painting them would be cheap.
   - **Labels are drawn over the drawing,** not among its shapes or inside its groups' opacity.
   - **Blitz isn't built never to panic:** a panic while the labels are prepared leaves them all
     out, with a warning; a stack overflow or an abort is bounded only by the nesting limit.

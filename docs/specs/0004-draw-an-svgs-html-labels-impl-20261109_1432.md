@@ -80,3 +80,22 @@ surprises, and what a later reader would want.
   ancestor with a style as long as the drawing ends the labels before a second one is copied.
   No test tells it from checking once at the end (both leave the labels out): only the memory
   held on the way differs.
+
+## Codex's review of task 1
+
+- **Commands, counted as painted:** the tool's `Recorder` wraps anyrender's `Scene` behind its
+  `PaintScene` trait and keeps commands while 200,000 last. It bounds memory but not time: Blitz
+  still walks each command it keeps none of, 3,125 million in 18 s. So the owner chose to estimate
+  the paint work too, after layout and before painting (option A, over a panic that stops the
+  painting, against the rules, or the recorder alone). The estimate reads Stylo's computed
+  values, which needs `stylo` named; the tool depends on it directly, and clv's `html.rs` will
+  from task 3.
+- **The estimate, with clv's code and its tests, lands in task 3,** where `html.rs` has its
+  document and painter: the review's commit holds the tool, the ADR and the spec.
+- **A picture a style asks for** (`background-image: url(data:…)`) is fetched as the styles
+  resolve and answered after: the document's styles resolve again once their messages are
+  handled. Before that, the `tile` row drew no picture at all (7 commands then, 8 now).
+- **The styles fixture** is now rules of some 380 bytes, 8,313 of them under 3 MiB: 42.6 million
+  rule tries with the document's wrappers, where the first one's 37,401 short rules passed 50
+  million at element 1,337. `rules 10000 5000` was over by a little too: now `rules 9900 5000`.
+- **Every row of the ADR was measured again** with the tool as it now is.

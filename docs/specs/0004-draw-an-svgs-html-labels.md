@@ -109,7 +109,8 @@ hostile drawing, what it cost, and how to measure it again.
 | Requests | `data:` URLs answered | 1,024 | in the net provider | refused |
 | Layout | a label's laid-out size | 16,384 CSS pixels a side | after layout, before recording | that label left out |
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | while written out | cut |
-| Recording | commands recorded | 200,000 | after recording, before any replay | all labels left out, with a warning |
+| Paint work | each element's shadows, and each background and mask layer's tiles, as blitz-paint 0.3.0-beta.4 paints them (ADR-0024) | 20 million | after layout, before painting | all labels left out, with a warning |
+| Recording | commands recorded, all labels | 200,000 | as they are painted: a recorder keeps none past it | all labels left out, with a warning |
 | Painting | each label's part of the page, twice, and 2 KiB a command held; each command's box on the page, and the part's pixels, as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
 
 - A drawing's labels cost about one document, not one each: their styles parsed and their fonts
@@ -174,8 +175,10 @@ hostile drawing, what it cost, and how to measure it again.
 - `Cargo.toml` — the Blitz crates pinned `=0.3.0-beta.4` without their default features (which
   leaves out Blitz's own SVG, usvg without clv's bounds), with `woff` and `system-fonts`;
   `anyrender` 0.14, `anyrender_vello_cpu` 0.18, `kurbo` 0.13 (built already for Blitz) and
-  `svgtypes` 0.16, each with its comment; `svg-html = ["svg", "dep:image", …]`, so its decoders
-  come with it; among the defaults from task 3.
+  `svgtypes` 0.16, each with its comment; from task 3, `stylo` `=0.22.0` too (built already for
+  Blitz, which doesn't re-export it), for the paint work estimate to read Stylo's computed values,
+  named only in `html.rs` and in the version guard; `svg-html = ["svg", "dep:image", …]`, so its
+  decoders come with it; among the defaults from task 3.
 - `tests/it/resvg.rs` — the tests; `nothing_but_svg_html_names_blitz`; the version guard.
 - `.github/workflows/ci.yml` — `--features svg-html` alone among the backends built alone, and
   `--no-default-features --features pdf,svg`, so the integration tests (gated on `pdf`) run the
@@ -205,8 +208,9 @@ hostile drawing, what it cost, and how to measure it again.
   label in a box of its own (a slot), packed in rows about as wide as all of them would be square,
   8 CSS pixels apart, each placed by `transform: translate()`, never `left`/`top`: Blitz culls by a
   box that counts an element's position twice, and slots placed by `left` and `top` carry their
-  neighbours' empty clip layers, the square of the labels in all. Laid out once; each label
-  painted once at scale 1, the viewport scrolled to its slot and sized to it, into an anyrender
+  neighbours' empty clip layers, the square of the labels in all. Its styles resolved twice, so
+  the pictures a `background-image` asks for as they resolve are there; laid out once; its paint
+  work estimated; each label painted once at scale 1, the viewport scrolled to its slot and sized to it, into an anyrender
   `Scene` of its own, kept with the usvg tree, and the document dropped. Each render replays a
   label's scene through its transform into the part of the page it lands on. A scene keeps the
   fonts and pictures it paints with (seen drawn after the document was dropped); Blitz paints no
@@ -258,14 +262,16 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   parsed, a root-declared XHTML prefix, an internal entity in a label.
 - [ ] **Labels drawn, bounded, on by default** — `Painter`, the net provider and its budgets, the
   document, fragments and replays as task 1 decided; painting only what lands on the page; opacity;
-  overflow; hints; pictures; the stage limits and their warnings; `Estimate`; the nesting limit;
-  `svg-html` among the defaults. *Files:* `src/source/svg.rs`, `src/source/svg/html.rs`,
+  overflow; hints; pictures; the stage limits and their warnings; the paint work estimate and the
+  recorder; `Estimate`; the nesting limit; `svg-html` among the defaults. *Files:* `src/source/svg.rs`, `src/source/svg/html.rs`,
   `Cargo.toml`, `tests/it/resvg.rs`. *Verify:* `cargo test -j 2 --test it resvg`; boxes for: placed
   through nested `<svg>`s and a `preserveAspectRatio`, a percentage label, a child several boxes
   outside an `overflow: visible` label, a label in a window over 6,000 pixels wide, a group's
   opacity, a shape overlapping a label (drawn over it), a rule on the `<foreignObject>`'s class, an
   inherited `color`, labels of different sizes with percentage children, a `data:` PNG, each hint
-  overridden by a rule and a malformed one; and each stage's limit, with its warning.
+  overridden by a rule and a malformed one; and each stage's limit, with its warning: the paint
+  work's for each multiplier at its limit and past it (shadows, layers, `space` tiles), each seen
+  failing without the estimate, and the recorder's past 200,000 commands.
 - [ ] **The docs** — usage's SVG drawings, Limits and known differences; architecture; CHANGELOG;
   README's credits; `CLAUDE.md`; the ADR Accepted. *Files:* `docs/usage.md`, `docs/architecture.md`,
   `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/adr/0024-…`. *Verify:* `cargo test -j 2 --test docs`,
@@ -300,3 +306,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   drawing holds; the labels' elements held to 100,000, their commands to 200,000, their overflow
   to 4,096 CSS pixels; the nesting limit 64, with Blitz on a thread of its own with an 8 MiB stack,
   since a debug build overflows 2 MiB at 58 nested grids.
+- 2026-11-09 — Codex's review of task 1: commands counted as they are painted, a recorder keeping
+  none past 200,000, and the paint work estimated after layout, before painting, past 20 million
+  all labels left out (ADR-0024: counting alone bounds memory, not time); a style resolved twice
+  for the pictures it asks for; the styles fixture of fewer, larger rules, within 50 million;
+  `stylo` a direct dependency from task 3, approved by the owner.

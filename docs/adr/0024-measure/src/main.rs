@@ -198,6 +198,255 @@ fn drawing(text: &str) -> Drawing {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The recording, its commands counted as they are painted.
+
+/// The most commands recorded, all labels together (ADR-0024).
+const MAX_COMMANDS: usize = 200_000;
+
+/// An anyrender `Scene` that keeps a command only while `budget` has room: past it, it counts
+/// what Blitz paints and keeps nothing, so a recording holds at most the budget's commands.
+struct Recorder<'b> {
+    scene: Scene,
+    budget: &'b mut usize,
+    /// Commands painted past the budget, kept nowhere.
+    past: &'b mut u64,
+}
+
+impl Recorder<'_> {
+    /// Whether one more command may be kept.
+    fn take(&mut self) -> bool {
+        match self.budget.checked_sub(1) {
+            Some(left) => {
+                *self.budget = left;
+                true
+            }
+            None => {
+                *self.past += 1;
+                false
+            }
+        }
+    }
+}
+
+impl anyrender::RenderContext for Recorder<'_> {}
+
+impl PaintScene for Recorder<'_> {
+    fn reset(&mut self) {
+        self.scene.reset();
+    }
+
+    fn push_layer(
+        &mut self,
+        fill: peniko::Fill,
+        blend: impl Into<peniko::BlendMode>,
+        alpha: f32,
+        transform: Affine,
+        clip: &impl kurbo::Shape,
+        filter: Option<Arc<anyrender::Filter>>,
+        backdrop_filter: Option<Arc<anyrender::Filter>>,
+    ) {
+        if self.take() {
+            self.scene.push_layer(fill, blend, alpha, transform, clip, filter, backdrop_filter);
+        }
+    }
+
+    fn push_clip_layer(&mut self, fill: peniko::Fill, transform: Affine, clip: &impl kurbo::Shape) {
+        if self.take() {
+            self.scene.push_clip_layer(fill, transform, clip);
+        }
+    }
+
+    fn pop_layer(&mut self) {
+        if self.take() {
+            self.scene.pop_layer();
+        }
+    }
+
+    fn stroke<'a>(
+        &mut self,
+        style: &kurbo::Stroke,
+        transform: Affine,
+        brush: impl Into<anyrender::PaintRef<'a>>,
+        brush_transform: Option<Affine>,
+        shape: &impl kurbo::Shape,
+    ) {
+        if self.take() {
+            self.scene.stroke(style, transform, brush, brush_transform, shape);
+        }
+    }
+
+    fn fill<'a>(
+        &mut self,
+        style: peniko::Fill,
+        transform: Affine,
+        brush: impl Into<anyrender::PaintRef<'a>>,
+        brush_transform: Option<Affine>,
+        shape: &impl kurbo::Shape,
+    ) {
+        if self.take() {
+            self.scene.fill(style, transform, brush, brush_transform, shape);
+        }
+    }
+
+    fn draw_glyphs<'a, 's: 'a>(
+        &'s mut self,
+        font: &'a peniko::FontData,
+        font_size: f32,
+        hint: bool,
+        normalized_coords: &'a [anyrender::NormalizedCoord],
+        embolden: kurbo::Vec2,
+        style: impl Into<peniko::StyleRef<'a>>,
+        brush: impl Into<anyrender::PaintRef<'a>>,
+        brush_alpha: f32,
+        transform: Affine,
+        glyph_transform: Option<Affine>,
+        glyphs: impl Iterator<Item = anyrender::Glyph> + Clone,
+    ) {
+        if self.take() {
+            self.scene.draw_glyphs(font, font_size, hint, normalized_coords, embolden, style, brush, brush_alpha, transform, glyph_transform, glyphs);
+        }
+    }
+
+    fn draw_box_shadow(&mut self, transform: Affine, rect: Rect, brush: peniko::Color, radius: f64, std_dev: f64) {
+        if self.take() {
+            self.scene.draw_box_shadow(transform, rect, brush, radius, std_dev);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The paint estimate: what painting a laid-out document will cost, before it is painted.
+
+/// The most work the estimate allows: about 0.1 s of painting with nothing kept (ADR-0024).
+const MAX_PAINT_WORK: u64 = 20_000_000;
+
+/// Commands an inset or outset shadow paints at most (blitz-paint's `box_shadow.rs`: an inset one
+/// pushes two layers, fills, shadows and pops).
+const PER_SHADOW: u64 = 6;
+
+/// Commands a gradient layer paints at most: blitz-paint paints none past 500 tiles.
+const PER_GRADIENT: u64 = 500;
+
+/// Commands a layer paints around its tiles: its clip layer, pushed and popped (a mask's two).
+const PER_LAYER: u64 = 4;
+
+/// Each element's painting, as blitz-paint 0.3.0-beta.4 does it, counted in commands where CSS
+/// lists or tiling multiply them: its shadows, and each background and mask layer's tiles. What
+/// else an element paints is a few commands, bounded by the elements and the text.
+fn paint_work(doc: &BaseDocument) -> u64 {
+    let viewport = doc.viewport().window_size;
+    let mut work = 0u64;
+    let mut walk = vec![doc.root_element().id];
+    while let Some(id) = walk.pop() {
+        let Some(node) = doc.get_node(id) else { continue };
+        walk.extend(node.children.iter().copied());
+        let (Some(element), Some(style)) = (node.element_data(), node.primary_styles()) else { continue };
+        let size = node.final_layout().size;
+        let border = (f64::from(size.width), f64::from(size.height));
+        work = work.saturating_add(PER_SHADOW.saturating_mul(style.get_effects().box_shadow.0.len() as u64));
+        let bg = style.get_background();
+        for (idx, image) in
+            bg.background_image.0.iter().enumerate().filter(|(_, image)| !matches!(image, style::values::generics::image::GenericImage::None))
+        {
+            let fixed = matches!(
+                cyclic(&bg.background_attachment.0, idx),
+                Some(style::properties::generated::longhands::background_attachment::single_value::computed_value::T::Fixed)
+            );
+            // A fixed layer is placed in the painted area, the label's slot at most.
+            let area = if fixed { (border.0.max(f64::from(viewport.0)), border.1.max(f64::from(viewport.1))) } else { border };
+            let tiles = layer_tiles(
+                image,
+                element.background_images.get(idx).and_then(Option::as_ref),
+                cyclic(&bg.background_repeat.0, idx),
+                cyclic(&bg.background_size.0, idx),
+                area,
+            );
+            work = work.saturating_add(PER_LAYER).saturating_add(tiles);
+        }
+        let svg = style.get_svg();
+        for (idx, image) in
+            svg.mask_image.0.iter().enumerate().filter(|(_, image)| !matches!(image, style::values::generics::image::GenericImage::None))
+        {
+            let tiles = layer_tiles(
+                image,
+                element.mask_images.get(idx).and_then(Option::as_ref),
+                cyclic(&svg.mask_repeat.0, idx),
+                cyclic(&svg.mask_size.0, idx),
+                border,
+            );
+            work = work.saturating_add(PER_LAYER).saturating_add(tiles);
+        }
+    }
+    work
+}
+
+/// `values[idx]`, the list repeated as CSS repeats a layer's shorter lists.
+fn cyclic<T>(values: &[T], idx: usize) -> Option<&T> {
+    values.get(idx.checked_rem(values.len())?)
+}
+
+/// The tiles one image layer paints over `area`, as blitz-paint tiles it: a gradient at most 500;
+/// a picture once, but once a tile on an axis it spaces (`space`).
+fn layer_tiles(
+    image: &style::values::computed::Image,
+    data: Option<&blitz_dom::node::ImageResourceData>,
+    repeat: Option<&style::values::computed::BackgroundRepeat>,
+    size: Option<&style::values::computed::background::BackgroundSize>,
+    area: (f64, f64),
+) -> u64 {
+    use style::values::generics::image::GenericImage;
+    use style::values::specified::background::BackgroundRepeatKeyword::Space;
+    match image {
+        GenericImage::Gradient(_) => PER_GRADIENT,
+        GenericImage::Url(_) => {
+            let Some(blitz_dom::node::ImageData::Raster(raster)) = data.map(|d| &d.image) else { return 0 };
+            let (Some(repeat), Some(size)) = (repeat, size) else { return 1 };
+            let tile = layer_size(size, area, (f64::from(raster.width), f64::from(raster.height)));
+            let count = |keyword, length: f64, tile: f64| if keyword == Space { space_count(length, tile) } else { 1 };
+            count(repeat.0, area.0, tile.0).saturating_mul(count(repeat.1, area.1, tile.1))
+        }
+        _ => 0,
+    }
+}
+
+/// How many tiles of `tile` fit in `length` spaced, at least one: blitz-paint's
+/// `compute_space_count_and_stride`, its `as u32` saturating.
+fn space_count(length: f64, tile: f64) -> u64 {
+    let count = (length - length % tile) / tile;
+    // `as` saturates, and makes NaN 0.
+    u64::from(count as u32).max(1)
+}
+
+/// A picture layer's size in `area`, `image` its natural size: blitz-paint's
+/// `compute_layer_size`, as it sizes a picture.
+fn layer_size(size: &style::values::computed::background::BackgroundSize, area: (f64, f64), image: (f64, f64)) -> (f64, f64) {
+    use style::values::computed::Length;
+    use style::values::computed::background::BackgroundSize;
+    use style::values::generics::length::GenericLengthPercentageOrAuto as Lpa;
+    let ((cw, ch), (iw, ih)) = (area, image);
+    match size {
+        BackgroundSize::ExplicitSize { width, height } => {
+            let width = width.map(|w| w.0.resolve(Length::new(cw as f32)));
+            let height = height.map(|h| h.0.resolve(Length::new(ch as f32)));
+            match (width, height) {
+                (Lpa::LengthPercentage(w), Lpa::LengthPercentage(h)) => (f64::from(w.px()), f64::from(h.px())),
+                (Lpa::LengthPercentage(w), Lpa::Auto) => (f64::from(w.px()), ih / iw * f64::from(w.px())),
+                (Lpa::Auto, Lpa::LengthPercentage(h)) => (iw / ih * f64::from(h.px()), f64::from(h.px())),
+                (Lpa::Auto, Lpa::Auto) => (iw, ih),
+            }
+        }
+        BackgroundSize::Cover => {
+            let ratio = (cw / iw).max(ch / ih);
+            (iw * ratio, ih * ratio)
+        }
+        BackgroundSize::Contain => {
+            let ratio = (cw / iw).min(ch / ih);
+            (iw * ratio, ih * ratio)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The documents.
 
 /// An XHTML document holding `slots`: each label in a box of its own at (x, y), none overlapping.
@@ -310,6 +559,14 @@ fn config(width: u32, height: u32, fonts: &FontContext) -> DocumentConfig {
     }
 }
 
+/// `doc` styled and laid out, with what its styles fetched: a `background-image` or a
+/// `mask-image` is asked for as the styles resolve, and answered after, so they resolve again.
+fn resolved(doc: &mut HtmlDocument) {
+    doc.resolve(0.0);
+    doc.handle_messages();
+    doc.resolve(0.0);
+}
+
 /// The `<foreignObject>` copy of each slot of `doc`, in order: body's children, then down the
 /// first element child `depth` times.
 fn boxes(doc: &BaseDocument, depths: &[usize]) -> Vec<(Rect, Rect)> {
@@ -362,6 +619,8 @@ fn run(args: &[String]) {
     let mut scenes: Vec<(Scene, Rect)> = Vec::with_capacity(d.labels.len());
     let (mut markup, mut documents) = (0usize, 0usize);
     let mut largest = (0.0f64, 0.0f64);
+    // The commands left to record, and those painted past them.
+    let (mut budget, mut past) = (MAX_COMMANDS, 0u64);
     if each {
         for label in &d.labels {
             let xhtml = document(&d.css, &[(label, 0.0, 0.0)]);
@@ -373,15 +632,15 @@ fn run(args: &[String]) {
             doc.handle_messages();
             built += t.elapsed();
             let t = Instant::now();
-            doc.resolve(0.0);
+            resolved(&mut doc);
             laid += t.elapsed();
             let t = Instant::now();
             let (border, region) = boxes(&doc, &[label.depth()])[0];
             largest = (largest.0.max(border.width()), largest.1.max(border.height()));
-            let mut scene = Scene::new();
-            blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
+            let mut recorder = Recorder { scene: Scene::new(), budget: &mut budget, past: &mut past };
+            blitz_paint::paint_scene(&mut recorder, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
             recorded += t.elapsed();
-            scenes.push((scene, region));
+            scenes.push((recorder.scene, region));
         }
     } else {
         // Shelves: left to right, a row about as wide as all of them would be square, at most
@@ -418,8 +677,18 @@ fn run(args: &[String]) {
         doc.handle_messages();
         built = t.elapsed();
         let t = Instant::now();
-        doc.resolve(0.0);
+        resolved(&mut doc);
         laid = t.elapsed();
+        let t = Instant::now();
+        let work = paint_work(&doc);
+        println!(
+            "  paint work estimated: {work} ({:.1} ms){}",
+            t.elapsed().as_secs_f64() * 1e3,
+            if work > MAX_PAINT_WORK { ", past the limit: all labels left out" } else { "" }
+        );
+        if work > MAX_PAINT_WORK && std::env::var("PAINT_ANYWAY").is_err() {
+            return;
+        }
         let t = Instant::now();
         let depths: Vec<usize> = d.labels.iter().map(Label::depth).collect();
         let found = boxes(&doc, &depths);
@@ -427,9 +696,9 @@ fn run(args: &[String]) {
             largest = (largest.0.max(border.width()), largest.1.max(border.height()));
             let (sw, sh) = label.slot();
             doc.set_viewport_scroll(blitz_dom::Point { x: f64::from(*x), y: f64::from(*y) });
-            let mut scene = Scene::new();
-            blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
-            scenes.push((scene, region));
+            let mut recorder = Recorder { scene: Scene::new(), budget: &mut budget, past: &mut past };
+            blitz_paint::paint_scene(&mut recorder, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
+            scenes.push((recorder.scene, region));
         }
         recorded = t.elapsed();
         let t = Instant::now();
@@ -462,7 +731,9 @@ fn run(args: &[String]) {
 
     // The replay: each label through its transform into the part of the page it lands on.
     let t = Instant::now();
-    let scale = if args.iter().any(|a| a == "--no-replay") { 0.0 } else { scale };
+    // Past the commands' limit the labels are left out: nothing is replayed, and what was kept,
+    // its layers cut off unbalanced, couldn't be (vello_cpu panics on it).
+    let scale = if args.iter().any(|a| a == "--no-replay") || past > 0 { 0.0 } else { scale };
     let (pw, ph) = ((f64::from(d.size.0) * scale).ceil() as u32, (f64::from(d.size.1) * scale).ceil() as u32);
     let mut page = vec![0u8; pw as usize * ph as usize * 4];
     let mut painted = 0u64;
@@ -500,6 +771,10 @@ fn run(args: &[String]) {
         markup as f64 / 1048576.0,
         d.css.len() as f64 / 1024.0
     );
+    // As ADR-0003 counts them: a rule for each `{`, an element for each tag the document opens.
+    let rules = d.css.matches('{').count();
+    let all: Vec<(&Label, f32, f32)> = d.labels.iter().map(|l| (l, 0.0, 0.0)).collect();
+    let elements = tags(&document(&d.css, &all));
     println!(
         "  found {:.0} ms, fonts {:.0} ms, built {:.0} ms, laid out {:.0} ms, recorded {:.0} ms, replayed {:.0} ms",
         ms(found),
@@ -509,6 +784,11 @@ fn run(args: &[String]) {
         ms(recorded),
         ms(replayed)
     );
+    println!("  {rules} rules × {elements} elements = {:.1} million", (rules * elements) as f64 / 1e6);
+    if past > 0 {
+        println!("  past {MAX_COMMANDS} commands: {past} more painted and not kept, all labels left out");
+    }
+    println!("  painted {} commands in all", commands as u64 + past);
     println!(
         "  {commands} commands ({glyphs} glyphs); page {pw} × {ph}, {painted} pixels painted; largest label {:.0} × {:.0}",
         largest.0, largest.1
@@ -540,6 +820,11 @@ fn run(args: &[String]) {
     }
 }
 
+/// The tags `markup` opens.
+fn tags(markup: &str) -> usize {
+    markup.match_indices('<').filter(|(at, _)| markup[at + 1..].starts_with(|c: char| c.is_ascii_alphabetic())).count()
+}
+
 // ---------------------------------------------------------------------------------------------
 // The stack.
 
@@ -564,7 +849,7 @@ fn stack(depth: usize, tag: &str) {
     let fonts = FontContext::default();
     let mut doc = HtmlDocument::from_xml(&xhtml, config(400, 100, &fonts));
     doc.handle_messages();
-    doc.resolve(0.0);
+    resolved(&mut doc);
     let mut scene = Scene::new();
     blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, 400, 100, 0, 0);
     let _ = render_to_buffer::<VelloCpuImageRenderer, _>(|s| s.append_scene(scene, Affine::scale(2.0)), 800, 200);
@@ -643,13 +928,20 @@ const BOX: &str = ".box{background:#3a7;border:2px solid #135;width:100%;height:
 fn generate(args: &[String]) -> String {
     let n = |i: usize, default: u64| args.get(i).map(|s| s.parse::<u64>().unwrap()).unwrap_or(default);
     match args.first().map(String::as_str) {
-        // N labels under K KiB of stylesheet rules, matching none of them.
+        // N labels under K KiB of stylesheet rules, matching none of them, some 380 bytes each.
         Some("styles") => {
             let (count, kib) = (n(1, 1024) as u32, n(2, 3072));
             let mut css = String::from(BOX);
             let mut i = 0;
             while (css.len() as u64) < kib * 1024 {
-                let _ = write!(css, "\n.r{i} .s{i} > .t{i}{{color:#123456;background:#abcdef;border:1px solid #fedcba}}");
+                // As an export's rules are: a few selectors, many declarations, some 380 bytes.
+                let _ = write!(
+                    css,
+                    "\n.r{i} .s{i} > .t{i}, #n{i} .label{{color:#123456;background:#abcdef;border:1px solid #fedcba;padding:1px 2px 3px 4px;\
+                     margin:0 1px;font:12px/1.4 sans-serif;text-decoration:underline;opacity:.9;border-radius:3px;box-sizing:border-box;\
+                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.01em;word-spacing:.1em;min-width:10px;\
+                     max-width:400px;min-height:5px}}"
+                );
                 i += 1;
             }
             let (w, h, body) = grid(count, 32, 120, 40, |i| format!("<div class=\"box\">Label {i}</div>"));
@@ -745,6 +1037,31 @@ fn generate(args: &[String]) -> String {
             let css = ".f{position:absolute;left:0;top:0;width:100%;height:100%;background:rgba(40,80,200,0.02)}";
             svg(side, side, css, &label(0, 0, side, side, &"<i class=\"f\"></i>".repeat(count)))
         }
+        // One label of N small boxes, each with L gradient layers.
+        Some("layers") => {
+            let (count, layers) = (n(1, 1000) as usize, n(2, 100) as usize);
+            let gradients: Vec<String> = (0..layers).map(|i| format!("linear-gradient(#{:03x},#fff)", i % 4096)).collect();
+            let css = format!(".c{{display:inline-block;width:2px;height:2px;margin:1px;background-image:{}}}", gradients.join(","));
+            svg(2000, 2000, &css, &label(0, 0, 2000, 2000, &"<i class=\"c\"></i>".repeat(count)))
+        }
+        // One S × S label of a 1-pixel PNG spaced (`background-repeat: space`) in tiles of T pixels.
+        Some("space") => {
+            let (side, tile) = (n(1, 4096) as u32, n(2, 1) as u32);
+            let png = b64(&png_bytes(1, 1, [40, 120, 200, 255]));
+            let css = format!(
+                ".s{{width:{side}px;height:{side}px;background-image:url(data:image/png;base64,{png});background-repeat:space;background-size:{tile}px {tile}px}}"
+            );
+            svg(side, side, &css, &label(0, 0, side, side, "<div class=\"s\"></div>"))
+        }
+        // One label of N small boxes, each with a list of S shadows from one rule: N × S commands
+        // from a few bytes of style.
+        Some("shadow-list") => {
+            let (count, shadows) = (n(1, 400) as usize, n(2, 500) as usize);
+            let side = n(3, 2000) as u32;
+            let list: Vec<String> = (0..shadows).map(|i| format!("{}px {}px 1px #000", i % 7, i % 5)).collect();
+            let css = format!(".c{{display:inline-block;width:2px;height:2px;margin:1px;box-shadow:{}}}", list.join(","));
+            svg(side, side, &css, &label(0, 0, side, side, &"<i class=\"c\"></i>".repeat(count)))
+        }
         // One label of N boxes, each with a blurred shadow.
         Some("shadows") => {
             let count = n(1, 10_000) as usize;
@@ -761,7 +1078,8 @@ fn generate(args: &[String]) -> String {
         _ => {
             eprintln!(
                 "kinds: styles N KiB | font N KB | text BYTES | rules R E | deep D | woff-bomb MiB | pictures N SIDE | tile SIDE | \
-                 commands N SIDE | lines N SIDE | stacked N SIDE | shadows N SIDE | visible N | labels N"
+                 commands N SIDE | lines N SIDE | stacked N SIDE | shadows N SIDE | shadow-list N S [SIDE] | layers N L | space SIDE TILE | \
+                 visible N | labels N"
             );
             std::process::exit(2);
         }
