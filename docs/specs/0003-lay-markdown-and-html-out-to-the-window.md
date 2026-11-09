@@ -264,6 +264,10 @@ a row only at `largest_scale`, for a page that has one.
 - 🟡 **The least lines a page holds** (10 for now), and a small room's margins: measured.
 - 🟡 **A cell of unknown size** — laid out at the assumed cell; if that proves poor on a real
   terminal, a page of the room's shape at 80 characters is the other way.
+- 🟡 **Printing to a pipe or a file** lays out at the room the tty says, as decided: so the page's
+  shape is the terminal the command runs in, and a test that prints a document from a terminal gets
+  that terminal's room (the tests compute it from `/dev/tty` as `clv` does). The other way is the
+  preview's room whenever stdout isn't a terminal, which would make printed pages the same anywhere.
 
 ## Tasks
 
@@ -297,16 +301,18 @@ Each task's commit passes the quality gates alone.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, after each
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, after each
   task, each backend alone too (`cfg` attributes change).
-- [ ] Tests added, each seen failing without the change: name them.
+- [x] Tests added, each seen failing without the change: named, with what was reverted for each, in the
+  [notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md), under each task.
 - [ ] Manual, with `target/debug/clv` built last by a plain `cargo build`, always run by that path:
   in kitty, a long Markdown file: one page a screen, two in a wide window, `+` and `-`, `[` and `]`
   keeping the height, `0]` and `0+`, the window resized; HTML through a pipe; `+` on a PDF; a
   list, its documents' portrait tiles and `+`; `--protocol ascii` on a Markdown file, legible; again
   in a private tmux, the pane resized.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
-  ADR.
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)), with the
+  ADR ([ADR-0023](../adr/0023-the-window-is-the-page-of-markdown-and-html.md); README's Plans had no
+  bullet for this).
 
 ## Changelog
 
@@ -330,4 +336,5 @@ Each task's commit passes the quality gates alone.
   says, and a terminal without pixels lays out again once its cell is known (no `Tty::opening`,
   which Ctrl-C would have left behind); `Room`'s cell exact, compared with a 2% give; the pager's
   peak measured, and the font's extremes in task 3.
-- 2026-11-09 — Implementing ([notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md)).
+- 2026-11-09 — Implementing ([notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md)); an open
+  question added: where printing to a pipe lays out.

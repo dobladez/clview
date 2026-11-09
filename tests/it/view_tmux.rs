@@ -634,6 +634,7 @@ fn inside_tmux_markdown_takes_the_panes_colour_and_d_turns_it() {
 
 /// Each image whose upload arrived whole in `out`, its size in pixels: the chunks of one (`a=t`, then
 /// those with only `m` and `q`, to `m=0`) gathered from wherever tmux put them among its own output.
+#[cfg(feature = "word")]
 fn sizes_sent(out: &[u8]) -> Vec<(u32, u32)> {
     use base64::Engine as _;
     let text = String::from_utf8_lossy(out);
