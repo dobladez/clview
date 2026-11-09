@@ -105,7 +105,7 @@ the document is dropped.
 | tldraw, 27 labels and its 400 KB font: built | 15 ms | 239 ms |
 | tldraw, 33 labels: built | 12 ms | 292 ms |
 | `font 50 400`: 50 labels sharing a 400 KB `@font-face`, a TrueType font made by the tool | 0.07 s, 32 MB | 0.98 s, 57 MB |
-| `styles 1024 3072`: 1,024 labels under 3 MiB of styles, 8,313 rules of some 380 bytes (8,313 rules × 5,125 elements, 42.6 million, within ADR-0003's 50 million) | 0.60 s, 145 MB | 315.6 s, 435 MB |
+| `styles 1024 3072`: 1,024 labels under 3 MiB of styles, 4,202 rules of some 750 bytes (4,202 rules × the drawing's 3,074 elements, 12.9 million, and × the labels' document's 5,125, 21.5 million: 34.4 million, within ADR-0003's 50 million as clv counts them) | 0.41 s, 120 MB | 235.1 s, 414 MB |
 
 One document a label parses the styles and loads the font again for each label, as the spike did.
 
@@ -242,8 +242,8 @@ spawned for each drawing with labels. The limit is 64.
 - **Blitz for the whole SVG:** Blitz hands an SVG to usvg with default options and paints usvg's
   tree, so it drops `<foreignObject>` too, and has none of ADR-0003's bounds.
 - **One Blitz document a label,** as the spike did: each parses the drawing's styles and loads its
-  fonts again, 16 times slower for a tldraw drawing, and 530 times for 1,024 labels under 3 MiB
-  of styles (316 s and 435 MB here; 111 s and 3.1 GB for the spike's styles). Its 32 MiB budget
+  fonts again, 16 times slower for a tldraw drawing, and 570 times for 1,024 labels under 3 MiB
+  of styles (235 s and 414 MB here; 111 s and 3.1 GB for the spike's styles). Its 32 MiB budget
   of documents in all left out 1,014 of them.
 - **Painting a whole label at the scale shown,** as the spike first did: a label is pixels the
   size it is shown at, so a large label at a large zoom is more pixels than the page, and past

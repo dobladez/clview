@@ -213,3 +213,28 @@ surprises, and what a later reader would want.
   How each opens. The ADR is Accepted.
 - README's Plans gains a bullet, at the owner's word: bounding what an SVG's stylesheets take to
   parse before they are parsed (the known issue above).
+
+## Codex's review, round 3
+
+Seven findings. The owner moved Blitz into a worker process, capped on time and memory, within
+this spec, so the four that are estimate work (a decoration's insets, the text styles write
+before layout, a clip path's points, a shared decoration once a pass) and the WOFF table check
+were held, uncommitted; the two that hold in either design are fixed:
+
+- **Stylesheets fetched:** Blitz asks the net provider for a URL without saying what for, and
+  the provider told a font by its first bytes, so a `<link rel=stylesheet>` whose bytes began
+  `OTTO` was answered and parsed as CSS. The labels' markup now holds no element that loads a
+  stylesheet or a document (`link`, `iframe`, `frame`, `frameset`, `object`, `embed`, `base`,
+  `portal`, `style`), in any namespace; a label's `<style>` joins the drawing's stylesheets,
+  which Stylo reads and writes out again without `@import` before Blitz is given them. What is
+  left asks only for fonts (`@font-face`) and pictures. `a_label_loads_no_stylesheet_or_document`
+  failed with no element left out (the `<link>`), with `style` kept in the markup (its `@import`),
+  with the `@import`s kept, and with a label's `<style>` not joining the drawing's (its rule).
+- **Opacity twice:** a label's own `style` opacity is kept on its copy, which Blitz applies, and
+  the composite counted it again: 0.5 drew at a quarter. Its own `opacity` attribute, which the
+  copy doesn't keep, still counts, as its ancestors' do. Failed with the rule reverted (alpha 64
+  for 128).
+- **The styles fixture, corrected:** its 8,313 rules were within 50 million against the labels'
+  document alone, but clv adds the drawing's elements (ADR-0003's scan), so clv left all 1,024
+  labels out. Rules of some 750 bytes, 4,202 under 3 MiB, are 34.4 million as clv counts them:
+  0.41 s and 120 MB as one document, 235 s and 414 MB as one a label.

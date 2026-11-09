@@ -414,6 +414,11 @@ fn labels_are_drawn_over_the_drawing_at_their_opacity() {
     let (picture, _) = page("svg-opacity", 40, 20, &body, &[]);
     let [r, g, b, a] = picture.get_pixel(100, 100).0;
     assert!((r, g, b) == (0, 0, 255) && (62..=66).contains(&a), "{:?}", [r, g, b, a]);
+    // Its own opacity by `style` its copy keeps, and is applied once.
+    let body = fo("width='20' height='20' style='opacity: 0.5'", &filled("blue"));
+    let (picture, _) = page("svg-opacity", 40, 20, &body, &[]);
+    let [r, g, b, a] = picture.get_pixel(100, 100).0;
+    assert!((r, g, b) == (0, 0, 255) && (126..=130).contains(&a), "{:?}", [r, g, b, a]);
     let body = format!("{}<rect width='20' height='20' fill='red'/>", fo("width='20' height='20'", &filled("blue")));
     let (picture, _) = page("svg-opacity", 40, 20, &body, &[]);
     assert_eq!(picture.get_pixel(100, 100).0, BLUE);
@@ -525,6 +530,25 @@ fn painting_too_long_is_refused_before_it_starts() {
     // A tile a pixel, and four steps around the layer: 4,472 pixels a side are 19,998,788.
     assert!(!spaced(4472).iter().any(|w| w.contains(too_long)));
     assert!(spaced(4473).iter().any(|w| w.contains(too_long)));
+}
+
+/// A label loads no stylesheet and no document: a `<link>`'s is not fetched, whatever its bytes
+/// look like, nor an `@import`, a label's `<style>`'s or the drawing's. That `<style>`'s own
+/// rules are taken, as the drawing's.
+#[cfg(feature = "svg-html")]
+#[test]
+fn a_label_loads_no_stylesheet_or_document() {
+    // Its first bytes are a font's: a font is fetched.
+    let sheet = "data:text/css,OTTO%7B%7Ddiv%7Bbackground:blue%7D";
+    let block = "<div style='width:20px;height:20px'/>";
+    let linked = fo("width='20' height='20'", &format!("<div><link rel='stylesheet' href='{sheet}'/>{block}</div>"));
+    assert_eq!(page("svg-loads", 40, 20, &linked, &[]).0.get_pixel(100, 100).0, NONE);
+    let imported = fo("width='20' height='20'", &format!("<div><style>@import url({sheet});</style>{block}</div>"));
+    assert_eq!(page("svg-loads", 40, 20, &imported, &[]).0.get_pixel(100, 100).0, NONE);
+    let drawings = format!("<style>@import url({sheet});</style>{}", fo("width='20' height='20'", &format!("<div>{block}</div>")));
+    assert_eq!(page("svg-loads", 40, 20, &drawings, &[]).0.get_pixel(100, 100).0, NONE);
+    let own = fo("width='20' height='20'", &format!("<div><style>div div {{ background: red }}</style>{block}</div>"));
+    assert_eq!(page("svg-loads", 40, 20, &own, &[]).0.get_pixel(100, 100).0, RED);
 }
 
 /// Each stage of what labels cost has its limit, past which they are left out, and said: their

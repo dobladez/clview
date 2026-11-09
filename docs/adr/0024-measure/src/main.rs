@@ -1029,14 +1029,14 @@ fn generate(args: &[String]) -> String {
             let mut css = String::from(BOX);
             let mut i = 0;
             while (css.len() as u64) < kib * 1024 {
-                // As an export's rules are: a few selectors, many declarations, some 380 bytes.
-                let _ = write!(
-                    css,
-                    "\n.r{i} .s{i} > .t{i}, #n{i} .label{{color:#123456;background:#abcdef;border:1px solid #fedcba;padding:1px 2px 3px 4px;\
+                // As an export's rules are: a few selectors, many declarations, some 750 bytes. Few
+                // enough that the rules times the drawing's elements and the labels' are within
+                // ADR-0003's 50 million, as clv counts them.
+                const DECLARATIONS: &str = "color:#123456;background:#abcdef;border:1px solid #fedcba;padding:1px 2px 3px 4px;\
                      margin:0 1px;font:12px/1.4 sans-serif;text-decoration:underline;opacity:.9;border-radius:3px;box-sizing:border-box;\
                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.01em;word-spacing:.1em;min-width:10px;\
-                     max-width:400px;min-height:5px}}"
-                );
+                     max-width:400px;min-height:5px";
+                let _ = write!(css, "\n.r{i} .s{i} > .t{i}, #n{i} .label, .q{i} .x{i}, #m{i} > .y{i}{{{DECLARATIONS};{DECLARATIONS}}}");
                 i += 1;
             }
             let (w, h, body) = grid(count, 32, 120, 40, |i| format!("<div class=\"box\">Label {i}</div>"));

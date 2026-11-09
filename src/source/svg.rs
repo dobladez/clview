@@ -820,8 +820,14 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes, style_work: u64, viewp
     let root = doc.root_element();
     let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
     let aspect = root.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
-    // The `<font>` hints first, of no specificity, so the drawing's own rules win.
-    let styles: Vec<&str> = doc.descendants().filter(|n| svg_element(*n, "style")).filter_map(|n| n.text()).collect();
+    // The `<font>` hints first, of no specificity, so the drawing's own rules win. A label's own
+    // `<style>`s join the drawing's, as a browser takes them: the painter is given no element
+    // that loads a stylesheet ([`LOADING`]).
+    let styles: Vec<&str> = doc
+        .descendants()
+        .filter(|n| svg_element(*n, "style") || (n.has_tag_name((XHTML_NS, "style")) && n.ancestors().any(|a| svg_element(a, "foreignObject"))))
+        .filter_map(|n| n.text())
+        .collect();
     let css = format!("{}\n{}", font_hints(doc), styles.join("\n"));
     let mut spent = Spent { markup: css.len(), ..Spent::default() };
     let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)), style_work };
@@ -859,8 +865,9 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes, style_work: u64, viewp
     found
 }
 
-/// The opacity `node` is drawn at: its own and its ancestors' (`opacity`, by attribute or
-/// `style`, a number or a percentage, within 0 to 1), multiplied.
+/// The opacity the label `node` is drawn at: its ancestors' (`opacity`, by attribute or `style`, a
+/// number or a percentage, within 0 to 1), multiplied, and its own attribute's. Its own `style`'s
+/// the painter applies, its copy keeping it ([`copy_of`]), so it isn't counted twice.
 #[cfg(feature = "svg-html")]
 fn opacity(node: roxmltree::Node) -> f32 {
     let parse = |v: &str| {
@@ -876,7 +883,11 @@ fn opacity(node: roxmltree::Node) -> f32 {
         .map(|a| {
             let styled =
                 declarations(a.attribute("style").unwrap_or_default()).filter(|(p, _)| p.trim() == "opacity").filter_map(|(_, v)| parse(v)).last();
-            styled.or_else(|| a.attribute("opacity").and_then(parse)).unwrap_or(1.0)
+            match styled {
+                Some(_) if a == node => 1.0,
+                Some(styled) => styled,
+                None => a.attribute("opacity").and_then(parse).unwrap_or(1.0),
+            }
         })
         .product()
 }
@@ -1245,11 +1256,18 @@ fn affordable(spent: &Spent) -> Result<(), Past> {
     Ok(())
 }
 
+/// The elements left out of a label's markup, in any namespace, since the painter would load a
+/// stylesheet or a document for them, and asks for them without saying which they are: only fonts
+/// and pictures are answered ([`html`]), as data. A `<style>`'s text joins the drawing's
+/// stylesheets instead, read for the painter without `@import`.
+#[cfg(feature = "svg-html")]
+const LOADING: &[&str] = &["style", "link", "iframe", "frame", "frameset", "object", "embed", "base", "portal"];
+
 /// `node`, `depth` levels below its label's `<foreignObject>`, inside an element in the
 /// namespace `parent`, written out from the parsed tree onto `out`, counted in `spent`: elements
 /// in the namespaces the drawing binds, declared where they change; attributes without a
 /// namespace; text, its entities expanded; each escaped. Comments and processing instructions
-/// are left out.
+/// are left out, and the elements [`LOADING`] names.
 #[cfg(feature = "svg-html")]
 fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mut Spent, out: &mut Markup) -> Result<(), Past> {
     if node.is_text() {
@@ -1263,6 +1281,9 @@ fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mu
     }
     if depth > MAX_LABEL_DEPTH {
         return Err(Past::Nesting);
+    }
+    if LOADING.contains(&node.tag_name().name()) {
+        return Ok(());
     }
     spent.elements = spent.elements.saturating_add(1);
     affordable(spent)?;

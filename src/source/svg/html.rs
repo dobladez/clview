@@ -172,10 +172,36 @@ fn document(css: &str, labels: &[Label], at: &[Option<At>]) -> String {
     out
 }
 
+/// The drawing's stylesheets `css` parsed by Stylo, as Blitz will parse them, and written out again
+/// without their `@import`s: Blitz asks for a URL without saying what for, and no stylesheet is
+/// ever fetched.
+fn without_imports(css: &str) -> String {
+    use style::context::QuirksMode;
+    use style::media_queries::MediaList;
+    use style::servo_arc::Arc as ServoArc;
+    use style::shared_lock::{SharedRwLock, ToCssWithGuard};
+    use style::stylesheets::{AllowImportRules, CssRule, Origin, Stylesheet};
+    let mut out = String::new();
+    let Ok(url) = blitz_traits::net::Url::parse("file:///") else { return out };
+    let lock = SharedRwLock::new();
+    let media = ServoArc::new(lock.wrap(MediaList::empty()));
+    let sheet = Stylesheet::from_str(css, url.into(), Origin::Author, media, lock.clone(), None, None, QuirksMode::NoQuirks, AllowImportRules::No);
+    let guard = lock.read();
+    let contents = sheet.contents.read_with(&guard);
+    for rule in contents.rules.read_with(&guard).0.iter() {
+        if matches!(rule, CssRule::Import(_)) {
+            continue;
+        }
+        let _ = rule.to_css(&guard, &mut out);
+        out.push('\n');
+    }
+    out
+}
+
 /// The `labels` laid out in one document and each recorded, or why none can be.
 fn recorded(css: &str, labels: &[Label]) -> Result<Painted, String> {
     let (at, size) = packed(labels);
-    let markup = document(css, labels, &at);
+    let markup = document(&without_imports(css), labels, &at);
     let net = Arc::new(DataOnly::default());
     let config = DocumentConfig {
         // Within u32: the labels' document is at most some 800,000 pixels a side.

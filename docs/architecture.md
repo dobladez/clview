@@ -233,8 +233,11 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   Each render replays a label into the part of the page it lands on, that part and its commands in
   the page's estimate, and draws it over resvg's pixels at its opacity
   ([ADR-0024](adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)). Its net
-  provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its header; the
-  system's fonts are found once a run.
+  provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its header.
+  Blitz asks it for a URL without saying what for, so the labels' markup holds no element that
+  loads a stylesheet or a document (`LOADING`), and a label's `<style>` joins the drawing's
+  stylesheets, which Stylo reads and writes out again without `@import` (`without_imports`).
+  The system's fonts are found once a run.
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
   export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
   pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps
