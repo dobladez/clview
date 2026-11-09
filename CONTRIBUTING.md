@@ -11,8 +11,7 @@ How to build, test and release clview, and the rules its code keeps. How it work
 cargo install --path .      # installs `clv`
 ```
 
-It takes Rust 1.95 or later, the `rust-version`. Seven of its eight features are on by default, all
-but `svg-html` (an SVG's HTML labels, while [Spec-0004](docs/specs/0004-draw-an-svgs-html-labels.md) is built);
+It takes Rust 1.95 or later, the `rust-version`. All eight features are on by default;
 `cargo build --no-default-features --features image` builds the viewer with images alone, and
 `--no-default-features` alone without any backend.
 [Backends](docs/architecture.md#backends) lists the features.
@@ -64,7 +63,7 @@ it prints, never by name.
   pulldown-cmark only in `src/source/wordcraft.rs`, `tests/it/wordcraft.rs` (which checks it) and
   `Cargo.toml`; gridcraft only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks
   it) and `Cargo.toml`; Blitz and what it paints an SVG's HTML labels with (blitz, anyrender,
-  kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
+  kurbo, peniko, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
   checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend

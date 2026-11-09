@@ -56,6 +56,9 @@ impl Backend for Svg {
     }
 
     fn credits(&self) -> &[&'static str] {
+        #[cfg(feature = "svg-html")]
+        return &["resvg", html::CREDIT];
+        #[cfg(not(feature = "svg-html"))]
         &["resvg"]
     }
 
@@ -82,15 +85,15 @@ impl Backend for Svg {
         let (encoded, drawn) = match input.reopenable()? {
             Reopenable::Disk(file) => {
                 let bytes = read(file).map_err(error)?;
-                (Encoded::Disk(PathBuf::from(&path)), guarded_parse(&bytes))
+                (Encoded::Disk(PathBuf::from(&path)), guarded_open(&bytes))
             }
             Reopenable::Bytes(bytes) => {
-                let drawn = guarded_parse(&bytes);
+                let drawn = guarded_open(&bytes);
                 (Encoded::Memory(bytes), drawn)
             }
             Reopenable::Again(again) => {
                 let bytes = again().and_then(within).map_err(error)?;
-                (Encoded::Held(again), guarded_parse(&bytes))
+                (Encoded::Held(again), guarded_open(&bytes))
             }
         };
         // Only the size is kept: the tree goes, and a render parses the drawing again.
@@ -379,17 +382,27 @@ struct Drawn {
     tree: usvg::Tree,
     size: (f32, f32),
     warnings: Vec<String>,
+    /// Its HTML labels, recorded, each with where it goes on the drawing and its opacity.
+    #[cfg(feature = "svg-html")]
+    labels: Option<(Vec<(Transform, f32)>, html::Painted)>,
 }
 
-/// [`parse`], a parser's panic made an error.
+/// [`parse`], a parser's panic made an error: the drawing to render, its labels prepared.
 fn guarded_parse(bytes: &[u8]) -> Result<Drawn, String> {
-    std::panic::catch_unwind(|| parse(bytes)).unwrap_or_else(|_| Err("the SVG parser failed on this drawing".into()))
+    std::panic::catch_unwind(|| parse(bytes, true)).unwrap_or_else(|_| Err("the SVG parser failed on this drawing".into()))
+}
+
+/// [`guarded_parse`], for a drawing being opened, which keeps only its size: its labels aren't
+/// prepared.
+fn guarded_open(bytes: &[u8]) -> Result<Drawn, String> {
+    std::panic::catch_unwind(|| parse(bytes, false)).unwrap_or_else(|_| Err("the SVG parser failed on this drawing".into()))
 }
 
 /// The drawing in `bytes`, an SVG or an svgz, at its size: its own, or its `viewBox`'s. One that
 /// says neither (no `viewBox`, and a `width` or a `height` missing or a percentage) is as large
 /// as what it draws reaches from its origin, as usvg sizes it, and 100 × 100 if it draws nothing.
-fn parse(bytes: &[u8]) -> Result<Drawn, String> {
+/// With `labels`, its HTML labels are laid out and recorded too.
+fn parse(bytes: &[u8], labels: bool) -> Result<Drawn, String> {
     let notes = Notes::default();
     let (tree, found) = parse_at(bytes, 0, &notes)?;
     let size = (tree.size().width(), tree.size().height());
@@ -397,12 +410,50 @@ fn parse(bytes: &[u8]) -> Result<Drawn, String> {
         return Err(format!("the drawing has no size to show ({} × {})", size.0, size.1));
     }
     #[cfg(feature = "svg-html")]
-    if !found.labels.is_empty() && !html::prepare(&found.css, &found.labels) {
-        notes.undrawn.fetch_add(found.labels.len(), Ordering::Relaxed);
-    }
+    let labels = (labels && !found.labels.is_empty()).then(|| prepared(found, &notes)).flatten();
     #[cfg(not(feature = "svg-html"))]
-    let Found {} = found;
-    Ok(Drawn { tree, size, warnings: notes.warnings() })
+    let (Found {}, _) = (found, labels);
+    Ok(Drawn {
+        tree,
+        size,
+        warnings: notes.warnings(),
+        #[cfg(feature = "svg-html")]
+        labels,
+    })
+}
+
+/// The labels `found`, laid out and recorded, with where each goes; or none, with why told to
+/// `notes`.
+#[cfg(feature = "svg-html")]
+fn prepared(found: Found, notes: &Notes) -> Option<(Vec<(Transform, f32)>, html::Painted)> {
+    let leave_out = |why: &str| {
+        for _ in &found.labels {
+            notes.left_out_label(why);
+        }
+    };
+    if found.style_work > MAX_STYLE {
+        leave_out("its stylesheets' rules are too many for its labels' elements");
+        return None;
+    }
+    match html::prepare(&found.css, &found.labels) {
+        Ok(painted) => {
+            notes.linked(painted.links.iter().map(String::as_str));
+            for index in 0..found.labels.len() {
+                if painted.region(index).is_none() {
+                    notes.left_out_label(&format!(
+                        "laid out past {} pixels a side, or an element of it past {}",
+                        html::MAX_LAYOUT_SIDE,
+                        html::MAX_ELEMENT_SIDE
+                    ));
+                }
+            }
+            Some((found.labels.iter().map(|l| (l.place, l.opacity)).collect(), painted))
+        }
+        Err(why) => {
+            leave_out(&why);
+            None
+        }
+    }
 }
 
 /// Refuses `text` if its entities could expand it past [`MAX_EXPANDED`]: checked before every
@@ -451,6 +502,9 @@ fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<(usvg::Tree, Fo
         }
         fonts
     };
+    // What matching the stylesheets costs, as the scan counted it: the labels' elements add to it.
+    #[cfg(feature = "svg-html")]
+    let style_work = scan.visited.saturating_mul(scan.rules);
     drop(scan);
     let options = options_for(notes, depth, fonts);
     #[cfg(feature = "svg-html")]
@@ -461,7 +515,7 @@ fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<(usvg::Tree, Fo
         let parsed = |doc: &roxmltree::Document| usvg::Tree::from_xmltree(doc, &options).map_err(|e| e.to_string());
         let (tree, mut found) = match root_viewport(doc.root_element()) {
             Some(viewport) => {
-                let found = found_labels(&doc, notes, viewport);
+                let found = found_labels(&doc, notes, style_work, viewport);
                 let tree = match cut {
                     Some(cut) => {
                         drop(doc);
@@ -476,7 +530,7 @@ fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<(usvg::Tree, Fo
                     Some(cut) => parsed(&xml(cut)?)?,
                     None => parsed(&doc)?,
                 };
-                let found = found_labels(&doc, notes, (tree.size().width(), tree.size().height()));
+                let found = found_labels(&doc, notes, style_work, (tree.size().width(), tree.size().height()));
                 (tree, found)
             }
         };
@@ -706,11 +760,14 @@ struct Found {
     /// The root's `viewBox` and `preserveAspectRatio`, which usvg applies and doesn't say.
     #[cfg(feature = "svg-html")]
     view: Option<(svgtypes::ViewBox, svgtypes::AspectRatio)>,
+    /// What matching the stylesheets (the labels' hints too) costs, the labels' elements with
+    /// the drawing's, counted as ADR-0003 counts them: rules times elements.
+    #[cfg(feature = "svg-html")]
+    style_work: u64,
 }
 
 /// A label, written out for the painter.
 #[cfg(feature = "svg-html")]
-#[cfg_attr(not(test), expect(dead_code, reason = "painted by Spec-0004's third task"))]
 struct Label {
     /// XHTML: copies of its ancestors (their ids, classes, styles, and font and colour
     /// attributes as styles, `display: contents`), then of the `<foreignObject>` made its box,
@@ -722,6 +779,8 @@ struct Label {
     visible: bool,
     /// From its box (its CSS pixels, from its top left) to the drawing's size as shown.
     place: Transform,
+    /// Its ancestors' opacity and its own, multiplied: the label is drawn at it as a whole.
+    opacity: f32,
 }
 
 #[cfg(feature = "svg-html")]
@@ -757,13 +816,15 @@ enum Past {
 /// `doc`'s labels a browser would draw ([`drawn`]), placed and written out within their
 /// budgets; what is left out is told to `notes`.
 #[cfg(feature = "svg-html")]
-fn found_labels(doc: &roxmltree::Document, notes: &Notes, viewport: (f32, f32)) -> Found {
+fn found_labels(doc: &roxmltree::Document, notes: &Notes, style_work: u64, viewport: (f32, f32)) -> Found {
     let root = doc.root_element();
     let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
     let aspect = root.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
-    let css: String = doc.descendants().filter(|n| svg_element(*n, "style")).filter_map(|n| n.text()).collect::<Vec<_>>().join("\n");
+    // The `<font>` hints first, of no specificity, so the drawing's own rules win.
+    let styles: Vec<&str> = doc.descendants().filter(|n| svg_element(*n, "style")).filter_map(|n| n.text()).collect();
+    let css = format!("{}\n{}", font_hints(doc), styles.join("\n"));
     let mut spent = Spent { markup: css.len(), ..Spent::default() };
-    let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)) };
+    let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)), style_work };
     let mut spent_out: Option<String> = (spent.markup > MAX_LABEL_MARKUP).then(|| format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20));
     let (labels, uses) = drawn(doc);
     for fo in labels {
@@ -777,7 +838,7 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes, viewport: (f32, f32)) 
         let Some((place, width, height)) = placed(fo, viewport) else { continue };
         let before = spent;
         match written_label(fo, width, height, &mut spent) {
-            Ok((markup, visible)) => found.labels.push(Label { markup, width, height, visible, place }),
+            Ok((markup, visible)) => found.labels.push(Label { markup, width, height, visible, place, opacity: opacity(fo) }),
             Err(Past::Nesting) => {
                 spent = before;
                 notes.left_out_label(&format!("nested more than {MAX_LABEL_DEPTH} deep"));
@@ -789,7 +850,90 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes, viewport: (f32, f32)) 
         }
     }
     notes.undrawn.fetch_add(used_labels(doc, &uses), Ordering::Relaxed);
+    // The labels' elements are matched against every rule too, as their document's: the copies of
+    // their context, and for each label a slot and its box.
+    let rules = u64::try_from(found.css.matches('{').count()).unwrap_or(u64::MAX).saturating_add(1);
+    let labels = u64::try_from(found.labels.len()).unwrap_or(u64::MAX);
+    let elements = spent.elements.saturating_add(labels.saturating_mul(2)).saturating_add(4);
+    found.style_work = found.style_work.saturating_add(rules.saturating_mul(elements));
     found
+}
+
+/// The opacity `node` is drawn at: its own and its ancestors' (`opacity`, by attribute or
+/// `style`, a number or a percentage, within 0 to 1), multiplied.
+#[cfg(feature = "svg-html")]
+fn opacity(node: roxmltree::Node) -> f32 {
+    let parse = |v: &str| {
+        let v = v.trim().trim_end_matches("!important").trim();
+        let n = match v.strip_suffix('%') {
+            Some(percent) => percent.trim().parse::<f32>().ok().map(|p| p / 100.0),
+            None => v.parse::<f32>().ok(),
+        };
+        n.filter(|n| n.is_finite()).map(|n| n.clamp(0.0, 1.0))
+    };
+    node.ancestors()
+        .filter(roxmltree::Node::is_element)
+        .map(|a| {
+            let styled =
+                declarations(a.attribute("style").unwrap_or_default()).filter(|(p, _)| p.trim() == "opacity").filter_map(|(_, v)| parse(v)).last();
+            styled.or_else(|| a.attribute("opacity").and_then(parse)).unwrap_or(1.0)
+        })
+        .product()
+}
+
+/// The most `<font>` hints written as rules.
+#[cfg(feature = "svg-html")]
+const MAX_FONT_HINTS: usize = 1_024;
+
+/// Rules for the hints of the `<font>` elements in `doc` (`face`, `color`, `size`), which a browser
+/// takes and the painter doesn't (draw.io sets its labels' fonts with them): of no specificity
+/// (`:where(…)`), so any rule of the drawing's overrides them, as it overrides a hint. Each value
+/// is quoted or parsed, never pasted, so a drawing can't write rules of its own here; one that
+/// doesn't parse is left out.
+#[cfg(feature = "svg-html")]
+fn font_hints(doc: &roxmltree::Document) -> String {
+    const SIZES: [&str; 7] = ["x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large"];
+    let mut rules = std::collections::BTreeSet::new();
+    for font in doc.descendants().filter(|n| n.has_tag_name((XHTML_NS, "font"))) {
+        if rules.len() >= MAX_FONT_HINTS {
+            break;
+        }
+        if let Some(face) = font.attribute("face").filter(|f| f.len() <= 4096) {
+            let names: Vec<String> = face.split(',').map(str::trim).filter(|n| !n.is_empty()).map(css_string).collect();
+            if !names.is_empty() {
+                rules.insert(format!(":where(font[face={}]){{font-family:{}}}", css_string(face), names.join(",")));
+            }
+        }
+        if let Some((value, c)) = font.attribute("color").and_then(|v| Some((v, v.trim().parse::<svgtypes::Color>().ok()?))) {
+            let colour = format!("rgba({},{},{},{})", c.red, c.green, c.blue, f32::from(c.alpha) / 255.0);
+            rules.insert(format!(":where(font[color={}]){{color:{colour}}}", css_string(value)));
+        }
+        if let Some((value, size)) = font.attribute("size").and_then(|v| Some((v, font_size(v)?))) {
+            rules.insert(format!(":where(font[size={}]){{font-size:{}}}", css_string(value), SIZES.get(size.saturating_sub(1)).unwrap_or(&"medium")));
+        }
+    }
+    rules.into_iter().collect()
+}
+
+/// A `<font size>`, 1 to 7: a number, or `+n` or `-n` from 3, clamped; `None` when it isn't one.
+#[cfg(feature = "svg-html")]
+fn font_size(value: &str) -> Option<usize> {
+    let v = value.trim();
+    let (relative, digits) = match v.as_bytes().first()? {
+        b'+' => (Some(1i64), v.get(1..)?),
+        b'-' => (Some(-1i64), v.get(1..)?),
+        _ => (None, v),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // At most 7 after clamping, so it fits usize.
+    let n = digits.parse::<i64>().unwrap_or(i64::MAX).min(1_000);
+    let size = match relative {
+        Some(sign) => 3i64.saturating_add(sign.saturating_mul(n)),
+        None => n,
+    };
+    usize::try_from(size.clamp(1, 7)).ok()
 }
 
 /// The root's viewport, its percentages' measure, as it says it: its `viewBox`, else its own
@@ -1743,7 +1887,21 @@ impl Drawn {
         // At most MAX_SIDE, so exact as f32 and as u32.
         let (w, h) = (canvas.w as f32, canvas.h as f32);
         let transform = Transform::from_scale(w / width, h / height);
-        let cost = Estimate::of(&self.tree, transform, canvas)?;
+        #[allow(unused_mut, reason = "its labels add to it, in a build that draws them")]
+        let mut cost = Estimate::of(&self.tree, transform, canvas)?;
+        #[cfg(feature = "svg-html")]
+        let parts = self.label_parts(transform, canvas);
+        #[cfg(feature = "svg-html")]
+        if let Some((_, painted)) = &self.labels {
+            // Each label's part painted, then drawn over the page; its commands held as they are
+            // replayed; and as work, the pixels they paint there, and the part's.
+            for (index, (_, to, size)) in parts.iter().enumerate().filter_map(|(i, p)| Some((i, (*p)?))) {
+                let part = Dims { w: u64::from(size.0), h: u64::from(size.1) };
+                let (commands, pixels) = painted.cost(index, to, size);
+                cost.peak = cost.peak.saturating_add(part.bytes().saturating_mul(2)).saturating_add(commands.saturating_mul(html::COMMAND_BYTES));
+                cost.work = cost.work.saturating_add(pixels).saturating_add(part.px());
+            }
+        }
         if cost.peak > MAX_RENDER {
             return Err(format!("drawing it at {} × {} would take more than {} MiB", canvas.w, canvas.h, MAX_RENDER >> 20));
         }
@@ -1753,8 +1911,60 @@ impl Drawn {
         let (cw, ch) = (canvas.w as u32, canvas.h as u32);
         let mut pixmap = Pixmap::new(cw, ch).ok_or_else(|| format!("no canvas of {cw} × {ch} pixels"))?;
         resvg::render(&self.tree, transform, &mut pixmap.as_mut());
+        #[cfg(feature = "svg-html")]
+        self.draw_labels(&mut pixmap, &parts);
         // tiny-skia's pixels are premultiplied RGBA, row by row, as a frame's are.
         Ok(Frame { request, width: cw, height: ch, rgba: Pixels::new(pixmap.take()), error: None, warnings: self.warnings.clone(), again: false })
+    }
+}
+
+/// Where a label is drawn on a page: the part of the page it lands on (its top left), the transform
+/// from its box's CSS pixels to that part, and the part's size.
+#[cfg(feature = "svg-html")]
+type Part = ((i32, i32), [f64; 6], (u32, u32));
+
+#[cfg(feature = "svg-html")]
+impl Drawn {
+    /// The part of a `canvas` drawn through `transform` each label lands on: `None` for a label
+    /// left out, or landing nowhere on it. Only that part is painted, so no label costs more
+    /// pixels than the page, however large it is shown.
+    fn label_parts(&self, transform: Transform, canvas: Dims) -> Vec<Option<Part>> {
+        let Some((placed, painted)) = &self.labels else { return Vec::new() };
+        placed
+            .iter()
+            .enumerate()
+            .map(|(index, (place, _))| {
+                let [x0, y0, x1, y1] = painted.region(index)?;
+                let to_page = transform.pre_concat(*place);
+                // Within f32: a region is at most some 25,000 pixels a side.
+                let mut corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| resvg::tiny_skia::Point::from_xy(x as f32, y as f32));
+                to_page.map_points(&mut corners);
+                let (lx, ly) = corners.iter().fold((f32::INFINITY, f32::INFINITY), |(x, y), p| (x.min(p.x), y.min(p.y)));
+                let (hx, hy) = corners.iter().fold((f32::NEG_INFINITY, f32::NEG_INFINITY), |(x, y), p| (x.max(p.x), y.max(p.y)));
+                // At most MAX_SIDE, so exact as f32.
+                let (lx, ly, hx, hy) = (lx.floor().max(0.0), ly.floor().max(0.0), hx.ceil().min(canvas.w as f32), hy.ceil().min(canvas.h as f32));
+                if !(lx.is_finite() && ly.is_finite() && hx > lx && hy > ly) {
+                    return None;
+                }
+                let to = to_page.post_translate(-lx, -ly);
+                // Within the canvas, at most MAX_SIDE: exact as i32 and u32.
+                Some(((lx as i32, ly as i32), [to.sx, to.ky, to.kx, to.sy, to.tx, to.ty].map(f64::from), ((hx - lx) as u32, (hy - ly) as u32)))
+            })
+            .collect()
+    }
+
+    /// Its labels, each replayed into its part of the page and drawn over `pixmap` at its
+    /// opacity: over the whole drawing, not among its shapes. One whose replay fails is left off.
+    fn draw_labels(&self, pixmap: &mut Pixmap, parts: &[Option<Part>]) {
+        use resvg::tiny_skia::{IntSize, PixmapPaint};
+        let Some((placed, painted)) = &self.labels else { return };
+        for (index, part) in parts.iter().enumerate() {
+            let (Some(((x, y), to, size)), Some((_, opacity))) = (part, placed.get(index)) else { continue };
+            let Some(rgba) = painted.paint(index, *to, *size) else { continue };
+            let Some(drawn) = IntSize::from_wh(size.0, size.1).and_then(|size| Pixmap::from_vec(rgba, size)) else { continue };
+            let paint = PixmapPaint { opacity: *opacity, ..PixmapPaint::default() };
+            pixmap.draw_pixmap(*x, *y, drawn.as_ref(), &paint, Transform::identity(), None);
+        }
     }
 }
 
@@ -2135,6 +2345,44 @@ mod tests {
         let mut out = Markup { out: String::new(), room: MAX_LABEL_MARKUP };
         assert!(out.escaped(&"\"".repeat((MAX_LABEL_MARKUP / 6) + 1)).is_err());
         assert_eq!(out.out.capacity(), 0);
+    }
+
+    /// `<font>`'s hints are rules of no specificity, each value quoted or parsed: a face is
+    /// a list of names, quoted, so nothing in one ends its rule; a size 1 to 7, or from 3.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_fonts_hints_are_rules_that_write_nothing_of_their_own() {
+        let text = svg(
+            10,
+            10,
+            r#"<foreignObject width="1" height="1"><div xmlns="http://www.w3.org/1999/xhtml"><font face='Courier New, "x"}*{color:red'/><font size="+9"/><font size="-1"/><font size="x"/></div></foreignObject>"#,
+        );
+        let hints = font_hints(&xml(&text).unwrap());
+        let face = r#":where(font[face="Courier New, \"x\"}*{color:red"]){font-family:"Courier New","\"x\"}*{color:red"}"#;
+        assert!(hints.contains(face), "{hints}");
+        assert!(
+            hints.contains(r#":where(font[size="+9"]){font-size:xxx-large}"#) && hints.contains(r#":where(font[size="-1"]){font-size:small}"#),
+            "{hints}"
+        );
+        assert!(!hints.contains(r#"size="x""#), "{hints}");
+        assert_eq!(
+            [font_size("3"), font_size("+1"), font_size("-9"), font_size("12"), font_size(""), font_size("+")],
+            [Some(3), Some(4), Some(1), Some(7), None, None]
+        );
+    }
+
+    /// A label stays on a page however large it is drawn, only its part of the page painted: the
+    /// spike lost a label as wide as the drawing past some 8,192 pixels of label.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_label_is_drawn_on_a_page_over_six_thousand_pixels_wide() {
+        // Its overflow visible, and a box of nothing reaching 4,000 units past the drawing each way:
+        // what it paints over is 1.3 million pixels across, of which the page is 6,400.
+        let wide = r#"<foreignObject width="100%" height="100%" overflow="visible"><div xmlns="http://www.w3.org/1999/xhtml" style="position:relative">
+            <div style="position:absolute;left:-4000px;top:-4000px;width:8040px;height:8020px"/><div style="margin-left:38px;width:2px;height:20px;background:blue"/></div></foreignObject>"#;
+        let frame = render(&open(svg(40, 20, wide).as_bytes()).unwrap(), 160.0);
+        assert_eq!((frame.width, frame.error.as_deref()), (6400, None));
+        assert_eq!([pixel(&frame, 6300, 100), pixel(&frame, 6000, 100)], [[0, 0, 255, 255], [0, 0, 0, 0]]);
     }
 
     /// A percentage of a drawing that says no size of its own is of the size usvg gives it from what

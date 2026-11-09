@@ -148,3 +148,45 @@ surprises, and what a later reader would want.
 - **A discovery, for its home (ADR-0003's scan):** usvg's stylesheet parser (simplecss) takes time
   as the square of a declaration's length, working out a position for each part: a `<style>` with
   one 600 KB `box-shadow` list takes 45 s to open in a debug build, labels or not.
+
+## Task 3: labels drawn, bounded, on by default
+
+- **`html.rs`** has the painter: the labels' one document (slots packed square, placed by
+  `transform`, 8 pixels apart), its styles resolved twice (for the pictures a style asks for), the
+  paint work estimated, each label recorded through `Recorder` (200,000 commands at most, a fill of
+  a colour with nothing of it, the root's `transparent`, not kept), and the document dropped; then
+  each render's replay into the part of the page a label lands on, and `cost`, its commands and the
+  pixels they paint there, for the page's estimate. `svg.rs` places the parts, adds them to the
+  estimate, and draws them over resvg's pixels at the label's opacity.
+- **A drawing being opened isn't laid out** (`guarded_open`): opening keeps only its size, so its
+  labels are prepared by a render's parse alone, once.
+- **Blitz's base URL** is `file:///`: its own, a `data:` URL, can't be a base, and Blitz panicked
+  resolving a label's `<img src='other.png'>` against it (caught, and the labels left out: found by
+  the links test). A relative link now resolves to a file not read, and is counted as a link.
+- **Bugs the tests found:** a refused font or picture was counted in its drawing's total; a label
+  left out for its size took the next label's slot.
+- **The over-6,000-pixel test** renders a page 160 times the drawing (6,400 pixels) in a unit test:
+  through a pipe the window is 80 × 24 cells, and `--zoom` sets pages to a row. Its label reaches
+  4,000 units past the page, so an unclamped part is 1.3 million pixels across.
+- **The stack:** clv's dev profile builds its dependencies at `opt-level = 2`, so Blitz in its tests
+  holds 392 nested grids on 2 MiB, not the 58 of the tool's unoptimized build. The 8 MiB thread
+  stays (margin, and unoptimized builds); the ADR has both. The at-limit test passes on 2 MiB too:
+  seen failing on 128 KiB. No fixture within the limit can tell 8 MiB from 2 MiB as clv builds:
+  2 MiB holds 392 nested grids, the costliest nesting tried, six times the 64 a label may nest.
+- **New dependencies:** `stylo` (approved) and `peniko`, which anyrender's `PaintScene` names in its
+  signatures and doesn't re-export (asked for).
+- **Task 2's tests** with a label of the text "a" over a pixel they read now hold an empty label,
+  and the rule's test expects, where labels are drawn, only those a `<use>` repeats as not drawn.
+- **Tests, each seen failing with its fix reverted** (copied aside, `cmp` after): placed (the label's
+  place ignored); overflow (`OVERFLOW` 0); the page over 6,000 pixels (the part not clamped to the
+  page); opacity (ignored); the drawing's rules (not given); a picture (not answered); hints (of a
+  specificity; none); paint work, once each for shadows, gradients and spaced tiles (each not
+  counted); the recorder (keeping everything); layout (any size); styles (the labels' elements not
+  counted); the stack (128 KiB); the page's estimate (the labels' pixels not counted); links (not
+  told); the base URL (none); fonts (not sized); requests (unbounded); a spaced tile of no size;
+  a face pasted into its rule.
+- **Not tested:** a Blitz panic leaving the labels out (no panic to call up but a Blitz bug; the
+  base URL one was, before its fix), and a thread that can't be spawned.
+- **A discovery, for its home:** the drawing's scan counts a stylesheet's `@font-face`, and its
+  `data:` URLs, as links not followed, so a tldraw drawing says "2 links … not followed" while its
+  labels draw that font. Older than this spec (ADR-0003's scan).

@@ -221,9 +221,9 @@ hostile drawing, what it cost, and how to measure it again.
   labels) runs on a thread of its own with an 8 MiB stack (`source/later.rs`'s `STACK`, or a
   constant of the same size beside it), joined before the labels are kept. The render threads keep
   the 2 MiB `source/threads.rs` gives them, and only replay. Task 1 measured nesting on both
-  stacks, in a child process each (ADR-0024): on 2 MiB a debug build overflows at 58 nested grids,
-  on 8 MiB it holds 240 (release 1,440), so the limit is 64 and the test at the limit nests grids,
-  in a debug build. A thread that can't be spawned is a Blitz failure: all the labels left out,
+  stacks, in a child process each (ADR-0024): on 2 MiB an unoptimized build overflows at 58 nested
+  grids, on 8 MiB it holds 240 (release 1,440; clv's dev profile, which optimizes its dependencies,
+  holds 392 on 2 MiB), so the limit is 64 and the test at the limit nests grids, in a debug build. A thread that can't be spawned is a Blitz failure: all the labels left out,
   with a warning, never a panic.
 - **Panics** print through the viewer's hook, which makes them printable and keeps them off the
   pager (`src/view/mod.rs`'s `run`); `catch_unwind` around Blitz turns them into the warnings above.
@@ -261,7 +261,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `--no-default-features --features pdf,svg`; tests for each eligibility case, a fallback after a
   `<foreignObject>` and after a `requiredFeatures` child, entities in a fallback refused before it is
   parsed, a root-declared XHTML prefix, an internal entity in a label.
-- [ ] **Labels drawn, bounded, on by default** — `Painter`, the net provider and its budgets, the
+- [x] **Labels drawn, bounded, on by default** — `Painter`, the net provider and its budgets, the
   document, fragments and replays as task 1 decided; painting only what lands on the page; opacity;
   overflow; hints; pictures; the stage limits and their warnings; the paint work estimate and the
   recorder; `Estimate`; the nesting limit; `svg-html` among the defaults. *Files:* `src/source/svg.rs`, `src/source/svg/html.rs`,
@@ -321,3 +321,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   label, a dotted border's dots, a decoration's pixels of line and a gradient's stops; an element
   or a line of text past 24,576 pixels leaves its label out; a percentage of a drawing sized by what
   it draws is of that size.
+- 2026-11-09 — Task 3: the stack measured again as clv's tests build it (dependencies optimized):
+  392 nested grids hold on 2 MiB, so the 8 MiB thread is margin for an unoptimized build, not what
+  clv's tests need; kept. `peniko` a direct dependency, for the recorder, approved.

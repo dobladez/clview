@@ -220,18 +220,22 @@ nested ever deeper, each depth in a child process (`measure stack <depth> <kind>
 thread with Rust's default 2 MiB stack, or `STACK=8` MiB, and prints the deepest that held before
 the child overflowed its stack (SIGABRT). The debug build is `cargo build` there.
 
-| Nested | 2 MiB, release | 2 MiB, debug | 8 MiB, release | 8 MiB, debug |
-|---|---|---|---|---|
-| `div` | 864 | 132 | 3,456 | 544 |
-| `span` | 2,016 | 816 | 8,064 | 3,264 |
-| `display: flex` | 640 | 176 | 2,624 | 720 |
-| `display: inline-block` | 624 | 136 | 2,496 | 544 |
-| `display: grid` | 360 | 58 | 1,440 | 240 |
-| `display: table` | 16,128 | 2,880 | 64,512 | 11,520 |
+| Nested | 2 MiB, release | 2 MiB, debug | 8 MiB, release | 8 MiB, debug | 2 MiB, clv's dev profile | 8 MiB, clv's dev profile |
+|---|---|---|---|---|---|---|
+| `div` | 864 | 132 | 3,456 | 544 | 928 | 3,776 |
+| `span` | 2,016 | 816 | 8,064 | 3,264 | | |
+| `display: flex` | 640 | 176 | 2,624 | 720 | 720 | 2,880 |
+| `display: inline-block` | 624 | 136 | 2,496 | 544 | | |
+| `display: grid` | 360 | 58 | 1,440 | 240 | 392 | 1,600 |
+| `display: table` | 16,128 | 2,880 | 64,512 | 11,520 | | |
 
-On a render thread's 2 MiB, a debug build (what the tests run) overflows at 58 nested grids, below
-the spec's 64. On 8 MiB, 64 levels hold with a margin of 3.75 in a debug build and 22 in release,
-nested grids being the deepest-costing kind tried: the limit is 64, on a thread of 8 MiB.
+"Debug" is the tool's own debug build, nothing optimized. clv's dev profile, what its tests run,
+builds its dependencies at `opt-level = 2` (`[profile.dev.package."*"]`); the last two columns are
+the tool built so (those lines added to its `Cargo.toml`, `CARGO_TARGET_DIR=target/clv-dev cargo
+build`). An unoptimized build overflows a render thread's 2 MiB at 58 nested grids, below the
+spec's 64; with clv's profiles, 2 MiB holds 392. Blitz runs on a thread of 8 MiB all the same: 64
+levels then hold with a margin of 3.75 even unoptimized, and of 25 as clv builds, for a thread
+spawned for each drawing with labels. The limit is 64.
 
 ## Alternatives considered
 
@@ -245,9 +249,9 @@ nested grids being the deepest-costing kind tried: the limit is 64, on a thread 
   size it is shown at, so a large label at a large zoom is more pixels than the page, and past
   the spike's cap of 8,192 pixels a side it was lost: every label of a newer draw.io drawing, in
   a window past some 4,100 pixels wide.
-- **Blitz on the render thread's 2 MiB,** its nesting held to 64 by what a release build holds
-  (360 nested grids): a debug build overflows at 58, so the tests could not show the limit holds.
-  Held to 32 instead, it would hold in debug too, and leave out the labels 33 to 64 levels deep.
+- **Blitz on the render thread's 2 MiB,** its nesting held to 64 by what an optimized build holds
+  (360 nested grids, 392 as clv's tests build it): an unoptimized build overflows at 58. Held to
+  32 instead, it would hold unoptimized too, and leave out the labels 33 to 64 levels deep.
 - **Counting commands only, as they are painted,** without estimating first: memory is bounded,
   time is not (above).
 - **A recorder that stops the painting by panicking past its limit,** caught as Blitz's panics
