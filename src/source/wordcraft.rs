@@ -62,6 +62,7 @@ const PAPER: Setting = Setting {
     help: "Markdown and HTML light on dark, or dark on light",
     missing: "only Markdown and HTML go dark",
     effect: Effect::Redraw,
+    sets_width: false,
 };
 const LIGHT: &str = "light";
 const DARK: &str = "dark";
@@ -88,6 +89,7 @@ const WIDTH: Setting = Setting {
     help: "Markdown and HTML 4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
     missing: "only Markdown and HTML reflow",
     effect: Effect::Relayout,
+    sets_width: true,
 };
 const WINDOW: &str = "window";
 
@@ -106,6 +108,7 @@ const FONT: Setting = Setting {
     help: "Markdown and HTML text larger, or smaller; 150+ sets 150%, 0+ 100%",
     missing: "only Markdown and HTML have a font size",
     effect: Effect::Relayout,
+    sets_width: false,
 };
 const FONT_DEFAULT: u32 = 100;
 
@@ -202,7 +205,7 @@ const MAX_PAGE: f32 = 14_400.0;
 
 /// The room a document is laid out for when it is opened with none ([`Backend::open`]): 100 × 40
 /// cells of 10 × 20 pixels. The viewer always gives one ([`Backend::open_at`]).
-const ROOMLESS: Room = Room { cols: 100, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+const ROOMLESS: Room = Room { cols: 100, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
 
 /// A cell of `room` in points at `font` percent: a column wide at 100%, half of one at 200%, and as
 /// tall as the cell's shape makes it, taken within reason since the room is input like any other.
@@ -227,19 +230,29 @@ fn margins(room: &Room) -> (f32, f32) {
     (SIDE_MARGIN * cw, TOP_MARGIN * ch)
 }
 
+/// The cells a page of `room` is wide: the room's, or with `per_row` pages to a row of it, its share
+/// of the room's columns less the gaps between them, a cell at least.
+fn page_cols(room: &Room) -> u16 {
+    let Some(n) = room.per_row.filter(|n| *n > 1) else { return room.cols };
+    let gaps = room.gap.checked_mul(n.saturating_sub(1));
+    gaps.and_then(|gaps| room.cols.checked_sub(gaps)).and_then(|cols| cols.checked_div(n)).unwrap_or(0).max(1)
+}
+
 /// The page `width` is laid out on in `room` at `font` percent, in points such that a character of the
 /// code face is `font`/100 of a cell of the room when the page is shown as tall as it: always as tall
-/// as the room; as wide as it at `window`, or half of it less the gap where each half holds
-/// [`BOOK_LEAST`] characters of text; at a number, as wide as the characters take, never wider than
-/// the room. A font size past the most the room holds ([`font_most`]) is laid out at the most, as a
-/// width past the room's is; a page too small for [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text even at
+/// as the room; at `window`, as wide as it, or half of it less the gap where each half holds
+/// [`BOOK_LEAST`] characters of text, or with a count to a row ([`Room::per_row`]) that share of it
+/// ([`page_cols`]), the book rule off; at a number, as wide as the characters take, never wider than
+/// that page. A font size past the most the page holds ([`font_most`]) is laid out at the most, as a
+/// width past the page's is; a page too small for [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text even at
 /// the least size loses a column of each side margin, then grows past the room (and is shown smaller).
 fn page_in(width: Width, room: &Room, font: u32) -> wordcraft_doc::SectionProps {
     let (cw, ch) = cell_points(room, font.min(font_most(room)));
     let (mut side, top) = margins(room);
     let (least_w, least_h) = (LEAST_COLUMNS as f32 * CODE_WIDTH, LEAST_LINES as f32 * LINE);
-    let room_w = text_columns(room.cols, cw, side);
+    let room_w = text_columns(page_cols(room), cw, side);
     let text_w = match width {
+        Width::Window if room.per_row.is_some() => room_w,
         Width::Window => {
             let half = text_columns(room.cols.saturating_sub(room.gap) / 2, cw, side);
             if half >= BOOK_LEAST as f32 * CODE_WIDTH { half } else { room_w }
@@ -266,11 +279,13 @@ fn page_in(width: Width, room: &Room, font: u32) -> wordcraft_doc::SectionProps 
 }
 
 /// Whether `room` holds a page of [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text at `font` percent, the
-/// side margins down to a column: past the font size where it doesn't, the page grows past the room.
+/// side margins down to a column, a page as wide as its share of the room ([`page_cols`]): past the font
+/// size where it doesn't, the page grows past the room.
 fn fits(room: &Room, font: u32) -> bool {
     let (cw, ch) = cell_points(room, font);
     let (_, top) = margins(room);
-    text_columns(room.cols, cw, CODE_WIDTH) >= LEAST_COLUMNS as f32 * CODE_WIDTH && f32::from(room.rows) * ch - 2.0 * top >= LEAST_LINES as f32 * LINE
+    text_columns(page_cols(room), cw, CODE_WIDTH) >= LEAST_COLUMNS as f32 * CODE_WIDTH
+        && f32::from(room.rows) * ch - 2.0 * top >= LEAST_LINES as f32 * LINE
 }
 
 /// The largest font size, among [`FONT`]'s steps, at which `room` holds a page ([`fits`]): the least
@@ -1441,7 +1456,7 @@ mod tests {
 
     /// A room of `cols` × `rows` cells of `cell_w` × `cell_h` pixels, two cells between pages.
     const fn room(cols: u16, rows: u16, cell_w: f32, cell_h: f32) -> Room {
-        Room { cols, rows, cell_w, cell_h, gap: 2 }
+        Room { cols, rows, cell_w, cell_h, gap: 2, per_row: None }
     }
 
     /// Within a hundredth of a point.
@@ -1522,6 +1537,42 @@ mod tests {
         assert_eq!((lines(37), lines(38)), (1, 2));
         let frame = looked_at_on("One", Paper::Printed, Some("40"));
         assert_eq!(frame.width, (44.0 * CODE_WIDTH * SCALE).ceil() as u32);
+    }
+
+    /// With a count to a row ([`Room::per_row`]), `window` is a column: the room's columns less the gaps
+    /// between pages, shared that many ways, as tall as the room, the book rule off. The width's most is a
+    /// column's line, and the font's the largest at which a column holds 20 characters; where even 50%
+    /// leaves a column under 20, it is laid out at 20 and grows, as a small room is.
+    #[test]
+    fn pages_to_a_row_are_columns_of_the_room() {
+        let wide = room(132, 40, 10.0, 20.0);
+        let at = |per_row| Room { per_row, ..wide };
+        // Three to a row: (132 − 2 × 2) / 3 = 42 columns each, 38 characters between the margins.
+        let three = page_in(Width::Window, &at(Some(3)), 100);
+        let alone = page_in(Width::Window, &wide, 100);
+        assert!(near(three.page_w, 42.0 * CODE_WIDTH) && near(three.page_h, alone.page_h), "{} × {}", three.page_w, three.page_h);
+        assert_eq!(columns_of(&three), 38);
+        // One to a row is the whole room, no book of two, which `auto` makes here.
+        assert_eq!((columns_of(&page_in(Width::Window, &at(Some(1)), 100)), columns_of(&alone)), (128, 61));
+        assert_eq!(columns_of(&page_in(Width::Window, &at(Some(2)), 100)), 61, "two: each half less the gap");
+        // A width within a column: past it, the column's.
+        assert_eq!(columns_of(&page_in(Width::Columns(72), &at(Some(3)), 100)), 38);
+        assert_eq!(columns_of(&page_in(Width::Columns(30), &at(Some(3)), 100)), 30);
+        // The font's most is a column's: 190% holds 20 characters in 42 columns, 200% doesn't.
+        assert_eq!((fits(&at(Some(3)), 190), fits(&at(Some(3)), 200), font_most(&at(Some(3))), font_most(&wide)), (true, false, 190, 300));
+        let past = page_in(Width::Window, &at(Some(3)), 300);
+        assert!(near(past.page_w, page_in(Width::Window, &at(Some(3)), 190).page_w) && columns_of(&past) == 20, "laid out at the most: {past:?}");
+        // Eight to a row of 40 columns: 3 each, under 20 characters even at 50%; laid out at 20, grown.
+        let narrow = Room { per_row: Some(8), ..room(40, 40, 10.0, 20.0) };
+        assert_eq!(font_most(&narrow), 50);
+        let grown = page_in(Width::Window, &narrow, 100);
+        assert!(near(grown.text_width(), 20.0 * CODE_WIDTH) && near(grown.margin_left, CODE_WIDTH), "{grown:?}");
+        // However odd the count: a cell at least, never a panic.
+        for per_row in [Some(0), Some(u16::MAX), Some(200)] {
+            let page = page_in(Width::Window, &at(per_row), 100);
+            assert!(page.page_w.is_finite() && page.text_width() >= 20.0 * CODE_WIDTH - 0.01, "{per_row:?}: {page:?}");
+            assert!((1..=wide.cols).contains(&page_cols(&at(per_row))), "{per_row:?}");
+        }
     }
 
     /// At a font size, a cell of the room is that share of a character of the code face: at 200%, a

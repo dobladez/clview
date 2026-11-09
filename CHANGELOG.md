@@ -30,6 +30,11 @@ works today. A version's section becomes the notes of its
   width; `3.` sets three, as many as the window takes, and `0.` goes back to `auto`. In a list they set
   the tiles to a row, `.` stopping at one. They are the pages to a row on a Markdown or HTML file too,
   where `+` and `-` are its font size.
+- Markdown and HTML in columns: `3.` (or `--per-row 3`) lays the document out again on three pages
+  side by side, each a third of the window wide and as tall, the text at its font size; `.` stops at
+  one. A count and a width you type both say how wide a page is, so the last you set wins: `3.` puts the
+  width back to `window`, `72]` the count back to `auto`. `--width 72` with `--per-row 3` lays out at
+  the width, with a warning. Printed, `--per-row 3` prints three-column pages.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 

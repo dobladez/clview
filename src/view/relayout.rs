@@ -197,7 +197,7 @@ mod tests {
     };
 
     /// The room the tests show the document in, and another.
-    const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+    const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
     const OTHER: Room = Room { cols: 100, ..ROOM };
 
     fn values(paper: &'static str, width: Option<u32>) -> Values {

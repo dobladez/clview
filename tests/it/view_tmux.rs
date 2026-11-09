@@ -707,6 +707,36 @@ fn inside_tmux_a_pane_resized_lays_the_document_out_again() {
     server.tmux(&["send-keys", "-t", &pane, "q"]);
 }
 
+/// Inside tmux, `3.` lays a Markdown file out in three columns of the pane, as tall as it, at once.
+#[cfg(feature = "word")]
+#[test]
+fn inside_tmux_a_count_to_a_row_lays_markdown_out_in_columns_of_the_pane() {
+    let Some(Shell { server, pane, output, pdf }) = shell("columns") else { return };
+    let notes = pdf.with_file_name("long.md");
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    std::fs::write(&notes, long).unwrap();
+    let from = output.lock().unwrap().len();
+    let shapes = || sizes_sent(&output.lock().unwrap()[from..]);
+    let shaped = |(x, y): &(u32, u32), w: f32, h: f32| (*x as f32 / *y as f32 - w / h).abs() < 0.01;
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what} never happened: {:?}", shapes());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let size = String::from_utf8_lossy(&server.tmux(&["display-message", "-p", "-t", &pane, "#{pane_width} #{pane_height}"])).into_owned();
+    let mut parts = size.split_whitespace().map(|n| n.parse::<u16>().unwrap());
+    let (cols, rows) = (parts.next().unwrap(), parts.next().unwrap());
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol kitty", notes.display()), "Enter"]);
+    until("the first pages", &|| !shapes().is_empty());
+    server.tmux(&["send-keys", "-t", &pane, "3."]);
+    // (cols − 2 × 2) / 3 columns each, as tall as the pane less the status line.
+    let column = f32::from((cols - 4) / 3) * 5.64;
+    until("three columns", &|| shapes().iter().any(|s| shaped(s, column, f32::from(rows - 1) * 11.28)));
+    server.tmux(&["send-keys", "-t", &pane, "q"]);
+}
+
 /// The pager's text cells are the pane's, however tmux shows it: drawn and turned with no passthrough
 /// and nothing asked of tmux about what reached the terminal.
 #[test]

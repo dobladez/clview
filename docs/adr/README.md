@@ -34,7 +34,8 @@ Use [`template.md`](template.md) as the starting point.
 | 0020 | [New versions through a Homebrew tap, not a check inside clv](0020-new-versions-through-a-homebrew-tap-not-a-check-inside-clv.md) | Accepted |
 | 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted; the viewer's keys first set aside for the zoom keys by ADR-0023 |
 | 0022 | [Markdown and HTML reflow to a width in characters, as a new level](0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md) | Accepted; its US Letter page superseded by ADR-0023 |
-| 0023 | [The window is the page of Markdown and HTML](0023-the-window-is-the-page-of-markdown-and-html.md) | Accepted |
+| 0023 | [The window is the page of Markdown and HTML](0023-the-window-is-the-page-of-markdown-and-html.md) | Accepted; its pages to a row given keys of their own by ADR-0024 |
+| 0024 | [Pages to a row of Markdown and HTML are columns, and the last key wins](0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md) | Accepted |
 
 ## When to write one
 

@@ -154,6 +154,8 @@ const LIST_HELP: &[(&str, &str)] = &[
     ("r  Ctrl-L", "render again"),
     ("c", "copy its picture to the clipboard"),
 ];
+/// The `, .` line on a document laid out for its room, where they are columns.
+const COLUMNS_HELP: (&str, &str) = (", .  3.", "one more column, or one fewer, down to one; 3. sets 3, 0. auto");
 /// Leaving, gone into from a list or not, and these keys themselves.
 const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list"), ("q  Ctrl-C", "quit")];
 const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
@@ -162,7 +164,8 @@ const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 /// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
 /// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A container gone into
 /// from a list is listed by `opener`, a few files at a time, saying how far it has got. `room` is
-/// what a document on screen is laid out for: the room what is shown was opened for. Returns
+/// what a document on screen is laid out for: the room what is shown was opened for, its count to a
+/// row `zoom`'s. Returns
 /// what the reader should know once the screen is back: why the files those containers left out
 /// were.
 #[expect(clippy::too_many_arguments, reason = "each is a different part of what the pager shows, and how")]
@@ -188,6 +191,8 @@ pub(super) fn run(
     }
     let settings =
         Rc::new(Settings { declared: super::settings(opener.backends), values: std::cell::Cell::new(terminal.values), changed: Default::default() });
+    // The window's room; the count to a row a document is laid out in is the reader's ([`Nav::columns`]).
+    let room = Room { per_row: None, ..room };
     let mut level = Level::new(0, shown, zoom, false, settings.clone(), room);
     level.nav.message = note;
     let mut pager = Pager {
@@ -309,12 +314,16 @@ pub(super) fn run(
                     }
                     continue;
                 }
-                let step = pager.level.nav.key(key);
-                // A setting's bounds may depend on another's value (the width's on the font size): asked
-                // again before the next key.
+                let mut step = pager.level.nav.key(key);
+                // A setting's bounds may depend on another's value (the width's on the font size) and on
+                // the pages to a row: asked again before the next key.
                 pager.refresh_bounds();
+                if let Step::Again(key) = step {
+                    step = pager.level.nav.key(key);
+                    pager.refresh_bounds();
+                }
                 match step {
-                    Step::Continue => {}
+                    Step::Continue | Step::Again(_) => {}
                     // Esc at the top, where there is nothing to go back to, quits.
                     Step::Quit => quit = true,
                     Step::Leave if pager.parents.is_empty() => quit = true,
@@ -344,6 +353,8 @@ pub(super) fn run(
         redraw |= pager.watch_room();
         pager.refresh_bounds();
         redraw |= pager.relayout()?;
+        // A layout that failed put the count to a row back: the bounds follow it before the draw.
+        pager.refresh_bounds();
         redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
@@ -371,6 +382,9 @@ enum Step {
     Open(usize),
     /// Copy this page of the source to the clipboard: in a list, this tile's picture.
     ToClipboard(usize),
+    /// This key again, once the bounds are asked again: it set the pages to a row back to `auto`
+    /// first, and steps from the bounds of the room at `auto` ([`Nav::setting_key`]).
+    Again(Key),
 }
 
 /// Where the reader is, and what keys do to it: in a file's pages, or in a list, where the reader
@@ -669,8 +683,10 @@ impl Nav {
         let settings =
             self.settings.declared.iter().filter(|setting| setting.keys != Keys::Zoom).map(|setting| (setting_keys(setting), setting.help));
         let fixed = |lines: &[(&str, &'static str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), *what)).collect::<Vec<_>>();
+        let reflows = self.reflows();
         let keys = fixed(keys).into_iter().map(|(chars, what)| match zoomed {
             Some(setting) if chars == "+ -" => (setting_keys(setting), setting.help),
+            _ if reflows && chars == COLUMNS_HELP.0 => (chars, COLUMNS_HELP.1),
             _ => (chars, what),
         });
         keys.chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
@@ -786,14 +802,14 @@ impl Nav {
             Key::Char('G') | Key::End => self.go(usize::MAX),
             // `=` and `_` are the same keys as `+` and `-`, with Shift or without.
             // A document's font size, where it has one; the zoom everywhere else.
-            Key::Char('+' | '=' | '-' | '_') if self.zoom_setting().is_some() => self.setting_key(key),
+            Key::Char('+' | '=' | '-' | '_') if self.zoom_setting().is_some() => return self.setting_key(key),
             Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char(',') => self.per_row_key(true),
             Key::Char('.') => self.per_row_key(false),
             Key::Char('r' | '\u{c}') => self.rerender = true,
             Key::Char('/') => self.message = Some(NO_SEARCH.into()),
-            _ => self.setting_key(key),
+            _ => return self.setting_key(key),
         }
         Step::Continue
     }
@@ -827,7 +843,7 @@ impl Nav {
             Key::Char('.') => self.per_row_key(false),
             Key::Char('r' | '\u{c}') => self.rerender = true,
             Key::Char('/') => self.start_filter(),
-            _ => self.setting_key(key),
+            _ => return self.setting_key(key),
         }
         Step::Continue
     }
@@ -839,18 +855,28 @@ impl Nav {
     /// changes and the reader is told what it is now: a redraw setting's pages are made again, and a
     /// document whose layout isn't at a relayout setting's value is laid out again when it is on screen
     /// ([`Pager::relayout`]).
-    fn setting_key(&mut self, key: Key) {
-        let Key::Char(key) = key else { return };
+    ///
+    /// On a document laid out in columns, a key of a setting that says how wide a page is
+    /// ([`Setting::sets_width`]) sets the pages to a row back to `auto` first, and is pressed again once
+    /// the bounds are those of the room at `auto` ([`Step::Again`]); `0` before it changes only its own.
+    fn setting_key(&mut self, key: Key) -> Step {
+        let Key::Char(char) = key else { return Step::Continue };
         let settings = self.settings.clone();
-        let Some(setting) = settings.declared.iter().find(|setting| setting.keys.chars().contains(&key)) else { return };
+        let Some(setting) = settings.declared.iter().find(|setting| setting.keys.chars().contains(&char)) else { return Step::Continue };
+        let zero = self.typed.parse::<u32>().ok() == Some(0);
+        if setting.sets_width && self.has.contains(&setting.name) && self.columns().is_some() && !zero {
+            self.zoom_to(Some(Zoom::Auto), "");
+            return Step::Again(key);
+        }
+        let key = char;
         let count = setting.numbers.and_then(|_| (!self.typed.is_empty()).then(|| std::mem::take(&mut self.typed)));
         if !self.has.contains(&setting.name) {
             self.message = Some(setting.missing.into());
-            return;
+            return Step::Continue;
         }
         if setting.effect == Effect::Relayout && (self.list || self.picked) {
             self.message = Some(if self.list { REFLOW_IN_LIST } else { REFLOW_WITH_PAGES }.into());
-            return;
+            return Step::Continue;
         }
         let mut values = settings.values.get();
         let now = values.get(setting.name).unwrap_or(setting.default);
@@ -862,6 +888,7 @@ impl Nav {
             }
         }
         self.message = Some(said);
+        Step::Continue
     }
 
     /// In a list, choose the tile at `index`, or the last: the screen follows it.
@@ -903,13 +930,75 @@ impl Nav {
             let wanted = typed.parse::<u32>().unwrap_or(u32::MAX);
             let most = self.most_per_row.max(1);
             let n = u16::try_from(wanted).unwrap_or(u16::MAX).min(most);
-            self.zoom_to(Some(if n == 0 { Zoom::Auto } else { Zoom::PerRow(n) }), "");
+            if n == 0 {
+                // `0.` changes only the count.
+                self.zoom_to(Some(Zoom::Auto), "");
+                return;
+            }
+            self.zoom_to(Some(Zoom::PerRow(n)), "");
             if wanted > u32::from(most) {
                 self.message = Some("fully zoomed out".into());
             }
+            self.width_gives_way();
             return;
         }
+        if !more && self.reflows() && self.per_row <= 1 {
+            // A reflowed page is never wider than the window: one to a row is as far in as it goes.
+            self.message = Some("1 per row, the least".into());
+            return;
+        }
+        let zoom = self.zoom;
         self.step_per_row(more);
+        if self.zoom != zoom {
+            self.width_gives_way();
+        }
+    }
+
+    /// Whether what is shown is a document laid out for its room, by itself: one that has a relayout
+    /// setting, not in a list, and not pages picked by `--pages` (as laid out, never laid out again).
+    fn reflows(&self) -> bool {
+        !self.list
+            && !self.picked
+            && self.settings.declared.iter().any(|setting| setting.effect == Effect::Relayout && self.has.contains(&setting.name))
+    }
+
+    /// How many pages to a row a document laid out for its room is laid out in ([`Room::per_row`]): the
+    /// count the grid draws, as asked; `None` at `auto`, or for anything else.
+    fn columns(&self) -> Option<u16> {
+        match self.zoom {
+            _ if !self.reflows() => None,
+            Zoom::Auto => None,
+            Zoom::Width => Some(1),
+            Zoom::PerRow(_) => Some(self.per_row.max(1)),
+        }
+    }
+
+    /// A count to a row was set, on a document laid out in columns: the settings that say how wide a
+    /// page is ([`Setting::sets_width`]) go back to their default, as the last key wins.
+    fn width_gives_way(&mut self) {
+        if !self.reflows() {
+            return;
+        }
+        let mut values = self.settings.values.get();
+        let widths = self.settings.declared.iter().filter(|setting| setting.sets_width && self.has.contains(&setting.name));
+        let mut changed = false;
+        for setting in widths {
+            if values.get(setting.name).is_some_and(|value| value != setting.default) {
+                changed |= values.set(setting.name, setting.default);
+            }
+        }
+        if changed {
+            self.settings.values.set(values);
+        }
+    }
+
+    /// The count to a row back to `per_row`, what the document on screen is laid out in, after a layout
+    /// that failed: the next step starts from what is on screen.
+    fn put_back_columns(&mut self, per_row: Option<u16>) {
+        let zoom = per_row.map_or(Zoom::Auto, Zoom::PerRow);
+        if self.reflows() && self.columns() != per_row {
+            self.zoom_to(Some(zoom), "");
+        }
     }
 
     /// One page (or tile) more to a row (`more`), or one fewer: `-` and `+`, and `,` and `.`.
@@ -1305,16 +1394,21 @@ struct Level {
 }
 
 impl Level {
-    /// What is `shown`, at `zoom`, in `room`; `nested` when opened from a list. A list gone into from
-    /// a list needs no reminder of the keys: they are the list's.
+    /// What is `shown`, at `zoom`, in `room` (the window's, at `auto` to a row); `nested` when opened
+    /// from a list. A list gone into from a list needs no reminder of the keys: they are the list's. A
+    /// document laid out for its room is never wider than it: the width is one to a row there.
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>, room: Room) -> Self {
         let list = shown.is_list();
         let Shown { pages: Pages { source, name, pages, picked }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
-        let bounds = bounds_in(&settings, &*source, &has, room, settings.values.get());
-        let laid = (!list).then(|| laid_at(&settings, &*source, &has, &bounds)).flatten();
-        let nav = Nav { list, nested, hint: !(list && nested), names, settings, has, bounds, picked, laid, ..Nav::new(pages, source.pages(), zoom) };
+        let mut nav = Nav { list, nested, hint: !(list && nested), names, settings, has, picked, ..Nav::new(pages, source.pages(), zoom) };
+        if nav.reflows() && nav.zoom == Zoom::Width {
+            nav.zoom_to(Some(Zoom::PerRow(1)), "");
+        }
+        let room = Room { per_row: nav.columns(), ..room };
+        nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
+        nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
     }
 
@@ -1335,7 +1429,8 @@ struct Pager<'a> {
     level: Level,
     parents: Vec<Level>,
     /// The room a document on screen is laid out for: the window's pages area, as the files were
-    /// opened for it, then as the window has held since it changed size ([`Pager::watch_room`]).
+    /// opened for it, then as the window has held since it changed size ([`Pager::watch_room`]); at
+    /// `auto` to a row, the reader's count added where it is used ([`Pager::room_for`]).
     room: Room,
     /// A container gone into, being read or its files opened before it shows.
     reading: Option<Reading>,
@@ -1742,7 +1837,7 @@ impl Pager<'_> {
         }
         let (declared, has) = (self.settings.declared.clone(), self.level.nav.has.clone());
         let (laid, laid_room) = self.level.source.laid_at();
-        let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room, laid_room);
+        let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room_for(), laid_room);
         // What is being laid out that isn't the default, or that it is.
         let saying = |values: Values| Some(relayout::describe(&declared, &has, values)).filter(|said| !said.is_empty()).unwrap_or(LAYING_OUT.into());
         let mut changed = false;
@@ -1762,7 +1857,7 @@ impl Pager<'_> {
                     }
                     Err(why) => {
                         self.level.nav.message = Some(printable(&why));
-                        self.put_back(laid);
+                        self.put_back(laid, laid_room);
                         if let Some((values, room)) = wanted {
                             self.relayout.fail(values, room);
                         }
@@ -1778,7 +1873,7 @@ impl Pager<'_> {
         };
         let Some(job) = self.level.source.relayout(values, room) else {
             self.level.nav.message = Some("it can't be laid out again".into());
-            self.put_back(laid);
+            self.put_back(laid, laid_room);
             self.level.nav.relaying = None;
             return Ok(true);
         };
@@ -1810,7 +1905,7 @@ impl Pager<'_> {
     /// status line says of the layout follows, as a number past the most is said with what it is laid
     /// out at.
     fn refresh_bounds(&mut self) {
-        let (values, room) = (self.settings.values.get(), self.room);
+        let (values, room) = (self.settings.values.get(), self.room_for());
         if self.bounds_for.is_some_and(|(level, asked, asked_in)| level == self.level.id && asked == values && asked_in.same(&room)) {
             return;
         }
@@ -1822,11 +1917,20 @@ impl Pager<'_> {
         }
     }
 
-    /// The shared values of the relayout settings back to `laid`, what the document on screen is laid
-    /// out at.
-    fn put_back(&self, laid: Values) {
+    /// The shared values of the relayout settings back to `laid`, and the count to a row back to
+    /// `laid_room`'s, what the document on screen is laid out at: a key that changed both is one change.
+    fn put_back(&mut self, laid: Values, laid_room: Option<Room>) {
         let values = relayout::put_back(&self.settings.declared, &self.level.nav.has, self.settings.values.get(), laid);
         self.settings.values.set(values);
+        if let Some(room) = laid_room {
+            self.level.nav.put_back_columns(room.per_row);
+        }
+    }
+
+    /// The room the document on screen is laid out for: the window's ([`Pager::room`]), in as many
+    /// columns as the reader asked for ([`Nav::columns`]).
+    fn room_for(&self) -> Room {
+        Room { per_row: self.level.nav.columns(), ..self.room }
     }
 
     /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
@@ -2394,6 +2498,7 @@ mod tests {
         help: "pale or deep",
         missing: "only some go deep",
         effect: Effect::Redraw,
+        sets_width: false,
     };
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
@@ -2460,6 +2565,7 @@ mod tests {
         help: "narrower or wider",
         missing: "only some are as wide",
         effect: Effect::Relayout,
+        sets_width: true,
         ..SHADE
     };
 
@@ -2479,6 +2585,85 @@ mod tests {
     /// The width `nav` has, and what the status line says.
     fn width(nav: &Nav) -> (Option<Value>, Option<&str>) {
         (nav.settings.values.get().get(WIDTH.name), nav.message.as_deref())
+    }
+
+    /// On a document laid out for its room, `,` and `.` are columns: the count reaches the layout
+    /// ([`Nav::columns`]), `.` stops at one to a row, and the width is one to a row. Between a count and a
+    /// typed width the last key wins: a count sets `width` back to `window`, a width key sets the count
+    /// back to `auto` first and is pressed again once the bounds are asked again; `0.` and `0]` change
+    /// only their own. In a list, with `--pages` and on a PDF, the count is the zoom alone.
+    #[test]
+    fn on_a_reflowed_document_a_count_is_columns_and_the_last_key_wins() {
+        let chars = |text: &str| text.chars().map(Key::Char).collect::<Vec<_>>();
+        // As the pager does: a key that asks to be pressed again is, the bounds asked again between.
+        let press = |nav: &mut Nav, keys: &[Key]| {
+            for key in keys {
+                if let Step::Again(key) = nav.key(*key) {
+                    nav.key(key);
+                }
+            }
+        };
+        let mut nav = declaring_both(reader(0, 20, 40, 40), &["width"]);
+        nav.grid(1, 1, 8);
+        assert_eq!((nav.reflows(), nav.columns()), (true, None), "auto: the document's to say");
+        press(&mut nav, &chars("3."));
+        assert_eq!((nav.zoom, nav.columns()), (Zoom::PerRow(3), Some(3)));
+        press(&mut nav, &chars(","));
+        assert_eq!(nav.columns(), Some(4));
+        // `.` down to one, and no further: never the width.
+        press(&mut nav, &chars("..."));
+        assert_eq!((nav.zoom, nav.message.as_deref()), (Zoom::PerRow(1), None));
+        press(&mut nav, &chars("."));
+        assert_eq!((nav.zoom, nav.columns(), nav.message.as_deref()), (Zoom::PerRow(1), Some(1), Some("1 per row, the least")));
+        // From `auto` showing one: the least already.
+        let mut one = declaring_both(reader(0, 20, 40, 40), &["width"]);
+        one.grid(1, 1, 8);
+        press(&mut one, &chars("."));
+        assert_eq!((one.zoom, one.message.as_deref()), (Zoom::Auto, Some("1 per row, the least")));
+        // A count sets the width back to `window`; `0.` leaves it.
+        press(&mut nav, &chars("72"));
+        assert_eq!(nav.key(Key::Char(']')), Step::Again(Key::Char(']')), "the count goes to auto first");
+        assert_eq!((nav.zoom, nav.typed.as_str()), (Zoom::Auto, "72"), "the number waits for the key again");
+        assert_eq!(nav.key(Key::Char(']')), Step::Continue);
+        assert_eq!((width(&nav), nav.columns()), ((Some(Value::Number(72)), Some("width 72")), None));
+        press(&mut nav, &chars("0."));
+        assert_eq!(width(&nav).0, Some(Value::Number(72)), "0. changes only the count");
+        press(&mut nav, &chars("3."));
+        assert_eq!((width(&nav).0, nav.columns()), (Some(Value::Named("window")), Some(3)));
+        press(&mut nav, &chars("72]"));
+        press(&mut nav, &chars(","));
+        assert_eq!((width(&nav).0, nav.zoom), (Some(Value::Named("window")), Zoom::PerRow(2)), "`,` from auto showing one");
+        // `[` steps from `window` as it sits at auto, once the count is back there.
+        assert_eq!(nav.key(Key::Char('[')), Step::Again(Key::Char('[')));
+        assert_eq!(nav.zoom, Zoom::Auto);
+        nav.key(Key::Char('['));
+        // `0]` changes only the width.
+        press(&mut nav, &chars("3."));
+        nav.key(Key::Char('0'));
+        assert_eq!(nav.key(Key::Char(']')), Step::Continue);
+        assert_eq!((nav.columns(), width(&nav).0), (Some(3), Some(Value::Named("window"))));
+        // A layout that failed puts the count back to what the document is laid out in.
+        nav.put_back_columns(None);
+        assert_eq!((nav.zoom, nav.columns()), (Zoom::Auto, None));
+        nav.put_back_columns(Some(2));
+        assert_eq!(nav.zoom, Zoom::PerRow(2));
+        // Elsewhere the count is the zoom alone: in a list, with `--pages`, on what has no relayout setting.
+        for mut other in [
+            declaring_both(Nav { list: true, ..reader(0, 20, 40, 40) }, &["width"]),
+            Nav { picked: true, ..declaring_both(reader(0, 20, 40, 40), &["width"]) },
+            declaring_both(reader(0, 20, 40, 40), &["shade"]),
+        ] {
+            press(&mut other, &chars("3."));
+            assert_eq!((other.zoom, other.columns(), other.reflows()), (Zoom::PerRow(3), None, false));
+            press(&mut other, &chars("72]"));
+            assert_eq!(other.zoom, Zoom::PerRow(3), "a width key leaves the zoom");
+        }
+        assert!(nav.help_lines().contains(&(COLUMNS_HELP.0.to_owned(), COLUMNS_HELP.1)), "`?` says columns");
+        let mut picked = Nav { picked: true, ..declaring_both(reader(0, 20, 40, 40), &["width"]) };
+        assert!(!picked.help_lines().iter().any(|(_, what)| *what == COLUMNS_HELP.1), "with --pages, the zoom's");
+        picked.grid(1, 1, 8);
+        press(&mut picked, &chars("."));
+        assert_eq!(picked.zoom, Zoom::Width, "with --pages, the width");
     }
 
     /// `Step` keys go to the next multiple of the step down or up, through the named value set among

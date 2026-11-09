@@ -1733,6 +1733,118 @@ fn a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back() {
     assert!(view.finish().success());
 }
 
+/// A page a third of these tests' window wide, in points: (100 − 2 × 2) / 3 = 32 columns.
+#[cfg(feature = "word")]
+const THIRD: f32 = 32.0 * 5.64;
+
+/// On Markdown `3.` lays the document out again in three columns, each as tall as the window, three to
+/// a row; `,` four. Between a count and a typed width the last key wins: `72]` sets the count back to
+/// `auto`, `3.` the width back to `window`, and `[` steps from `window` as it sits at `auto`, not in a
+/// column. `0.` is `auto` again. With `--pages` they are the zoom alone: the pages as laid out.
+#[cfg(feature = "word")]
+#[test]
+fn a_count_to_a_row_lays_markdown_out_in_columns_and_the_last_key_wins() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("columns", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    let since = |view: &mut Session, keys: &str, what: &str, done: &dyn Fn(&str) -> bool| {
+        let before = view.text().len();
+        view.press(keys);
+        view.wait_until(what, |t| done(&t[before..]));
+    };
+    since(&mut view, "3.", "three columns", &|t| {
+        bar(last_draw(t)).contains("· 3 per row ·") && t.contains("  pages 1–3/") && last_sent_shaped(t, THIRD, WINDOW.1)
+    });
+    since(&mut view, ",", "four", &|t| t.contains("  pages 1–4/") && last_sent_shaped(t, 23.0 * 5.64, WINDOW.1));
+    // A width: the count back to auto, the pages 76 columns wide, one to a row.
+    since(&mut view, "72]", "width 72", &|t| bar(last_draw(t)).contains("· width 72 · 1 per row ·") && last_sent_shaped(t, 76.0 * 5.64, WINDOW.1));
+    // A count: the width back to window.
+    since(&mut view, "3.", "three again", &|t| {
+        last_sent_shaped(t, THIRD, WINDOW.1) && t.contains("  pages 1–3/") && !bar(last_draw(t)).contains("width")
+    });
+    // `[` from window at auto, the window's 96 characters: not from a column's 28.
+    since(&mut view, "[", "from the window's width", &|t| bar(last_draw(t)).contains("· width 96 ·") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    assert!(!view.text().contains("width 28"));
+    since(&mut view, "3.0.", "auto again", &|t| bar(last_draw(t)).contains("· 1 per row ·") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    view.press("q");
+    assert!(view.finish().success());
+    // With `--pages`, the zoom: three of the window's pages to a row, none laid out again.
+    let mut view = Session::start_on(KITTY, &long_markdown("columns-pages", "long.md"), &["--pager", "--pages", "1-3"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    since(&mut view, "3.", "three to a row", &|t| t.contains("  pages 1–3/") && bar(last_draw(t)).contains("· 3 per row ·"));
+    let window = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - WINDOW.0 / WINDOW.1).abs() < 0.01;
+    assert!(sizes_sent(&view.text()).iter().all(window), "{:?}", sizes_sent(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// Printed on a terminal, `--per-row 3` lays Markdown out for the room the tty says, in three columns
+/// as tall as it: in 100 × 60, pages 32 columns by 59 rows, three to a row; not the window's pages
+/// shrunk into a third of it (32 × 19).
+#[cfg(feature = "word")]
+#[test]
+fn printing_lays_markdown_out_in_columns_for_the_ttys_room() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("print-columns", "long.md");
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--no-pager", "--per-row", "3"], 100, 60);
+    assert!(view.finish().success());
+    let text = view.text();
+    let column = text.matches("\x1b_Ga=T,f=100,t=d,q=2,C=1,c=32,r=59,").count();
+    assert!(column >= 3 && !text.contains(",c=32,r=19,"), "{column} columns: {:?}", &text[..text.len().min(400)]);
+}
+
+/// A key that changes both the count and the width is one change: when its layout fails, both go back
+/// to what is on screen, and the next step starts from there.
+#[cfg(feature = "word")]
+#[test]
+fn a_count_whose_layout_fails_puts_the_count_and_the_width_back() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("columns-fail", "gone.md");
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("72]");
+    view.wait_until("width 72", |t| bar(last_draw(t)).contains("· width 72 ·") && last_sent_shaped(t, 76.0 * 5.64, WINDOW.1));
+    std::fs::remove_file(&path).unwrap();
+    let before = view.text().len();
+    view.press("3.");
+    view.wait_until("why", |t| bar(&t[before..]).contains("os error"));
+    std::thread::sleep(Duration::from_millis(300));
+    let text = view.text();
+    assert!(bar(last_draw(&text)).contains("· width 72 · 1 per row ·"), "both back: {:?}", last_draw(&text));
+    // The old pages, drawn three to a row until the layout came back, and nothing laid out in columns.
+    let as_laid = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - 76.0 * 5.64 / WINDOW.1).abs() < 0.01;
+    assert!(sizes_sent(&text[before..]).iter().all(as_laid), "nothing laid out: {:?}", sizes_sent(&text[before..]));
+    // From one to a row again: `,` is two, not four.
+    let before = view.text().len();
+    view.press(",");
+    view.wait_until("two asked", |t| bar(&t[before..]).contains("os error") || bar(&t[before..]).contains("2 per row"));
+    assert!(!view.text()[before..].contains("4 per row"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In text cells the count reaches the layout as it does in images: three columns, more pages.
+#[cfg(feature = "word")]
+#[test]
+fn text_cells_lay_markdown_out_in_columns_too() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(TEXT_ONLY, &long_markdown("columns-cells", "long.md"), &["--pager", "--protocol", "blocks"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    let alone = page_count(&view.text()).unwrap();
+    view.press("3.");
+    view.wait_until("three columns", |t| bar(last_draw(t)).contains("· 3 per row ·") && page_count(t).is_some_and(|count| count > alone));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// Where the reader is, by the last status line drawn: the first page on screen, of how many.
 #[cfg(feature = "word")]
 fn place_now(text: &str) -> Option<(usize, usize)> {

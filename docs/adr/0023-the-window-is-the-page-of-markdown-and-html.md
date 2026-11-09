@@ -171,6 +171,7 @@ of the cost either: a page of 20 × 10 at 170% holds what it does at 100%.
   font size kept between runs; laying out while the window is still changing size, where a layout
   could be stopped. A font size for Word, RTF and OpenDocument, whose pages are their own, is not
   planned: the owner decided on 2026-11-09 not to reflow documents that come with a page size, for
-  now.
+  now. The pages to a row the zoom keys gave up here came back on keys of their own, as columns on
+  Markdown and HTML ([ADR-0024](0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md)).
 - **Revisit when:** the two-up shrinking proves a nuisance (one condition in `fit::grid`), or a
   terminal reports its cell wrong often enough that the room's shape should be assumed instead.

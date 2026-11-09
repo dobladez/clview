@@ -119,8 +119,9 @@ fn area(size: WindowSize, cell: Option<Cell>, output: Output) -> Area {
 /// file shown alone, the window `size` the tty says, with `told` the cell tmux reports inside tmux,
 /// on the output `protocol` and `inside_tmux` promise (text cells asked for by name take a
 /// sampling cell; inside tmux, placeholders bound the columns); without a terminal, the preview's.
-/// And for a list's documents, the preview's ([`PREVIEW`]), at the cell the first takes.
-fn first_rooms(size: Option<WindowSize>, told: Option<Cell>, protocol: Protocol, inside_tmux: bool) -> (Room, Room) {
+/// And for a list's documents, the preview's ([`PREVIEW`]), at the cell the first takes. A file alone
+/// is laid out in `per_row` columns, as many as the grid draws in its room; a list's, at `auto`.
+fn first_rooms(size: Option<WindowSize>, told: Option<Cell>, protocol: Protocol, inside_tmux: bool, per_row: Option<u16>) -> (Room, Room) {
     // Only the output's kind matters to the cells: text cells sample, tmux's placeholders bound.
     let output = match protocol {
         Protocol::Text(glyphs) => Output::Text(Style { glyphs, colours: Colours::None, ground: Ground::Dark }),
@@ -129,19 +130,38 @@ fn first_rooms(size: Option<WindowSize>, told: Option<Cell>, protocol: Protocol,
     };
     let area = area(size.unwrap_or(FALLBACK_SIZE), told, output);
     let preview = preview_room(area.cell);
-    (if size.is_some() { room(area) } else { preview }, preview)
+    let first = if size.is_some() { room(area) } else { preview };
+    let per_row = per_row.map(|n| n.clamp(1, fit::max_per_row(first.cols)));
+    (Room { per_row, ..first }, preview)
+}
+
+/// How many pages to a row `zoom` lays a document out in, laid out for its room: `None` at `auto`, one
+/// at the width (a reflowed page is never wider than the window).
+fn columns(zoom: Zoom) -> Option<u16> {
+    match zoom {
+        Zoom::Auto => None,
+        Zoom::Width => Some(1),
+        Zoom::PerRow(n) => Some(n),
+    }
+}
+
+/// Whether `source` is laid out for the room it is shown in: it has one of `settings` that lays it out
+/// again ([`crate::source::Effect::Relayout`]).
+fn reflows(settings: &[&'static Setting], source: &dyn Source) -> bool {
+    let has = source.settings();
+    settings.iter().any(|setting| setting.effect == crate::source::Effect::Relayout && has.contains(&setting.name))
 }
 
 /// `area` as a room a document is laid out for: its cells, and the gap between two pages side by
 /// side.
 fn room(area: Area) -> Room {
-    Room { cols: area.cols, rows: area.rows, cell_w: area.cell.w, cell_h: area.cell.h, gap: fit::GAP }
+    Room { cols: area.cols, rows: area.rows, cell_w: area.cell.w, cell_h: area.cell.h, gap: fit::GAP, per_row: None }
 }
 
 /// The room a list's documents are laid out for ([`PREVIEW`]), at `cell`, the cell the run started
 /// with.
 fn preview_room(cell: Cell) -> Room {
-    Room { cols: PREVIEW.0, rows: PREVIEW.1, cell_w: cell.w, cell_h: cell.h, gap: fit::GAP }
+    Room { cols: PREVIEW.0, rows: PREVIEW.1, cell_w: cell.w, cell_h: cell.h, gap: fit::GAP, per_row: None }
 }
 
 /// How long the terminal gets to answer a query (support, cell size). Terminals answer within
@@ -596,12 +616,30 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     // without a question: its cell from the pixels it reports, or tmux's, or the one assumed; where
     // the cell asked later makes another room, the pager lays the document out once more.
     let told = client.as_ref().and_then(|c| c.as_ref().ok()).and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    let (first, preview) = first_rooms(tty.as_ref().and_then(Tty::size), told, protocol, inside_tmux);
+    // A typed width and a count to a row disagree on a document laid out for its room: the width wins.
+    // With `--pages`, a document is laid out as it is opened and the count is the zoom alone.
+    let width =
+        starts.iter().find(|(setting, start)| setting.sets_width && options.has(setting.option.name) && matches!(start, Start::Is(Value::Number(_))));
+    let per_row = columns(zoom).filter(|_| given.is_none() && width.is_none());
+    let (first, preview) = first_rooms(tty.as_ref().and_then(Tty::size), told, protocol, inside_tmux, per_row);
     let opener = Opener::new(backends, &options, first, preview);
     let Given { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
     warn(&warnings, &left_out);
     // Said first, what was left out may be why there are fewer than asked for.
     let shown = shown.pick(given.as_deref())?;
+    let alone = !shown.is_list() && !shown.pages.picked && reflows(&settings, &*shown.pages.source);
+    let zoom = match (zoom, width) {
+        _ if !alone => zoom,
+        (Zoom::Auto, _) => zoom,
+        (_, Some((setting, _))) => {
+            let per_row = options.typed(PER_ROW, &known);
+            note(&format!("warning: {} and {per_row} disagree on {}: the width wins", setting.option.name, shown.pages.name));
+            Zoom::Auto
+        }
+        // A reflowed page is never wider than the window: the width is one to a row.
+        (Zoom::Width, None) => Zoom::PerRow(1),
+        (_, None) => zoom,
+    };
     // A terminal that takes no escape codes gets no pager, unless told it takes images all the same.
     let plain = protocol != Protocol::Kitty && !inside_tmux && term_says_plain();
     let paging = paging.pages(shown.pages.pages.len(), std::io::stdout().is_terminal() && tty.is_some() && !plain);
@@ -1625,7 +1663,7 @@ mod tests {
     }
 
     /// The room the tests open files for: 80 × 23 cells of the cell assumed.
-    const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+    const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
 
     const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password", alias: None };
 
@@ -1731,27 +1769,27 @@ mod tests {
     #[test]
     fn the_first_room_is_the_window_the_tty_says_and_a_lists_is_the_preview() {
         let size = |cols, rows, xpixel, ypixel| WindowSize { cols, rows, xpixel, ypixel };
-        let (first, preview) = first_rooms(Some(size(120, 40, 1080, 920)), None, Protocol::Auto, false);
-        assert_eq!(first, Room { cols: 120, rows: 39, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP });
-        assert_eq!(preview, Room { cols: 60, rows: 40, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP });
+        let (first, preview) = first_rooms(Some(size(120, 40, 1080, 920)), None, Protocol::Auto, false, None);
+        assert_eq!(first, Room { cols: 120, rows: 39, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP, per_row: None });
+        assert_eq!(preview, Room { cols: 60, rows: 40, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP, per_row: None });
         assert_eq!(first, room(area(size(120, 40, 1080, 920), None, Output::Direct)), "what the pager draws in");
         // No pixels: the cell tmux told, else the one assumed.
         let told = Cell { w: 8.0, h: 17.0 };
-        let in_tmux = first_rooms(Some(size(120, 40, 0, 0)), Some(told), Protocol::Auto, true).0;
-        assert_eq!(in_tmux, Room { cols: 120, rows: 39, cell_w: 8.0, cell_h: 17.0, gap: 2 });
-        let assumed = first_rooms(Some(size(120, 40, 0, 0)), None, Protocol::Kitty, false).0;
-        assert_eq!(assumed, Room { cols: 120, rows: 39, cell_w: 10.0, cell_h: 20.0, gap: 2 });
+        let in_tmux = first_rooms(Some(size(120, 40, 0, 0)), Some(told), Protocol::Auto, true, None).0;
+        assert_eq!(in_tmux, Room { cols: 120, rows: 39, cell_w: 8.0, cell_h: 17.0, gap: 2, per_row: None });
+        let assumed = first_rooms(Some(size(120, 40, 0, 0)), None, Protocol::Kitty, false, None).0;
+        assert_eq!(assumed, Room { cols: 120, rows: 39, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None });
         // Text cells: the sampling cell, the shape kept. Inside tmux: at most 297 columns.
-        let text = first_rooms(Some(size(120, 40, 1200, 640)), None, Protocol::Text(Glyphs::Ascii), false).0;
+        let text = first_rooms(Some(size(120, 40, 1200, 640)), None, Protocol::Text(Glyphs::Ascii), false, None).0;
         assert_eq!((text.cell_w, text.cell_h), (1.25, 2.0));
-        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, true).0.cols, kitty::MAX_CELLS);
-        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, false).0.cols, 400);
+        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, true, None).0.cols, kitty::MAX_CELLS);
+        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, false, None).0.cols, 400);
         // No terminal: the preview's, at the cell assumed.
-        let (none, preview) = first_rooms(None, None, Protocol::Auto, false);
+        let (none, preview) = first_rooms(None, None, Protocol::Auto, false, None);
         assert_eq!(none, preview);
-        assert_eq!(none, Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 });
+        assert_eq!(none, Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None });
         // A window of one row still has a row of pages.
-        assert_eq!(first_rooms(Some(size(80, 1, 0, 0)), None, Protocol::Auto, false).0.rows, 1);
+        assert_eq!(first_rooms(Some(size(80, 1, 0, 0)), None, Protocol::Auto, false, None).0.rows, 1);
     }
 
     #[test]

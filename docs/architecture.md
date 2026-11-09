@@ -278,9 +278,10 @@ Markdown and HTML have no page of their own, so the window is their page
 window is a `Room` (`source.rs`), all of it the viewer's to say: the pages area's columns and rows (the
 window less the status line's row), a cell's width and height in pixels as `f32`, exactly the cell the
 grid is fitted with (`Output::fitting` included: for text cells a sampling cell, 1.25 × 2 for a 10 × 16
-terminal cell, which rounding would reshape), and the cells between two pages side by side (`fit::GAP`).
+terminal cell, which rounding would reshape), the cells between two pages side by side (`fit::GAP`),
+and `per_row`, the pages to a row the reader asked for, as the grid draws them (`None` at `auto`).
 It isn't `fit::Area`: the contract takes nothing from the core. Rooms are compared only through
-`Room::same`: the same columns, rows and gap, and a cell within 2% of the other's each way, so a window
+`Room::same`: the same columns, rows, gap and `per_row`, and a cell within 2% of the other's each way, so a window
 dragged a few pixels, which changes a cell's size by a fraction, lays nothing out again, and a font
 change in the terminal, which changes it by more and the columns with it, does.
 
@@ -297,14 +298,27 @@ change in the terminal, which changes it by more and the columns with it, does.
   run started with, a portrait page, as tiles are square; they keep it, as previews, and `Later`'s
   `Slot` opens with it. Printing with no terminal lays out for the preview's room too. The `Opener`
   carries both rooms, and `Backend::open_at` takes the one that fits (`Opener::file`).
+- **The count to a row** ([ADR-0024](adr/0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md)).
+  `first_rooms` gives a file alone `--per-row`'s count (`view::columns`: one for `width`), clamped to
+  `fit::max_per_row` of the room, unless `--pages` picks the pages or a `--width` of a number disagrees,
+  which wins with a warning once the file is known to reflow; a list's preview room has none. The
+  pager keeps its `room` at `auto` and adds the reader's count where it lays out and asks bounds
+  (`Pager::room_for`, from `Nav::columns`: the count drawn, on a document that `Nav::reflows`), so a
+  count is laid out for at once, while `Hold` still waits for a change of size. A count resets the
+  settings that say how wide a page is (`Setting::sets_width`, the documents' `width`) to their
+  default (`Nav::width_gives_way`); a key of one sets the count back to `auto` and returns
+  `Step::Again`, which the pager presses again after `refresh_bounds`, so it steps from the bounds at
+  `auto`. A layout that fails puts the count back to its `laid_at` room's with the values
+  (`Pager::put_back`), and the failed pair, its room's count included, is refused as any is.
 - **The page** (`wordcraft.rs`'s `page_in`), in points such that a character of the code face
   (`CODE_WIDTH`, `CODE_SIZE` × `CODE_ADVANCE` = 5.64 pt) is `font`/100 of a cell of the room when the
   page is shown as tall as it: a cell of the room is 5.64 × 100/`font` pt wide and that × the cell's
   shape tall (`cell_points`, the shape taken within reason, since a room is input), so at 200% the page
   is half as large in points and its text twice as large on screen. The page is always as tall as the
   room; at `window` as wide as it, or half of it less the gap where each half holds `BOOK_LEAST` (60)
-  characters of text, as an open book; at a number, as wide as the characters take, never wider than
-  the room. The margins are `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and
+  characters of text, as an open book, or with a count its share of the room's columns less the gaps
+  (`page_cols`, checked, a cell at least), the book rule off; at a number, as wide as the characters
+  take, never wider than that page. `fits` and so `font_most` go by that page too. The margins are `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and
   below, at the text's size whatever the font size (`margins`). A font size past the most the room
   holds (`font_most`) is laid out at the most, as a width past the room's is, the value kept; a page
   too small for `LEAST_COLUMNS` × `LEAST_LINES` (20 × 10) of text even at the least size loses a

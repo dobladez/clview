@@ -120,9 +120,10 @@ pub(crate) trait Backend: Sync {
 /// window, all of it the viewer's to say and none of it a document's. The area's columns and rows
 /// (the window less the status line's row), a cell's width and height in pixels, exactly the cell
 /// the pages are fitted with (for text cells a sampling cell, 1.25 × 2 for a 10 × 16 terminal cell:
-/// rounding it would change its shape), and the cells between two pages side by side. A room is
-/// input like any other: a backend checks what it computes from one. Rooms are only ever compared
-/// through [`Room::same`].
+/// rounding it would change its shape), the cells between two pages side by side, and how many pages
+/// the reader asked to have to a row of it (`--per-row`, `,` and `.`), as the grid draws them: `None`
+/// at `auto`, where the document decides (one, or two as a book). A room is input like any other: a
+/// backend checks what it computes from one. Rooms are only ever compared through [`Room::same`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Room {
     pub(crate) cols: u16,
@@ -130,6 +131,7 @@ pub(crate) struct Room {
     pub(crate) cell_w: f32,
     pub(crate) cell_h: f32,
     pub(crate) gap: u16,
+    pub(crate) per_row: Option<u16>,
 }
 
 /// How far two cells may differ, as a share of either side, and still be the same room: a window
@@ -137,7 +139,7 @@ pub(crate) struct Room {
 const SAME_CELL: f32 = 0.02;
 
 impl Room {
-    /// Whether `other` is the same room: the same columns, rows and gap, and a cell within
+    /// Whether `other` is the same room: the same columns, rows, gap and pages to a row, and a cell within
     /// [`SAME_CELL`] of this one's, width and height each. A font change in the terminal, which
     /// changes the cell by more and the columns and rows with it, isn't.
     pub(crate) fn same(&self, other: &Self) -> bool {
@@ -145,6 +147,7 @@ impl Room {
         self.cols == other.cols
             && self.rows == other.rows
             && self.gap == other.gap
+            && self.per_row == other.per_row
             && near(self.cell_w, other.cell_w)
             && near(self.cell_h, other.cell_h)
     }
@@ -200,6 +203,10 @@ pub(crate) struct Setting {
     pub(crate) missing: &'static str,
     /// What a change of its value takes.
     pub(crate) effect: Effect,
+    /// Whether its numbers say how wide a page is, as a count of pages to a row does on a document laid
+    /// out for the room ([`Room::per_row`]): then the last of the two the reader sets wins. A count sets
+    /// it back to its default, and a number of it, typed or stepped to, sets the count back to `auto`.
+    pub(crate) sets_width: bool,
 }
 
 /// What a change of a [`Setting`]'s value takes.
@@ -904,6 +911,7 @@ pub(crate) mod tests {
             help: "",
             missing: "not this one",
             effect: Effect::Redraw,
+            sets_width: false,
         }
     }
 
@@ -985,11 +993,15 @@ pub(crate) mod tests {
     /// cell is kept as it is, never rounded to a whole pixel.
     #[test]
     fn a_room_is_the_same_within_a_little_of_its_cell() {
-        let room = Room { cols: 100, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+        let room = Room { cols: 100, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
         assert!(room.same(&room));
         assert!(room.same(&Room { cell_w: 10.1, cell_h: 19.8, ..room }), "1% off");
         assert!(!room.same(&Room { cell_w: 10.3, ..room }) && !room.same(&Room { cell_h: 20.6, ..room }), "3% off");
         assert!(!room.same(&Room { cols: 101, ..room }) && !room.same(&Room { rows: 39, ..room }) && !room.same(&Room { gap: 1, ..room }));
+        assert!(
+            !room.same(&Room { per_row: Some(3), ..room })
+                && Room { per_row: Some(3), ..room }.same(&Room { per_row: Some(3), cell_w: 10.1, ..room })
+        );
         let sampling = Room { cell_w: 1.25, cell_h: 2.0, ..room };
         assert!(sampling.same(&sampling) && !sampling.same(&Room { cell_w: 1.0, ..sampling }));
         let odd = Room { cell_w: f32::NAN, cell_h: 0.0, ..room };

@@ -33,3 +33,53 @@ surprises, and what a later reader would want.
   `view_pager::comma_and_dot_set_pages_and_tiles_to_a_row` (the `,` `.` arms removed from `key` and
   `list_key`: "three to a row never happened"); `view::zoom_is_still_taken_for_per_row_and_warns` (the
   warning loop removed: stderr empty; the both-given check disabled: the run succeeded).
+
+## Task 2: columns on Markdown and HTML
+
+- **`Room.per_row`**, `None` at `auto`, compared by `Room::same`; every literal has it. The pager keeps
+  its own `room` at `auto` (what `Hold` compares the window with) and adds the reader's count where it
+  lays out and asks bounds: `Pager::room_for`, from `Nav::columns` (the count the last draw drew, or
+  just set by a key; one at `width`; `None` unless `Nav::reflows`: a document with a relayout setting,
+  not in a list, not `--pages`). So a count is laid out for at once, on the next pass, and only a
+  change of size waits for the hold.
+- **Which setting a count undoes is the backend's to say**: a new field, `Setting::sets_width` (true
+  for the documents' `width` alone), since the core may not name `width`. Not in the spec's Approach,
+  which listed no new `Setting` field; the alternative, the core recognising the setting by its named
+  value or by name, would break "the core names no backend".
+- **A width key's "count back to auto first, then step from the bounds at auto"** is `Step::Again`:
+  `Nav::setting_key` sets the zoom to `auto` and hands the key back, untouched by its typed number; the
+  pager runs `refresh_bounds` and presses it again. `0]` and `0.` change only their own.
+- **`.` on a reflowed document** stops where the last draw showed one to a row (`1 per row, the
+  least`), from `auto` too; it never goes to the width. `--per-row width` there is one to a row
+  (`view()` maps it for printing, `Level::new` for the pager).
+- **Options.** `--width N` (a number, from `starts`) with a count: the first room has no count, and once
+  the file is known to reflow (shown alone, not `--pages`), the zoom goes to `auto` with
+  `warning: --width and --per-row disagree on notes.md: the width wins` (the option as typed, so
+  `--zoom` there too). On a PDF both hold, silently. With `--pages`, the document opens with no count:
+  "both hold, each for what it is about", the count the zoom alone.
+- **Recovery.** `Pager::put_back` puts the count back to the failed layout's `laid_at` room's
+  (`Nav::put_back_columns`) with the values; the failed pair's room carries the count, so it is refused
+  as any pair is. **A surprise:** the bounds were asked before `relayout` in each pass, so after a
+  failure the status line said `width 72 (window)` (the bounds of the three columns) until the next
+  pass; `refresh_bounds` now runs after `relayout` too.
+- **Seen meanwhile, left as it is:** a count's key changes the grid at once, so until the new layout
+  lands the old pages are drawn N to a row, shrunk (and rendered again for that). Holding the grid's
+  count until the layout lands would be another change; noted here only.
+- **`?`** says columns on a reflowed document (`COLUMNS_HELP`).
+- **The ADR** is ADR-0024, linked from ADR-0023 and the architecture's room section. Margins' place in
+  the order of the bounds goes in with task 3.
+- **Seen failing**, each by reverting its fix and copying it back (`cmp`): `page_cols` and the book rule's
+  arm in `page_in` (→ `wordcraft::tests::pages_to_a_row_are_columns_of_the_room`,
+  `wordcraft::per_row_lays_markdown_and_html_out_in_columns`,
+  `view_pager::printing_lays_markdown_out_in_columns_for_the_ttys_room`,
+  `view_pager::text_cells_lay_markdown_out_in_columns_too`,
+  `view_tmux::inside_tmux_a_count_to_a_row_lays_markdown_out_in_columns_of_the_pane`,
+  `view_pager::a_count_to_a_row_lays_markdown_out_in_columns_and_the_last_key_wins`); `Step::Again` in
+  `setting_key` (→ `pager::tests::on_a_reflowed_document_a_count_is_columns_and_the_last_key_wins`, and the
+  pager test at `72]`); `width_gives_way` (→ both, "three again never happened"); the `refresh_bounds`
+  before the key pressed again (→ the pager test: `[` stepped from a column's bounds); `put_back_columns`
+  and, separately, the `refresh_bounds` after `relayout`
+  (→ `view_pager::a_count_whose_layout_fails_puts_the_count_and_the_width_back`); `per_row` in
+  `Room::same` (→ `source::tests::a_room_is_the_same_within_a_little_of_its_cell`, and the text-cells test:
+  no layout); the printed room's count (→ both printing tests); the conflict's warning (→ the printing
+  test's stderr).

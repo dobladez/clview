@@ -559,7 +559,7 @@ mod tests {
     }
 
     /// The room the tests' files are laid out for.
-    const ROOM: Room = Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+    const ROOM: Room = Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
 
     fn later(backend: &'static Test) -> Later {
         let file = std::env::temp_dir().join(format!("clview-later-{}", std::process::id()));

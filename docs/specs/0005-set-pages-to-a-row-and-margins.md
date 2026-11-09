@@ -200,7 +200,7 @@ a margin setting on `{` and `}`.
   `cargo test -j 2 --bin clv args`, `cargo test -j 2 --bin clv view::pager`,
   `cargo test -j 2 --test it view` (`--zoom` taken and warning, both given refused, `,` `.` on a
   PDF and in a list, a narrow window's most).
-- [ ] **Columns on Markdown and HTML** — `Room.per_row` (every literal here), `page_in` at N,
+- [x] **Columns on Markdown and HTML** — `Room.per_row` (every literal here), `page_in` at N,
   `.` stopping at one, the last key winning with bounds refreshed first, the failed pair covering
   the count, the options' conflict, printing with `--per-row`, the ADR. *Files:* `src/source.rs`,
   `src/source/later.rs`, `src/source/wordcraft.rs`, `src/view/relayout.rs`, `src/view/pager.rs`,

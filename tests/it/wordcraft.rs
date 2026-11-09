@@ -672,6 +672,42 @@ fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
     assert!(shaped(&drawn(&pdf, &["--width", "40", "--font", "200"]), 612.0, 792.0));
 }
 
+/// `--per-row` lays Markdown and HTML out in that many columns of the room printing lays out for, the
+/// tty's or with none the preview's ([`printed_page`]): each its share of the room's columns less the
+/// gaps, as tall, and more pages of them; printed that many to a row. A typed `--width` disagrees with
+/// it, and wins, with a warning; on a PDF both hold, each for what it is about.
+#[test]
+fn per_row_lays_markdown_and_html_out_in_columns() {
+    let window = printed_page(None);
+    let cols = tty_window().map_or(60, |(cols, _, _)| cols);
+    // Three where each holds 20 characters at 100%, else two.
+    let n = if (cols.saturating_sub(4) / 3).saturating_sub(4) >= 20 { 3 } else { 2 };
+    let column = f32::from((cols - 2 * (n - 1)) / n) * COLUMN;
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
+        let path = write(tmp("word-per-row", name), document.as_bytes());
+        let (alone, columns) = (drawn(&path, &[]), drawn(&path, &["--per-row", &n.to_string()]));
+        assert!(shaped(&columns, column, window.h), "{name}: {columns:?}, not {column} × {}", window.h);
+        assert!(columns.len() > alone.len(), "{name}: {} pages in columns, {} alone", columns.len(), alone.len());
+        // Printed in rows: each page leaves the cursor where it was (`C=1`), not as a page alone does.
+        let out = view(&path, &["--protocol", "kitty", "--per-row", &n.to_string()]);
+        let placed = images(&out.stdout);
+        assert!(placed.len() >= usize::from(n) && placed.iter().all(|d| d.keys.contains(",C=1,")), "{name}: rows of {n}");
+        // `--width 40` and a count disagree: the width wins, said once.
+        let out = view(&path, &["--protocol", "kitty", "--width", "40", "--per-row", "3"]);
+        let at_40 = printed_page(Some(40.0));
+        let sizes: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
+        assert!(out.status.success() && shaped(&sizes, at_40.w, at_40.h), "{name}: {sizes:?}");
+        assert_eq!(text(&out.stderr), format!("warning: --width and --per-row disagree on {name}: the width wins\n"), "{name}");
+        // Its old name, as typed.
+        let out = view(&path, &["--protocol", "kitty", "--width", "40", "--zoom", "3"]);
+        assert!(text(&out.stderr).contains("--width and --zoom disagree"), "{}", text(&out.stderr));
+    }
+    let pdf = write(tmp("word-per-row", "a.pdf"), &crate::fixtures::letter("One", 3));
+    let out = view(&pdf, &["--protocol", "kitty", "--width", "40", "--per-row", "3"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+}
+
 /// A protected Word document opens with its password, says it needs one without, and refuses a
 /// wrong one.
 #[test]

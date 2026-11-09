@@ -35,7 +35,7 @@ clv --password PW secret.pdf
 | `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
 | `--per-row auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--per-row width` | one page as wide as the window; a tall page runs past the bottom |
-| `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row |
+| `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row. A Markdown or HTML file is laid out in that many columns ([Documents](#a-page-the-windows-size)); a `--width` of a number wins over it there, with a warning |
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
@@ -91,8 +91,8 @@ In a file's pages:
 | a number, then `Enter` or `g` | that page |
 | `-`, `_` | zoom out: one more page to a row. On a Markdown or HTML file, its text 10% smaller ([Documents](#documents)) |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
-| `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto` |
-| `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file |
+| `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto`. On a Markdown or HTML file, columns: the document laid out again on that many pages to a row ([Documents](#a-page-the-windows-size)) |
+| `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
@@ -487,6 +487,20 @@ said as `font 300% (170%)`. The status line shows the size while it isn't 100% (
 font size is a most, not a promise: two pages share a row where each keeps 80% of its size alone, so a
 width between about half and five eighths of the window shows two pages a little smaller than the
 size asked, while `window` never does.
+
+**Columns.** `,` and `.` set the pages to a row on a Markdown or HTML file too, but there they are
+columns: `3.` lays the document out again on pages a third of the window wide (less the gaps between
+them), each as tall as the window and its text at the font size, three to a row; `,` one more column,
+`.` one fewer, down to one, where `.` stops and says `1 per row, the least`: a page is never wider than
+the window, and `--per-row width` is one to a row here. `0.` goes back to `auto`, one page or a book of
+two. They lay out again at once, as `[` `]` and `+` `-` do. A narrow column holds fewer sizes of text:
+the font size's most is the largest at which a column holds 20 characters a line. A count and a width
+of your own are both about how wide a page is, so the last you set wins: `3.` puts the width back to
+`window`, and `72]`, `[` or `]` put the count back to `auto` first, stepping from where `window` sits
+there; `0.` and `0]` change only their own. On the command line, `--width 72` and `--per-row 3` on such
+a file disagree, and the width wins, with a warning. A layout that fails puts both back to what is on
+screen. In a list and with `--pages`, `,` and `.` are the zoom, as on a PDF; printed, `--per-row 3`
+lays the file out in three columns of the terminal's room.
 
 **A width of your own.** `]` and `[` lay a Markdown or HTML file out again to lines 4 characters
 wider or narrower, counted in the code face, from 20 up to the longest line the window holds, with
