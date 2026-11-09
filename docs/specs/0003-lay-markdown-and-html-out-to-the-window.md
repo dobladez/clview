@@ -1,6 +1,6 @@
 # Spec-0003: Markdown and HTML on pages the window's size, and a font size
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-07
 - **Related:** [Spec-0002](0002-reflow-markdown-and-html-to-a-width.md), `Done`, whose relayout this
   builds on and whose US Letter pages it replaces
@@ -330,3 +330,4 @@ Each task's commit passes the quality gates alone.
   says, and a terminal without pixels lays out again once its cell is known (no `Tty::opening`,
   which Ctrl-C would have left behind); `Room`'s cell exact, compared with a 2% give; the pager's
   peak measured, and the font's extremes in task 3.
+- 2026-11-09 — Implementing ([notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md)).
