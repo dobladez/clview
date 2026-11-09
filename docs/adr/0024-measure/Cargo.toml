@@ -1,0 +1,29 @@
+[package]
+name = "measure"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone, its own workspace: not part of clv's build. Measures what Spec-0004's labels cost,
+# for ADR-0024: `cargo build --release` here, then `target/release/measure`.
+[workspace]
+
+[dependencies]
+blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff", "system-fonts"] }
+blitz-html = "=0.3.0-beta.4"
+blitz-paint = { version = "=0.3.0-beta.4", default-features = false }
+blitz-traits = "=0.3.0-beta.4"
+anyrender = "=0.14.0"
+anyrender_vello_cpu = "=0.18.0"
+kurbo = "0.13"
+roxmltree = "0.21"
+svgtypes = "0.16"
+base64 = "0.22"
+png = "0.18"
+flate2 = "1.1"
+imagesize = "0.15"
+# The decoders clv's `svg-html` brings, through its `image` dependency.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[profile.release]
+debug = false

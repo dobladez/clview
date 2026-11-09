@@ -94,30 +94,30 @@ far); its first task measures what the spike left open, and sets the limits belo
 **What it costs**
 
 Every stage is bounded before it is spent, by limits named in the code and listed in usage's
-[Limits](../usage.md#limits). The numbers below are where task 1 starts; it measures each, and the
-ADR records the numbers set and how to measure them again.
+[Limits](../usage.md#limits). The numbers below are task 1's, measured: [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) has each stage's
+hostile drawing, what it cost, and how to measure it again.
 
-| Stage | What is counted | Limit, to start | Where | Past it |
+| Stage | What is counted | Limit | Where | Past it |
 |---|---|---|---|---|
 | The XML | the file, svgz, entities, as now | ADR-0003's | before **every** parse, the fallbacks' included | refused |
-| Finding labels | labels drawn; their elements and depth, in the drawing's | 1,024; within the million elements and 1024 levels | while the drawing is scanned | the rest left out, with a warning |
+| Finding labels | labels drawn; their elements in all, and their depth, in the drawing's | 1,024; 100,000, within the drawing's million; its 1024 levels | while the drawing is scanned | the rest left out, with a warning |
 | Their markup | markup and wrappers written out; their text | 8 MiB; 1 MiB of text | while written out | the rest left out, with a warning |
-| Their nesting | levels from a `<foreignObject>` down | what task 1's stack test shows holds, at least 64 | while written out | that label left out |
+| Their nesting | levels from a `<foreignObject>` down | 64, on Blitz's thread of 8 MiB | while written out | that label left out |
 | Styles | rules times the labels' elements, as ADR-0003 counts them | 50 million, with the drawing's | before Blitz | all labels left out, with a warning |
 | Fonts | each `data:` font, its size unpacked read from its header before it is unpacked; in all | 32 MiB; 64 MiB | in the net provider | that font refused |
 | Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | in the net provider | that picture refused |
 | Requests | `data:` URLs answered | 1,024 | in the net provider | refused |
 | Layout | a label's laid-out size | 16,384 CSS pixels a side | after layout, before recording | that label left out |
-| Recording | commands recorded | 1 million | after recording, before any replay | all labels left out, with a warning |
-| Painting | pixels painted, and commands replayed, for all labels | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
+| Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | while written out | cut |
+| Recording | commands recorded | 200,000 | after recording, before any replay | all labels left out, with a warning |
+| Painting | each label's part of the page, twice, and 2 KiB a command held; each command's box on the page, and the part's pixels, as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
 
 - A drawing's labels cost about one document, not one each: their styles parsed and their fonts
-  loaded once (if task 1 shows one document holds; else one document a label, under the markup
-  budget, its omissions said).
+  loaded once.
 - If Blitz fails or panics while the labels are prepared, all of that drawing's labels are left
   out, with a warning, and the drawing drawn; if one label's painting fails, only it is.
-- A label's nesting is bounded before Blitz runs, at a depth that never overflows a render
-  thread's stack.
+- A label's nesting is bounded before Blitz runs, at a depth that never overflows the stack of
+  the thread Blitz runs on, in a debug build too.
 
 **Builds**
 
@@ -137,7 +137,7 @@ ADR records the numbers set and how to measure them again.
   inline content straight in a `display: table` element isn't drawn (5 of a Mermaid flowchart's
   24 labels blank). Architecture's backends table and How each opens. `CONTRIBUTING.md`'s library
   rule, its count of features and its gates. `CHANGELOG.md`. An ADR,
-  [ADR-0024](../adr/README.md) (the next free number), why Blitz and how its cost is bounded, with
+  [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) (the next free number), why Blitz and how its cost is bounded, with
   what reproduces its evidence.
 
 ## Out of scope
@@ -200,19 +200,26 @@ ADR records the numbers set and how to measure them again.
   usvg's tree, so it drops `<foreignObject>` too, and has none of ADR-0003's bounds); Gecko (not
   embeddable); Servo (a browser's weight for a drawing's labels); wordcraft's HTML importer (it
   lays out pages, not CSS boxes, no flex, and is another backend's library).
-- **The design task 1 tries first: one Blitz document a drawing.** Each label in a box of its
-  own, stacked so none overlap, the document's viewport covering them all (Blitz paints nothing
-  outside its viewport); laid out once, and each label painted once at scale 1 into a recorded
-  anyrender `Scene` of its own (a fragment, its layers balanced), kept with the usvg tree. Each
-  render replays a label's fragment through its transform (its scale too: the fragment is vectors,
-  so it stays sharp) into the part of the page it lands on, so the work is each label's commands,
-  not every label's. A recorded scene keeps its fonts and pictures (anyrender clones them in);
-  task 1 checks that it keeps all Blitz records. If one document doesn't hold, one document a
-  label, under the markup budget.
-- **The stack:** render threads keep the stack `source/threads.rs` gives them. Task 1 lays out,
-  paints and drops labels nested ever deeper on such a thread, in a child process so an overflow
-  can't take the test runner down, and the nesting limit is set below the depth that holds, with a
-  margin.
+- **One Blitz document a drawing,** as task 1 measured it
+  ([ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)). Each
+  label in a box of its own (a slot), packed in rows about as wide as all of them would be square,
+  8 CSS pixels apart, each placed by `transform: translate()`, never `left`/`top`: Blitz culls by a
+  box that counts an element's position twice, and slots placed by `left` and `top` carry their
+  neighbours' empty clip layers, the square of the labels in all. Laid out once; each label
+  painted once at scale 1, the viewport scrolled to its slot and sized to it, into an anyrender
+  `Scene` of its own, kept with the usvg tree, and the document dropped. Each render replays a
+  label's scene through its transform into the part of the page it lands on. A scene keeps the
+  fonts and pictures it paints with (seen drawn after the document was dropped); Blitz paints no
+  `Resource` or custom paint. Its pixels are the same as one document a label's, on tldraw,
+  draw.io and Mermaid drawings.
+- **The stack:** Blitz's work for a drawing (building its document, laying it out, recording its
+  labels) runs on a thread of its own with an 8 MiB stack (`source/later.rs`'s `STACK`, or a
+  constant of the same size beside it), joined before the labels are kept. The render threads keep
+  the 2 MiB `source/threads.rs` gives them, and only replay. Task 1 measured nesting on both
+  stacks, in a child process each (ADR-0024): on 2 MiB a debug build overflows at 58 nested grids,
+  on 8 MiB it holds 240 (release 1,440), so the limit is 64 and the test at the limit nests grids,
+  in a debug build. A thread that can't be spawned is a Blitz failure: all the labels left out,
+  with a warning, never a panic.
 - **Panics** print through the viewer's hook, which makes them printable and keeps them off the
   pager (`src/view/mod.rs`'s `run`); `catch_unwind` around Blitz turns them into the warnings above.
 - **Branch:** `spec-0004` from `main`, the spike's code ported to it; `spike/` stays on the spike's
@@ -225,14 +232,13 @@ ADR records the numbers set and how to measure them again.
 
 🔴 blocks it · 🟡 to keep in mind.
 
-- 🟡 **Whether one document holds** — task 1 settles it; the fallback is in Decided.
-- 🟡 **The limits' numbers** — task 1 measures each stage's, starting from the table's.
+None: task 1 settled both (one document holds; the limits are its measurements).
 
 ## Tasks
 
 One checkbox each: a session's work, and a commit that builds and passes on its own.
 
-- [ ] **Measured** — on the spike's branch, the open design tried and measured: one document a
+- [x] **Measured** — on the spike's branch, the open design tried and measured: one document a
   drawing with a fragment a label, against a document a label; the stack test in a child process;
   each stage's hostile drawing (a label's text, styles times labels, deep nesting, a font declaring
   a huge size unpacked, many pictures, a 1-pixel background tile over the largest box, many
@@ -290,3 +296,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   shared failure leaves out all labels; decoders brought by `svg-html`; the feature default only
   once bounded; ADR-0024; the 32 MiB fallback's omissions and the 50-label fixture made honest.
 - 2026-11-09 — Implementing ([notes](0004-draw-an-svgs-html-labels-impl-20261109_1432.md)).
+- 2026-11-09 — Task 1, measured (ADR-0024, its tool in `docs/adr/0024-measure/`): one document a
+  drawing holds; the labels' elements held to 100,000, their commands to 200,000, their overflow
+  to 4,096 CSS pixels; the nesting limit 64, with Blitz on a thread of its own with an 8 MiB stack,
+  since a debug build overflows 2 MiB at 58 nested grids.
