@@ -315,78 +315,159 @@ impl PaintScene for Recorder<'_> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The paint estimate: what painting a laid-out document will cost, before it is painted.
+// The paint estimate, as clv's `source/svg/html.rs` makes it.
 
 /// The most work the estimate allows: about 0.1 s of painting with nothing kept (ADR-0024).
 const MAX_PAINT_WORK: u64 = 20_000_000;
 
-/// Commands an inset or outset shadow paints at most (blitz-paint's `box_shadow.rs`: an inset one
-/// pushes two layers, fills, shadows and pops).
+// The paint estimate. It follows blitz-paint 0.3.0-beta.4's painting, which the version guard
+// pins: `box_shadow.rs`, and `background.rs`'s `compute_layer_size`,
+// `raster_axis_tiling` and `gradient_axis_tiling` (ADR-0024).
+
+/// Commands an inset or outset shadow paints at most: an inset one pushes two layers, fills,
+/// shadows and pops.
 const PER_SHADOW: u64 = 6;
 
 /// Commands a gradient layer paints at most: blitz-paint paints none past 500 tiles.
 const PER_GRADIENT: u64 = 500;
 
+/// A dot of a dotted border, or a dash of a dashed one, in steps: blitz-paint builds an edge's
+/// dots into one path, some 170 bytes a dot (ADR-0024), held as a command is.
+const DOT_STEPS: u64 = 20;
+
+/// A pixel of a dotted, dashed or wavy text decoration, in steps: a wave is a path of a segment
+/// a pixel or two.
+const DECORATION_STEPS: u64 = 4;
+
+/// A gradient's stops, as many as hold what a command does (some 1 KB, 20 bytes a stop).
+const STOPS_A_STEP: u64 = 32;
+
 /// Commands a layer paints around its tiles: its clip layer, pushed and popped (a mask's two).
 const PER_LAYER: u64 = 4;
 
-/// Each element's painting, as blitz-paint 0.3.0-beta.4 does it, counted in commands where CSS
-/// lists or tiling multiply them: its shadows, and each background and mask layer's tiles. What
-/// else an element paints is a few commands, bounded by the elements and the text.
-fn paint_work(doc: &BaseDocument) -> u64 {
+/// The largest side of any element, or line of text, of a label: a label's own side and what it
+/// draws past it each way. blitz-paint builds some paths at their box's size (a dotted border's
+/// dots, before anything counts them), so a box past it leaves its label out.
+const MAX_ELEMENT_SIDE: f32 = 16_384.0 + 2.0 * OVERFLOW;
+
+/// What painting the labels' document takes, before it is done.
+struct Work {
+    /// In commands, where CSS lists, tiling or a box's size multiply them.
+    steps: u64,
+    /// For each slot, in order, whether an element of it is past [`MAX_ELEMENT_SIDE`].
+    oversized: Vec<bool>,
+}
+
+/// What painting `doc` takes, its labels painted in `passes` (one each), where CSS lists, tiling or
+/// a box's size multiply the commands: each element's shadows; each background and mask layer's
+/// tiles, a gradient's stops too; each dotted or dashed border edge's dots or dashes; each line of
+/// text a dotted, dashed or wavy decoration may draw along. The document's own `html` and `body`
+/// (and their `::before` and `::after`) are painted with every label, so they count once a pass.
+/// What else an element paints is a few commands, or one a line of its text, bounded by the labels'
+/// elements and text.
+fn paint_work(doc: &BaseDocument, passes: u64) -> Work {
+    use style::properties::generated::longhands::background_attachment::single_value::computed_value::T as Attachment;
+    use style::properties::generated::longhands::text_decoration_style::computed_value::T as DecorationStyle;
+    use style::values::computed::{BorderStyle, TextDecorationLine};
+    use style::values::generics::image::GenericImage;
     let viewport = doc.viewport().window_size;
-    let mut work = 0u64;
-    let mut walk = vec![doc.root_element().id];
-    while let Some(id) = walk.pop() {
+    let (mut steps, mut oversized, mut decorated, mut lines) = (0u64, Vec::new(), 0u64, 0u64);
+    // Each node, whether it is painted with every label, and its slot.
+    let mut walk = vec![(doc.root_element().id, true, None::<usize>)];
+    while let Some((id, shared, slot)) = walk.pop() {
         let Some(node) = doc.get_node(id) else { continue };
-        walk.extend(node.children.iter().copied());
+        let body = node.element_data().is_some_and(|e| &*e.name.local == "body") && shared;
+        for child in node.children.iter().copied() {
+            let element = doc.get_node(child).is_some_and(|c| c.element_data().is_some());
+            let slot = match (body, element) {
+                (true, true) => {
+                    oversized.push(false);
+                    Some(oversized.len().saturating_sub(1))
+                }
+                _ => slot,
+            };
+            walk.push((child, shared && slot.is_none(), slot));
+        }
+        walk.extend([node.before(), node.after()].into_iter().flatten().map(|p| (p, shared, slot)));
         let (Some(element), Some(style)) = (node.element_data(), node.primary_styles()) else { continue };
-        let size = node.final_layout().size;
-        let border = (f64::from(size.width), f64::from(size.height));
-        work = work.saturating_add(PER_SHADOW.saturating_mul(style.get_effects().box_shadow.0.len() as u64));
-        let bg = style.get_background();
-        for (idx, image) in
-            bg.background_image.0.iter().enumerate().filter(|(_, image)| !matches!(image, style::values::generics::image::GenericImage::None))
+        let layout = node.final_layout();
+        let (width, height) = (f64::from(layout.size.width), f64::from(layout.size.height));
+        let text = element.inline_layout_data.as_ref().map(|t| &t.layout);
+        let wide = text.is_some_and(|t| t.full_width() > MAX_ELEMENT_SIDE);
+        if (layout.size.width > MAX_ELEMENT_SIDE || layout.size.height > MAX_ELEMENT_SIDE || wide)
+            && let Some(flag) = slot.and_then(|s| oversized.get_mut(s))
         {
-            let fixed = matches!(
-                cyclic(&bg.background_attachment.0, idx),
-                Some(style::properties::generated::longhands::background_attachment::single_value::computed_value::T::Fixed)
-            );
-            // A fixed layer is placed in the painted area, the label's slot at most.
-            let area = if fixed { (border.0.max(f64::from(viewport.0)), border.1.max(f64::from(viewport.1))) } else { border };
-            let tiles = layer_tiles(
-                image,
-                element.background_images.get(idx).and_then(Option::as_ref),
-                cyclic(&bg.background_repeat.0, idx),
-                cyclic(&bg.background_size.0, idx),
-                area,
-            );
-            work = work.saturating_add(PER_LAYER).saturating_add(tiles);
+            *flag = true;
+        }
+        let mut own = 0u64;
+        let shadows = u64::try_from(style.get_effects().box_shadow.0.len()).unwrap_or(u64::MAX);
+        own = own.saturating_add(PER_SHADOW.saturating_mul(shadows));
+        let background = style.get_background();
+        for (index, image) in background.background_image.0.iter().enumerate() {
+            if matches!(image, GenericImage::None) {
+                continue;
+            }
+            // A fixed layer is placed in the area painted: the slot, at most the viewport.
+            let fixed = matches!(cyclic(&background.background_attachment.0, index), Some(Attachment::Fixed));
+            let area = if fixed { (width.max(f64::from(viewport.0)), height.max(f64::from(viewport.1))) } else { (width, height) };
+            let data = element.background_images.get(index).and_then(Option::as_ref);
+            let tiles = layer_tiles(image, data, cyclic(&background.background_repeat.0, index), cyclic(&background.background_size.0, index), area);
+            own = own.saturating_add(PER_LAYER).saturating_add(tiles);
         }
         let svg = style.get_svg();
-        for (idx, image) in
-            svg.mask_image.0.iter().enumerate().filter(|(_, image)| !matches!(image, style::values::generics::image::GenericImage::None))
-        {
-            let tiles = layer_tiles(
-                image,
-                element.mask_images.get(idx).and_then(Option::as_ref),
-                cyclic(&svg.mask_repeat.0, idx),
-                cyclic(&svg.mask_size.0, idx),
-                border,
-            );
-            work = work.saturating_add(PER_LAYER).saturating_add(tiles);
+        for (index, image) in svg.mask_image.0.iter().enumerate() {
+            if matches!(image, GenericImage::None) {
+                continue;
+            }
+            let data = element.mask_images.get(index).and_then(Option::as_ref);
+            let tiles = layer_tiles(image, data, cyclic(&svg.mask_repeat.0, index), cyclic(&svg.mask_size.0, index), (width, height));
+            own = own.saturating_add(PER_LAYER).saturating_add(tiles);
         }
+        // A dotted edge is a dot each twice its width along it (the whole perimeter, where its
+        // corners are rounded), a dashed one fewer: counted as the perimeter over the width.
+        let border = style.get_border();
+        let edges = [
+            (border.border_top_style, layout.border.top),
+            (border.border_bottom_style, layout.border.bottom),
+            (border.border_left_style, layout.border.left),
+            (border.border_right_style, layout.border.right),
+        ];
+        for (style, thickness) in edges {
+            if matches!(style, BorderStyle::Dotted | BorderStyle::Dashed) && thickness > 0.0 {
+                // `as` saturates, and makes NaN 0.
+                let dots = ((width + height) / f64::from(thickness)).ceil() as u64;
+                own = own.saturating_add(DOT_STEPS.saturating_mul(dots)).saturating_add(1);
+            }
+        }
+        let text_style = style.get_text();
+        let lines_drawn = TextDecorationLine::UNDERLINE | TextDecorationLine::OVERLINE | TextDecorationLine::LINE_THROUGH;
+        if text_style.text_decoration_line.intersects(lines_drawn)
+            && !matches!(text_style.text_decoration_style, DecorationStyle::Solid | DecorationStyle::Double)
+        {
+            decorated = decorated.saturating_add(1);
+        }
+        if let Some(text) = text {
+            // A line's dots, dashes or waves: at most one a pixel of it, each at least a pixel thick.
+            for line in text.lines() {
+                // `as` saturates, and makes NaN 0.
+                lines = lines.saturating_add(line.metrics().advance.ceil() as u64).saturating_add(1);
+            }
+        }
+        steps = steps.saturating_add(if shared { own.saturating_mul(passes) } else { own });
     }
-    work
+    // Each decorating box may draw its three lines along every line of text: a high count, and one
+    // that is none where no decoration is dotted, dashed or wavy.
+    steps = steps.saturating_add(decorated.saturating_mul(3).saturating_mul(DECORATION_STEPS).saturating_mul(lines));
+    Work { steps, oversized }
 }
 
-/// `values[idx]`, the list repeated as CSS repeats a layer's shorter lists.
-fn cyclic<T>(values: &[T], idx: usize) -> Option<&T> {
-    values.get(idx.checked_rem(values.len())?)
+/// `values[index]`, the list repeated as CSS repeats a layer's shorter lists.
+fn cyclic<T>(values: &[T], index: usize) -> Option<&T> {
+    values.get(index.checked_rem(values.len())?)
 }
 
-/// The tiles one image layer paints over `area`, as blitz-paint tiles it: a gradient at most 500;
-/// a picture once, but once a tile on an axis it spaces (`space`).
+/// The tiles one image layer paints over `area`, as blitz-paint tiles it: a gradient at most
+/// [`PER_GRADIENT`]; a picture once, but once a tile on an axis it spaces (`space`).
 fn layer_tiles(
     image: &style::values::computed::Image,
     data: Option<&blitz_dom::node::ImageResourceData>,
@@ -397,7 +478,8 @@ fn layer_tiles(
     use style::values::generics::image::GenericImage;
     use style::values::specified::background::BackgroundRepeatKeyword::Space;
     match image {
-        GenericImage::Gradient(_) => PER_GRADIENT,
+        // Each of its tiles a fill holding all its stops.
+        GenericImage::Gradient(gradient) => PER_GRADIENT.saturating_mul(1u64.saturating_add(stops(gradient) / STOPS_A_STEP)),
         GenericImage::Url(_) => {
             let Some(blitz_dom::node::ImageData::Raster(raster)) = data.map(|d| &d.image) else { return 0 };
             let (Some(repeat), Some(size)) = (repeat, size) else { return 1 };
@@ -409,8 +491,18 @@ fn layer_tiles(
     }
 }
 
+/// A gradient's stops (and hints).
+fn stops(gradient: &style::values::computed::Gradient) -> u64 {
+    use style::values::generics::image::GenericGradient;
+    let items = match gradient {
+        GenericGradient::Linear { items, .. } | GenericGradient::Radial { items, .. } => items.len(),
+        GenericGradient::Conic { items, .. } => items.len(),
+    };
+    u64::try_from(items).unwrap_or(u64::MAX)
+}
+
 /// How many tiles of `tile` fit in `length` spaced, at least one: blitz-paint's
-/// `compute_space_count_and_stride`, its `as u32` saturating.
+/// `compute_space_count_and_stride`, whose `as u32` saturates.
 fn space_count(length: f64, tile: f64) -> u64 {
     let count = (length - length % tile) / tile;
     // `as` saturates, and makes NaN 0.
@@ -426,6 +518,7 @@ fn layer_size(size: &style::values::computed::background::BackgroundSize, area: 
     let ((cw, ch), (iw, ih)) = (area, image);
     match size {
         BackgroundSize::ExplicitSize { width, height } => {
+            // An area's sides are within f32: a slot's, or the labels' document's.
             let width = width.map(|w| w.0.resolve(Length::new(cw as f32)));
             let height = height.map(|h| h.0.resolve(Length::new(ch as f32)));
             match (width, height) {
@@ -680,9 +773,11 @@ fn run(args: &[String]) {
         resolved(&mut doc);
         laid = t.elapsed();
         let t = Instant::now();
-        let work = paint_work(&doc);
+        let work = paint_work(&doc, d.labels.len() as u64);
+        let oversized = work.oversized.iter().filter(|o| **o).count();
+        let work = work.steps;
         println!(
-            "  paint work estimated: {work} ({:.1} ms){}",
+            "  paint work estimated: {work} ({:.1} ms){}; {oversized} labels oversized",
             t.elapsed().as_secs_f64() * 1e3,
             if work > MAX_PAINT_WORK { ", past the limit: all labels left out" } else { "" }
         );
@@ -1018,6 +1113,37 @@ fn generate(args: &[String]) -> String {
             let css = ".l{width:1px;font-size:2px;line-height:2px;word-break:normal}";
             svg(side, side, css, &label(0, 0, side, side, &format!("<div class=\"l\">{}</div>", "ab ".repeat(count))))
         }
+        // N labels under a stylesheet giving the document's own `html` S shadows.
+        Some("html-shadows") => {
+            let (count, shadows) = (n(1, 1024) as u32, n(2, 50_000) as usize);
+            let list: Vec<String> = (0..shadows).map(|i| format!("{}px 0 1px #000", i % 5)).collect();
+            let css = format!("html{{box-shadow:{}}}{BOX}", list.join(","));
+            let (w, h, body) = grid(count, 32, 120, 40, |i| format!("<div class=\"box\">Label {i}</div>"));
+            svg(w, h, &css, &body)
+        }
+        // One S × S label of N boxes as large, stacked, each a dotted border a pixel wide.
+        Some("dotted") => {
+            let (count, side) = (n(1, 12) as usize, n(2, 10_000) as u32);
+            let boxes = format!(
+                "<i style=\"position:absolute;left:0;top:0;width:{side}px;height:{side}px;border:1px dotted red;box-sizing:border-box\"></i>"
+            )
+            .repeat(count);
+            svg(side, side, "", &label(0, 0, side, side, &format!("<div style=\"position:relative\">{boxes}</div>")))
+        }
+        // A 400 × 100 label holding a box W pixels wide, its border T pixels of STYLE.
+        Some("long-border") => {
+            let width = n(1, 1_000_000);
+            let style = args.get(2).cloned().unwrap_or_else(|| "dotted".into());
+            let thickness: f64 = args.get(3).map(|t| t.parse().unwrap()).unwrap_or(1.0);
+            let html = format!("<div style=\"width:{width}px;height:20px;border:{thickness}px {style} red\"></div>");
+            svg(400, 100, "", &label(0, 0, 400, 100, &html))
+        }
+        // One label of B bytes of words, a wavy underline under all of them.
+        Some("wavy") => {
+            let bytes = n(1, 1 << 20) as usize;
+            let words: String = "lorem ipsum dolor sit amet ".chars().cycle().take(bytes).collect();
+            svg(800, 600, "", &label(0, 0, 800, 600, &format!("<div style=\"text-decoration:underline wavy\">{words}</div>")))
+        }
         // N labels of `overflow: visible`, each with a box three boxes to its right.
         Some("visible") => {
             let count = n(1, 1024) as u32;
@@ -1079,7 +1205,7 @@ fn generate(args: &[String]) -> String {
             eprintln!(
                 "kinds: styles N KiB | font N KB | text BYTES | rules R E | deep D | woff-bomb MiB | pictures N SIDE | tile SIDE | \
                  commands N SIDE | lines N SIDE | stacked N SIDE | shadows N SIDE | shadow-list N S [SIDE] | layers N L | space SIDE TILE | \
-                 visible N | labels N"
+                 visible N | labels N | dotted N SIDE | html-shadows N S | long-border W STYLE T | wavy BYTES"
             );
             std::process::exit(2);
         }

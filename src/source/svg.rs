@@ -455,15 +455,31 @@ fn parse_at(bytes: &[u8], depth: usize, notes: &Notes) -> Result<(usvg::Tree, Fo
     let options = options_for(notes, depth, fonts);
     #[cfg(feature = "svg-html")]
     if depth == 0 {
-        let mut found = found_labels(&doc, notes);
-        let tree = match without_fallbacks(&doc, text) {
-            Some(cut) => {
-                drop(doc);
-                usvg::Tree::from_xmltree(&xml(&cut)?, &options)
+        // Percentages are of the root's viewport: its own, or, where it says none, the size usvg
+        // gives the drawing from what it draws, known once its tree is made.
+        let cut = without_fallbacks(&doc, text);
+        let parsed = |doc: &roxmltree::Document| usvg::Tree::from_xmltree(doc, &options).map_err(|e| e.to_string());
+        let (tree, mut found) = match root_viewport(doc.root_element()) {
+            Some(viewport) => {
+                let found = found_labels(&doc, notes, viewport);
+                let tree = match cut {
+                    Some(cut) => {
+                        drop(doc);
+                        parsed(&xml(&cut)?)?
+                    }
+                    None => parsed(&doc)?,
+                };
+                (tree, found)
             }
-            None => usvg::Tree::from_xmltree(&doc, &options),
-        }
-        .map_err(|e| e.to_string())?;
+            None => {
+                let tree = match &cut {
+                    Some(cut) => parsed(&xml(cut)?)?,
+                    None => parsed(&doc)?,
+                };
+                let found = found_labels(&doc, notes, (tree.size().width(), tree.size().height()));
+                (tree, found)
+            }
+        };
         found.place(&tree);
         return Ok((tree, found));
     }
@@ -741,16 +757,11 @@ enum Past {
 /// `doc`'s labels a browser would draw ([`drawn`]), placed and written out within their
 /// budgets; what is left out is told to `notes`.
 #[cfg(feature = "svg-html")]
-fn found_labels(doc: &roxmltree::Document, notes: &Notes) -> Found {
+fn found_labels(doc: &roxmltree::Document, notes: &Notes, viewport: (f32, f32)) -> Found {
     let root = doc.root_element();
     let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
     let aspect = root.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
     let css: String = doc.descendants().filter(|n| svg_element(*n, "style")).filter_map(|n| n.text()).collect::<Vec<_>>().join("\n");
-    let viewport = match view_box {
-        // Within f32: a viewBox's numbers are a drawing's.
-        Some(v) => (v.w as f32, v.h as f32),
-        None => (length(root, "width", 0.0).filter(|w| *w > 0.0).unwrap_or(100.0), length(root, "height", 0.0).filter(|h| *h > 0.0).unwrap_or(100.0)),
-    };
     let mut spent = Spent { markup: css.len(), ..Spent::default() };
     let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)) };
     let mut spent_out: Option<String> = (spent.markup > MAX_LABEL_MARKUP).then(|| format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20));
@@ -779,6 +790,22 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes) -> Found {
     }
     notes.undrawn.fetch_add(used_labels(doc, &uses), Ordering::Relaxed);
     found
+}
+
+/// The root's viewport, its percentages' measure, as it says it: its `viewBox`, else its own
+/// `width` and `height`; `None` when it says neither, usvg then sizing the drawing by what it draws.
+#[cfg(feature = "svg-html")]
+fn root_viewport(root: roxmltree::Node) -> Option<(f32, f32)> {
+    let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
+    // Within f32: a viewBox's numbers are a drawing's.
+    if let Some(v) = view_box {
+        return Some((v.w as f32, v.h as f32));
+    }
+    let absolute = |name: &str| {
+        let l = root.attribute(name)?.parse::<svgtypes::Length>().ok()?;
+        (l.unit != svgtypes::LengthUnit::Percent).then(|| length(root, name, 0.0)).flatten().filter(|n| *n > 0.0)
+    };
+    Some((absolute("width")?, absolute("height")?))
 }
 
 /// `node`'s length `name` in user units, a percentage of `of` (the side of the viewport it
@@ -2108,6 +2135,16 @@ mod tests {
         let mut out = Markup { out: String::new(), room: MAX_LABEL_MARKUP };
         assert!(out.escaped(&"\"".repeat((MAX_LABEL_MARKUP / 6) + 1)).is_err());
         assert_eq!(out.out.capacity(), 0);
+    }
+
+    /// A percentage of a drawing that says no size of its own is of the size usvg gives it from what
+    /// it draws: a rect at (10, 20), 300 × 50, makes it 310 × 70.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_percentage_of_a_drawing_sized_by_what_it_draws_is_of_that_size() {
+        let text = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect x="10" y="20" width="300" height="50"/><foreignObject width="100%" height="100%"/></svg>"#;
+        let found = labels(text);
+        assert_eq!((found[0].width, found[0].height), (310.0, 70.0));
     }
 
     /// The labels found in `text`, placed on the drawing.

@@ -59,15 +59,18 @@ little of it itself:
 | Fonts | each `data:` font's unpacked size, from its header; in all | 32 MiB; 64 MiB | that font refused |
 | Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | that picture refused |
 | Requests | `data:` URLs answered | 1,024 | refused |
-| Layout | a label's laid-out size | 16,384 CSS pixels a side | that label left out |
+| Layout | a label's laid-out size; any element of it, or line of its text | 16,384 CSS pixels a side; 24,576 (16,384 and the overflow each way) | that label left out |
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | cut |
-| Paint work | after layout, before painting: each element's shadows (6 commands each), and each background and mask layer's tiles (a gradient 500, a picture 1, or a tile an axis it spaces), 4 a layer | 20,000,000 | all labels left out, with a warning |
+| Paint work | after layout, before painting: each element's shadows (6 steps each); each background and mask layer's tiles (a gradient 500, with a step for each 32 of its stops; a picture 1, or a tile an axis it spaces), 4 a layer; each dotted or dashed border edge's dots (20 steps each); 4 steps a pixel of text line for each dotted, dashed or wavy decoration; the document's own `html` and `body` once for each label | 20,000,000 | all labels left out, with a warning |
 | Recording | commands, all labels, counted as they are painted: a recorder keeps none past the limit | 200,000 | all labels left out, with a warning |
 | Painting | each label's part of the page, and its commands | in the page's estimate (ADR-0003's 1 GiB and 4,000 million pixels) | the page fails with why |
 
 The paint work follows blitz-paint 0.3.0-beta.4's painting (`box_shadow.rs`, `background.rs`'s
-`compute_layer_size`, `raster_axis_tiling` and `gradient_axis_tiling`, `mask.rs`), reading Stylo's
-computed values, as ADR-0003's `Estimate` follows resvg 0.49. The painting estimate counts, for
+`compute_layer_size`, `raster_axis_tiling` and `gradient_axis_tiling`, `mask.rs`, `border.rs`'s
+dotted and dashed edges, `text.rs`'s decorations), reading Stylo's computed values and Parley's
+lines, as ADR-0003's `Estimate` follows resvg 0.49. Each label's painting paints the document's
+`html` and `body` (and their `::before` and `::after`) again, so what they paint counts once a
+label; the labels' slots and what they hold, culled, once. The painting estimate counts, for
 each label landing on the page, its part's pixels twice
 (painted, then drawn over the page) and 2 KiB a command held; and as work, each command's box on
 the page within that part, and the part's pixels.
@@ -142,6 +145,14 @@ One document a label parses the styles and loads the font again for each label, 
 | `layers 1000 40` | 40 each | 20.16 million: left out | 42,051 | 0.04 s, 21 MB |
 | `space 4472 1` | a 1-pixel PNG spaced in 1-pixel tiles over a 4,472-pixel box | 19,998,788 | 19,998,791, in 106 ms: left out | 0.16 s, 206 MB |
 | `space 4473 1` | over 4,473 pixels | 20,007,733: left out | 20,007,736 | 0.04 s, 19 MB |
+| `html-shadows 1024 50000` | 1,024 labels, 50,000 shadows on the document's `html` | 307 million: left out | 51 million, a label at a time | 0.09 s, 58 MB |
+| `html-shadows 100 33333` | 100 labels, 33,333 shadows | 20.0 million | past 200,000 commands: left out | 0.09 s, 130 MB |
+| `html-shadows 101 33333` | 101 labels | 20.2 million: left out | | 0.06 s, 35 MB |
+| `dotted 12 10000`, `--scale 0.05` | 12 boxes 10,000 pixels a side, each a dotted border of 1 pixel: 960,000 dots | 19.2 million | 149 commands | 0.11 s, 191 MB |
+| `dotted 13 10000` | 13 of them | 20.8 million: left out | 149 commands, 205 MB | 0.03 s, 19 MB |
+| `long-border 1000000 dotted 1` | a 400 × 100 label holding a box a million pixels wide, its border dotted | 80 million, and the box past 24,576 pixels: left out | 17 commands, 862 MB | 0.03 s, 19 MB |
+| `wavy 100000` | 100,000 bytes of text, a wavy underline under it | 7.9 million | 1,653 commands | 0.18 s, 87 MB |
+| `wavy 1048576` | 1 MiB of it | its box 950,000 pixels tall: left out | | |
 
 "Left out" past the paint work's limit is before painting, so its time and memory are the
 drawing's without it; past the commands' limit it is after a painting the recorder kept 200,000
@@ -173,12 +184,25 @@ What sets each limit:
   it, laid out and culled as the box is; 1,024 such labels cost 0.15 s and 77 MB. Every
   `overflow: visible` label seen (older draw.io's) overflows its box by less than its own size;
   newer draw.io's labels are the drawing's size, and inside it.
+- **An element, or a line of text, past 24,576 pixels (new):** blitz-paint builds some paths at
+  their box's size before anything counts them: a dotted border's dots, all of an edge's in one
+  path, some 170 bytes a dot, 862 MB for a box a million pixels wide (`long-border`). A label
+  holding an element, or a line of text, larger than the label may be (16,384 pixels) and what it
+  may draw past its box (4,096 each way), is left out. So is a label whose text runs past it:
+  1 MiB of text in an 800-pixel box is 950,000 pixels of lines.
 - **Paint work, 20 million (new):** the work Blitz would do painting, estimated before it does,
   since a painting runs to its end and a recorder that keeps nothing still lets Blitz walk every
   command: 3,125 million shadows took 18.3 s with none kept, and the 8 MiB of markup allows some
   500,000 in one rule, three minutes. 20 million tiles painted with nothing kept take 0.1 s
   (`space 4472 1`); estimating takes 3 ms for 99,000 elements. Painting's other commands, a few an
-  element and some a line of text, are bounded by the elements and the text.
+  element and some a line of text, are bounded by the elements and the text. A dot of a dotted
+  border (or a dash of a dashed one) counts 20, its 170 bytes held: 20 million steps are a million
+  dots, 191 MB (`dotted 12`). A decoration's dot, dash or wave is at least a pixel (blitz-paint
+  floors its thickness to one), so a dotted, dashed or wavy decoration draws at most one a pixel of
+  each of its three lines: 4 steps a pixel of every line of text, for each such decoration. A
+  gradient's fills hold its stops, 20 bytes each: a step for each 32. What the document's `html`
+  and `body` paint counts once a label: Codex's review found 50,000 shadows on `html` estimated at
+  300,000 and painted 51 million times over 1,024 labels.
 - **Recording, 200,000 commands (the spec started at a million), counted as they are painted:** a
   recorder in front of anyrender's `Scene` keeps them while the budget lasts and only counts past
   it, so what a recording holds is bounded whatever the estimate missed: 251,005 painted cost

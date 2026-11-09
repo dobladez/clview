@@ -124,3 +124,27 @@ surprises, and what a later reader would want.
   `a_switchs_child_taken_is_drawn_whatever_features_it_asks_for` (the attribute not cut);
   `a_fallback_from_an_entity_is_left_with_what_else_the_entity_makes` (the body check taken
   out); `markup_past_its_budget_is_refused_before_it_is_written` (escaped, then checked).
+
+## Codex's review, round 2
+
+- **Shared nodes:** each label's painting paints the document's `html` and `body` (and their
+  `::before` and `::after`) again, so the estimate counts what they paint once a label; it walked
+  no pseudo-element before, which it now does. Charging them was the sound one of the two ways:
+  keeping a drawing's styles from making them paint would mean a user-agent rule for every
+  property that paints, and their pseudo-elements.
+- **Paths at a box's size:** blitz-paint 0.3.0-beta.4 builds a dotted border's dots into one path
+  (some 170 bytes a dot), and draws a dotted, dashed or wavy decoration as a dot, a dash or a wave
+  a pixel or two along each line (its thickness floored to a pixel); a dashed border is one stroke
+  vello_cpu dashes as it replays. Outlines are one path whatever their style, and a radius's
+  corners a few segments. So an element, or a line of text, past 24,576 pixels leaves its label
+  out, and the estimate counts dots (20 steps each), decorations (4 steps a pixel of line) and a
+  gradient's stops (a step for each 32): 20 million steps are a million dots, 191 MB.
+- **A label of much text is left out now:** 1 MiB of it in an 800-pixel box is 950,000 pixels of
+  lines, past 24,576.
+- **Sub-pixel borders** are no border: 0.004 pixels dotted came out as nothing, so cost nothing.
+- **A percentage label in a drawing that says no size** (no `viewBox`, no absolute `width` and
+  `height`) is placed against the size usvg gives it from what it draws: the tree is made first,
+  the first parse kept for the labels only in that case.
+- **A discovery, for its home (ADR-0003's scan):** usvg's stylesheet parser (simplecss) takes time
+  as the square of a declaration's length, working out a position for each part: a `<style>` with
+  one 600 KB `box-shadow` list takes 45 s to open in a debug build, labels or not.

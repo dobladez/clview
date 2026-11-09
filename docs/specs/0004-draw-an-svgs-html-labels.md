@@ -107,9 +107,9 @@ hostile drawing, what it cost, and how to measure it again.
 | Fonts | each `data:` font, its size unpacked read from its header before it is unpacked; in all | 32 MiB; 64 MiB | in the net provider | that font refused |
 | Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | in the net provider | that picture refused |
 | Requests | `data:` URLs answered | 1,024 | in the net provider | refused |
-| Layout | a label's laid-out size | 16,384 CSS pixels a side | after layout, before recording | that label left out |
+| Layout | a label's laid-out size; any element of it, or line of its text | 16,384 CSS pixels a side; 24,576 (with the overflow each way) | after layout, before recording | that label left out |
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | while written out | cut |
-| Paint work | each element's shadows, and each background and mask layer's tiles, as blitz-paint 0.3.0-beta.4 paints them (ADR-0024) | 20 million | after layout, before painting | all labels left out, with a warning |
+| Paint work | each element's shadows; each background and mask layer's tiles, a gradient's stops too; each dotted or dashed border's dots; each line of text a dotted, dashed or wavy decoration draws along; the document's own `html` and `body` once a label: as blitz-paint 0.3.0-beta.4 paints them (ADR-0024) | 20 million | after layout, before painting | all labels left out, with a warning |
 | Recording | commands recorded, all labels | 200,000 | as they are painted: a recorder keeps none past it | all labels left out, with a warning |
 | Painting | each label's part of the page, twice, and 2 KiB a command held; each command's box on the page, and the part's pixels, as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
 
@@ -272,7 +272,9 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   inherited `color`, labels of different sizes with percentage children, a `data:` PNG, each hint
   overridden by a rule and a malformed one; and each stage's limit, with its warning: the paint
   work's for each multiplier at its limit and past it (shadows, layers, `space` tiles), each seen
-  failing without the estimate, and the recorder's past 200,000 commands.
+  failing without the estimate, and the recorder's past 200,000 commands; shadows on the
+  document's `html` and `body`, counted once a label; dotted borders at the paint work's limit and
+  past it; a label holding an element past 24,576 pixels (a dotted one a million wide), left out.
 - [ ] **The docs** — usage's SVG drawings, Limits and known differences; architecture; CHANGELOG;
   README's credits; `CLAUDE.md`; the ADR Accepted. *Files:* `docs/usage.md`, `docs/architecture.md`,
   `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/adr/0024-…`. *Verify:* `cargo test -j 2 --test docs`,
@@ -315,3 +317,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-09 — Codex's review of task 2: labels through `<use>`s counted by the one rule, nested
   uses too, in one pass; a fallback an entity makes kept (a known difference); the child taken
   loses its `requiredFeatures`; markup refused before it is written past its budget.
+- 2026-11-09 — Codex's review, round 2: the estimate counts the document's `html` and `body` once a
+  label, a dotted border's dots, a decoration's pixels of line and a gradient's stops; an element
+  or a line of text past 24,576 pixels leaves its label out; a percentage of a drawing sized by what
+  it draws is of that size.
