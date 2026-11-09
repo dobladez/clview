@@ -162,4 +162,18 @@ surprises, and what a later reader would want.
   pager said `it can't be laid out again`. `stepped` now steps down from a named value only to a number
   within the range (200), and up from 200 to `window`, which says `the most`.
   `the_room_bounds_the_steps_and_a_number_past_its_most_is_kept` failed first with `width 296`.
+- **Bounds asked again when the values change.** `Nav::bounds` were asked when the level was made,
+  for the values then; the width's depend on the font size, so `150+[` typed together stepped from
+  `window` at 96 (100%) instead of at 62 (150%), before the layout at 150% landed. `Pager::refresh_bounds`
+  asks the source again after each key and each pass, whenever the level, the values or the room
+  differ from what they were asked for (`bounds_for`), and refreshes the status line's `laid` with
+  them. `a_width_key_after_a_font_key_steps_by_the_bounds_at_the_new_size` (`tests/it/view_pager.rs`)
+  failed first with `width 96`; the right answer is 62, the most the window holds at 150% and a step
+  of its own, which `window` sits after.
+- **The preview's shape from the terminal's cell.** `in_a_list_markdown_and_html_are_tiles` expected
+  a 2 : 1 cell, but the preview room takes the cell the run started with, the terminal's where it
+  reports pixels; the test now takes it from `/dev/tty` as `printed_page` does (`tty_window`,
+  `preview_page`), so a terminal with 9 × 23 cells accepts its previews. The other tests that print
+  documents already went through `printed_page`; the pager and tmux tests run on pseudo-terminals
+  without pixels.
 

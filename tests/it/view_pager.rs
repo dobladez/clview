@@ -1860,6 +1860,24 @@ fn the_zoom_keys_are_the_font_size_on_a_markdown_file_and_the_zoom_on_a_pdf() {
     assert!(view.finish().success());
 }
 
+/// Where `window` sits among the widths depends on the font size: `150+` then `[`, typed together before
+/// the layout at 150% lands, steps down from `window` to the 62 characters a 100-column window holds at
+/// 150% (the most there, a step of its own, `window` sitting after it), not to the 96 it held at 100%.
+#[cfg(feature = "word")]
+#[test]
+fn a_width_key_after_a_font_key_steps_by_the_bounds_at_the_new_size() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("font-bounds", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    view.press("150+[");
+    view.wait_until("width 62 at 150%", |t| bar(t).contains("· width 62 · font 150% ·"));
+    assert!(!view.text().contains("width 96"), "stepped from the bounds at 100%");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// Each image sent, its size: what kitty is told in the stream.
 pub(crate) fn sizes_sent(text: &str) -> Vec<(u32, u32)> {
     use base64::Engine as _;

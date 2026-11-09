@@ -212,6 +212,7 @@ pub(super) fn run(
         openers: opener.openers(),
         relayout: Relayout::new(),
         hold: Hold::default(),
+        bounds_for: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -291,7 +292,11 @@ pub(super) fn run(
                     }
                     continue;
                 }
-                match pager.level.nav.key(key) {
+                let step = pager.level.nav.key(key);
+                // A setting's bounds may depend on another's value (the width's on the font size): asked
+                // again before the next key.
+                pager.refresh_bounds();
+                match step {
                     Step::Continue => {}
                     // Esc at the top, where there is nothing to go back to, quits.
                     Step::Quit => quit = true,
@@ -320,6 +325,7 @@ pub(super) fn run(
         }
         redraw |= pager.go_on_into()?;
         redraw |= pager.watch_room();
+        pager.refresh_bounds();
         redraw |= pager.relayout()?;
         redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
@@ -454,6 +460,13 @@ fn laid_at(settings: &Settings, source: &dyn Source, has: &[&str], bounds: &[(&'
         Some(said_in(setting, value, bounds_of(bounds, setting.name)))
     });
     shown.reduce(|all, one| format!("{all} · {one}"))
+}
+
+/// Where the settings `source` has (`has`) sit for it shown in `room` with `values`, by name, as the
+/// source says ([`Source::bounds`]): those it has a say over.
+fn bounds_in(settings: &Settings, source: &dyn Source, has: &[&'static str], room: Room, values: Values) -> Vec<(&'static str, Bounds)> {
+    let declared = settings.declared.iter().filter(|setting| has.contains(&setting.name));
+    declared.filter_map(|setting| Some((setting.name, source.bounds(setting.name, room, values)?))).collect()
 }
 
 /// Setting `name`'s bounds among `bounds`, if the source said any.
@@ -1250,10 +1263,7 @@ impl Level {
         let Shown { pages: Pages { source, name, pages, picked }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
-        let values = settings.values.get();
-        let declared = settings.declared.iter().filter(|setting| has.contains(&setting.name));
-        let bounds: Vec<(&'static str, Bounds)> =
-            declared.filter_map(|setting| Some((setting.name, source.bounds(setting.name, room, values)?))).collect();
+        let bounds = bounds_in(&settings, &*source, &has, room, settings.values.get());
         let laid = (!list).then(|| laid_at(&settings, &*source, &has, &bounds)).flatten();
         let nav = Nav { list, nested, hint: !(list && nested), names, settings, has, bounds, picked, laid, ..Nav::new(pages, source.pages(), zoom) };
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
@@ -1341,6 +1351,8 @@ struct Pager<'a> {
     relayout: Relayout<Handle>,
     /// The room the window has had since it changed size, until it has held long enough to lay out for.
     hold: Hold,
+    /// What the level's bounds were asked for: the level, the values and the room ([`Pager::refresh_bounds`]).
+    bounds_for: Option<(u64, Values, Room)>,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1740,6 +1752,24 @@ impl Pager<'_> {
                 true
             }
             None => false,
+        }
+    }
+
+    /// The level's bounds ([`Nav::bounds`]) asked of its source again when the values or the room have
+    /// changed since they were, or the level is another: where a setting's values sit depends on both
+    /// (the width's on the font size), and the keys step by them before any layout lands. What the
+    /// status line says of the layout follows, as a number past the most is said with what it is laid
+    /// out at.
+    fn refresh_bounds(&mut self) {
+        let (values, room) = (self.settings.values.get(), self.room);
+        if self.bounds_for.is_some_and(|(level, asked, asked_in)| level == self.level.id && asked == values && asked_in.same(&room)) {
+            return;
+        }
+        self.bounds_for = Some((self.level.id, values, room));
+        let (source, nav) = (&*self.level.source, &mut self.level.nav);
+        nav.bounds = bounds_in(&self.settings, source, &nav.has, room, values);
+        if !nav.list {
+            nav.laid = laid_at(&self.settings, source, &nav.has, &nav.bounds);
         }
     }
 

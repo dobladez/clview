@@ -195,13 +195,8 @@ struct Page {
 /// the room. The rules the backend's own tests check on rooms of their choosing, here at whatever room
 /// the tests run in.
 fn printed_page(width: Option<f32>) -> Page {
-    let tty = std::fs::File::open("/dev/tty").ok().and_then(|tty| rustix::termios::tcgetwinsize(&tty).ok());
-    let (cols, rows, shape) = match tty.filter(|w| w.ws_col > 0 && w.ws_row > 1) {
-        Some(w) => {
-            let pixels = (w.ws_xpixel > 0 && w.ws_ypixel > 0)
-                .then(|| f32::from(w.ws_ypixel) / f32::from(w.ws_row) / (f32::from(w.ws_xpixel) / f32::from(w.ws_col)));
-            (w.ws_col, w.ws_row - 1, pixels.unwrap_or(2.0))
-        }
+    let (cols, rows, shape) = match tty_window() {
+        Some((cols, rows, shape)) => (cols, rows - 1, shape),
         None => (60, 40, 2.0),
     };
     let room = f32::from(cols) * COLUMN - 4.0 * COLUMN;
@@ -213,6 +208,24 @@ fn printed_page(width: Option<f32>) -> Page {
     };
     let (row, text_h) = (shape * COLUMN, f32::from(rows) * shape * COLUMN - 2.0 * shape * COLUMN);
     Page { w: text_w + 4.0 * COLUMN, h: text_h + 2.0 * row, text_w, text_h }
+}
+
+/// The window the tests' controlling terminal reports, if they have one: its columns and rows, and the
+/// shape of its cell (its height over its width, from the pixels it reports, or the 2 of the 10 × 20
+/// cell `clv` assumes without them), as `clv` takes them.
+fn tty_window() -> Option<(u16, u16, f32)> {
+    let tty = std::fs::File::open("/dev/tty").ok().and_then(|tty| rustix::termios::tcgetwinsize(&tty).ok());
+    let w = tty.filter(|w| w.ws_col > 0 && w.ws_row > 1)?;
+    let pixels =
+        (w.ws_xpixel > 0 && w.ws_ypixel > 0).then(|| f32::from(w.ws_ypixel) / f32::from(w.ws_row) / (f32::from(w.ws_xpixel) / f32::from(w.ws_col)));
+    Some((w.ws_col, w.ws_row, pixels.unwrap_or(2.0)))
+}
+
+/// The page a list's documents are previewed on, in points: 60 × 40 cells at the cell `clv` started
+/// with, the terminal's or the 10 × 20 assumed ([`tty_window`]).
+fn preview_page() -> (f32, f32) {
+    let shape = tty_window().map_or(2.0, |(_, _, shape)| shape);
+    (60.0 * COLUMN, 40.0 * shape * COLUMN)
 }
 
 /// Neither gives a page size, so both are laid out on the window's: a page as wide and as tall as the
@@ -581,7 +594,8 @@ fn dark_paper_doesnt_swallow_a_near_black_drawing() {
 }
 
 /// In a directory or an archive they are tiles, while text that is neither is left out. A list's
-/// documents are previews, laid out on a fixed portrait page, 60 × 40 cells, whatever the window.
+/// documents are previews, laid out on a fixed portrait page, 60 × 40 cells at the cell the run started
+/// with, whatever the window.
 #[test]
 fn in_a_list_markdown_and_html_are_tiles() {
     let files = [("a.md", "# One"), ("b.html", "<p>Two</p>"), ("c.txt", "Three")];
@@ -595,7 +609,8 @@ fn in_a_list_markdown_and_html_are_tiles() {
         assert!(out.status.success(), "{}", text(&out.stderr));
         assert_eq!(names(&out.stdout), [" a.md b.html"], "{}", path.display());
         let tiles: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
-        assert!(shaped(&tiles, 60.0 * COLUMN, 40.0 * 2.0 * COLUMN), "{}: {tiles:?}", path.display());
+        let (w, h) = preview_page();
+        assert!(shaped(&tiles, w, h), "{}: {tiles:?}, not {w} × {h}", path.display());
     }
 }
 
