@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-use super::{Again, Backend, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Source};
+use super::{Again, Backend, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Room, Source};
 use crate::args::OwnedOptions;
 
 /// The most files opened at once. A document's first layout takes a core, and a large PDF is read
@@ -245,6 +245,8 @@ struct Slot {
     file: Reopen,
     backend: &'static dyn Backend,
     options: Arc<OwnedOptions>,
+    /// The room it is laid out for: a list's preview page.
+    room: Room,
     stage: Mutex<Stage>,
 }
 
@@ -260,7 +262,7 @@ impl Slot {
     /// The file opened, here on this thread. A backend's bug costs the file, not the viewer.
     fn open(&self) -> Outcome {
         let open = || -> Outcome {
-            match self.backend.open(self.file.input()?, &self.options.parsed())? {
+            match self.backend.open_at(self.file.input()?, &self.options.parsed(), self.room)? {
                 Opened::Pages(source) if source.pages() == 0 => Err("no pages to show".into()),
                 Opened::Pages(source) => Ok(source),
                 // A backend that defers opening says it has pages to show: this is its bug.
@@ -284,8 +286,8 @@ struct Inner {
 }
 
 impl Later {
-    /// The file `file`, which `backend` opens with `options`, and which has `settings`, as
-    /// [`Backend::deferred`] said; opened on `openers`.
+    /// The file `file`, which `backend` opens with `options`, laid out for `room`, and which has
+    /// `settings`, as [`Backend::deferred`] said; opened on `openers`.
     pub(crate) fn new(
         file: Reopen,
         path: String,
@@ -293,8 +295,9 @@ impl Later {
         backend: &'static dyn Backend,
         options: Arc<OwnedOptions>,
         openers: Rc<Openers>,
+        room: Room,
     ) -> Self {
-        let slot = Arc::new(Slot { file, backend, options, stage: Mutex::new(Stage::Idle) });
+        let slot = Arc::new(Slot { file, backend, options, room, stage: Mutex::new(Stage::Idle) });
         Self(Rc::new(Inner { path, settings, slot, openers, outcome: OnceCell::new() }))
     }
 
@@ -371,6 +374,14 @@ impl Source for Later {
 
     fn natural(&self, page: usize) -> bool {
         matches!(self.0.outcome.get(), Some(Ok(source)) if source.natural(page))
+    }
+
+    /// Its own, once known, as its size is.
+    fn largest_scale(&self, page: usize) -> Option<f32> {
+        match self.0.outcome.get() {
+            Some(Ok(source)) => source.largest_scale(page),
+            _ => None,
+        }
     }
 
     fn settings(&self) -> Vec<&'static str> {
@@ -547,11 +558,14 @@ mod tests {
         }
     }
 
+    /// The room the tests' files are laid out for.
+    const ROOM: Room = Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+
     fn later(backend: &'static Test) -> Later {
         let file = std::env::temp_dir().join(format!("clview-later-{}", std::process::id()));
         std::fs::write(&file, "x").unwrap();
         let path = file.to_str().unwrap().to_owned();
-        Later::new(Reopen::Disk(path.clone()), path, &[], backend, Arc::new(Parsed::default().owned()), Rc::new(Openers::default()))
+        Later::new(Reopen::Disk(path.clone()), path, &[], backend, Arc::new(Parsed::default().owned()), Rc::new(Openers::default()), ROOM)
     }
 
     fn request(tag: u64) -> Request {
@@ -653,7 +667,7 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let path = file.to_str().unwrap().to_owned();
         let made: Vec<Later> = (0..THREADS + 3)
-            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone()))
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone(), ROOM))
             .collect();
         let pools: Vec<Box<dyn Pool>> = made.iter().map(|later| later.pool(1)).collect();
         for pool in &pools {
@@ -737,7 +751,7 @@ mod tests {
         let path = file.to_str().unwrap().to_owned();
         // More files than threads: the last of them wait.
         let made: Vec<Later> = (0..THREADS + 3)
-            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone()))
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &BACKEND, Arc::new(Parsed::default().owned()), openers.clone(), ROOM))
             .collect();
         let pools: Vec<Box<dyn Pool>> = made.iter().map(|later| later.pool(1)).collect();
         for pool in &pools {
@@ -772,7 +786,7 @@ mod tests {
         // Queued while every thread opens a slow file, and dropped before it begins: never run.
         static SLOW: Test = Test { opened: AtomicUsize::new(0), millis: 300, size: (1.0, 1.0), broken: false };
         let slow: Vec<Later> = (0..THREADS)
-            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &SLOW, Arc::new(Parsed::default().owned()), openers.clone()))
+            .map(|_| Later::new(Reopen::Disk(path.clone()), path.clone(), &[], &SLOW, Arc::new(Parsed::default().owned()), openers.clone(), ROOM))
             .collect();
         let slow_pools: Vec<Box<dyn Pool>> = slow.iter().map(|later| later.pool(1)).collect();
         for pool in &slow_pools {

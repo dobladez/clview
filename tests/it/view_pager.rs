@@ -1514,15 +1514,17 @@ fn page_count(text: &str) -> Option<usize> {
     count.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
-/// A page 40 characters wide, and US Letter.
+/// A document's page in these tests' pager, in points: the window's, 100 × 59 cells of the 10 × 20 px
+/// assumed (a column 5.64 pt, a row 11.28), and one 40 characters wide, as tall.
 #[cfg(feature = "word")]
-const NARROW: f32 = 144.0 + 40.0 * 5.64;
+const WINDOW: (f32, f32) = (100.0 * 5.64, 59.0 * 11.28);
 #[cfg(feature = "word")]
-const LETTER: (f32, f32) = (612.0, 792.0);
+const NARROW: f32 = 44.0 * 5.64;
 
-/// `40]` lays the document out again at 40 characters a line, the new pages narrower and the status
-/// line saying `width 40` on its right; `]` steps on to 44; `80]` then `]` is `page` again, Letter, and
-/// nothing on the right. Each time, the pages before stay until the new ones are ready.
+/// A document's page is the window's: as tall as the pages area, as wide. `40]` lays the document out
+/// again at 40 characters a line, the new pages narrower and as tall, the status line saying `width 40`
+/// on its right; `]` steps on to 44; `0]` is `window` again, the window's page, and nothing on the
+/// right. Each time, the pages before stay until the new ones are ready.
 #[cfg(feature = "word")]
 #[test]
 fn the_width_keys_lay_the_document_out_again_and_the_status_line_says_what_it_is_at() {
@@ -1531,16 +1533,19 @@ fn the_width_keys_lay_the_document_out_again_and_the_status_line_says_what_it_is
     }
     let mut view = Session::start_on(KITTY, &long_markdown("reflow", "long.md"), &["--pager"], 100, 60);
     view.wait_until("page 1", |t| t.contains("  page 1/"));
-    assert!(last_sent_shaped(&view.text(), LETTER.0, LETTER.1));
+    assert!(last_sent_shaped(&view.text(), WINDOW.0, WINDOW.1), "{:?}", sizes_sent(&view.text()));
+    // Fitted to the pages area: as tall as its 59 rows, in all its 100 columns.
+    let (w, h) = sizes_sent(&view.text())[0];
+    assert!((999..=1001).contains(&w) && (1179..=1181).contains(&h), "the page fills the window: {w} × {h}");
     view.press("40]");
-    view.wait_until("narrow pages, said", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("narrow pages, said", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
     let narrow_pages = page_count(&view.text()).unwrap();
     view.press("]");
-    view.wait_until("stepped", |t| bar(t).contains("· width 44 ·") && last_sent_shaped(t, 144.0 + 44.0 * 5.64, 792.0));
-    view.press("80]]");
-    view.wait_until("a page again", |t| bar(t).contains("width page") && last_sent_shaped(t, LETTER.0, LETTER.1));
+    view.wait_until("stepped", |t| bar(t).contains("· width 44 ·") && last_sent_shaped(t, 48.0 * 5.64, WINDOW.1));
+    view.press("0]");
+    view.wait_until("the window's again", |t| bar(t).contains("width window") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
     view.wait_until("fewer pages", |t| page_count(t).is_some_and(|count| count < narrow_pages));
-    assert!(!bar(&view.text()).rsplit_once("width page").unwrap().1.contains("width"), "{:?}", last_draw(&view.text()));
+    assert!(!bar(&view.text()).rsplit_once("width window").unwrap().1.contains("width"), "{:?}", last_draw(&view.text()));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -1576,7 +1581,7 @@ fn a_copy_still_rendering_stops_when_the_document_is_laid_out_again() {
     view.wait_until("page 1", |t| t.contains("  page 1/"));
     view.press("c40]");
     view.wait_until("stopped", |t| bar(t).contains("stopped copying page 1"));
-    view.wait_until("laid out again", |t| last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("laid out again", |t| last_sent_shaped(t, NARROW, WINDOW.1));
     assert!(!view.text().contains("copied page 1"));
     view.press("q");
     assert!(view.finish().success());
@@ -1603,7 +1608,7 @@ fn a_document_gone_into_after_a_change_is_laid_out_at_the_new_width_and_its_tile
     view.press("\r");
     view.wait_until("a opened", |t| t.contains("  page 1/") && bar(t).contains(" a.md "));
     view.press("40]");
-    view.wait_until("a laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("a laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
     view.press("u");
     view.wait_until("back in the list", |t| bar(last_draw(t)).contains(" 1/2 ·"));
     let sent = sizes_sent(&view.text()).len();
@@ -1613,7 +1618,7 @@ fn a_document_gone_into_after_a_change_is_laid_out_at_the_new_width_and_its_tile
     view.press("\x1b[C");
     view.wait_until("b chosen", |t| chosen(t).as_deref() == Some("b.md"));
     view.press("\r");
-    view.wait_until("b opened at 40", |t| bar(t).contains(" b.md ") && bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("b opened at 40", |t| bar(t).contains(" b.md ") && bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -1642,11 +1647,12 @@ fn keys_work_while_the_document_is_laid_out_again_and_the_new_pages_show_with_no
     view.wait_until("laid out", |t| bar(t).contains("· width 40 ·"));
     let text = view.text();
     // The slot on the right, padded, once the layout is done: the key's own message says `width 40` too.
-    let (keys, done) = (text.find(KEYS).unwrap(), text.find("width 40    ·").expect("the slot without …"));
+    let slot = text.match_indices("width 40").map(|(at, _)| at).find(|at| text[at + "width 40".len()..].trim_start_matches(' ').starts_with('·'));
+    let (keys, done) = (text.find(KEYS).unwrap(), slot.expect("the slot without …"));
     assert!(keys < done, "the keys were shown only after the layout");
     // The keys stay up, over the new layout, until a key; then the narrow pages are there.
     view.press("n");
-    view.wait_until("the pages", |t| t.get(done..).is_some_and(|t| t.contains("a=p,q=1,")) && last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("the pages", |t| t.get(done..).is_some_and(|t| t.contains("a=p,q=1,")) && last_sent_shaped(t, NARROW, WINDOW.1));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -1667,12 +1673,12 @@ fn a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back() {
     view.wait_until("why", |t| bar(t).contains("reading the file again"));
     std::thread::sleep(Duration::from_millis(300));
     let text = view.text();
-    let letter = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - LETTER.0 / LETTER.1).abs() < 0.01;
-    assert!(!bar(&text).contains("· width 40 ·") && sizes_sent(&text).iter().all(letter), "{:?}", last_draw(&text));
-    // From `page` again, not from 40.
-    view.press("]");
-    view.wait_until("from page again", |t| bar(t).contains("width 84"));
-    assert!(!view.text().contains("width 44"));
+    let window = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - WINDOW.0 / WINDOW.1).abs() < 0.01;
+    assert!(!bar(&text).contains("· width 40 ·") && sizes_sent(&text).iter().all(window), "{:?}", last_draw(&text));
+    // From `window` again, set at the 96 characters this window holds (the number first), not from 40.
+    view.press("[");
+    view.wait_until("from window again", |t| bar(t).contains("width 96"));
+    assert!(!view.text().contains("width 36"));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -1689,7 +1695,7 @@ fn place_now(text: &str) -> Option<(usize, usize)> {
 
 /// The paragraph at the top of the screen stays on the reader's page across a relayout: narrower pages
 /// hold fewer of them, so from page 9 the reader lands further on (two narrow pages to a row, the pair
-/// shown starts at an even page), and back on a page again, near 9.
+/// shown starts at an even page), and back on the window's page again, near 9.
 #[cfg(feature = "word")]
 #[test]
 fn the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_relayout() {
@@ -1697,7 +1703,7 @@ fn the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_rel
         return;
     }
     let path = crate::view::tmp("reflow-place", "place.md");
-    let text: String = (1..=200)
+    let text: String = (1..=400)
         .map(|n| format!("Paragraph {n}, with words enough in it to take a line or two of a page as printed, and more of a narrow one.\n\n"))
         .collect();
     std::fs::write(&path, text).unwrap();
@@ -1711,10 +1717,10 @@ fn the_paragraph_at_the_top_of_the_screen_stays_on_the_readers_page_across_a_rel
     view.wait_until("laid out at 40", |t| bar(t).contains("· width 40 ·"));
     let (page, pages) = place_now(&view.text()).unwrap();
     assert!(pages > letter_pages && page >= 11 && page < pages, "page {page} of {pages}, from page 9 of {letter_pages}");
-    view.press("80]]");
-    view.wait_until("a page again", |t| {
+    view.press("0]");
+    view.wait_until("the window's page again", |t| {
         let line = bar(last_draw(t));
-        line.contains("width page") && !line.contains("· width")
+        line.contains("width window") && !line.contains("· width")
     });
     let (back, _) = place_now(&view.text()).unwrap();
     assert!((7..=10).contains(&back), "page {back}");
@@ -1736,7 +1742,7 @@ fn html_through_a_pipe_lays_out_again_too() {
     let mut view = Session::start_command(KITTY, &command, 100, 60);
     view.wait_until("page 1", |t| t.contains("  page 1/"));
     view.press("40]");
-    view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, 792.0));
+    view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
     view.press("q");
     assert!(view.finish().success());
 }

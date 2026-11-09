@@ -56,7 +56,7 @@ const PNG_TYPE: &str = "image/png";
 /// The scale page `size` is copied at: its own pixels for a picture, [`SCALE`] otherwise, within
 /// [`MAX_PIXELS`] a side and [`MAX_AREA`] in all.
 pub(crate) fn scale(size: Size) -> Result<f32, String> {
-    let Size { w, h, natural } = size;
+    let Size { w, h, natural, .. } = size;
     let positive = |v: f32| v.is_finite() && v > 0.0;
     if !(positive(w) && positive(h)) {
         return Err("it has no size".into());
@@ -545,8 +545,8 @@ mod tests {
 
     #[test]
     fn a_picture_is_copied_at_its_own_pixels_and_a_page_at_twice_its_points() {
-        let picture = |w, h| Size { w, h, natural: true };
-        let page = |w, h| Size { w, h, natural: false };
+        let picture = |w, h| Size { w, h, natural: true, largest: None };
+        let page = |w, h| Size { w, h, natural: false, largest: None };
         assert_eq!(scale(picture(640.0, 480.0)), Ok(1.0));
         // US Letter at 144 per inch: 1224 × 1584 pixels.
         assert_eq!(scale(page(612.0, 792.0)), Ok(2.0));
@@ -625,7 +625,7 @@ mod tests {
         Frame { request, width: 2, height: 1, rgba, error: error.map(String::from), warnings: Vec::new(), again: false }
     }
 
-    const PAGE: Size = Size { w: 1.0, h: 0.5, natural: false };
+    const PAGE: Size = Size { w: 1.0, h: 0.5, natural: false, largest: None };
 
     /// `copier`'s copy carried on until all of it went to the terminal, `out` collecting it,
     /// with nothing said meanwhile.
@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(copier.on(now, &mut Vec::new()).as_deref(), Some("can't copy page 1: broken"));
         // A page with no size, or none at all, is never asked for.
         assert_eq!(
-            copier.start("page 2".into(), 0, 1, Some(Size { w: 0.0, h: 1.0, natural: false }), 2, now, &mut Vec::new()),
+            copier.start("page 2".into(), 0, 1, Some(Size { w: 0.0, h: 1.0, natural: false, largest: None }), 2, now, &mut Vec::new()),
             "can't copy page 2: it has no size"
         );
         assert_eq!(copier.start("page 9".into(), 0, 8, None, 2, now, &mut Vec::new()), "can't copy page 9: it isn't there");
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(copier.left(5).as_deref(), Some("stopped copying page 2"));
         assert!(copier.request(5).is_none());
         // A large picture is copied smaller, and says of what.
-        let photo = Size { w: 6000.0, h: 4000.0, natural: true };
+        let photo = Size { w: 6000.0, h: 4000.0, natural: true, largest: None };
         copier.start("photo.jpg".into(), 0, 0, Some(photo), 4, now, &mut Vec::new());
         copier.answer(Key::Clipboard(true));
         copier.rendered(frame(Request { page: 0, scale: 1.0, tag: 4, ..Default::default() }, None));

@@ -8,12 +8,17 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- Markdown and HTML pages are the window's size, as on an e-reader: as tall as the pages area and as
+  wide, or two side by side like an open book where the window holds two pages of 60 characters, a
+  character of code to a cell. They were US Letter pages fitted to the window. A list's tiles are
+  previews on a portrait page.
 - Markdown and HTML reflow to a width: `[` and `]` lay the document out again 4 characters a line
-  narrower or wider, `72]` to 72, from 20 to 200, with `page` (US Letter, as before) among the steps;
-  `--width page|N` says where to start. The paragraph at the top of the screen stays on the page you
-  land on. The status line shows the width when it isn't a page's. Only
-  the document on screen reflows: a list's tiles keep their layout, and a document opened from the
-  list after a change is laid out at the new width.
+  narrower or wider, `72]` to 72, `0]` back to the window's, from 20 up to the longest line the window
+  holds, with `window` among the steps; `--width window|N` says where to start, and a width the window
+  doesn't hold is kept and laid out at the window's. The paragraph at the top of the screen stays on
+  the page you land on. The status line shows the width when it isn't the window's. Only the document
+  on screen reflows: a list's tiles keep their layout, and a document opened from the list after a
+  change is laid out at the new width.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 

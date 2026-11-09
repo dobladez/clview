@@ -30,7 +30,7 @@ pub(crate) use pager::VIEWER_KEYS;
 use crate::CliError;
 use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};
 use crate::source::{
-    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Part, Ready, Request, Setting, Source, Value,
+    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Part, Ready, Request, Room, Setting, Source, Value,
     Values,
 };
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
@@ -72,6 +72,54 @@ list. The list shows each file as a tile, and each subdirectory as a folder.";
 /// The window assumed when there is no terminal to ask (no controlling terminal, as under CI):
 /// the classic 80 × 24, at [`fit::FALLBACK_CELL`].
 const FALLBACK_SIZE: WindowSize = WindowSize { cols: 80, rows: 24, xpixel: 0, ypixel: 0 };
+
+/// The room a list's documents are laid out for, in cells: a fixed portrait page, as tiles are
+/// square and a landscape page the window's shape would be a strip of small text in one. They
+/// are previews, and keep it; a document gone into is laid out for the window. Printing with no
+/// terminal lays out for it too.
+const PREVIEW: (u16, u16) = (60, 40);
+
+/// The cells pages go into in a window `size`, on `output`, with `cell` the cell size the terminal
+/// or tmux reported where the tty reports no pixels: what the pager's draw lays its grid out in,
+/// what printing lays its rows out in, and the room a document is laid out for ([`room`]), all from
+/// here, so that what is laid out and what is shown agree. The last row stays free, for the status
+/// line or the shell prompt.
+fn area(size: WindowSize, cell: Option<Cell>, output: Output) -> Area {
+    let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(cell).unwrap_or(fit::FALLBACK_CELL);
+    let cell = output.fitting(cell);
+    let rows = size.rows.saturating_sub(1).max(1);
+    let (cols, max_rows) = output.limits(size.cols);
+    Area { cols, rows, cell, max_rows }
+}
+
+/// The rooms files are laid out for as they open, before the terminal is asked anything: for a
+/// file shown alone, the window `size` the tty says, with `told` the cell tmux reports inside tmux,
+/// on the output `protocol` and `inside_tmux` promise (text cells asked for by name take a
+/// sampling cell; inside tmux, placeholders bound the columns); without a terminal, the preview's.
+/// And for a list's documents, the preview's ([`PREVIEW`]), at the cell the first takes.
+fn first_rooms(size: Option<WindowSize>, told: Option<Cell>, protocol: Protocol, inside_tmux: bool) -> (Room, Room) {
+    // Only the output's kind matters to the cells: text cells sample, tmux's placeholders bound.
+    let output = match protocol {
+        Protocol::Text(glyphs) => Output::Text(Style { glyphs, colours: Colours::None, ground: Ground::Dark }),
+        _ if inside_tmux => Output::Tmux(IdColor::Indexed),
+        _ => Output::Direct,
+    };
+    let area = area(size.unwrap_or(FALLBACK_SIZE), told, output);
+    let preview = preview_room(area.cell);
+    (if size.is_some() { room(area) } else { preview }, preview)
+}
+
+/// `area` as a room a document is laid out for: its cells, and the gap between two pages side by
+/// side.
+fn room(area: Area) -> Room {
+    Room { cols: area.cols, rows: area.rows, cell_w: area.cell.w, cell_h: area.cell.h, gap: fit::GAP }
+}
+
+/// The room a list's documents are laid out for ([`PREVIEW`]), at `cell`, the cell the run started
+/// with.
+fn preview_room(cell: Cell) -> Room {
+    Room { cols: PREVIEW.0, rows: PREVIEW.1, cell_w: cell.w, cell_h: cell.h, gap: fit::GAP }
+}
 
 /// How long the terminal gets to answer a query (support, cell size). Terminals answer within
 /// milliseconds, so this only matters for one that never does.
@@ -514,13 +562,20 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     let starts = starts(&settings, &options)?;
     let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
     let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
-    let opener = Opener::new(backends, &options);
+    let tty = Tty::open().ok();
+    let inside_tmux = tmux::inside();
+    let client = inside_tmux.then(tmux::client);
+    // Files open before the terminal is asked anything and before raw mode, so Ctrl-C stops a long
+    // layout and leaves the terminal as it was. A document is laid out for the room the tty says
+    // without a question: its cell from the pixels it reports, or tmux's, or the one assumed; where
+    // the cell asked later makes another room, the pager lays the document out once more.
+    let told = client.as_ref().and_then(|c| c.as_ref().ok()).and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
+    let (first, preview) = first_rooms(tty.as_ref().and_then(Tty::size), told, protocol, inside_tmux);
+    let opener = Opener::new(backends, &options, first, preview);
     let Given { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
     warn(&warnings, &left_out);
     // Said first, what was left out may be why there are fewer than asked for.
     let shown = shown.pick(given.as_deref())?;
-    let tty = Tty::open().ok();
-    let inside_tmux = tmux::inside();
     // A terminal that takes no escape codes gets no pager, unless told it takes images all the same.
     let plain = protocol != Protocol::Kitty && !inside_tmux && term_says_plain();
     let paging = paging.pages(shown.pages.pages.len(), std::io::stdout().is_terminal() && tty.is_some() && !plain);
@@ -539,10 +594,10 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
         _ => None,
     };
     // What the terminal can't show is said once, not stopped at: `instead` says why it is text.
-    let text = |glyphs| text_terminal(glyphs, tty.as_ref(), inside_tmux);
+    let text = |glyphs| text_terminal(glyphs, tty.as_ref(), inside_tmux, client.as_ref().and_then(|c| c.as_ref().ok()));
     let (terminal, instead) = match protocol {
         Protocol::Text(glyphs) => (text(glyphs), None),
-        _ if inside_tmux => match tmux_terminal(protocol)? {
+        _ if inside_tmux => match tmux_terminal(protocol, client.clone().unwrap_or_else(|| Err("not inside tmux".into())))? {
             Ok(terminal) => (terminal, None),
             Err(why) => (text(Glyphs::Blocks), Some(why)),
         },
@@ -583,7 +638,7 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
         let said = said.or_else(|| instead.is_some().then(|| TEXT_INSTEAD_SHORT.to_owned()));
-        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener)?;
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener, first)?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());
@@ -725,13 +780,17 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
     }
 }
 
-/// Opens files for the viewer: with the first of `backends` that opens each, with `options`.
+/// Opens files for the viewer: with the first of `backends` that opens each, with `options`, each
+/// laid out for the room it is shown in: a file alone for `room`, the window's, a list's files for
+/// `preview`, a fixed portrait page ([`PREVIEW`]).
 pub(super) struct Opener<'o, 'a> {
     backends: &'o [&'static dyn Backend],
     options: &'o Parsed<'a>,
     /// The options again, for the threads that open a list's files, and those threads.
     owned: Arc<OwnedOptions>,
     openers: Rc<Openers>,
+    room: Room,
+    preview: Room,
 }
 
 /// What the files given show, and what of them couldn't be shown, with why.
@@ -743,8 +802,8 @@ struct Given {
 }
 
 impl<'o, 'a> Opener<'o, 'a> {
-    fn new(backends: &'o [&'static dyn Backend], options: &'o Parsed<'a>) -> Self {
-        Self { backends, options, owned: Arc::new(options.owned()), openers: Rc::default() }
+    fn new(backends: &'o [&'static dyn Backend], options: &'o Parsed<'a>, room: Room, preview: Room) -> Self {
+        Self { backends, options, owned: Arc::new(options.owned()), openers: Rc::default(), room, preview }
     }
 
     /// What `paths` show: one file's pages, or a list. A file alone that can't be shown is the
@@ -892,14 +951,16 @@ impl<'o, 'a> Opener<'o, 'a> {
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
     /// its pages, or for a file that holds files, to a container of them; or if `defer` and the
     /// backend says what it costs is better spent later, not opened until its tile is wanted. A file
-    /// no backend opens, `None`, is none.
+    /// no backend opens, `None`, is none. `defer` says the file is one of a list, laid out for the
+    /// preview's room; alone, it is laid out for the window's.
     fn file(&self, chosen: Option<(&'static dyn Backend, Input)>, name: &str, defer: bool) -> Chosen {
         let Some((backend, input)) = chosen else { return Ok(None) };
         let path = input.path.clone();
+        let room = if defer { self.preview } else { self.room };
         let input = match input.deferred_by(backend).filter(|_| defer) {
             Some(deferred) => match input.later() {
                 Ok(file) => {
-                    let later = Later::new(file, path, deferred.settings, backend, self.owned.clone(), self.openers.clone());
+                    let later = Later::new(file, path, deferred.settings, backend, self.owned.clone(), self.openers.clone(), room);
                     return Ok(Some((backend, Item::Later { name: name.to_owned(), later: Rc::new(later) })));
                 }
                 // A pipe, which can't be read twice.
@@ -907,7 +968,7 @@ impl<'o, 'a> Opener<'o, 'a> {
             },
             None => input,
         };
-        let item = match backend.open(input, self.options)? {
+        let item = match backend.open_at(input, self.options, room)? {
             Opened::Files(container) => Item::Container { name: format!("{name}/"), container },
             Opened::Pages(source) if source.pages() == 0 => return Err(format!("{path}: no pages to show")),
             Opened::Pages(source) => {
@@ -1064,17 +1125,16 @@ fn term_says_plain() -> bool {
 /// on it. Output to a file or a pipe has no terminal to ask: ASCII is plain text there, for logs
 /// and mail and whatever else reads it, and blocks keep the colours the environment says, as they
 /// are only of use shown later on a terminal.
-fn text_terminal(glyphs: Glyphs, tty: Option<&Tty>, inside_tmux: bool) -> Terminal {
+fn text_terminal(glyphs: Glyphs, tty: Option<&Tty>, inside_tmux: bool, client: Option<&tmux::Client>) -> Terminal {
     let to_terminal = std::io::stdout().is_terminal();
     // One that takes no escape codes would show the questions, and it doesn't answer them.
     let tty = tty.filter(|_| inside_tmux || !term_says_plain());
-    let client = inside_tmux.then(tmux::client).and_then(Result::ok);
     let var = |name| std::env::var(name).ok();
     let colours = match (glyphs, to_terminal) {
         (Glyphs::Ascii, false) => Colours::None,
         _ => {
             let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-            Colours::from_env(no_color, var("COLORTERM").as_deref(), var("TERM").as_deref(), client.as_ref().is_some_and(|c| c.rgb))
+            Colours::from_env(no_color, var("COLORTERM").as_deref(), var("TERM").as_deref(), client.is_some_and(|c| c.rgb))
         }
     };
     let mut style = Style { glyphs, colours, ground: Ground::Dark };
@@ -1143,12 +1203,11 @@ fn ask(tty: &Tty, query: &[u8], done: impl Fn(&[u8]) -> bool) -> Result<Vec<u8>,
 /// `Err`, saying why, for text cells to go instead. When the pane doesn't pass them, `clv` stops,
 /// though text cells would show: one command gets images, and it leaves the setting as it is
 /// ([`tmux::passthrough`]).
-fn tmux_terminal(protocol: Protocol) -> Result<Result<Terminal, String>, CliError> {
+fn tmux_terminal(protocol: Protocol, client: Result<tmux::Client, String>) -> Result<Result<Terminal, String>, CliError> {
     let to_terminal = std::io::stdout().is_terminal();
     if protocol == Protocol::Auto && !to_terminal {
         return Err(NOT_A_TERMINAL.into());
     }
-    let client = tmux::client();
     let colour = match tmux_colour(protocol, &client) {
         Ok(colour) => colour,
         Err(why) => return Ok(Err(why)),
@@ -1226,12 +1285,9 @@ fn print_pages(
     sent: &mut Vec<u32>,
 ) -> Result<(), CliError> {
     let mut renderer = source.renderer()?;
-    let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(terminal.cell).unwrap_or(fit::FALLBACK_CELL);
-    let cell = terminal.output.fitting(cell);
-    // One row stays free for the shell prompt after the last page.
-    let rows = size.rows.saturating_sub(1).max(1);
-    let (cols, max_rows) = terminal.output.limits(size.cols);
-    let area = Area { cols, rows, cell, max_rows };
+    // The same cells the pager draws in: one row stays free for the shell prompt after the last page.
+    let area = self::area(size, terminal.cell, terminal.output);
+    let (cell, max_rows) = (area.cell, area.max_rows);
     let size_of = |i: usize| pages.get(i).and_then(|p| page_size(source, *p));
     let grid_at = |zoom: Zoom, start: usize| match labels {
         Some(_) => fit::tiles(zoom, pages.len(), area),
@@ -1428,9 +1484,10 @@ struct Image {
     warning: Option<String>,
 }
 
-/// `source`'s `page`'s size, and whether it is a natural one; `None` past its last page.
+/// `source`'s `page`'s size, whether it is a natural one, and the largest scale it is shown at, if it
+/// has one; `None` past its last page.
 fn page_size(source: &dyn Source, page: usize) -> Option<Size> {
-    source.size(page).map(|(w, h)| Size { w, h, natural: source.natural(page) })
+    source.size(page).map(|(w, h)| Size { w, h, natural: source.natural(page), largest: source.largest_scale(page) })
 }
 
 /// Where `source`'s `page` goes in `place`, and what it renders at for `output`. Errors name the
@@ -1491,7 +1548,7 @@ mod tests {
     static WIDTH: Setting = Setting {
         numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4 }),
         auto: None,
-        named: &[crate::source::Named { name: "page", says: "as laid out", at: Some(83) }],
+        named: &[crate::source::Named { name: "page", says: "as laid out" }],
         default: Value::Named("page"),
         ..crate::source::tests::cycled("width", 'w', "--width")
     };
@@ -1540,6 +1597,9 @@ mod tests {
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
+
+    /// The room the tests open files for: 80 × 23 cells of the cell assumed.
+    const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2 };
 
     const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password" };
 
@@ -1624,7 +1684,7 @@ mod tests {
         let given = args(&[]);
         let options = parsed(&given);
         let backends: [&'static dyn Backend; 1] = [&LATER];
-        let opener = Opener::new(&backends, &options);
+        let opener = Opener::new(&backends, &options, ROOM, ROOM);
         let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
         let is_later = |shown: &Shown| shown.items.iter().map(|item| matches!(item, Item::Later { .. })).collect::<Vec<_>>();
         let several = opener.open(&[a, b], false).unwrap();
@@ -1634,6 +1694,38 @@ mod tests {
         let alone = opener.open(&[a], false).unwrap();
         assert!(!alone.shown.is_list());
         assert!(alone.shown.pages.source.settings().is_empty());
+    }
+
+    /// The room a file alone is laid out for as it opens is the window the tty says, before anything is
+    /// asked of the terminal: its columns and its rows less the status line's, and its cell from the
+    /// pixels it reports, else the one tmux told, else the one assumed; text cells asked for by name
+    /// take their sampling cell, and inside tmux the placeholders bound the columns. Without a terminal
+    /// it is the preview's, which a list's documents always get, at the cell the first takes. The same
+    /// cells the pager draws its grid in, from one function.
+    #[test]
+    fn the_first_room_is_the_window_the_tty_says_and_a_lists_is_the_preview() {
+        let size = |cols, rows, xpixel, ypixel| WindowSize { cols, rows, xpixel, ypixel };
+        let (first, preview) = first_rooms(Some(size(120, 40, 1080, 920)), None, Protocol::Auto, false);
+        assert_eq!(first, Room { cols: 120, rows: 39, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP });
+        assert_eq!(preview, Room { cols: 60, rows: 40, cell_w: 9.0, cell_h: 23.0, gap: fit::GAP });
+        assert_eq!(first, room(area(size(120, 40, 1080, 920), None, Output::Direct)), "what the pager draws in");
+        // No pixels: the cell tmux told, else the one assumed.
+        let told = Cell { w: 8.0, h: 17.0 };
+        let in_tmux = first_rooms(Some(size(120, 40, 0, 0)), Some(told), Protocol::Auto, true).0;
+        assert_eq!(in_tmux, Room { cols: 120, rows: 39, cell_w: 8.0, cell_h: 17.0, gap: 2 });
+        let assumed = first_rooms(Some(size(120, 40, 0, 0)), None, Protocol::Kitty, false).0;
+        assert_eq!(assumed, Room { cols: 120, rows: 39, cell_w: 10.0, cell_h: 20.0, gap: 2 });
+        // Text cells: the sampling cell, the shape kept. Inside tmux: at most 297 columns.
+        let text = first_rooms(Some(size(120, 40, 1200, 640)), None, Protocol::Text(Glyphs::Ascii), false).0;
+        assert_eq!((text.cell_w, text.cell_h), (1.25, 2.0));
+        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, true).0.cols, kitty::MAX_CELLS);
+        assert_eq!(first_rooms(Some(size(400, 40, 0, 0)), None, Protocol::Auto, false).0.cols, 400);
+        // No terminal: the preview's, at the cell assumed.
+        let (none, preview) = first_rooms(None, None, Protocol::Auto, false);
+        assert_eq!(none, preview);
+        assert_eq!(none, Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 });
+        // A window of one row still has a row of pages.
+        assert_eq!(first_rooms(Some(size(80, 1, 0, 0)), None, Protocol::Auto, false).0.rows, 1);
     }
 
     #[test]
@@ -1656,7 +1748,7 @@ mod tests {
         let (book, c) = (book.to_str().unwrap(), c.to_str().unwrap());
         let given = args(&[]);
         let options = parsed(&given);
-        let opener = Opener::new(&[&PDF, &ARCHIVE], &options);
+        let opener = Opener::new(&[&PDF, &ARCHIVE], &options, ROOM, ROOM);
         let names = |paths: &[&str], recurse: bool| {
             let shown = opener.open(paths, recurse).map_err(|e| e.to_string()).unwrap().shown;
             shown.items.iter().map(|item| item.name().to_owned()).collect::<Vec<_>>()
@@ -1709,7 +1801,7 @@ mod tests {
         }
         let given = args(&[]);
         let options = parsed(&given);
-        let opener = Opener::new(&[&PDF], &options);
+        let opener = Opener::new(&[&PDF], &options, ROOM, ROOM);
         for (quickest, opened) in [(vec![2, 0, 1], ["c.pdf", "a.pdf", "b.pdf"]), (vec![0, 0, 1], ["a.pdf", "b.pdf", "c.pdf"])] {
             let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: RefCell::default() });
             let mut found = Found::default();

@@ -92,18 +92,20 @@ pub(crate) struct Layout {
 
 /// A page's size in its source's unit, and whether that is its natural size: an image's, in
 /// pixels of its own, which fitting never enlarges (zooming to the width still does). A PDF's
-/// points have no such size.
+/// points have no such size. A page laid out for a room has a largest scale instead, the one at
+/// which it is as tall as that room, which fitting never goes past either.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Size {
     pub(crate) w: f32,
     pub(crate) h: f32,
     pub(crate) natural: bool,
+    pub(crate) largest: Option<f32>,
 }
 
 /// Fit a page of `size` into `cols` × `rows` cells of `cell` pixels, never more than `max_rows`
 /// cells tall or [`MAX_PIXELS`] on a side.
 pub(crate) fn layout(size: Size, cols: u16, rows: u16, cell: Cell, fit: Fit, max_rows: u16) -> Result<Layout, String> {
-    let Size { w: page_w, h: page_h, natural } = size;
+    let Size { w: page_w, h: page_h, natural, largest } = size;
     let positive = |v: f32| v.is_finite() && v > 0.0;
     if !(positive(page_w) && positive(page_h)) {
         return Err("the page has no size".into());
@@ -115,10 +117,13 @@ pub(crate) fn layout(size: Size, cols: u16, rows: u16, cell: Cell, fit: Fit, max
         return Err("the terminal reports no cell size".into());
     }
     let (area_w, area_h) = (f32::from(cols) * cell.w, f32::from(rows) * cell.h);
+    // Fitted to the whole page, never past what the page is held to: one pixel of its own to a
+    // pixel of the screen for a natural size, its largest scale for a page laid out for a room (one
+    // that is no scale at all holds it to nothing).
+    let held = if natural { 1.0 } else { f32::INFINITY };
+    let held = held.min(largest.filter(|s| positive(*s)).unwrap_or(f32::INFINITY));
     let fitted = match fit {
-        // One pixel of its own to a pixel of the screen, at most.
-        Fit::Page if natural => (area_w / page_w).min(area_h / page_h).min(1.0),
-        Fit::Page => (area_w / page_w).min(area_h / page_h),
+        Fit::Page => (area_w / page_w).min(area_h / page_h).min(held),
         Fit::Width => area_w / page_w,
     };
     let scale = fitted.min(f32::from(max_rows) * cell.h / page_h).min(largest_scale(page_w, page_h));
@@ -294,7 +299,7 @@ mod tests {
 
     /// A PDF's page, `w` × `h` points.
     const fn pts(w: f32, h: f32) -> Size {
-        Size { w, h, natural: false }
+        Size { w, h, natural: false, largest: None }
     }
 
     #[test]
@@ -383,23 +388,57 @@ mod tests {
     #[test]
     fn a_picture_is_fitted_no_larger_than_its_own_pixels_but_the_width_enlarges_it() {
         // 800 × 480 px of window.
-        let icon = Size { w: 32.0, h: 32.0, natural: true };
+        let icon = Size { w: 32.0, h: 32.0, natural: true, largest: None };
         let fitted = layout(icon, 80, 24, CELL, Fit::Page, u16::MAX).unwrap();
         assert_eq!((fitted.scale, fitted.cols, fitted.rows), (1.0, 4, 2));
         // The same size in points fills the height.
         assert_eq!(layout(pts(32.0, 32.0), 80, 24, CELL, Fit::Page, u16::MAX).unwrap().scale, 15.0);
         assert_eq!(layout(icon, 80, 24, CELL, Fit::Width, u16::MAX).unwrap().scale, 25.0);
         // A picture larger than the window is fitted as any page is.
-        let photo = Size { w: 4000.0, h: 3000.0, natural: true };
+        let photo = Size { w: 4000.0, h: 3000.0, natural: true, largest: None };
         assert_eq!(layout(photo, 80, 24, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.16);
         // Two that keep their own size side by side share a window they would each fill.
-        let banner = Size { w: 300.0, h: 100.0, natural: true };
+        let banner = Size { w: 300.0, h: 100.0, natural: true, largest: None };
         assert!(two_up_fits(banner, 80, 24, CELL, u16::MAX));
         assert!(!two_up_fits(Size { natural: false, ..banner }, 80, 24, CELL, u16::MAX));
         // A picture's place in a row is the whole of its share: a larger one after it fills it.
         let small_first =
             grid(Zoom::PerRow(2), 2, 0, |i| Some(if i == 0 { icon } else { photo }), Area { cols: 80, rows: 24, cell: CELL, max_rows: u16::MAX });
         assert_eq!(small_first.cols, per_row_cols(80, 2));
+    }
+
+    /// A page laid out for a room is held to its largest scale, the one at which it is as tall as
+    /// that room: fitted to the whole page it never grows past it, alone or beside another, as a
+    /// natural page never grows past its pixels; at the width, and shared N ways, it is any page.
+    #[test]
+    fn a_page_laid_out_for_a_room_is_never_shown_larger_than_its_font_size() {
+        // A page the shape of 80 × 23 cells of 10 × 20 px, laid out at a scale of 0.5 px/pt: its
+        // room's height is 460 px, so its largest scale is 0.5.
+        let page = Size { w: 1600.0, h: 920.0, natural: false, largest: Some(0.5) };
+        let room = layout(page, 80, 23, CELL, Fit::Page, u16::MAX).unwrap();
+        assert_eq!((room.scale, room.cols, room.rows), (0.5, 80, 23));
+        // A larger window: the same scale, in the same cells, not the window's.
+        let larger = layout(page, 200, 50, CELL, Fit::Page, u16::MAX).unwrap();
+        assert_eq!((larger.scale, larger.cols, larger.rows), (0.5, 80, 23));
+        // A smaller one fits it as any page.
+        assert_eq!(layout(page, 40, 23, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.25);
+        // Two to a row: each in its half, held to the scale there, not past it.
+        let two = layout(page, per_row_cols(200, 2), 50, CELL, Fit::Page, u16::MAX).unwrap();
+        assert_eq!(two.scale, 0.5);
+        // A book's page, half the room wide, fits two to a row at its largest scale: each keeps all
+        // of its size alone.
+        let book = Size { w: 780.0, ..page };
+        assert!(two_up_fits(book, 80, 23, CELL, u16::MAX));
+        assert_eq!(layout(book, per_row_cols(80, 2), 23, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.5);
+        // The width enlarges it, as it does a natural page.
+        assert_eq!(layout(page, 200, 50, CELL, Fit::Width, u16::MAX).unwrap().scale, 1.25);
+        // A largest scale that is no scale holds it to nothing.
+        for odd in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(layout(Size { largest: Some(odd), ..page }, 200, 50, CELL, Fit::Page, u16::MAX).unwrap().scale, 1000.0 / 920.0, "{odd}");
+        }
+        // Both bounds hold at once.
+        let both = Size { natural: true, largest: Some(0.5), ..page };
+        assert_eq!(layout(both, 8000, 2000, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.5);
     }
 
     #[test]
@@ -553,7 +592,7 @@ mod tests {
         fn a_grid_fits_its_area(zoom in zoom(), count in 0usize..100, at in 0usize..100, sizes in proptest::collection::vec((any::<f32>(), any::<f32>(), any::<bool>()), 0..100),
                                 cols in any::<u16>(), rows in any::<u16>(), max_rows in any::<u16>()) {
             let area = Area { cols, rows, cell: CELL, max_rows };
-            let g = grid(zoom, count, at, |i| sizes.get(i).map(|&(w, h, natural)| Size { w, h, natural }), area);
+            let g = grid(zoom, count, at, |i| sizes.get(i).map(|&(w, h, natural)| Size { w, h, natural, largest: None }), area);
             prop_assert!(g.per_row >= 1 && g.per_row <= g.most && g.most <= MAX_PER_ROW && g.rows >= 1, "{g:?}");
             // A list's tiles, and their names, fit too, when a tile fits at all.
             let t = tiles(zoom, count, area);
@@ -569,8 +608,8 @@ mod tests {
 
         #[test]
         fn any_numbers_are_an_answer(w in any::<f32>(), h in any::<f32>(), natural in any::<bool>(), cols in any::<u16>(), rows in any::<u16>(),
-                                     cw in any::<f32>(), ch in any::<f32>(), max_rows in any::<u16>(), fit in fit()) {
-            if let Ok(l) = layout(Size { w, h, natural }, cols, rows, Cell { w: cw, h: ch }, fit, max_rows) {
+                                     cw in any::<f32>(), ch in any::<f32>(), max_rows in any::<u16>(), fit in fit(), largest in proptest::option::of(any::<f32>())) {
+            if let Ok(l) = layout(Size { w, h, natural, largest }, cols, rows, Cell { w: cw, h: ch }, fit, max_rows) {
                 prop_assert!(l.scale.is_finite() && l.scale > 0.0);
                 prop_assert!(l.cols >= 1 && l.cols <= cols && l.rows >= 1 && l.rows <= max_rows);
             }

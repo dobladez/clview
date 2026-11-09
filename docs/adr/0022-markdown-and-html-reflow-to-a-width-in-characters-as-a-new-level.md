@@ -1,6 +1,7 @@
 # ADR-0022: Markdown and HTML reflow to a width in characters, as a new level
 
-- **Status:** Accepted
+- **Status:** Accepted; its US Letter page, and `page` among the widths, superseded by
+  [ADR-0023](0023-the-window-is-the-page-of-markdown-and-html.md)
 - **Date:** 2026-11-07
 
 ## Context

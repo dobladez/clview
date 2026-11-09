@@ -269,7 +269,7 @@ a row only at `largest_scale`, for a page that has one.
 
 Each task's commit passes the quality gates alone.
 
-- [ ] **Pages the window's shape** — `Room`, `open_at`, `laid_at` and `relayout` with it;
+- [x] **Pages the window's shape** — `Room`, `open_at`, `laid_at` and `relayout` with it;
   `largest_scale` and `fit::layout` held to it; the page from the room at 100%, the book; `window`
   replacing `page`, `Setting.zero` and `0]`; `bounds` and the steps' order; `Room::same`; the
   first room from the tty; the preview room for a list and for printing with no terminal; printing

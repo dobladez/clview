@@ -32,7 +32,7 @@ The code is three layers, and what each may depend on is a rule
 | Layer | Where | What it is |
 |---|---|---|
 | **Core** | `src/main.rs`, `src/args.rs`, `src/encode.rs`, `src/view/` | The program: the entry point, the options, the pager and the printer, the terminal. It knows no file format |
-| **Contract** | `src/source.rs` | How the core sees what it shows: the traits (`Backend`, `Source`, `Render`, `Pool`, `Frame`, `Container`), the generic sources it re-exports (`Directory`, `Joined`, `Later`, `Folder`) and `BACKENDS`, the one list of this build's backends |
+| **Contract** | `src/source.rs` | How the core sees what it shows: the traits (`Backend`, `Source`, `Render`, `Pool`, `Frame`, `Container`), what passes between them (`Room`, `Bounds`, `Setting`), the generic sources it re-exports (`Directory`, `Joined`, `Later`, `Folder`) and `BACKENDS`, the one list of this build's backends |
 | **Extensions** | `src/source/*.rs` | The backends, one each behind a cargo feature ([Backends](#backends)), and the modules that serve them |
 
 - **The core depends on the contract alone.** Nothing in it names a module of `src/source/`:
@@ -139,17 +139,25 @@ Each backend declares its own options (`Backend::options`): the viewer parses th
 against its own and every backend's, lists them in `--help` under the backends that take some,
 and refuses one the chosen backend doesn't take. The backend's `open` gets the parsed command line
 and reads its own options from it, so an option that belongs to one kind of file (a PDF's
-`--password`) is the backend's, never the viewer's.
+`--password`) is the backend's, never the viewer's. The viewer opens every file through
+`Backend::open_at`, which adds the `Room` the file is shown in ([The room a document is laid out
+for](#the-room-a-document-is-laid-out-for)): a default method calling `open`, which only the
+documents' backend overrides, for the files that have no page of their own.
 
 A backend declares its settings the same way (`Backend::settings`): what the reader may change while
-its files are shown, each a `Setting` with its named values and what each says (and where each sits
-among the numbers, `Named::at`, if it does), its numbers (`Numbers`: least, most, step), its default,
+its files are shown, each a `Setting` with its named values and what each says, its numbers
+(`Numbers`: least, most, step), its default, where a count of 0 sends it (`zero`: `0]` is `window`),
 `auto` by the terminal's background, its keys (`Keys::Cycle` or `Keys::Step`), its option, its line in
 `?`, its message for a file that hasn't it, and its `Effect`: `Redraw`, the pages drawn again with the
 value, or `Relayout`, the document laid out again at it ([Relayout](#relayout)). The documents'
 backend declares two, `paper` (`d`, `--theme`, a redraw) and `width` (`[` and `]`, `--width`, a
 relayout). Which a file has is its source's
-(`Source::settings`; a list's, `Joined`'s, those of any of its files). `view::settings` makes the
+(`Source::settings`; a list's, `Joined`'s, those of any of its files). Where a setting's values sit
+for a file depends on the room it is shown in, so the source says (`Source::bounds`, a `Bounds`): where
+its named value sits among its numbers (`named_at`: `window`, at the characters a line of the
+window's page holds) and the most a number is laid out at there (`most`: the longest line the room
+holds). The level asks when it is made and keeps the answer on its `Nav` (`Nav::bounds`), and `turned`
+takes it. `view::settings` makes the
 build's table, each setting once. The viewer takes a setting's option for any file (`takes_all`),
 starts each at what its option says or its default, resolving `auto` by the background (`starting`),
 and asks the terminal for its background only when what is shown has a setting with `auto`, or is a
@@ -158,11 +166,15 @@ request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend
 pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
 says the setting's message if what is shown hasn't it; a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
 value; `Step` keys to the next among the steps down or up (`stepped`): the multiples of the step from
-the least to the most, and each named value with an `at` among them, after the number equal to it
-(`page` at 83: from it `]` goes to 84 and `[` to 80, and from 80 `]` comes back to it), staying at the
-least or the most and saying so; and a number typed before a numbered setting's key sets it, clamped
-to its range, used up whatever happens (`turned`). The
-values are shared by every level (`pager::Settings`), and so is the change, so a level left before
+the least up to the most here (the setting's, or the room's where that is under it), and the named
+value set among them (`Bounds::named_at`), after the number equal to it (`window` at 96 in a window
+of 100 columns: from 92 `]` goes to 96, then to `window`, which says `the most here`; in a window
+that holds a book, `window` sits at a page's characters and the steps go on past it to the window's
+width), staying at the least or the most and saying so; a number typed before a numbered setting's
+key sets it, clamped to its range, used up whatever happens, and 0 to the setting's `zero`
+(`turned`). A number past the most here is kept, laid out at the most, and said with what it is laid
+out at, `width 120 (window)` (`said_in`): `]` from it says so, `[` goes to the last step under it.
+The values are shared by every level (`pager::Settings`), and so is the change, so a level left before
 the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
 `the_viewers_keys_are_those_listed` checks) and that a key means one setting
@@ -206,8 +218,9 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   that ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
   HTML comes through wordcraft's importer as a fragment (`html::import_with`), whose text takes the
   document's styles, not as a web page (`import_on`), which sets Times New Roman over them
-  ([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)), on a US Letter page, since it gives none, and Markdown
-  through pulldown-cmark into HTML for it
+  ([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)), on a page the
+  window's size, since it gives none ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)),
+  and Markdown through pulldown-cmark into HTML for it
   ([ADR-0014](adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)). What they
   cost is bounded before it is spent, by their marks before they are imported and their text before
   they are laid out ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
@@ -223,13 +236,15 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`
   does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). They have
-  the `width` setting too, which is the source's own (`Width`, from `--width` when it opens, `page` or
-  a number of characters): the page it gives (`Width::page`, Letter, or as wide as the characters take
-  at `CODE_SIZE` × `CODE_ADVANCE` each between Letter's side margins) goes into wordcraft's conversion
-  of the fragment (`html::parse_with`, then `model::to_doc_in`), where tables take their widths from it.
-  `Source::laid_at` says the width, and `Source::relayout` gives a job that reads the bytes again from
-  where they are kept (`Document::at`) and lays out at another, as a new `Paged`
-  ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
+  the `width` setting too, which is the source's own (`Width`, from `--width` when it opens, `window`
+  or a number of characters), and are laid out for the room they are shown in (`Document::room`): the
+  page the two give (`page_in`, below) goes into wordcraft's conversion of the fragment
+  (`html::parse_with`, then `model::to_doc_in`), where tables take their widths from it.
+  `Source::laid_at` says the width and the room, exactly as given, and `Source::relayout` gives a job
+  that reads the bytes again from where they are kept (`Document::at`) and lays out at another width,
+  or for another room, as a new `Paged`
+  ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md),
+  [ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings
@@ -245,6 +260,53 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   of its own, into a temporary file removed as soon as it is made
   ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file
   compressed alone is opened as what it unpacks to.
+
+### The room a document is laid out for
+
+Markdown and HTML have no page of their own, so the window is their page
+([ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)). What the backend knows of the
+window is a `Room` (`source.rs`), all of it the viewer's to say: the pages area's columns and rows (the
+window less the status line's row), a cell's width and height in pixels as `f32`, exactly the cell the
+grid is fitted with (`Output::fitting` included: for text cells a sampling cell, 1.25 × 2 for a 10 × 16
+terminal cell, which rounding would reshape), and the cells between two pages side by side (`fit::GAP`).
+It isn't `fit::Area`: the contract takes nothing from the core. Rooms are compared only through
+`Room::same`: the same columns, rows and gap, and a cell within 2% of the other's each way, so a window
+dragged a few pixels, which changes a cell's size by a fraction, lays nothing out again, and a font
+change in the terminal, which changes it by more and the columns with it, does.
+
+- **Where a room comes from.** One function, `view::area`, makes the cells pages go into from a
+  window's size, the cell tmux or the terminal reported where the tty reports no pixels, and the
+  output, and `view::room` turns that into a `Room`: the pager's `draw` lays its grid out in the one,
+  `print_pages` prints in it, and a document is laid out for the other, so that what is laid out and
+  what is shown agree. Files open where they did before, before the terminal is asked anything and
+  before raw mode, so Ctrl-C stops a long layout and leaves the terminal as it was
+  (`first_rooms`): a file alone is laid out for the window the tty says without a question, its cell
+  from the pixels it reports, or tmux's client's cell inside tmux, or `fit::FALLBACK_CELL`, with the
+  output guessed from the protocol asked for (text cells by name sample; inside tmux the placeholders
+  bound the columns). A list's documents are laid out for `PREVIEW`, 60 × 40 cells at the cell the
+  run started with, a portrait page, as tiles are square; they keep it, as previews, and `Later`'s
+  `Slot` opens with it. Printing with no terminal lays out for the preview's room too. The `Opener`
+  carries both rooms, and `Backend::open_at` takes the one that fits (`Opener::file`).
+- **The page** (`wordcraft.rs`'s `page_in`), in points such that a character of the code face
+  (`CODE_WIDTH`, `CODE_SIZE` × `CODE_ADVANCE` = 5.64 pt) is a cell of the room when the page is shown
+  as tall as it: a column is 5.64 pt and a row 5.64 × the cell's shape (`cell_points`, the shape taken
+  within reason, since a room is input). The page is always as tall as the room; at `window` as wide
+  as it, or half of it less the gap where each half holds `BOOK_LEAST` (60) characters of text, as an
+  open book; at a number, as wide as the characters take, never wider than the room. The margins are
+  `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and below; a page too small
+  for `LEAST_COLUMNS` × `LEAST_LINES` (20 × 10) of text loses a column of each side margin, then grows
+  past the room (and is shown smaller). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
+  answers for `width` alone: `named_at` the columns of the `window` page's text (`columns_of`), `most`
+  those of a page as wide as the room.
+- **Shown at its size.** `Source::largest_scale` is a default method answering `None`; the documents'
+  backend answers, for Markdown and HTML, with the scale at which a page is as tall as its room
+  (`rows × cell_h / page_h`). `fit::layout` takes it in `Size::largest` as it takes the 1.0 a natural
+  page is held to: at `Fit::Page`, never past it, alone or beside another; at `Fit::Width` and at N to
+  a row the page is any page. So a page is never shown larger than its font size, but may be shown
+  smaller: two to a row at 80% of their size alone (`TWO_UP_SHARE`) still happens for a width between
+  about half and five eighths of the window, a known limitation the ADR records. A document's pages
+  aren't natural, so text cells oversample them as a PDF's (`Output::rendering`). `Joined` and `Later`
+  pass the scale through for a list's tiles.
 
 ## Lists and levels
 
@@ -295,20 +357,23 @@ that shows one file's pages, opened alone or gone into from a list. Its keys don
 `changed` flag, which is for redraw settings and deletes every page sent; in a list they change nothing
 and say to open a document, and with `--pages` (`Pages::picked`) that pages are picked as laid out.
 Instead, on each pass of its loop, after the keys and after a file gone into shows, the pager compares
-what the level's source is laid out at (`Source::laid_at`) with the values wanted, for the relayout
-settings the source has (`Pager::relayout_wanted`), and when they differ asks the source for a job
-(`Source::relayout`, a `Job`: a `Send` closure owning the bytes the source keeps and the values, which
-gives a new source laid out at them). So `]` then `u`, read together, reflows nothing in the list, and
-the next document gone into is laid out at the new value as it shows.
+what the level's source is laid out at and for (`Source::laid_at`: the values and the room) with the
+values wanted and the room it shows in (`Pager::room`), for the relayout settings the source has
+(`relayout::wanted`: the values, and the room through `Room::same`), and when either differs asks the
+source for a job (`Source::relayout`, a `Job`: a `Send` closure owning the bytes the source keeps, the
+values and the room, which gives a new source laid out at them). So `]` then `u`, read together,
+reflows nothing in the list, and the next document gone into is laid out at the new value, and for the
+pager's room rather than the preview's it was opened for, as it shows. A layout is asked for, and its
+result taken in, by its values and its room together.
 
 The job runs on `Openers`' threads (`Openers::run`, first in their queue, since the reader is waiting
 on it), a panic in it costing the relayout alone, and the pager polls its `Handle` on each pass
 (`Pager::relayout`; `Handle::try_take` never blocks), waking every `POLL` while one runs, so the new
 pages show without a key and the keys work meanwhile. `view/relayout.rs` keeps the bookkeeping, with no
-IO: which values want a layout (`relayout::wanted`, the relayout settings' alone, so a redraw setting's
-change tells no two apart), the values the job under way is for (`Relayout`), and whether its result,
-when it ends, is for the values wanted now (`Ended::Taken`) or stale, dropped whether it succeeded or
-failed. At most one job is under way: a change meanwhile waits in the shared values and starts when it
+IO: which values and room want a layout (`relayout::wanted`, the relayout settings' alone, so a redraw
+setting's change tells no two apart), the values and the room the job under way is for (`Relayout`),
+and whether its result, when it ends, is for the values and the room wanted now (`Ended::Taken`) or
+stale, dropped whether it succeeded or failed. At most one job is under way: a change meanwhile waits in the shared values and starts when it
 ends, and the status line says the value wanted with `…` after it (`Nav::relaying`) until then. Leaving
 the level (`enter`, `back`) forgets the job, which runs to its end for nobody. A new source makes a new
 `Level` in place of the one on screen (`Pager::replace`): a new id and pool, the same zoom, `nested`
@@ -344,7 +409,8 @@ file named alone never defers, as it is shown at once. So what the list knows fr
 tiles' number and names, each file's backend (for `takes_all`), and the settings each has.
 
 `Later` reports one page, as a tile. It opens on `source::Openers`, four threads for the whole run,
-each with a stack of 8 MiB, what the main thread has had to open files with. A `Later`'s pool asks for it
+each with a stack of 8 MiB, what the main thread has had to open files with, through
+`Backend::open_at` for the preview's room ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)). A `Later`'s pool asks for it
 when given requests, and forgets it when given none or dropped, if no thread has begun it; one begun
 goes on, and what it opened to is kept for when the reader comes back. The pool for the opened source
 is made once it is known. So what renders stays what `Joined` already bounds: `Pools` gives requests
@@ -441,7 +507,8 @@ then the 10 × 20 assumed stands. An answer arriving late reaches the pager as a
 sequence, which is no key, even cut in two (see the terminal's answers below). Inside tmux,
 `#{client_cell_width}` and `#{client_cell_height}` give the cell instead. The answer isn't asked
 again, so changing the font size in a session that reports no pixels shows only on the next
-start.
+start. The room a document is laid out for as it opens, before the question, takes the cell
+assumed where the tty reports no pixels ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)).
 
 ## Directly, or inside tmux
 
@@ -552,7 +619,10 @@ with fewer pages than that, when it is the only row, is centred. A screen holds 
 
 A page whose size is natural (`Source::natural`: an image's, in pixels) is fitted at a scale of 1
 at most, so a small picture keeps its size; `Fit::Width` still enlarges it. Its place in the row
-is computed without that bound, since the place is shared by the pages after it.
+is computed without that bound, since the place is shared by the pages after it. A page laid out
+for a room (`Source::largest_scale`, a Markdown or HTML page) is fitted at the scale that makes it
+as tall as that room at most, the same way ([The room a document is laid out
+for](#the-room-a-document-is-laid-out-for)).
 
 A screen starts at a multiple of the pages to a row (so two to a row pair pages the way a book's
 spreads do), or higher up near the end, so the last row stays at the bottom. Either way the

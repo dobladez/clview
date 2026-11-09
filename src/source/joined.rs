@@ -80,6 +80,12 @@ impl Source for Joined {
         self.0.locate(page).and_then(|(part, local)| Some(self.0.parts.get(part)?.source.natural(local))).unwrap_or(false)
     }
 
+    /// Its part's: a document's tile is never larger than its font size either.
+    fn largest_scale(&self, page: usize) -> Option<f32> {
+        let (part, local) = self.0.locate(page)?;
+        self.0.parts.get(part)?.source.largest_scale(local)
+    }
+
     /// A list has those any of its files has: only those files change.
     fn settings(&self) -> Vec<&'static str> {
         let mut settings = Vec::new();

@@ -33,7 +33,8 @@ Use [`template.md`](template.md) as the starting point.
 | 0019 | [A list opens its files when their tiles are wanted](0019-a-list-opens-its-files-when-their-tiles-are-wanted.md) | Accepted |
 | 0020 | [New versions through a Homebrew tap, not a check inside clv](0020-new-versions-through-a-homebrew-tap-not-a-check-inside-clv.md) | Accepted |
 | 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted |
-| 0022 | [Markdown and HTML reflow to a width in characters, as a new level](0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md) | Accepted |
+| 0022 | [Markdown and HTML reflow to a width in characters, as a new level](0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md) | Accepted; its US Letter page superseded by ADR-0023 |
+| 0023 | [The window is the page of Markdown and HTML](0023-the-window-is-the-page-of-markdown-and-html.md) | Accepted |
 
 ## When to write one
 

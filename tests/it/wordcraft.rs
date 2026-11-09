@@ -175,13 +175,55 @@ fn a_word_document_that_asks_for_hyphenation_gets_it() {
     assert!(first_page("asks.docx", true) != first_page("doesnt.docx", false), "the pages are the same, hyphenated or not");
 }
 
-/// Neither gives a page size, so both are laid out on US Letter, as a word processor opens them.
+/// A character of the code face, in points: a column of the page, a cell of the room at 100%.
+const COLUMN: f32 = 5.64;
+
+/// The page `clv` lays a Markdown or HTML file out on when these tests print it, in points.
+struct Page {
+    w: f32,
+    h: f32,
+    /// Its text's width and height, within the margins: two columns at each side, a row above and below.
+    text_w: f32,
+    text_h: f32,
+}
+
+/// The page `clv` lays a Markdown or HTML file out on when these tests print it: the room the tty says
+/// (the controlling terminal of the tests, if they have one: its columns, its rows less the one left
+/// free, and its cell from the pixels it reports, or the 10 × 20 assumed), or with no terminal, as
+/// under CI, the preview's 60 × 40 cells. As wide as the room, or a book's page where the room holds two
+/// of 60 characters, or `width` characters between the margins, never wider than the room; as tall as
+/// the room. The rules the backend's own tests check on rooms of their choosing, here at whatever room
+/// the tests run in.
+fn printed_page(width: Option<f32>) -> Page {
+    let tty = std::fs::File::open("/dev/tty").ok().and_then(|tty| rustix::termios::tcgetwinsize(&tty).ok());
+    let (cols, rows, shape) = match tty.filter(|w| w.ws_col > 0 && w.ws_row > 1) {
+        Some(w) => {
+            let pixels = (w.ws_xpixel > 0 && w.ws_ypixel > 0)
+                .then(|| f32::from(w.ws_ypixel) / f32::from(w.ws_row) / (f32::from(w.ws_xpixel) / f32::from(w.ws_col)));
+            (w.ws_col, w.ws_row - 1, pixels.unwrap_or(2.0))
+        }
+        None => (60, 40, 2.0),
+    };
+    let room = f32::from(cols) * COLUMN - 4.0 * COLUMN;
+    let half = f32::from((cols - 2) / 2) * COLUMN - 4.0 * COLUMN;
+    let text_w = match width {
+        Some(columns) => (columns * COLUMN).min(room),
+        None if half >= 60.0 * COLUMN => half,
+        None => room,
+    };
+    let (row, text_h) = (shape * COLUMN, f32::from(rows) * shape * COLUMN - 2.0 * shape * COLUMN);
+    Page { w: text_w + 4.0 * COLUMN, h: text_h + 2.0 * row, text_w, text_h }
+}
+
+/// Neither gives a page size, so both are laid out on the window's: a page as wide and as tall as the
+/// room the tty says, or the preview's with no terminal ([`printed_page`]).
 #[test]
 fn markdown_and_html_are_laid_out_into_pages() {
+    let page = printed_page(None);
     let long = |open: &str, close: &str| -> String { (1..=200).map(|n| format!("{open}Paragraph {n}{close}\n\n")).collect() };
     for (name, document) in [("long.md", long("", "")), ("long.html", long("<p>", "</p>"))] {
         let pages = drawn(&write(tmp("word-text", name), document.as_bytes()), &[]);
-        assert!(pages.len() > 1 && shaped(&pages, 612.0, 792.0), "{name}: {pages:?}");
+        assert!(pages.len() > 1 && shaped(&pages, page.w, page.h), "{name}: {pages:?}, not {} × {}", page.w, page.h);
     }
 }
 
@@ -304,7 +346,7 @@ fn a_drawing_or_a_pdfs_page_is_a_picture() {
     let of = |document: &str| page("word-vector", "here/a.md", document);
     let (size, red) = found(&of("![two](drawing.svg)"), RED);
     let (width, height) = red.expect("the drawing");
-    let expected = 45.0 / 612.0 * size.0 as f32;
+    let expected = 45.0 / printed_page(None).w * size.0 as f32;
     // Square, but for a row or column that where it falls on the pixels leaves only partly covered.
     assert!((width as f32 - expected).abs() < 3.0 && width.abs_diff(height) <= 1, "{width} × {height}, not about {expected}");
     assert_ne!(of("![two](figure.pdf)"), of("![two](missing.pdf)"), "a PDF's page");
@@ -321,21 +363,24 @@ fn a_picture_fits_the_page_and_keeps_its_shape() {
         write(dir.join(name), &picture(width, height, RED));
     }
     let of = |document: &str| found(&page("word-fit", "here/a.md", document), RED);
+    let laid = printed_page(None);
     let ((page_w, _), small) = of("![two](small.png)");
-    let points = page_w as f32 / 612.0;
+    let points = page_w as f32 / laid.w;
     let about = |pixels: u32, wanted: f32| (pixels as f32 - wanted * points).abs() <= 2.0;
     let (w, h) = small.expect("small");
     assert!(about(w, 30.0) && about(h, 15.0), "at its size: {w} × {h}");
 
     let (w, h) = of("![two](wide.png)").1.expect("wide");
-    assert!(about(w, 468.0) && about(h, 46.8), "to the column: {w} × {h}");
+    assert!(about(w, laid.text_w) && about(h, laid.text_w / 10.0), "to the column: {w} × {h}");
 
+    // 225 × 1800 pt as it is, shrunk to the page's text height (and the column, in a wide room).
     let (w, h) = of("![two](tall.png)").1.expect("tall");
-    assert!(about(w, 85.5) && about(h, 684.0), "to the page: {w} × {h}");
+    let shrunk = (laid.text_h / 1800.0).min(laid.text_w / 225.0);
+    assert!(about(w, 225.0 * shrunk) && about(h, 1800.0 * shrunk), "to the page: {w} × {h}");
 
     // A size the document gives it: fitted after it is read.
     let (w, h) = of("<img src=\"small.png\" width=\"100\" height=\"2000\">").1.expect("given a size");
-    assert!(about(w, 34.2) && about(h, 684.0), "to the page: {w} × {h}");
+    assert!(about(w, 75.0 * laid.text_h / 1500.0) && about(h, laid.text_h), "to the page: {w} × {h}");
 }
 
 /// Opening a document draws none of its pictures, and a page draws only its own: a picture that can't
@@ -535,7 +580,8 @@ fn dark_paper_doesnt_swallow_a_near_black_drawing() {
     assert!(of_logo > of_nothing / 2, "on white paper, white behind it is nothing to see");
 }
 
-/// In a directory or an archive they are tiles, while text that is neither is left out.
+/// In a directory or an archive they are tiles, while text that is neither is left out. A list's
+/// documents are previews, laid out on a fixed portrait page, 60 × 40 cells, whatever the window.
 #[test]
 fn in_a_list_markdown_and_html_are_tiles() {
     let files = [("a.md", "# One"), ("b.html", "<p>Two</p>"), ("c.txt", "Three")];
@@ -548,6 +594,8 @@ fn in_a_list_markdown_and_html_are_tiles() {
         let out = view(&path, &["--protocol", "kitty"]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         assert_eq!(names(&out.stdout), [" a.md b.html"], "{}", path.display());
+        let tiles: Vec<(u32, u32)> = images(&out.stdout).iter().map(|d| png_size(&d.png)).collect();
+        assert!(shaped(&tiles, 60.0 * COLUMN, 40.0 * 2.0 * COLUMN), "{}: {tiles:?}", path.display());
     }
 }
 
@@ -585,19 +633,20 @@ fn what_would_cost_too_much_is_refused_and_what_a_page_skips_is_not_counted() {
 }
 
 /// `--width` lays Markdown and HTML out to lines of that many characters of code: narrower pages,
-/// as tall as Letter, and more of them; `page` is Letter, as without it. It is taken whatever the
-/// files, doing nothing to a PDF, and refused out of its range, saying what it takes.
+/// as tall as the window's, and more of them; `window` is the window's, as without it. It is taken
+/// whatever the files, doing nothing to a PDF, and refused out of its range, saying what it takes.
 #[test]
 fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
+    let (window, at_40) = (printed_page(None), printed_page(Some(40.0)));
     let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
     for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
         let path = write(tmp("word-width", name), document.as_bytes());
-        let (letter, narrow) = (drawn(&path, &[]), drawn(&path, &["--width", "40"]));
-        assert!(shaped(&letter, 612.0, 792.0) && shaped(&narrow, 144.0 + 40.0 * 5.64, 792.0), "{name}: {letter:?} {narrow:?}");
-        assert!(narrow.len() > letter.len(), "{name}: {} pages at 40, {} on a page", narrow.len(), letter.len());
-        assert_eq!(drawn(&path, &["--width", "page"]), letter, "{name}");
+        let (wide, narrow) = (drawn(&path, &[]), drawn(&path, &["--width", "40"]));
+        assert!(shaped(&wide, window.w, window.h) && shaped(&narrow, at_40.w, at_40.h), "{name}: {wide:?} {narrow:?}");
+        assert!(narrow.len() > wide.len(), "{name}: {} pages at 40, {} at the window's width", narrow.len(), wide.len());
+        assert_eq!(drawn(&path, &["--width", "window"]), wide, "{name}");
         let out = view(&path, &["--protocol", "kitty", "--width", "300"]);
-        assert!(!out.status.success() && text(&out.stderr).contains("--width: expected page or 20–200, got 300"), "{}", text(&out.stderr));
+        assert!(!out.status.success() && text(&out.stderr).contains("--width: expected window or 20–200, got 300"), "{}", text(&out.stderr));
     }
     let pdf = write(tmp("word-width", "a.pdf"), &crate::fixtures::letter("One", 1));
     assert!(shaped(&drawn(&pdf, &["--width", "40"]), 612.0, 792.0));

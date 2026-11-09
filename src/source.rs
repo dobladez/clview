@@ -91,8 +91,15 @@ pub(crate) trait Backend: Sync {
     /// a shorter file.
     fn opens(&self, path: &str, head: &[u8]) -> bool;
     /// `input` opened, with the values `options` gives its own options: its pages, or for a file
-    /// that holds files (an archive), a container of them.
+    /// that holds files (an archive), a container of them. A backend that lays a file out for the
+    /// room it is shown in ([`Backend::open_at`]) takes a room of its own here.
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String>;
+    /// [`Backend::open`], for a file shown in `room`: the viewer opens every file through this, and
+    /// only a backend that lays a file out for the room it is shown in (a document with no page of
+    /// its own) looks at it; the rest open as they do without one.
+    fn open_at(&self, input: Input, options: &Parsed<'_>, _room: Room) -> Result<Opened, String> {
+        self.open(input, options)
+    }
     /// What a list may know of the file at `path`, which starts with `head`, without opening it: for
     /// a backend whose [`Backend::open`] costs more than a list of hundreds should spend on files
     /// the reader may never come to, and which then opens to pages, never to a container. `None`
@@ -107,6 +114,53 @@ pub(crate) trait Backend: Sync {
     fn draws_pictures(&self) -> bool {
         false
     }
+}
+
+/// What a page is laid out for, when a document has no page of its own: the pages area of the
+/// window, all of it the viewer's to say and none of it a document's. The area's columns and rows
+/// (the window less the status line's row), a cell's width and height in pixels, exactly the cell
+/// the pages are fitted with (for text cells a sampling cell, 1.25 × 2 for a 10 × 16 terminal cell:
+/// rounding it would change its shape), and the cells between two pages side by side. A room is
+/// input like any other: a backend checks what it computes from one. Rooms are only ever compared
+/// through [`Room::same`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Room {
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    pub(crate) cell_w: f32,
+    pub(crate) cell_h: f32,
+    pub(crate) gap: u16,
+}
+
+/// How far two cells may differ, as a share of either side, and still be the same room: a window
+/// dragged by a few pixels changes a cell's size by a fraction, and lays nothing out again.
+const SAME_CELL: f32 = 0.02;
+
+impl Room {
+    /// Whether `other` is the same room: the same columns, rows and gap, and a cell within
+    /// [`SAME_CELL`] of this one's, width and height each. A font change in the terminal, which
+    /// changes the cell by more and the columns and rows with it, isn't.
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        let near = |a: f32, b: f32| (a - b).abs() <= a.abs().max(b.abs()) * SAME_CELL;
+        self.cols == other.cols
+            && self.rows == other.rows
+            && self.gap == other.gap
+            && near(self.cell_w, other.cell_w)
+            && near(self.cell_h, other.cell_h)
+    }
+}
+
+/// Where a [`Setting`]'s values sit for a document in a room ([`Source::bounds`]): both for that
+/// room and the values the document is laid out with, so they change when either does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Bounds {
+    /// Where the setting's named value sits among its numbers (a page as wide as the window, at
+    /// the characters its line holds), so that stepping up from it goes on to the next number and
+    /// the steps pass through it. `None` for a named value that sits nowhere.
+    pub(crate) named_at: Option<u32>,
+    /// The most a number is laid out at here (the longest line the room holds): a number past it
+    /// is kept, and laid out at it.
+    pub(crate) most: Option<u32>,
 }
 
 /// What a list knows of a file it hasn't opened ([`Backend::deferred`]).
@@ -131,6 +185,9 @@ pub(crate) struct Setting {
     /// Where it starts, unless its option says otherwise; and with `auto`, where a terminal that
     /// doesn't say its background starts.
     pub(crate) default: Value,
+    /// Where a count of 0 before one of its keys goes (`0]`): back to the window's width, to 100%.
+    /// Only a setting with numbers takes a count, so only there does it matter.
+    pub(crate) zero: Value,
     /// Where it starts by the terminal's background, if it does: then its option takes `auto` too.
     pub(crate) auto: Option<Auto>,
     /// Its keys in the pager.
@@ -157,14 +214,12 @@ pub(crate) enum Effect {
 }
 
 /// A named value of a [`Setting`], and what the reader is told on going to it (`light on dark`).
+/// Where it sits among the setting's numbers, if it does, depends on the room a document is shown
+/// in, so the document says ([`Source::bounds`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Named {
     pub(crate) name: &'static str,
     pub(crate) says: &'static str,
-    /// Where it sits among the setting's numbers, for its [`Keys::Step`]: a page's width, at the
-    /// characters a page holds, so that stepping up from it goes on to the next number, and the
-    /// steps pass through it. Without one, up from it goes to the least and down to the most.
-    pub(crate) at: Option<u32>,
 }
 
 /// The numbers a [`Setting`] takes: from `least` to `most`, its keys stepping to the multiples of
@@ -189,8 +244,8 @@ pub(crate) enum Keys {
     /// One, going to the next named value, after the last the first.
     #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting"))]
     Cycle(char),
-    /// Two, going a step down and a step up among the numbers, and the named values set among them
-    /// ([`Named::at`]).
+    /// Two, going a step down and a step up among the numbers, and the named value set among them
+    /// ([`Bounds::named_at`]).
     #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting with numbers"))]
     Step(char, char),
 }
@@ -552,16 +607,32 @@ pub(crate) trait Source {
     /// a page that takes too long is given up on. The pool holds what it needs of the source,
     /// so the pager can keep both.
     fn pool(&self, threads: usize) -> Box<dyn Pool>;
-    /// The values of the relayout settings ([`Effect::Relayout`]) it was laid out at: a document's
-    /// width. None for what is laid out once and for all.
-    fn laid_at(&self) -> Values {
-        Values::default()
+    /// The values of the relayout settings ([`Effect::Relayout`]) it was laid out at, a document's
+    /// width, and the room it was laid out for, both exactly as asked ([`Backend::open_at`],
+    /// [`Source::relayout`]), never what the source made of them: the viewer compares them with what
+    /// it wants, and a source that answered otherwise would be laid out again on every pass. No
+    /// values and no room for what is laid out once and for all.
+    fn laid_at(&self) -> (Values, Option<Room>) {
+        (Values::default(), None)
     }
-    /// A job that lays this out again at `values`, for a source laid out at others: it owns what it
-    /// needs (the bytes the source keeps, the values), nothing of the viewer's, and gives a new source
-    /// laid out at them, or why not. It may run on any thread, and a panic in it costs the relayout
-    /// alone. `None` when the layout is at `values` already, or nothing here lays out again.
-    fn relayout(&self, _values: Values) -> Option<Job> {
+    /// A job that lays this out again at `values`, for `room`, for a source laid out at others: it
+    /// owns what it needs (the bytes the source keeps, the values, the room), nothing of the viewer's,
+    /// and gives a new source laid out at them, or why not. It may run on any thread, and a panic in it
+    /// costs the relayout alone. `None` when the layout is at `values` in that room already, or
+    /// nothing here lays out again.
+    fn relayout(&self, _values: Values, _room: Room) -> Option<Job> {
+        None
+    }
+    /// The largest scale (pixels per unit of [`Source::size`]) page `page` is shown at, fitted to the
+    /// window: for a page laid out for a room, the scale at which it is as tall as that room, so that
+    /// its text is never larger than its font size. `None` for a page shown at any scale.
+    fn largest_scale(&self, _page: usize) -> Option<f32> {
+        None
+    }
+    /// Where setting `setting`'s values sit for this source shown in `room`, laid out with `values`:
+    /// where its named value sits among its numbers, and the most a number is laid out at there.
+    /// `None` for a setting this source has no say over.
+    fn bounds(&self, _setting: &str, _room: Room, _values: Values) -> Option<Bounds> {
         None
     }
     /// Where the reader is, for a source laid out again to find it: the paragraph at `y` points down
@@ -805,9 +876,10 @@ pub(crate) mod tests {
     pub(crate) const fn cycled(name: &'static str, key: char, option: &'static str) -> Setting {
         Setting {
             name,
-            named: &[Named { name: "light", says: "dark on light", at: None }, Named { name: "dark", says: "light on dark", at: None }],
+            named: &[Named { name: "light", says: "dark on light" }, Named { name: "dark", says: "light on dark" }],
             numbers: None,
             default: Value::Named("light"),
+            zero: Value::Named("light"),
             auto: Some(Auto { light: "light", dark: "dark" }),
             keys: Keys::Cycle(key),
             option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "" },
@@ -881,5 +953,21 @@ pub(crate) mod tests {
     #[test]
     fn without_backends_nothing_opens() {
         assert!(choose("a.pdf", &[]).is_err_and(|e| e.contains("built without backends")));
+    }
+
+    /// Two rooms are the same with the same columns, rows and gap and a cell within 2% each way: a
+    /// window dragged a few pixels is the same room, a font change isn't, and a text cell's sampling
+    /// cell is kept as it is, never rounded to a whole pixel.
+    #[test]
+    fn a_room_is_the_same_within_a_little_of_its_cell() {
+        let room = Room { cols: 100, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 2 };
+        assert!(room.same(&room));
+        assert!(room.same(&Room { cell_w: 10.1, cell_h: 19.8, ..room }), "1% off");
+        assert!(!room.same(&Room { cell_w: 10.3, ..room }) && !room.same(&Room { cell_h: 20.6, ..room }), "3% off");
+        assert!(!room.same(&Room { cols: 101, ..room }) && !room.same(&Room { rows: 39, ..room }) && !room.same(&Room { gap: 1, ..room }));
+        let sampling = Room { cell_w: 1.25, cell_h: 2.0, ..room };
+        assert!(sampling.same(&sampling) && !sampling.same(&Room { cell_w: 1.0, ..sampling }));
+        let odd = Room { cell_w: f32::NAN, cell_h: 0.0, ..room };
+        assert!(!odd.same(&odd) && Room { cell_w: 0.0, cell_h: 0.0, ..room }.same(&Room { cell_w: 0.0, cell_h: 0.0, ..room }));
     }
 }
