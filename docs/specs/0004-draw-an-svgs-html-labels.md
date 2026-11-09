@@ -1,6 +1,6 @@
 # Spec-0004: Draw an SVG's HTML labels
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-09
 - **Related:** [ADR-0002](../adr/0002-render-svg-with-resvg.md) (resvg draws the drawing);
   [ADR-0003](../adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) (what a
@@ -289,3 +289,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   its context; hints of no specificity; labels drawn over the drawing, opacity approximated; a
   shared failure leaves out all labels; decoders brought by `svg-html`; the feature default only
   once bounded; ADR-0024; the 32 MiB fallback's omissions and the 50-label fixture made honest.
+- 2026-11-09 — Implementing ([notes](0004-draw-an-svgs-html-labels-impl-20261109_1432.md)).
