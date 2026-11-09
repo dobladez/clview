@@ -305,9 +305,10 @@ change in the terminal, which changes it by more and the columns with it, does.
   room; at `window` as wide as it, or half of it less the gap where each half holds `BOOK_LEAST` (60)
   characters of text, as an open book; at a number, as wide as the characters take, never wider than
   the room. The margins are `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and
-  below, at the text's size whatever the font size (`margins`); a page too small for `LEAST_COLUMNS`
-  × `LEAST_LINES` (20 × 10) of text loses a column of each side margin, then grows past the room (and
-  is shown smaller than the font size asks). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
+  below, at the text's size whatever the font size (`margins`). A font size past the most the room
+  holds (`font_most`) is laid out at the most, as a width past the room's is, the value kept; a page
+  too small for `LEAST_COLUMNS` × `LEAST_LINES` (20 × 10) of text even at the least size loses a
+  column of each side margin, then grows past the room (and is shown smaller). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
   answers for `width`, at the font size the values want: `named_at` the columns of the `window` page's
   text (`columns_of`), `most` those of a page as wide as the room; and for `font`: `most` the largest of
   its steps at which the room holds a page without growing (`fits`, `font_most`), the least where none

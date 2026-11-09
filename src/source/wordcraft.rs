@@ -229,10 +229,11 @@ fn margins(room: &Room) -> (f32, f32) {
 /// code face is `font`/100 of a cell of the room when the page is shown as tall as it: always as tall
 /// as the room; as wide as it at `window`, or half of it less the gap where each half holds
 /// [`BOOK_LEAST`] characters of text; at a number, as wide as the characters take, never wider than
-/// the room. A page too small for [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text loses a column of each
-/// side margin, then grows past the room (and is shown smaller than the font size).
+/// the room. A font size past the most the room holds ([`font_most`]) is laid out at the most, as a
+/// width past the room's is; a page too small for [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text even at
+/// the least size loses a column of each side margin, then grows past the room (and is shown smaller).
 fn page_in(width: Width, room: &Room, font: u32) -> wordcraft_doc::SectionProps {
-    let (cw, ch) = cell_points(room, font);
+    let (cw, ch) = cell_points(room, font.min(font_most(room)));
     let (mut side, top) = margins(room);
     let (least_w, least_h) = (LEAST_COLUMNS as f32 * CODE_WIDTH, LEAST_LINES as f32 * LINE);
     let room_w = text_columns(room.cols, cw, side);
@@ -1479,10 +1480,16 @@ mod tests {
         assert_eq!(columns_of(&page_in(Width::Window, &room(128, 40, 10.0, 20.0), 100)), 124, "one page, as wide as the room");
         // A tiny room: the side margins shrink to a column, then the page grows past the room, 20
         // characters and 10 lines of text at least, whatever the room says.
+        // A tiny room holds no page at any size, so it is laid out at the least, 50%, where 23 columns are 42
+        // characters; 10 columns aren't 20 even then, and the side margins shrink to a column before the page
+        // grows. Either way, 10 lines of text.
         let tiny = page_in(Width::Window, &room(23, 5, 10.0, 20.0), 100);
-        assert!(near(tiny.margin_left, CODE_WIDTH) && near(tiny.text_width(), 21.0 * CODE_WIDTH), "{}", tiny.text_width());
-        let tinier = page_in(Width::Window, &room(12, 5, 10.0, 20.0), 100);
-        assert!(near(tinier.text_width(), 20.0 * CODE_WIDTH) && near(tinier.text_height(), 10.0 * LINE), "{tinier:?}");
+        assert!(near(tiny.margin_left, 2.0 * CODE_WIDTH) && columns_of(&tiny) == 42 && near(tiny.text_height(), 10.0 * LINE), "{tiny:?}");
+        let tinier = page_in(Width::Window, &room(10, 5, 10.0, 20.0), 100);
+        assert!(
+            near(tinier.margin_left, CODE_WIDTH) && near(tinier.text_width(), 20.0 * CODE_WIDTH) && near(tinier.text_height(), 10.0 * LINE),
+            "{tinier:?}"
+        );
         for odd in [room(0, 0, 10.0, 20.0), room(1, 1, 0.0, 0.0), room(5, 5, f32::NAN, f32::INFINITY), room(u16::MAX, u16::MAX, 1.0, 1.0e30)] {
             let page = page_in(Width::Window, &odd, 100);
             assert!(
@@ -1520,21 +1527,32 @@ mod tests {
     /// short for ten lines, when it grows and is shown smaller. The margins stay at the text's size.
     #[test]
     fn a_font_size_shrinks_the_page_in_points_so_its_text_is_larger_on_screen() {
-        let small = room(80, 23, 10.0, 20.0);
-        let (at_100, at_200) = (page_in(Width::Window, &small, 100), page_in(Width::Window, &small, 200));
+        // 80 × 30 cells hold 200%: half the page in points, half the characters, twice the text on screen.
+        let tall = room(80, 30, 10.0, 20.0);
+        let (at_100, at_200) = (page_in(Width::Window, &tall, 100), page_in(Width::Window, &tall, 200));
         assert!(near(at_200.page_w, at_100.page_w / 2.0) && near(at_200.margin_left, at_100.margin_left), "{} {}", at_200.page_w, at_100.page_w);
+        assert!(near(at_200.page_h, at_100.page_h / 2.0), "{} {}", at_200.page_h, at_100.page_h);
         assert_eq!((columns_of(&at_100), columns_of(&at_200)), (76, 36));
-        assert!(near(at_200.text_height(), 10.0 * LINE) && near(at_200.page_h, 10.0 * LINE + 2.0 * at_200.margin_top), "grown: {}", at_200.page_h);
+        // A size past the most the room holds (170% at 80 × 23) is laid out at the most, as a width past
+        // the room's is: the page never grows for a size the room can't hold.
+        let small = room(80, 23, 10.0, 20.0);
+        let (at_170, at_300) = (page_in(Width::Window, &small, 170), page_in(Width::Window, &small, 300));
+        assert!(near(at_300.page_w, at_170.page_w) && near(at_300.page_h, at_170.page_h) && columns_of(&at_300) == 43, "{}", at_300.page_w);
+        assert!(near(at_170.page_h, 23.0 * 2.0 * CODE_WIDTH * 100.0 / 170.0), "the room's height still: {}", at_170.page_h);
+        // Where even the least size doesn't hold a page, the page grows to 20 × 10 of text and is shown
+        // smaller.
+        let grown = page_in(Width::Window, &room(12, 5, 10.0, 20.0), 50);
+        assert!(near(grown.text_height(), 10.0 * LINE) && near(grown.page_h, 10.0 * LINE + 2.0 * grown.margin_top), "grown: {}", grown.page_h);
         // At 50% the same window holds twice the characters: 156 a line, so two pages of 74 as a book.
-        let at_50 = page_in(Width::Window, &small, 50);
+        let (small_100, at_50) = (page_in(Width::Window, &small, 100), page_in(Width::Window, &small, 50));
         assert!(
-            near(at_50.page_w, 39.0 * 2.0 * CODE_WIDTH) && near(at_50.page_h, at_100.page_h * 2.0) && columns_of(&at_50) == 74,
+            near(at_50.page_w, 39.0 * 2.0 * CODE_WIDTH) && near(at_50.page_h, small_100.page_h * 2.0) && columns_of(&at_50) == 74,
             "{}",
             at_50.page_w
         );
         assert_eq!(columns_of(&page_in(Width::Columns(200), &small, 50)), 156);
         // A number is that many characters whatever the size, within the room.
-        assert_eq!(columns_of(&page_in(Width::Columns(40), &small, 200)), 36, "the room's 36 at 200%");
+        assert_eq!(columns_of(&page_in(Width::Columns(40), &tall, 200)), 36, "the room's 36 at 200%");
         assert_eq!(columns_of(&page_in(Width::Columns(40), &small, 50)), 40);
         // The most: the largest size at which the room holds 20 × 10 of text; a tiny room holds none, and
         // gets the least.
@@ -1570,7 +1588,11 @@ mod tests {
         assert_eq!(bounds(12), Bounds { named_at: Some(20), most: Some(20) }, "a tiny room: the least a page holds");
         let mut at_200 = Values::default();
         assert!(at_200.set(FONT.name, Value::Number(200)));
-        assert_eq!(md.bounds(WIDTH.name, room(80, 23, 10.0, 20.0), at_200), Some(Bounds { named_at: Some(36), most: Some(36) }));
+        assert_eq!(
+            md.bounds(WIDTH.name, room(80, 23, 10.0, 20.0), at_200),
+            Some(Bounds { named_at: Some(43), most: Some(43) }),
+            "laid out at 170%, the most"
+        );
         assert_eq!(md.bounds(FONT.name, room(80, 23, 10.0, 20.0), Values::default()), Some(Bounds { named_at: None, most: Some(170) }));
         assert_eq!(md.bounds(PAPER.name, room(80, 23, 10.0, 20.0), Values::default()), None);
         let rtf = open("a.rtf", "{\\rtf1\\ansi One}");
@@ -1708,7 +1730,8 @@ mod tests {
         let larger = source.relayout(doubled, small).expect("a job")().unwrap();
         assert_eq!(larger.laid_at().0.get(FONT.name), Some(Value::Number(200)));
         let (w, h) = larger.size(0).unwrap();
-        assert!(near(w, 2.0 * 2.0 * CODE_WIDTH + 36.0 * CODE_WIDTH) && h > source.size(0).unwrap().1 / 2.0, "{w} × {h}");
+        // Laid out at 170%, the most this room holds: the room's width at that size.
+        assert!(near(w, 80.0 * CODE_WIDTH * 100.0 / 170.0) && h > source.size(0).unwrap().1 / 2.0, "{w} × {h}");
         assert!(larger.pages() > source.pages());
         assert!(larger.largest_scale(0).unwrap() > source.largest_scale(0).unwrap(), "shown larger");
         assert!(larger.relayout(doubled, small).is_none(), "at it already");

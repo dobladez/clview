@@ -148,3 +148,18 @@ surprises, and what a later reader would want.
   reverting (`zoom_setting` never a setting's, the unit unsaid, the page ignoring the font, `font_most`
   the setting's own, the keys test refusing `Keys::Zoom`, the option's message without the unit),
   running, restoring and `cmp`: see the run recorded below.
+
+## Codex review fixes
+
+- **A font size past the room's most laid out at the most.** `page_in` laid out at the size asked and
+  grew the page to 20 × 10 of text, so at 300% on 80 × 24 the page held 23 characters a line where the
+  room's most, 170%, holds 43, while the status line said `(170%)`. Now the layout's font is the
+  lesser of the one asked and `font_most(room)`, and `laid_at` keeps the value asked; the page grows
+  only where even the least size holds no page. `a_font_size_shrinks_the_page_in_points_so_its_text_is_larger_on_screen`
+  failed first with a page at 300% unlike the one at 170%.
+- **`window` set past the setting's most.** At 50% in a 302-column room `window` sits at 296, past
+  200, and `[` from it gave 296, a number the setting doesn't take, so the backend clamped it and the
+  pager said `it can't be laid out again`. `stepped` now steps down from a named value only to a number
+  within the range (200), and up from 200 to `window`, which says `the most`.
+  `the_room_bounds_the_steps_and_a_number_past_its_most_is_kept` failed first with `width 296`.
+

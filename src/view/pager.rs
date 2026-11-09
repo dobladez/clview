@@ -571,7 +571,8 @@ fn stepped(named: &[Named], at: Option<u32>, numbers: Numbers, now: Value, up: b
         // Those set at this number before `now`; the number itself, from a named value set at one of
         // the steps; those set since the previous number, the last first; then it.
         let same = here.and_then(|here| set().filter(|(at, i)| *at == number && *i < here).max());
-        let on_a_step = number == least || number == most || number % step == 0;
+        // Set past the most, a named value steps down to the most itself, never to a number out of range.
+        let on_a_step = (least..=most).contains(&number) && (number == least || number == most || number % step == 0);
         let itself = (here.is_some() && on_a_step).then_some(Value::Number(number));
         let between = set().filter(|(at, _)| *at < number && previous.is_none_or(|previous| *at >= previous)).max();
         same.and_then(as_named).or(itself).or(between.and_then(as_named)).or(previous.map(Value::Number))
@@ -2529,6 +2530,18 @@ mod tests {
         assert_eq!(width(&book), (Some(Value::Named("window")), Some("width window")));
         press(&mut book, &[Key::Char('4'), Key::Char('0'), Key::Char('['), Key::Char('0'), Key::Char('[')]);
         assert_eq!((width(&book).0, book.typed.as_str()), (Some(Value::Named("window")), ""));
+        // A room wider than the setting's most, 302 columns at 50%: `window` sits at 296, past 200, the
+        // setting's own most. The steps stop at 200, `window` after it; down from `window` is 200, never
+        // a number the setting doesn't take.
+        let mut vast = declaring_in(reader(0, 12, 40, 40), &["width"], Bounds { named_at: Some(296), most: Some(298) });
+        press(&mut vast, &[Key::Char('[')]);
+        assert_eq!(width(&vast), (Some(Value::Number(200)), Some("width 200")));
+        press(&mut vast, &[Key::Char(']')]);
+        assert_eq!(width(&vast), (Some(Value::Named("window")), Some("width window")));
+        press(&mut vast, &[Key::Char(']')]);
+        assert_eq!(width(&vast), (Some(Value::Named("window")), Some("width window, the most")));
+        press(&mut vast, &[Key::Char('1'), Key::Char('9'), Key::Char('6'), Key::Char(']'), Key::Char(']')]);
+        assert_eq!(width(&vast).0, Some(Value::Number(200)));
         // A tiny room, its most under the least: the least is the most here.
         let mut tiny = declaring_in(reader(0, 12, 40, 40), &["width"], Bounds { named_at: Some(20), most: Some(20) });
         press(&mut tiny, &[Key::Char('4'), Key::Char('0'), Key::Char(']'), Key::Char('[')]);
