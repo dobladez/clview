@@ -36,12 +36,17 @@ documents are previewed on portrait pages of a fixed size.
 
 **The room a document is laid out for**
 
-- **`Room`** (`src/source.rs`, new): what a page is laid out for, in whole numbers, all of it the
-  viewer's to say and none of it a document's: the pages area's columns and rows (the window less
-  the status line's row), a cell's width and height in whole pixels, and the cells between two
-  pages side by side (`fit::GAP`). Whole pixels, so that a window dragged by a few pixels, which
-  changes a cell's size by a fraction, is the same room. It is not `fit::Area`, and `source.rs`
-  takes nothing from `src/view/`.
+- **`Room`** (`src/source.rs`, new): what a page is laid out for, all of it the viewer's to say and
+  none of it a document's: the pages area's columns and rows (the window less the status line's
+  row), a cell's width and height in pixels, as `f32`, exactly the cell the grid is fitted with
+  (for text cells a sampling cell, 1.25 × 2 for a 10 × 16 terminal cell: rounding it would change
+  its shape), and the cells between two pages side by side (`fit::GAP`). It is not `fit::Area`,
+  and `source.rs` takes nothing from `src/view/`.
+- **The same room** (`Room::same`): the same columns, rows and gap, and a cell within 2% of the
+  other's, width and height each. So a window dragged by a few pixels, which changes a cell's size
+  by a fraction, is the same room and lays nothing out; a font change in the terminal, which
+  changes the cell by more and its columns and rows with it, isn't. Rooms are only ever compared
+  through it.
 - **The room the pager gives** is the one `draw` lays its grid out in (the same columns, rows and
   cell, `output.fitting` included), made by one function both use, so that what is laid out and
   what is shown agree.
@@ -50,8 +55,8 @@ documents are previewed on portrait pages of a fixed size.
   changes. `Source::relayout(values, room)` takes it too.
 - **`laid_at`** gives back the values and the room the layout was asked for, exactly as given,
   never what the backend made of them (its margins shrunk, its least size): the pager compares
-  them with what it wants, and a source that answered otherwise would be laid out again on every
-  pass.
+  them with what it wants (the room through `Room::same`), and a source that answered otherwise
+  would be laid out again on every pass.
 
 **The page**
 
@@ -122,16 +127,16 @@ documents are previewed on portrait pages of a fixed size.
 
 **When it is laid out**
 
-- **The first layout:** a Markdown or HTML file is laid out for the room once the terminal has
-  said its size and its cell's. Before opening, the cell is asked as it is now (`ask_cell`, or
-  tmux's), whenever there is a tty and the output isn't plain; the answer serves the pager and
-  printing alike. The files are opened with the terminal neither canonical nor fully raw:
-  `ICANON` and `ECHO` off, as raw mode has them, so no line read begins (the FreeBSD reason raw
-  mode spans the questions, `src/view/mod.rs`), but `ISIG` and `OPOST` on, so Ctrl-C stops a long
-  layout and what is said on stderr starts its own lines (`Tty::opening`, a guard like `raw`).
-  Then raw mode, for the background question and the pager, as now.
-- **Printing** (`--protocol` without the pager) lays out at the terminal's size; with no terminal,
-  at the room a list's previews take.
+- **The first layout:** files open where and as they do now, before the terminal is asked
+  anything and before raw mode, so Ctrl-C stops a long layout and leaves the terminal as it was.
+  A Markdown or HTML file is laid out for the room the tty says without a question: its columns
+  and rows, and its cell from the pixels it reports (kitty, Ghostty, WezTerm and iTerm2 do), or
+  tmux's cell inside tmux, as now; otherwise `fit::FALLBACK_CELL`. Where the cell asked later, as
+  now, isn't the same room, the document on screen is laid out once more, through a change of size
+  (task 2): the old pages meanwhile, `laying out…`. Only a terminal that reports no pixels pays
+  that second layout.
+- **Printing** (`--protocol` without the pager) lays out at the room the tty says, as above, with
+  no second layout; with no terminal, at the room a list's previews take.
 - **A list's documents** are opened for a fixed portrait room (`PREVIEW`, 60 × 40 cells at the cell
   the run started with), as tiles are square: a landscape page the window's shape would be a strip
   of small text in one. They keep it: they are previews, as Spec-0002 decided. A document gone into
@@ -154,11 +159,14 @@ documents are previewed on portrait pages of a fixed size.
 - **Turning pages:** a page as tall as the room doesn't scroll, so `j`, `k` and Enter turn pages as
   `n` and `p` do. `docs/usage.md`'s Keys say so.
 - **Cost:** a change of size now lays out every Markdown or HTML document on screen. A small page
-  means many: 8 MiB of text at 20 characters and 10 lines is some 40,000 pages. Task 1 measures
-  ADR-0012's files at the extremes (80 × 24 at the font's most for it, width 20; and a large window
-  at 50%), printed under `/usr/bin/time -l` on a release build: within what
-  [Limits](../usage.md#limits) says a Markdown or HTML file costs at most, or the least lines a page
-  holds is raised until they are, and Limits says what was measured.
+  means many: 8 MiB of text at 20 characters and 10 lines is some 40,000 pages. Measured with
+  ADR-0012's files on a release build, under `/usr/bin/time -l`:
+  - **Printed**, at the extremes: task 1 at 80 × 24, width 20, 100%; task 3 at 80 × 24 at the
+    font's most for it, and a large window at 50%. Within what [Limits](../usage.md#limits) says a
+    Markdown or HTML file costs at most, or the least lines a page holds is raised until they are.
+  - **In the pager**, where a relayout holds the old layout beside the new (Spec-0002's 9.5 GB):
+    task 2, the costliest file at 80 × 24, width 20, the window resized once it shows; task 3, the
+    same at the font's most. The peak goes into Limits.
 
 ## Known limitation
 
@@ -198,12 +206,11 @@ a row only at `largest_scale`, for a page that has one.
   room in `laid_at`.
 - `src/source/later.rs` — `Slot` opening with `open_at`, at the preview room.
 - `src/view/fit.rs` — `layout` held to a page's largest scale at `Fit::Page`.
-- `src/view/mod.rs` — the cell asked before opening; `Tty::opening` while files open; the preview
-  room for a list's documents and for printing with no terminal; printing at the terminal's size;
+- `src/view/mod.rs` — the first room from the tty, without a question; the preview room for a
+  list's documents and for printing with no terminal; printing at the tty's room;
   `Output::rendering` as now, which a document's pages now go through; the option's message with
   the unit.
-- `src/view/tty.rs` — `Tty::opening`.
-- `src/view/pager.rs` — the room `draw` uses, from one function; `bounds` kept on `Nav` and given to
+- `src/view/pager.rs` — the room `draw` uses, from one function, compared through `Room::same`; `bounds` kept on `Nav` and given to
   `turned`; `Numbers.unit` said; `+` and `-` to a `Zoom` setting on a document; the room held
   500 ms and compared with `laid_at`; a failed pair not asked again; `help_lines`, the hints and
   the status line.
@@ -211,7 +218,8 @@ a row only at `largest_scale`, for a page that has one.
   defaults.
 - `src/source/picture.rs` — the scale a picture renders at reads a page's size; checked, changed
   only if the documents' page in a room needs it.
-- Tests: in `wordcraft.rs`, the page for a room at 100% and at 200%, a number, a book page and the
+- Tests: in `source.rs`, `Room::same` (a cell 1% off the same, 3% off not, a sampling cell kept
+  exact); in `wordcraft.rs`, the page for a room at 100% and at 200%, a number, a book page and the
   room that just doesn't hold two, a tiny room and a huge one, the font's most in a small room,
   `laid_at` as asked; in `fit.rs`, a page held to its largest scale alone and two to a row, and
   `--zoom 2` and the width as any page; in `relayout.rs`, a failed (values, room) not asked for
@@ -222,7 +230,7 @@ a row only at `largest_scale`, for a page that has one.
   portrait; `tests/it/view_pager.rs`, a page as tall as the window, `+` laying out again, a change
   of size laying out once; `tests/it/view_tmux.rs`, a pane resized.
 - Docs: `docs/usage.md` (Keys, Documents, the options, tmux, Limits), `docs/architecture.md`
-  (`Room`, `largest_scale`, `bounds`, opening before raw mode), `CHANGELOG.md` (Spec-0002's line
+  (`Room` and `Room::same`, `largest_scale`, `bounds`, the first room from the tty), `CHANGELOG.md` (Spec-0002's line
   rewritten: `page` never shipped), and an ADR superseding ADR-0022's page: the window as the page
   of a document without one; the font size on `+` and `-`; one largest scale rather than an
   `Exact` page size, and the limitation that brings.
@@ -243,10 +251,11 @@ a row only at `largest_scale`, for a page that has one.
 - The font size holds through one generic default method, `largest_scale`, which `fit.rs` applies
   as it does a natural page's 1.0: no `Exact` scale, no source but the documents' touched (see
   *Known limitation*).
-- What the backend knows of the window comes as a `Room` of whole numbers, and is said back
-  exactly as given.
-- Files open with Ctrl-C working and raw mode's no-line-read kept, rather than in full raw mode or
-  back in canonical mode.
+- What the backend knows of the window comes as a `Room`, said back exactly as given, and compared
+  with a 2% give in the cell rather than rounded, so text cells keep their shape.
+- Files open as now, before any question and before raw mode, at the room the tty says; a terminal
+  that reports no pixels gets a second layout once its cell is known. Asking first was rejected:
+  opening in raw mode, or in a mode between, leaves the terminal altered when Ctrl-C ends the run.
 - A list's documents are previewed on a fixed portrait page.
 - A change of size lays the document on screen out again, once it has held 500 ms.
 
@@ -255,8 +264,6 @@ a row only at `largest_scale`, for a page that has one.
 - 🟡 **The least lines a page holds** (10 for now), and a small room's margins: measured.
 - 🟡 **A cell of unknown size** — laid out at the assumed cell; if that proves poor on a real
   terminal, a page of the room's shape at 80 characters is the other way.
-- 🟡 **`Tty::opening` on FreeBSD** — `ICANON` off is what keeps a read from becoming a line read;
-  checked there if a machine is at hand, else the reasoning is the ADR's.
 
 ## Tasks
 
@@ -264,24 +271,26 @@ Each task's commit passes the quality gates alone.
 
 - [ ] **Pages the window's shape** — `Room`, `open_at`, `laid_at` and `relayout` with it;
   `largest_scale` and `fit::layout` held to it; the page from the room at 100%, the book; `window`
-  replacing `page`, `Setting.zero` and `0]`; `bounds` and the steps' order; the cell asked before
-  opening and `Tty::opening`; the preview room for a list and for printing with no terminal;
-  printing at the terminal's size; the cost measured. A change of size is fitted, as now. *Files:*
+  replacing `page`, `Setting.zero` and `0]`; `bounds` and the steps' order; `Room::same`; the
+  first room from the tty; the preview room for a list and for printing with no terminal; printing
+  at the tty's room; the cost printed at 100%. A change of size is fitted, as now. *Files:*
   `src/source.rs`, `src/source/wordcraft.rs`, `src/source/later.rs`, `src/view/fit.rs`,
-  `src/view/tty.rs`, `src/view/mod.rs`, `src/view/pager.rs`, `tests/it/wordcraft.rs`,
+  `src/view/mod.rs`, `src/view/pager.rs`, `tests/it/wordcraft.rs`,
   `tests/it/view.rs`, `tests/it/view_pager.rs`. *Verify:* `cargo test -j 2 --bin clv view::fit`,
   `cargo test -j 2 --bin clv view::pager`, `cargo test -j 2 --test it wordcraft`,
   `cargo test -j 2 --test it view`; manual: in kitty, `target/debug/clv --pager README.md`: one
   page fills the screen, or two in a wide window; `40[`: narrow pages, as tall; `0]` back; Ctrl-C
-  while a large file opens.
+  while a large file opens leaves the terminal as it was.
 - [ ] **A change of size** — the room held 500 ms, then laid out again, a cell's size alone where
-  the tty reports pixels; a failed (values, room) not asked for again; `describe` without
-  defaults; inside tmux, the pane's. *Files:* `src/view/pager.rs`, `src/view/relayout.rs`,
+  the tty reports pixels, and the cell asked after the first layout; a failed (values, room) not
+  asked for again; `describe` without defaults; inside tmux, the pane's; the pager's peak at
+  80 × 24, width 20. *Files:* `src/view/pager.rs`, `src/view/relayout.rs`,
   `tests/it/view_pager.rs`, `tests/it/view_tmux.rs`. *Verify:*
   `cargo test -j 2 --bin clv view::relayout`, `cargo test -j 2 --test it view_`; manual: in kitty,
   resize the window: one layout once it settles, `laying out…` meanwhile.
 - [ ] **The font size** — `font`, `Numbers.unit`, `Keys::Zoom` and the keys test, `0+`, `--font`,
-  its most in a small room, `?`, the hints and the status line. *Files:* `src/source.rs`,
+  its most in a small room, `?`, the hints and the status line; the cost at the font's extremes,
+  printed and in the pager. *Files:* `src/source.rs`,
   `src/source/wordcraft.rs`, `src/view/pager.rs`, `src/view/mod.rs`, `tests/it/view_pager.rs`.
   *Verify:* `cargo test -j 2 --bin clv view::pager`, `cargo test -j 2 --test it view_pager`;
   manual: in kitty, `+` and `-` on a Markdown file, `0+`, `+` on a PDF and in a list.
@@ -317,3 +326,7 @@ Each task's commit passes the quality gates alone.
   the window holds two of 60; `Numbers.unit`; `Keys::Zoom` spelt out; `0+`; files opened with
   Ctrl-C working; portrait previews; `describe` without defaults.
 - 2026-11-09 — Ready.
+- 2026-11-09 — After a third review: files open as now, before any question, at the room the tty
+  says, and a terminal without pixels lays out again once its cell is known (no `Tty::opening`,
+  which Ctrl-C would have left behind); `Room`'s cell exact, compared with a 2% give; the pager's
+  peak measured, and the font's extremes in task 3.
