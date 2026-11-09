@@ -83,7 +83,8 @@ a margin setting on `{` and `}`.
   is as now.
 - **In a list,** `--per-row` sets its tiles to a row; a document opened from it starts at `auto`, as
   now. A list's previews are laid out at `per_row: None`.
-- **The status line** says `3 per row` as the zoom does now, and nothing at `auto`. On text cells
+- **The status line** says `3 per row` as the zoom does now, and at `auto` the count `auto` drew
+  (`1 per row`, `2 per row`), as now, on every file; only the room carries nothing at `auto`. On text cells
   (`--protocol blocks|ascii`) and inside tmux the same, through the same room.
 
 **Margins, on `{` and `}`**
@@ -233,3 +234,5 @@ a margin setting on `{` and `}`.
 - 2026-11-09 — Ready (spec-new), revised after a Codex review: the grid's most, lists, `--pages`,
   the options' conflict, the bounds' order, recovery, keys at once, margins at the font size and 3.
 - 2026-11-09 — Implementing ([notes](0005-set-pages-to-a-row-and-margins-impl-20261109_1812.md)).
+- 2026-11-09 — Revised: the status line at `auto` says the count `auto` drew, as now (the owner's
+  answer); "nothing at `auto`" was the room's.

@@ -20,9 +20,10 @@ surprises, and what a later reader would want.
   and `[1]` at 100). `?` has a `, .  3.` line in a file's pages and in a list.
 - **`max_per_row`** was already the one limit (grid and tiles alike); nothing to change in `fit.rs` but
   the option's name in `Zoom::parse`.
-- **The status line at `auto`.** The spec says "nothing at `auto`"; today it says what auto drew (`1 per
-  row`, `2 per row`) on every file. Asked the owner on 2026-11-09; kept as it is meanwhile (the count
-  drawn, at `auto` too), reading "nothing at auto" as the `Room` carrying nothing there.
+- **The status line at `auto`.** The spec said "nothing at `auto`"; today it says what auto drew (`1 per
+  row`, `2 per row`) on every file. Asked the owner on 2026-11-09, who decided to keep it as it is
+  everywhere: the count `auto` drew, at `auto` too; "nothing at auto" meant the `Room` carries nothing
+  there. The spec's Requirements say so now (its Changelog).
 - **Tests moved to `--per-row`** (`tests/it/*.rs`); `--zoom` is tested on its own in
   `view::zoom_is_still_taken_for_per_row_and_warns`. README's example too.
 - **Seen failing**, each by reverting its fix and copying it back (`cmp` to be sure):
