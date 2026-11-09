@@ -632,6 +632,80 @@ fn inside_tmux_markdown_takes_the_panes_colour_and_d_turns_it() {
     until("the shell back", &|c| !c.contains("light on dark"));
 }
 
+/// Each image whose upload arrived whole in `out`, its size in pixels: the chunks of one (`a=t`, then
+/// those with only `m` and `q`, to `m=0`) gathered from wherever tmux put them among its own output.
+fn sizes_sent(out: &[u8]) -> Vec<(u32, u32)> {
+    use base64::Engine as _;
+    let text = String::from_utf8_lossy(out);
+    let (mut sizes, mut payload) = (Vec::new(), None::<String>);
+    for code in text.split("\x1b_G").skip(1) {
+        let body = code.split('\x1b').next().unwrap_or_default();
+        let (control, data) = body.split_once(';').unwrap_or((body, ""));
+        let keys: Vec<(&str, &str)> = control.split(',').filter_map(|kv| kv.split_once('=')).collect();
+        let get = |k: &str| keys.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+        if get("a") == Some("t") && get("f") == Some("100") {
+            payload = Some(data.to_owned());
+        } else if keys.iter().all(|(k, _)| matches!(*k, "m" | "q")) {
+            if let Some(payload) = payload.as_mut() {
+                payload.push_str(data);
+            }
+        } else {
+            payload = None;
+        }
+        if get("m") == Some("0")
+            && let Some(payload) = payload.take()
+            && let Ok(png) = base64::engine::general_purpose::STANDARD.decode(&payload)
+        {
+            sizes.push(crate::view::png_size(&png));
+        }
+    }
+    sizes
+}
+
+/// Inside tmux the pane is the window: a Markdown page is the pane's shape (at the cell tmux says, or
+/// the one assumed), and the pane resized lays the document out again once it has held, the new pages
+/// the new pane's shape.
+#[cfg(feature = "word")]
+#[test]
+fn inside_tmux_a_pane_resized_lays_the_document_out_again() {
+    let Some(Shell { server, pane, output, pdf }) = shell("resize") else { return };
+    let notes = pdf.with_file_name("long.md");
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    std::fs::write(&notes, long).unwrap();
+    let from = output.lock().unwrap().len();
+    // The pages sent so far, by their shape: tmux hands its client what was passed through, unwrapped.
+    let shapes = || sizes_sent(&output.lock().unwrap()[from..]);
+    let shaped = |(x, y): &(u32, u32), w: f32, h: f32| (*x as f32 / *y as f32 - w / h).abs() < 0.01;
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what} never happened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    // The pane's columns and rows, as tmux has them.
+    let pane_size = || {
+        let size = String::from_utf8_lossy(&server.tmux(&["display-message", "-p", "-t", &pane, "#{pane_width} #{pane_height}"])).into_owned();
+        let mut parts = size.split_whitespace().map(|n| n.parse::<f32>().unwrap());
+        (parts.next().unwrap(), parts.next().unwrap())
+    };
+    // The client is 200 × 58, the pane 200 columns, which hold a book of two pages, each
+    // (200 − 2) / 2 = 99 columns wide, as tall as the pane less the status line; the cell is the 10 × 20
+    // assumed, tmux's client being on a pseudo-terminal that reports no pixels.
+    let (cols, rows) = pane_size();
+    assert!(cols >= 200.0 && rows >= 40.0, "{cols} × {rows}");
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol kitty", notes.display()), "Enter"]);
+    until("a book's page", &|| shapes().iter().any(|s| shaped(s, ((cols - 2.0) / 2.0).floor() * 5.64, (rows - 1.0) * 11.28)));
+    // Resized to 100 × 30: one page as wide as the pane, as tall as it less the status line, after the
+    // hold.
+    server.tmux(&["set-option", "-g", "window-size", "manual"]);
+    server.tmux(&["resize-window", "-t", &pane, "-x", "100", "-y", "30"]);
+    let (cols, rows) = pane_size();
+    assert!(cols < 200.0 && rows < 40.0, "{cols} × {rows}");
+    until("the resized pane's page", &|| shapes().iter().any(|s| shaped(s, cols * 5.64, (rows - 1.0) * 11.28)));
+    server.tmux(&["send-keys", "-t", &pane, "q"]);
+}
+
 /// The pager's text cells are the pane's, however tmux shows it: drawn and turned with no passthrough
 /// and nothing asked of tmux about what reached the terminal.
 #[test]

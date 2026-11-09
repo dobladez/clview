@@ -59,6 +59,12 @@ enlarged past a scale of 1.
   assumed. Asking first was rejected: opening in raw mode, or in a mode between, leaves the terminal
   altered when Ctrl-C ends a long layout. A terminal that reports no pixels pays a second layout once
   its cell is known.
+- **A change of size lays the document on screen out again, once the window has held still for
+  500 ms** (`relayout::HOLD`): a window being dragged changes size many times a second, and a layout
+  can't be stopped. Until then the old pages are fitted to the new window as any page is. A room the
+  document can't be laid out for is remembered with its values, and not asked for again until either
+  changes or `r`, so a failure doesn't start a job on every pass. The status line says what is laid out
+  that isn't the default, or `laying out…`.
 - **A list's documents are previews**, laid out for a fixed portrait room (`PREVIEW`, 60 × 40 cells at
   the cell the run started with), as tiles are square and a landscape page the window's shape would be
   a strip of small text in one. A document gone into is laid out for the pager's room, through
@@ -93,6 +99,17 @@ The same as ADR-0022's Letter page at either width, within noise: importing is w
 80 columns wide and 23 rows tall, 20 characters a line, changes nothing. The least a page holds stays
 at 20 × 10.
 
+In the pager, where a relayout holds the old layout beside the new, the costliest of them on an
+80 × 24 pseudo-terminal at `--width 20`, the window resized to 100 × 30 once it shows and `q` pressed
+once the new pages show (`clv FILE --pager --width 20`, the same build and machine):
+
+| File | In the pager, resized once |
+|---|---|
+| `<ul>`, then the `<li>` sharing out 8 MiB of text (9.5 MiB) | 41,659 pages at 80 × 24, 31,244 at 100 × 30; 85 s in all, 9.2 GB at the peak |
+
+The peak is the two layouts held together, as ADR-0022 measured for `]` (9.5 GB): a change of size
+costs what a step of the width does.
+
 ## Alternatives considered
 
 - **US Letter, fitted to the window** (ADR-0022): small text in a short window, an empty wide one.
@@ -114,9 +131,11 @@ at 20 × 10.
 - **Accepted:** a page is never larger than its font size but may be shown smaller, two to a row (the
   known limitation above); a list's tiles and a document's pages are laid out for different rooms, so
   going into a document lays it out again; a page printed to a file is the terminal's shape at the
-  time.
-- **Follow-ups:** the font size on `+` and `-`, and laying out again when the window changes size
-  (Spec-0003's later tasks); a configuration file for `BOOK_LEAST` and `PREVIEW`; the width and the
-  font size kept between runs.
+  time; a change of size lays every Markdown or HTML document on screen out again, which for the
+  costliest file is the cost of opening it, and holds two layouts meanwhile; the old pages are drawn
+  at the new size, and again once laid out.
+- **Follow-ups:** the font size on `+` and `-` (Spec-0003's last task); a configuration file for
+  `BOOK_LEAST`, `PREVIEW` and the hold; the width and the font size kept between runs; laying out
+  while the window is still changing size, where a layout could be stopped.
 - **Revisit when:** the two-up shrinking proves a nuisance (one condition in `fit::grid`), or a
   terminal reports its cell wrong often enough that the room's shape should be assumed instead.

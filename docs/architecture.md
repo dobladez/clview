@@ -366,6 +366,18 @@ reflows nothing in the list, and the next document gone into is laid out at the 
 pager's room rather than the preview's it was opened for, as it shows. A layout is asked for, and its
 result taken in, by its values and its room together.
 
+The pager's room follows the window (`Pager::watch_room`, each pass of the loop): the room the window's
+pages area makes now, from the same `area` the draw lays its grid out in (so its columns and rows, or
+its cell where the tty reports pixels; a cell asked or told once holds for the run), becomes the room a
+document is laid out for once it has differed from that and held still for `relayout::HOLD` (500 ms),
+which `relayout::Hold` keeps, with no IO: a window still being dragged starts the wait again, one
+dragged back to the document's room ends it, and the loop wakes when the hold is due (`Hold::due`).
+Until then the old pages are fitted to the new window as any page is. So a terminal that reports no
+pixels, whose first layout took the cell assumed, is laid out once more as the pager starts, where the
+cell it answers makes another room. The status line says what is being laid out that isn't the default
+(`width 72…`; `relayout::describe` drops the defaults), or `laying out…` when nothing is (`LAYING_OUT`,
+a change of size at the defaults).
+
 The job runs on `Openers`' threads (`Openers::run`, first in their queue, since the reader is waiting
 on it), a panic in it costing the relayout alone, and the pager polls its `Handle` on each pass
 (`Pager::relayout`; `Handle::try_take` never blocks), waking every `POLL` while one runs, so the new
@@ -390,8 +402,11 @@ order in the document, with their top and height on the page (`paragraphs_of`, f
 starts on, and below a page's last paragraph the anchor is that one. The old level
 goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
 pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
-wanted dropped. A failure keeps the old level, says why through `printable`, and puts the shared value
-back to the document's `laid_at` (`Pager::put_back`), so the next step starts from what is on screen.
+wanted dropped. A failure keeps the old level, says why through `printable`, once, puts the shared value
+back to the document's `laid_at` (`Pager::put_back`), so the next step starts from what is on screen,
+and remembers the pair that failed (`Relayout::fail`): it isn't asked for again (`Relayout::refused`)
+until the values or the room change, or `r` (`Relayout::retry`), and leaving the level forgets it, so a
+room a document can't be laid out for doesn't start a job on every pass.
 The status line's right side shows the value the document is laid out at when it isn't the default
 (`Nav::laid`, from `laid_at` when the level is made), padded to the widest it is said, dropped first
 in a narrow window
@@ -508,7 +523,8 @@ sequence, which is no key, even cut in two (see the terminal's answers below). I
 `#{client_cell_width}` and `#{client_cell_height}` give the cell instead. The answer isn't asked
 again, so changing the font size in a session that reports no pixels shows only on the next
 start. The room a document is laid out for as it opens, before the question, takes the cell
-assumed where the tty reports no pixels ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)).
+assumed where the tty reports no pixels, and the pager lays it out once more for the cell answered,
+through a change of size ([Relayout](#relayout)).
 
 ## Directly, or inside tmux
 

@@ -1,10 +1,18 @@
 //! The bookkeeping of a relayout: the document on screen laid out again at a relayout setting's
-//! value ([`Effect::Relayout`]), on the openers' threads, as a new source for a new level. No IO
-//! here: which values want a layout, what a job under way comes to when it ends, and the values to put
-//! back when one fails. The pager starts the job, polls it and takes the result in (`Pager::relayout`).
+//! value ([`Effect::Relayout`]), or for the room it is shown in, on the openers' threads, as a new
+//! source for a new level. No IO here: which values and room want a layout, when a window that
+//! changed size has held still long enough to lay out for, what a job under way comes to when it
+//! ends, the pair that failed, and the values to put back then. The pager starts the job, polls it and
+//! takes the result in (`Pager::relayout`).
+
+use std::time::{Duration, Instant};
 
 use super::pager::said;
 use crate::source::{Effect, Room, Setting, Values};
+
+/// How long a room has to hold still after a change of size before the document is laid out for it:
+/// a window being dragged changes size many times a second, and a layout can't be stopped.
+pub(super) const HOLD: Duration = Duration::from_millis(500);
 
 /// The relayout settings `has` names, of those `declared`.
 fn relayout<'s>(declared: &'s [&'static Setting], has: &'s [&'static str]) -> impl Iterator<Item = &'static Setting> + 's {
@@ -42,10 +50,50 @@ pub(super) fn wanted(
     (wanted != of(declared, has, laid) || moved).then_some((wanted, room))
 }
 
-/// What `values` are said as on the status line, the relayout settings `has` alone: `width 72`.
+/// What `values` are said as on the status line, the relayout settings `has` alone, those at their
+/// default left out: `width 72`; empty when nothing is said, a layout for a change of size at the
+/// defaults.
 pub(super) fn describe(declared: &[&'static Setting], has: &[&'static str], values: Values) -> String {
-    let each = relayout(declared, has).map(|setting| said(setting, values.get(setting.name).unwrap_or(setting.default)));
+    let each = relayout(declared, has).filter_map(|setting| {
+        let value = values.get(setting.name).unwrap_or(setting.default);
+        (value != setting.default).then(|| said(setting, value))
+    });
     each.reduce(|all, one| format!("{all} · {one}")).unwrap_or_default()
+}
+
+/// The room the window has had since it changed, while it isn't the one the document on screen is
+/// laid out for: adopted once it has held [`HOLD`] ([`Hold::seen`]).
+#[derive(Debug, Default)]
+pub(super) struct Hold {
+    pending: Option<(Room, Instant)>,
+}
+
+impl Hold {
+    /// The window's room is `room` at `now`, the document's `current`: the room to lay out for, once
+    /// `room` has differed from `current` and held still for [`HOLD`]; `None` meanwhile, and once it is
+    /// the same as `current` again (the window dragged back). A room a little off the last one seen
+    /// ([`Room::same`]) is the same one, still holding.
+    pub(super) fn seen(&mut self, room: Room, current: &Room, now: Instant) -> Option<Room> {
+        if room.same(current) {
+            self.pending = None;
+            return None;
+        }
+        match self.pending {
+            Some((pending, since)) if pending.same(&room) => (now.saturating_duration_since(since) >= HOLD).then(|| {
+                self.pending = None;
+                room
+            }),
+            _ => {
+                self.pending = Some((room, now));
+                None
+            }
+        }
+    }
+
+    /// When the room pending, if one is, will have held long enough: for the pager to wake then.
+    pub(super) fn due(&self) -> Option<Instant> {
+        self.pending.map(|(_, since)| since + HOLD)
+    }
 }
 
 /// `values` with the relayout settings `has` back at `laid`'s: after a failure, so that the next step
@@ -61,9 +109,11 @@ pub(super) fn put_back(declared: &[&'static Setting], has: &[&'static str], valu
 
 /// The job under way for the level on screen, if one is: the values and the room it lays out for, and
 /// `H`, what it is polled by. At most one: a change meanwhile waits in the shared values, and starts
-/// when this ends.
+/// when this ends. And the pair that failed for this level, if one did: not asked for again until the
+/// values or the room change, or `r`.
 pub(super) struct Relayout<H> {
     under_way: Option<(Values, Room, H)>,
+    failed: Option<(Values, Room)>,
 }
 
 /// What a job's result comes to once it ends ([`Relayout::ended`]).
@@ -77,7 +127,23 @@ pub(super) enum Ended {
 
 impl<H> Relayout<H> {
     pub(super) const fn new() -> Self {
-        Self { under_way: None }
+        Self { under_way: None, failed: None }
+    }
+
+    /// A job for `values`, for `room`, failed: the pair isn't asked for again ([`Relayout::refused`])
+    /// until the values or the room change, or the reader asks again ([`Relayout::retry`]).
+    pub(super) fn fail(&mut self, values: Values, room: Room) {
+        self.failed = Some((values, room));
+    }
+
+    /// Whether `wanted` is the pair that failed, not to be asked for again.
+    pub(super) fn refused(&self, wanted: &(Values, Room)) -> bool {
+        self.failed.is_some_and(|(values, room)| values == wanted.0 && room.same(&wanted.1))
+    }
+
+    /// The reader asks again (`r`): what failed may be tried again.
+    pub(super) fn retry(&mut self) {
+        self.failed = None;
     }
 
     /// A job for `values`, for `room`, begun, polled by `handle`.
@@ -103,9 +169,11 @@ impl<H> Relayout<H> {
         }
     }
 
-    /// The level is left: a job under way runs to its end, and its result is nobody's.
+    /// The level is left: a job under way runs to its end, and its result is nobody's; what failed was
+    /// that level's.
     pub(super) fn forget(&mut self) {
         self.under_way = None;
+        self.failed = None;
     }
 }
 
@@ -163,7 +231,8 @@ mod tests {
         assert_eq!(wanted(&declared, &has, laid, laid, OTHER, None), None);
         assert_eq!(wanted(&declared, &["paper"], laid, laid, OTHER, Some(ROOM)), None, "no relayout setting: no room to speak of");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), "width 72");
-        assert_eq!(describe(&declared, &has, values("light", None)), "width window");
+        assert_eq!(describe(&declared, &has, values("light", None)), "", "the default is left unsaid");
+        assert_eq!(describe(&declared, &has, values("light", Some(72))), describe(&declared, &has, values("dark", Some(72))));
         assert_eq!(put_back(&declared, &has, values("dark", Some(72)), values("light", Some(40))), values("dark", Some(40)));
         assert_eq!(put_back(&declared, &has, values("dark", Some(72)), values("light", None)).get("width"), Some(Value::Named("window")));
     }
@@ -199,5 +268,53 @@ mod tests {
         relayout.forget();
         assert!(!relayout.is_under_way());
         assert_eq!(relayout.ended(Some((at(84), ROOM))), Ended::Stale, "nothing under way");
+    }
+
+    /// A pair that failed isn't asked for again until the values or the room change, or `r`; leaving
+    /// the level forgets it too, as what failed was that level's.
+    #[test]
+    fn a_pair_that_failed_is_not_asked_for_again_until_either_changes_or_r() {
+        let declared: Vec<&'static Setting> = vec![&PAPER, &WIDTH];
+        let has = ["paper", "width"];
+        let at = |width| of(&declared, &has, values("light", Some(width)));
+        let mut relayout: Relayout<u8> = Relayout::new();
+        assert!(!relayout.refused(&(at(84), ROOM)));
+        relayout.fail(at(84), ROOM);
+        assert!(relayout.refused(&(at(84), ROOM)) && relayout.refused(&(at(84), Room { cell_h: 20.3, ..ROOM })), "the same, within a little");
+        assert!(!relayout.refused(&(at(88), ROOM)) && !relayout.refused(&(at(84), OTHER)), "either changed");
+        relayout.retry();
+        assert!(!relayout.refused(&(at(84), ROOM)));
+        relayout.fail(at(84), ROOM);
+        relayout.forget();
+        assert!(!relayout.refused(&(at(84), ROOM)));
+    }
+
+    /// A room that differs from the document's is adopted once it has held still for `HOLD`: a window
+    /// still being dragged starts the wait again, one dragged back to the document's room ends it, and a
+    /// cell a little off is the same room, still holding.
+    #[test]
+    fn a_changed_room_is_laid_out_for_once_it_has_held_still() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let mut hold = Hold::default();
+        assert_eq!((hold.seen(ROOM, &ROOM, at(0)), hold.due()), (None, None), "the document's own");
+        assert_eq!(hold.seen(OTHER, &ROOM, at(0)), None);
+        assert_eq!(hold.due(), Some(at(500)));
+        assert_eq!(hold.seen(OTHER, &ROOM, at(400)), None, "not yet");
+        assert_eq!(hold.seen(Room { cell_w: 10.1, ..OTHER }, &ROOM, at(450)), None, "the same room, a little off");
+        assert_eq!(hold.seen(OTHER, &ROOM, at(500)), Some(OTHER));
+        assert_eq!(hold.due(), None, "adopted: nothing pending");
+        // Dragged on: the wait starts again from the newest room.
+        let wider = Room { cols: 120, ..ROOM };
+        assert_eq!(hold.seen(OTHER, &ROOM, at(1000)), None);
+        assert_eq!(hold.seen(wider, &ROOM, at(1300)), None);
+        assert_eq!(hold.seen(wider, &ROOM, at(1600)), None, "300 ms of the new one");
+        assert_eq!(hold.seen(wider, &ROOM, at(1800)), Some(wider));
+        // Dragged back to the document's room: nothing to do.
+        assert_eq!(hold.seen(OTHER, &ROOM, at(2000)), None);
+        assert_eq!((hold.seen(ROOM, &ROOM, at(2100)), hold.due()), (None, None));
+        assert_eq!(hold.seen(OTHER, &ROOM, at(2200)), None, "and the wait starts afresh");
+        assert_eq!(hold.seen(OTHER, &ROOM, at(2600)), None);
+        assert_eq!(hold.seen(OTHER, &ROOM, at(2700)), Some(OTHER));
     }
 }

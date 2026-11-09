@@ -39,7 +39,7 @@ use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
-use super::relayout::{self, Ended, Relayout};
+use super::relayout::{self, Ended, Hold, Relayout};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
     FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, cell_lines, chars, checked,
@@ -66,6 +66,9 @@ const NO_SEARCH: &str = "no text search; / filters lists";
 /// What a relayout setting's keys say in a list, and while `--pages` picks the pages.
 const REFLOW_IN_LIST: &str = "open a document to reflow it";
 const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
+/// What the status line says while the document is laid out again with nothing to say of its values
+/// (a change of size at the defaults), `…` after it.
+const LAYING_OUT: &str = "laying out";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -208,6 +211,7 @@ pub(super) fn run(
         copier: clip::Copier::new(terminal.local, terminal.effort, terminal.output.wrap()),
         openers: opener.openers(),
         relayout: Relayout::new(),
+        hold: Hold::default(),
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -241,6 +245,8 @@ pub(super) fn run(
         } else {
             TICK
         };
+        // A room that changed is laid out for once it has held: wake then.
+        let wait = pager.hold.due().map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
         let wait = pager.tmux_check.map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
         let read = tty.read_timeout(wait)?;
         if let Some(bytes) = &read {
@@ -313,6 +319,7 @@ pub(super) fn run(
             redraw |= pager.read_on(opener)?;
         }
         redraw |= pager.go_on_into()?;
+        redraw |= pager.watch_room();
         redraw |= pager.relayout()?;
         redraw |= pager.copy_on()?;
         let lost = pager.lost_files()?;
@@ -1243,7 +1250,7 @@ struct Pager<'a> {
     level: Level,
     parents: Vec<Level>,
     /// The room a document on screen is laid out for: the window's pages area, as the files were
-    /// opened for it.
+    /// opened for it, then as the window has held since it changed size ([`Pager::watch_room`]).
     room: Room,
     /// A container gone into, being read or its files opened before it shows.
     reading: Option<Reading>,
@@ -1306,6 +1313,8 @@ struct Pager<'a> {
     openers: Rc<Openers>,
     /// The document on screen being laid out again, if it is ([`Pager::relayout`]).
     relayout: Relayout<Handle>,
+    /// The room the window has had since it changed size, until it has held long enough to lay out for.
+    hold: Hold,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1634,20 +1643,26 @@ impl Pager<'_> {
     /// screen until the new ones are ready. At most one job is under way: a change meanwhile waits in
     /// the shared values and starts when it ends, and a result for values or a room no longer wanted is
     /// dropped. One for what is wanted makes a new level in place of this one ([`Pager::replace`]); a
-    /// failure keeps this one, says why, and puts the values back to what is on screen, so the next step
-    /// starts from it. Whether the screen changed.
+    /// failure keeps this one, says why once, puts the values back to what is on screen, so the next
+    /// step starts from it, and remembers the pair that failed, not asked for again until the values or
+    /// the room change, or `r`. Whether the screen changed.
     fn relayout(&mut self) -> Result<bool, String> {
         if self.level.nav.list || self.level.nav.picked {
             return Ok(false);
         }
+        if self.level.nav.rerender {
+            self.relayout.retry();
+        }
         let (declared, has) = (self.settings.declared.clone(), self.level.nav.has.clone());
         let (laid, laid_room) = self.level.source.laid_at();
         let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room, laid_room);
+        // What is being laid out that isn't the default, or that it is.
+        let saying = |values: Values| Some(relayout::describe(&declared, &has, values)).filter(|said| !said.is_empty()).unwrap_or(LAYING_OUT.into());
         let mut changed = false;
         if let Some(handle) = self.relayout.handle() {
             let Some(done) = handle.try_take() else {
                 // Still running: the status line says what is wanted now, which may have moved on.
-                let saying = wanted.map(|(values, _)| relayout::describe(&declared, &has, values));
+                let saying = wanted.map(|(values, _)| saying(values));
                 let changed = self.level.nav.relaying != saying;
                 self.level.nav.relaying = saying;
                 return Ok(changed);
@@ -1661,13 +1676,16 @@ impl Pager<'_> {
                     Err(why) => {
                         self.level.nav.message = Some(printable(&why));
                         self.put_back(laid);
+                        if let Some((values, room)) = wanted {
+                            self.relayout.fail(values, room);
+                        }
                         wanted = None;
                         changed = true;
                     }
                 }
             }
         }
-        let Some((values, room)) = wanted else {
+        let Some((values, room)) = wanted.filter(|wanted| !self.relayout.refused(wanted)) else {
             self.level.nav.relaying = None;
             return Ok(changed);
         };
@@ -1678,8 +1696,25 @@ impl Pager<'_> {
             return Ok(true);
         };
         self.relayout.start(values, room, self.openers.run(job));
-        self.level.nav.relaying = Some(relayout::describe(&declared, &has, values));
+        self.level.nav.relaying = Some(saying(values));
         Ok(true)
+    }
+
+    /// Follow the window: the room its pages area makes now, the same cells `draw` lays its grid out in
+    /// ([`super::area`]), becomes the room a document is laid out for once it has differed from that and
+    /// held still for [`relayout::HOLD`] (its columns and rows, or its cell where the tty reports pixels;
+    /// a cell asked or told once holds for the run). Until then the old pages are fitted to the new window
+    /// as any page is. Whether the room changed, for [`Pager::relayout`] to act on.
+    fn watch_room(&mut self) -> bool {
+        let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
+        let now = super::room(super::area(size, self.cell, self.output));
+        match self.hold.seen(now, &self.room, Instant::now()) {
+            Some(room) => {
+                self.room = room;
+                true
+            }
+            None => false,
+        }
     }
 
     /// The shared values of the relayout settings back to `laid`, what the document on screen is laid

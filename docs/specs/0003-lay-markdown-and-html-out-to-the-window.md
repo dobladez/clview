@@ -281,7 +281,7 @@ Each task's commit passes the quality gates alone.
   `cargo test -j 2 --test it view`; manual: in kitty, `target/debug/clv --pager README.md`: one
   page fills the screen, or two in a wide window; `40[`: narrow pages, as tall; `0]` back; Ctrl-C
   while a large file opens leaves the terminal as it was.
-- [ ] **A change of size** — the room held 500 ms, then laid out again, a cell's size alone where
+- [x] **A change of size** — the room held 500 ms, then laid out again, a cell's size alone where
   the tty reports pixels, and the cell asked after the first layout; a failed (values, room) not
   asked for again; `describe` without defaults; inside tmux, the pane's; the pager's peak at
   80 × 24, width 20. *Files:* `src/view/pager.rs`, `src/view/relayout.rs`,

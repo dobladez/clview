@@ -1765,8 +1765,66 @@ fn with_pages_the_width_keys_are_refused() {
     assert!(view.finish().success());
 }
 
+/// A change of the window's size lays the document out again, once the window has held still for half a
+/// second: the status line says `laying out…` meanwhile (nothing but the default to say), the new pages
+/// are the new window's shape, and the document has another number of pages. One layout for one
+/// change.
+#[cfg(feature = "word")]
+#[test]
+fn a_change_of_size_lays_the_document_out_again_once_the_window_has_held() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("resize", "long.md");
+    // The resize is asked for through a fifo, from a subshell on the same terminal, once the first
+    // pages show.
+    let fifo = crate::view::tmp("resize", "go");
+    let _ = std::fs::remove_file(&fifo);
+    assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let resize = format!("{{ (cat '{}' > /dev/null; stty rows 40 cols 80 < /dev/tty) & }}", fifo.display());
+    let command = format!("{resize}; exec '{BIN}' '{}' --pager", path.display());
+    let mut view = Session::start_command(KITTY, &command, 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    let before = page_count(&view.text()).unwrap();
+    std::fs::write(&fifo, "go").unwrap();
+    // 80 × 39 cells of 10 × 20 px: a page 451.2 × 439.92 pt.
+    let (w, h) = (80.0 * 5.64, 39.0 * 11.28);
+    view.wait_until("laying out", |t| t.contains("laying out…"));
+    view.wait_until("the new window's pages", |t| last_sent_shaped(t, w, h) && page_count(t).is_some_and(|count| count != before));
+    let after = page_count(&view.text()).unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    let text = view.text();
+    assert_eq!(page_count(&text), Some(after), "laid out once");
+    assert_eq!(text.matches("laying out…").count(), text.matches("laying out…").count().min(4), "{}", text.matches("laying out…").count());
+    assert!(!bar(last_draw(&text)).contains("laying out"), "{:?}", last_draw(&text));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A terminal that reports no pixels is asked its cell size after the first layout, which took the cell
+/// assumed (10 × 20): where the cell it says makes another room (8 × 20, a taller page), the document
+/// is laid out once more, through a change of size.
+#[cfg(feature = "word")]
+#[test]
+fn a_terminal_without_pixels_gets_a_second_layout_at_the_cell_it_says() {
+    if !pty_works() {
+        return;
+    }
+    let terminal = Terminal { cell: Some((8, 20)), ..KITTY };
+    let mut view = Session::start_on(terminal, &long_markdown("resize-cell", "long.md"), &["--pager"], 100, 60);
+    // 100 × 59 cells of 8 × 20 px: a page 564 × 831.9 pt, taller than the one assumed.
+    view.wait_until("laid out at the cell it says", |t| t.contains("laying out…") && last_sent_shaped(t, WINDOW.0, 59.0 * 2.5 * 5.64));
+    let shapes = sizes_sent(&view.text());
+    assert!(
+        shapes.iter().any(|(x, y)| (*x as f32 / *y as f32 - WINDOW.0 / WINDOW.1).abs() < 0.01),
+        "the first layout, at the cell assumed: {shapes:?}"
+    );
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// Each image sent, its size: what kitty is told in the stream.
-fn sizes_sent(text: &str) -> Vec<(u32, u32)> {
+pub(crate) fn sizes_sent(text: &str) -> Vec<(u32, u32)> {
     use base64::Engine as _;
     let mut found = Vec::new();
     let mut rest = text;

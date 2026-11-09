@@ -11,7 +11,9 @@ works today. A version's section becomes the notes of its
 - Markdown and HTML pages are the window's size, as on an e-reader: as tall as the pages area and as
   wide, or two side by side like an open book where the window holds two pages of 60 characters, a
   character of code to a cell. They were US Letter pages fitted to the window. A list's tiles are
-  previews on a portrait page.
+  previews on a portrait page. When the window changes size, the document is laid out again for it
+  once the size has held for half a second, the status line saying `laying out…` meanwhile; inside
+  tmux, the pane is the window.
 - Markdown and HTML reflow to a width: `[` and `]` lay the document out again 4 characters a line
   narrower or wider, `72]` to 72, `0]` back to the window's, from 20 up to the longest line the window
   holds, with `window` among the steps; `--width window|N` says where to start, and a width the window

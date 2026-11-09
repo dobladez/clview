@@ -141,7 +141,8 @@ size of every page on screen, and a page is never made smaller to fit another ro
 to a row, a tall window shows landscape pages two or three at a time, one under another.
 
 The pager follows the window: after a resize, the pages are drawn again for the new size, as many
-to a row as you zoomed to, or as the new size allows. Pages are rendered when they are shown, on a
+to a row as you zoomed to, or as the new size allows; a Markdown or HTML document is laid out again
+for it too ([Documents](#a-page-the-windows-size)). Pages are rendered when they are shown, on a
 thread of their own: the keys keep working while a slow page renders (the status line's `…` says it
 is rendering), moving on cancels it, and the renderer's watchdog gives up on a page that takes too
 long (20 seconds a try) and says so.
@@ -453,7 +454,14 @@ runs in; with no terminal at all, on the preview's page below. Inside tmux, the 
 ([Inside tmux](#inside-tmux)).
 
 The pages are laid out when the file opens, so a large file takes its time before anything shows
-(`Ctrl-C` stops it, the terminal as it was).
+(`Ctrl-C` stops it, the terminal as it was). When the window changes size, the document is laid out
+again for it once the size has held for half a second: until then the old pages are fitted to the
+new window, and while it is laid out the status line says `laying out…` (or the width to come, when
+it isn't the window's), the old pages staying until the new ones are ready. A window still being
+dragged is waited for; one dragged back to its size lays out nothing. On a terminal that doesn't
+report its cells' size in pixels, the first layout takes the cell assumed, and the document is laid
+out once more as the pager starts, once `clv` has asked the terminal, where the cell it says makes
+another page.
 
 **A width of your own.** `]` and `[` lay a Markdown or HTML file out again to lines 4 characters
 wider or narrower, counted in the code face, from 20 up to the longest line the window holds, with
@@ -602,6 +610,9 @@ either way.
   as text, which the terminal draws as the image. The page scrolls with the pane, and survives
   switching windows and panes. Placeholders number at most 297 rows and columns, so inside tmux a
   page is never drawn larger than that.
+- Inside tmux the pane is the window: a Markdown or HTML page is the pane's size, and the pane
+  resized lays the document out again. tmux says the terminal's cell size once, at the start, so a
+  font change in the terminal while `clv` runs isn't seen; the next run takes it.
 - Inside tmux, `TERM` describes tmux, not the terminal, so `clv` asks tmux which terminal it runs
   in. `xterm-kitty` and `xterm-ghostty` are trusted. Anything else gets [text cells](#text-cells)
   and a warning, unless `--protocol kitty` is given. With `allow-passthrough` off, a trusted terminal
@@ -647,7 +658,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
 | What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
-| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width; laid out again (`]`), with the old layout held until the new one shows, that file peaks at 9.5 GB |
+| A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |

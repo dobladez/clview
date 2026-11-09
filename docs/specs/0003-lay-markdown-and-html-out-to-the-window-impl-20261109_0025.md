@@ -77,3 +77,47 @@ surprises, and what a later reader would want.
   width, 14.4 s and 5.8 GB for the costliest file at 80 × 24, width 20, within what Limits says. The
   files were made again by a script in the scratchpad (499,900 marks each), measured on the release
   build under `/usr/bin/time -l` on an 80 × 24 pseudo-terminal from script(1).
+
+## Task 2: a change of size
+
+- **The hold is a small struct with no IO**, `relayout::Hold`: the room the window has had since it
+  changed, adopted once it has held `HOLD` (500 ms); the pager's `watch_room` feeds it each pass from
+  `tty.size()` through the same `area` the draw uses, and the loop wakes when the hold is due. A room
+  a little off the one pending (`Room::same`) is the same room, still holding; one dragged back to the
+  document's ends the wait.
+- **The failed pair lives on `Relayout`**, which the pager keeps and forgets on `enter`, `back` and
+  `replace`, so it is the level's as the spec asks without a field on `Level`; `r` clears it through
+  `nav.rerender`, read in `relayout()` before the draw consumes it.
+- **`describe` returns an empty string** when nothing but the default is laid out, and the pager says
+  `laying out` in its place (`LAYING_OUT`), `…` after it as for any value.
+- **The second layout on a terminal without pixels** needs nothing of its own: the pager's room on the
+  first pass, with the cell asked, differs from the opening room, and the hold adopts it 500 ms in.
+  `a_terminal_without_pixels_gets_a_second_layout_at_the_cell_it_says` answers 8 × 20 to the question
+  (a taller page than the 10 × 20 assumed), since a cell of the same shape would make the same page.
+- **Inside tmux the test resizes the window**, after `window-size manual` (a window follows its client
+  otherwise); the pane is the whole window there, as the test server has no status line, so the test
+  takes the pane's size from tmux rather than assuming it. tmux hands its client what was passed through
+  already unwrapped, and writes its own cursor moves between an image's chunks, so the test gathers an
+  image's chunks wherever they come (`view_tmux::sizes_sent`).
+- **Not in *Files*:** `docs/adr/0023-…` (the hold and the failed pair), `CHANGELOG.md`, `docs/usage.md`,
+  `docs/architecture.md`.
+- **Tests seen failing**, by copying `relayout.rs` aside, reverting (the hold never adopting a room,
+  `refused` never true, `describe` saying the defaults), running, restoring and `cmp`:
+  `a_changed_room_is_laid_out_for_once_it_has_held_still`,
+  `a_pair_that_failed_is_not_asked_for_again_until_either_changes_or_r` and
+  `a_layout_is_wanted_when_a_relayout_setting_or_the_room_differs_and_a_redraw_one_doesnt_count` (the
+  `describe` assertion) in `view::relayout`;
+  `a_change_of_size_lays_the_document_out_again_once_the_window_has_held` and
+  `a_terminal_without_pixels_gets_a_second_layout_at_the_cell_it_says` in `tests/it/view_pager.rs`;
+  `inside_tmux_a_pane_resized_lays_the_document_out_again` in `tests/it/view_tmux.rs`.
+- **The manual check** (in kitty, resize the window: one layout once it settles, `laying out…`
+  meanwhile) is left to the owner.
+- **The pager's peak** (ADR-0023's Evidence): the costliest file at 80 × 24, `--width 20`, resized to
+  100 × 30 once it shows: 41,659 pages laid out again as 31,244, 9.2 GB at the peak, the two layouts
+  held together as for `]` (9.5 GB in ADR-0022). Two things went wrong measuring it, worth knowing:
+  the shell these notes were written from runs inside tmux, so the first harness let `clv` inherit
+  `TMUX` and take the pseudo-terminal for a hidden pane, sending nothing (CONTRIBUTING's warning;
+  `env -u TMUX -u TMUX_PANE` fixed it); and a release build started while the "seen failing" revert
+  was in `relayout.rs` compiled the reverted hold, which never adopted a room and spun the loop
+  (seconds of system time). Rebuilt from the restored file, the numbers above.
+
