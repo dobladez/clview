@@ -52,7 +52,7 @@ See [`docs/usage.md`](docs/usage.md) for all options and more details.
 |---|---|
 | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft) |
 | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide) |
-| SVG drawings and svgz | [resvg](https://github.com/linebender/resvg) |
+| SVG drawings and svgz | [resvg](https://github.com/linebender/resvg), and [Blitz](https://github.com/DioxusLabs/blitz) for their HTML labels |
 | Word documents (docx, doc), OpenDocument text (odt) and RTF | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, with fonts of its own under the SIL Open Font License |
 | Markdown and HTML, with the pictures they refer to on disk | [wordcraft](https://github.com/storytold/wordcraft) again, and [pulldown-cmark](https://crates.io/crates/pulldown-cmark) for Markdown |
 | Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |
@@ -97,6 +97,9 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 - Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
 - HTML documents through Blitz, which draws an SVG's HTML labels, weighed against wordcraft's
   importer: Blitz lays out one long page, where documents are pages the window's size.
+- Bound what an SVG's stylesheets take to parse, before they are parsed: one long declaration in a
+  `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open, labels or not, which the
+  drawing's limits don't count ([notes](docs/specs/0004-draw-an-svgs-html-labels-impl-20261109_1432.md#links-the-labels-follow)).
 
 ## Working on clview
 

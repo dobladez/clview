@@ -62,6 +62,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/view/` | The viewer, below |
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`) and `BACKENDS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
+| `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and replayed by Blitz for `svg.rs`: the one file that names Blitz |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
@@ -124,7 +125,7 @@ PDF one, since a PDF's header may come anywhere in its first 1024 bytes:
 
 | Asked | File | Feature | How it tells its files | Why asked there |
 |---|---|---|---|---|
-| 1 | `svg.rs` | `svg` | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Those bytes may hold a PDF's header, in a drawing's text |
+| 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Those bytes may hold a PDF's header, in a drawing's text |
 | 2 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
 | 3 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | As for SVG (an RTF's text), and before zip, since a docx is a zip |
 | 4 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
@@ -221,7 +222,19 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   renderer or pool parses it again on its first render and keeps the tree for renders at other
   sizes, each of which is estimated before it starts
   ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)). The system's
-  fonts are looked for only once a drawing has text (about 15 ms on macOS).
+  fonts are looked for only once a drawing has text (about 15 ms on macOS). Its HTML labels
+  (`<foreignObject>`, the `svg-html` feature, `svg/html.rs`) are found by `svg.rs` in one walk
+  (`drawn`), placed through the drawing's viewports and written out from the parsed tree inside
+  copies of their context (`found_labels`); what follows the child a `<switch>` takes is cut from
+  the text before usvg parses it (`without_fallbacks`). The render's parse, not the open's, lays them
+  out with Blitz in one document a drawing, each label a slot placed by a transform, on a thread of
+  its own with an 8 MiB stack (`prepare`); estimates the painting (`paint_work`), and records each
+  label once into an anyrender `Scene` through a `Recorder` that keeps at most 200,000 commands.
+  Each render replays a label into the part of the page it lands on, that part and its commands in
+  the page's estimate, and draws it over resvg's pixels at its opacity
+  ([ADR-0024](adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)). Its net
+  provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its header; the
+  system's fonts are found once a run.
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
   export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
   pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps

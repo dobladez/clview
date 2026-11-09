@@ -1,6 +1,6 @@
 # ADR-0024: Draw an SVG's HTML labels with Blitz, one document a drawing, each stage bounded
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-09
 
 ## Context

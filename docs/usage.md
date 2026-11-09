@@ -396,6 +396,43 @@ A drawing reads nothing but itself: a picture, a stylesheet, a font or another d
 to by a path or a URL is left out, and a warning on the page says how many links weren't
 followed. An entity declared outside it (`SYSTEM`) is never read.
 
+A drawing's HTML labels (`<foreignObject>`, which tldraw, draw.io and Mermaid label their drawings
+with) are drawn by [Blitz](https://github.com/DioxusLabs/blitz), an HTML and CSS engine, over what
+resvg draws, at the size shown, so they stay sharp too. The fallback a browser skips after one in
+a `<switch>` isn't drawn (draw.io's "[Not supported by viewer]" and "Text is not SVG - cannot
+display"). A label is drawn as a browser draws it, as far as Blitz goes:
+
+- Only those a browser shows: none in a `defs`, `symbol`, `clipPath`, `mask`, `pattern` or
+  `marker`, none hidden (`display="none"`, `visibility="hidden"`, by attribute or `style`), and in a
+  `<switch>` only in the child it takes (`systemLanguage` as English, `requiredExtensions` never
+  met, `requiredFeatures` always). One a `<use>` repeats isn't drawn, and the page says how many.
+- Where the drawing puts it, through its `viewBox`es, nested `<svg>`s and transforms; its size in
+  percent is of its viewport (of the drawing, when it says no size of its own, as large as what it
+  draws).
+- Styled by the drawing's `<style>`s as if inside its ancestors (their ids, classes, styles, and
+  font and colour attributes), so a rule such as Mermaid's `#id .nodeLabel` reaches it; `<font>`'s
+  `face`, `color` and `size` as hints, under any rule of the drawing's.
+- With the system's fonts, and those the drawing embeds as `data:` URLs (WOFF, WOFF2, TrueType,
+  OpenType); with the pictures it embeds as `data:` URLs (PNG, JPEG, GIF, WebP). Nothing else: a
+  label's link to a picture or a font elsewhere isn't followed, and is counted with the drawing's.
+- Built without the `svg-html` feature, clv draws no labels, and a warning says how many weren't
+  drawn.
+
+Where clv draws a label otherwise than a browser:
+
+- Over the whole drawing, not among its shapes: a shape the drawing draws over a label is under it
+  here, and a group's opacity around a label applies to the label as a whole.
+- Not clipped by its ancestors' clip paths or masks, or by a nested `<svg>`'s bounds.
+- A stylesheet's `display: none` on an ancestor isn't seen; nor may a rule on an SVG element's name,
+  a namespace, a sibling or a structural pseudo-class (`:nth-child`) match.
+- Text directly in a `display: table` element isn't drawn (Blitz's: 5 of a Mermaid flowchart's 24
+  labels blank).
+- A `<switch>` whose child taken, or fallback, an entity makes keeps its fallback, drawn as resvg
+  draws it.
+- What an `overflow: visible` label draws past its box is drawn up to 4,096 pixels each way, and cut
+  there.
+- Its text can't be selected or copied.
+
 What a drawing costs is bounded before it is spent
 ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)): past its
 [limits](#limits), it is refused, what is too much of it is left out with a warning, or a page
@@ -719,7 +756,11 @@ limit, it does as the last column says. How large a page is drawn is under
 | An SVG's content, what it repeats counted: its entities expanded, each `use` copied, a marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to for each shape | 128 MiB, a million elements, 1024 levels deep, or stylesheet rules times elements past 50 million | refused before it is parsed |
 | An SVG's text, its `use`s counted | 200,000 characters, or about three seconds to lay out (a `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s) | that text is left out, with a warning, and the rest drawn |
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
-| What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
+| What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, each HTML label's part of the page and its commands, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
+| An SVG's HTML labels | 1,024 labels; 100,000 elements in all; 8 MiB of markup and 1 MiB of text; 64 levels from a `<foreignObject>` down; their stylesheets' rules times their elements, with the drawing's, 50 million | past a count, the rest are left out; nested deeper, that label; past the rules, all; with a warning |
+| An HTML label's size | 16,384 pixels a side; any element of it, or line of its text, 24,576 (so a label of much text, its lines past that, is left out) | that label is left out, with a warning |
+| What an HTML label fetches | `data:` URLs, 1,024 of them; a font unpacking to 32 MiB, 64 MiB of them; a picture decoding to 64 MiB, 256 MiB of them | refused: the label is drawn without it |
+| Painting a drawing's HTML labels, estimated before it starts: shadows, background and mask layers' tiles, a dotted border's dots, a dotted, dashed or wavy decoration's lines; then the commands recorded | 20 million steps (about a tenth of a second); 200,000 commands | all its labels are left out, with a warning |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |

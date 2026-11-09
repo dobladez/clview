@@ -202,3 +202,14 @@ surprises, and what a later reader would want.
   square of a declaration's length. A `<style>` of one `box-shadow` list of 40,000 shadows
   (about 600 KB) took 45 s to open in clv's debug build, labels or not: ADR-0003's scan doesn't
   bound it. Raised with the owner as a follow-up.
+
+## Task 4: the docs
+
+- Usage's SVG drawings say which labels are drawn, how they look and what they read, and where clv
+  draws one otherwise than a browser (the known differences: over the whole drawing, unclipped, a
+  stylesheet's `display: none` and some selectors unseen, Blitz's `display: table`, an entity's
+  fallback kept, overflow cut at 4,096 pixels, no selecting); Limits has the labels' four rows, and
+  the page's estimate their parts. Architecture has `svg/html.rs` in Files, the backends table, and
+  How each opens. The ADR is Accepted.
+- README's Plans gains a bullet, at the owner's word: bounding what an SVG's stylesheets take to
+  parse before they are parsed (the known issue above).

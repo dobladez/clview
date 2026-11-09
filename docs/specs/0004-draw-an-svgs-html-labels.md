@@ -275,7 +275,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   failing without the estimate, and the recorder's past 200,000 commands; shadows on the
   document's `html` and `body`, counted once a label; dotted borders at the paint work's limit and
   past it; a label holding an element past 24,576 pixels (a dotted one a million wide), left out.
-- [ ] **The docs** — usage's SVG drawings, Limits and known differences; architecture; CHANGELOG;
+- [x] **The docs** — usage's SVG drawings, Limits and known differences; architecture; CHANGELOG;
   README's credits; `CLAUDE.md`; the ADR Accepted. *Files:* `docs/usage.md`, `docs/architecture.md`,
   `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/adr/0024-…`. *Verify:* `cargo test -j 2 --test docs`,
   and the manual checks in Done.
@@ -324,3 +324,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-09 — Task 3: the stack measured again as clv's tests build it (dependencies optimized):
   392 nested grids hold on 2 MiB, so the 8 MiB thread is margin for an unoptimized build, not what
   clv's tests need; kept. `peniko` a direct dependency, for the recorder, approved.
+- 2026-11-09 — Task 4, the docs: usage's SVG drawings (which labels, how they look, where they differ
+  from a browser) and Limits, architecture, CHANGELOG, README's credit, `CLAUDE.md`; ADR-0024
+  Accepted. README's Plans gains bounding what an SVG's stylesheets take to parse, at the owner's
+  word (a long declaration takes some 45 seconds, labels or not).
