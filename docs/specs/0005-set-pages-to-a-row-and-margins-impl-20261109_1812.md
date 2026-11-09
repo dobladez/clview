@@ -164,6 +164,3 @@ surprises, and what a later reader would want.
   at 200 × 50, the margin test at 80 × 24).
 - **Seen failing**, before the fix, under `script` with `stty cols 140 rows 40` (and 200 × 50, 80 × 24);
   passing after at those sizes and with no tty.
-- **Left as it was:** `a_picture_fits_the_page_and_keeps_its_shape` fails at 140 × 40 and 200 × 50 on `main`
-  as well (a picture 2 or 3 pixels off what it expects, past the test's 2-pixel slack), unrelated to
-  margins or columns; raised to the owner.

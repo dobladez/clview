@@ -1,6 +1,6 @@
 # Spec-0005: Pages to a row on their own keys, and a document's margins
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-09
 - **Related:** [Spec-0003](0003-lay-markdown-and-html-out-to-the-window.md), `Done`, whose room,
   font size and relayout this builds on
@@ -250,3 +250,4 @@ a margin setting on `{` and `}`.
   (the owner's answer); a task added for it.
 - 2026-11-09 — A task added at the owner's request: the status line names the keys a number typed
   goes to.
+- 2026-11-09 — Done.
