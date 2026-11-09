@@ -345,7 +345,9 @@ fn starting(starts: &[(&'static Setting, Start)], background: Option<[u8; 3]>) -
     (values, own.unwrap_or(DARK_PAPER))
 }
 
-pub(super) fn run(args: &[String]) -> Result<(), CliError> {
+/// Runs the viewer on `args`, showing files through `backends`, this build's, which `main` hands
+/// over: the viewer names none of them.
+pub(super) fn run(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<(), CliError> {
     // A document can make the renderer panic. The renderer catches the panic and reports the page
     // as failed, but the default hook first prints the panic's message, which the document may
     // have shaped, raw to the terminal. This hook prints it made safe, and not over the pager.
@@ -354,7 +356,7 @@ pub(super) fn run(args: &[String]) -> Result<(), CliError> {
             note(&format!("{}: {info}", crate::NAME));
         }
     }));
-    view(args).map_err(|e| match e {
+    view(args, backends).map_err(|e| match e {
         CliError::Message(message) => CliError::Message(printable(&message)),
         other => other,
     })
@@ -500,8 +502,7 @@ fn capitalized(text: &str) -> String {
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-fn view(args: &[String]) -> Result<(), CliError> {
-    let backends = crate::source::BACKENDS;
+fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<(), CliError> {
     let settings = settings(backends);
     let known: Vec<OptionSpec> =
         OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().chain(settings.iter().map(|s| s.option)).collect();

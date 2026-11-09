@@ -603,9 +603,11 @@ pub(crate) trait Pool {
 pub(crate) mod tests {
     use super::*;
 
-    /// The viewer knows sources only through the items here: nothing in `src/view/` reaches into
-    /// a module of `src/source/`, a backend or the threads lent to one. (What a backend renders
-    /// with is named only by the backend and its own tests, which check it.)
+    /// The core never depends on an extension (CONTRIBUTING's rule): nothing in `src/view/`,
+    /// `src/main.rs`, `src/args.rs` or `src/encode.rs` names a module of `src/source/`, a backend
+    /// or the threads lent to one. The viewer knows sources only through the items here, and takes
+    /// the backends built from `main`, the one file that names `source::BACKENDS`. (What a backend
+    /// renders with is named only by the backend and its own tests, which check it.)
     #[test]
     fn the_viewer_names_no_backend() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -614,19 +616,19 @@ pub(crate) mod tests {
             .filter_map(|e| e.unwrap().path().file_stem().map(|s| s.to_string_lossy().into_owned()))
             .collect();
         assert!(modules.len() >= 3, "{modules:?}");
+        let mut core: Vec<std::path::PathBuf> = ["src/main.rs", "src/args.rs", "src/encode.rs"].iter().map(|f| root.join(f)).collect();
         let dir = root.join("src/view");
-        let mut read = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).unwrap();
-                for module in &modules {
-                    assert!(!text.contains(&format!("source::{module}")), "{} names source::{module}", path.display());
-                }
-                read += 1;
+        core.extend(std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "rs")));
+        assert!(core.len() >= 12, "read {} files, {} of them in {}", core.len(), core.len() - 3, dir.display());
+        for path in &core {
+            let text = std::fs::read_to_string(path).unwrap();
+            for module in &modules {
+                assert!(!text.contains(&format!("source::{module}")), "{} names source::{module}", path.display());
+            }
+            if !path.ends_with("main.rs") {
+                assert!(!text.contains("source::BACKENDS"), "{} names the backends built: main's to hand over", path.display());
             }
         }
-        assert!(read >= 9, "read {read} files in {}", dir.display());
     }
 
     /// A backend that opens files starting with `magic`: to a page (a folder's), or if it

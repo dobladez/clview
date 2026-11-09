@@ -45,6 +45,14 @@ it prints, never by name.
   numbers; allocations sized by input are capped. `unsafe_code = "forbid"`.
 - **Nothing raw reaches the terminal.** File names, messages and anything a document can shape go
   through `printable` first.
+- **The core never depends on an extension.** The code is three layers
+  ([Layers](docs/architecture.md#layers)): the core (`main.rs`, `args.rs`, `encode.rs`, `src/view/`),
+  the contract (`src/source.rs`) and the extensions (`src/source/`: the backends, and the modules
+  that serve them). The core names nothing under `src/source/`; what the viewer needs of a source,
+  `source.rs` declares or re-exports, and `main.rs` alone names `source::BACKENDS`, to hand the list
+  to the viewer. An extension may use the core the other way (`args`, `encode`), never `src/view/`,
+  and never another backend by name. `source::tests::the_viewer_names_no_backend` checks the core's
+  files, and `cargo clippy --no-default-features` builds the core with no backend at all.
 - **A backend's library is its own.** pdfcraft is named in code only in `src/source/pdfcraft.rs`,
   its tests (`tests/it/pdfcraft*.rs`), `Cargo.toml` and the line listing it in `source::BACKENDS`;
   swapping the PDF renderer must touch nothing else in the code, and in the docs only what credits

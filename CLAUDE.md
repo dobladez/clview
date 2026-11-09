@@ -6,7 +6,9 @@ documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs i
 
 ## Layout
 - `src/view/`: the viewer. It knows what it shows only through the traits in `src/source.rs`
-  (`Source`, `Render`, `Pool`, `Frame`, `Container`), never a backend; `the_viewer_names_no_backend` checks it.
+  (`Source`, `Render`, `Pool`, `Frame`, `Container`), never a backend, and takes the backends built
+  from `main.rs`, which alone names `source::BACKENDS`; `the_viewer_names_no_backend` checks it
+  (`CONTRIBUTING.md`'s rule "The core never depends on an extension"; `docs/architecture.md`'s "Layers" has the three layers and what each may depend on).
 - `src/source/<backend>.rs`: one backend each, behind a cargo feature, listed in
   `source::BACKENDS`. A backend says whether it opens a file (from its first bytes) and which
   options it takes; the first that opens a file opens it. Options that belong to one kind of file

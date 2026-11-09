@@ -24,21 +24,52 @@ A file, named on the command line, found in a directory or read from an archive,
    directly or through tmux, and the pager keeps track of what the terminal still holds; or, without
    the graphics protocol, as [text cells](#text-cells-cellsrs).
 
+### Layers
+
+The code is three layers, and what each may depend on is a rule
+([CONTRIBUTING](../CONTRIBUTING.md#rules), "The core never depends on an extension"):
+
+| Layer | Where | What it is |
+|---|---|---|
+| **Core** | `src/main.rs`, `src/args.rs`, `src/encode.rs`, `src/view/` | The program: the entry point, the options, the pager and the printer, the terminal. It knows no file format |
+| **Contract** | `src/source.rs` | How the core sees what it shows: the traits (`Backend`, `Source`, `Render`, `Pool`, `Frame`, `Container`), the generic sources it re-exports (`Directory`, `Joined`, `Later`, `Folder`) and `BACKENDS`, the one list of this build's backends |
+| **Extensions** | `src/source/*.rs` | The backends, one each behind a cargo feature ([Backends](#backends)), and the modules that serve them |
+
+- **The core depends on the contract alone.** Nothing in it names a module of `src/source/`:
+  whatever the viewer needs of a source, `source.rs` declares or re-exports. The viewer doesn't
+  even name `BACKENDS`: `main.rs`, wiring it all up, is the one core file that does, and hands the
+  list to `view::run` and `view::print_help`. So the core builds and its tests run with no backend
+  at all (`cargo clippy --no-default-features`).
+- **The contract names the extensions in one place**, `BACKENDS`, each line behind its feature,
+  and uses the core only for its options' types (`args`); its tests also check no backend claims
+  one of the viewer's keys.
+- **An extension depends on the contract, and on the core's utilities**: `args` for its options,
+  `encode` for a picture a document holds. Never on `src/view/`. Never on another backend by name:
+  the spreadsheet backend prints a PDF and asks `BACKENDS` which backend opens it, through the
+  `Backend` trait. A backend's library is named in its file alone (CONTRIBUTING's rule "A backend's
+  library is its own"), so swapping a renderer touches one file.
+
+`source::tests::the_viewer_names_no_backend` checks the first rule over every core file, and
+the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.rs`,
+`gridcraft.rs`) that no file but the backend's names its libraries.
+
+### Files
+
 | Where | What it does |
 |---|---|
-| `src/main.rs`, `src/args.rs` | The entry point; command-line options and page lists |
+| `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer; command-line options and page lists |
+| `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
+| `src/view/` | The viewer, below |
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`) and `BACKENDS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
-| `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
 | `src/source/later.rs` | A list's file not opened until its tile is wanted, and the threads that open them |
 | `src/source/folder.rs` | A container as a list shows it, to be opened: one page, a folder drawn in code |
 | `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
-| `src/view/` | The viewer, below |
 | `assets/` | The icon `--help` shows: its drawing, and the PNG built into the binary |
 
 ## The viewer (`src/view/`)
@@ -155,8 +186,8 @@ every backend built. A backend also names the libraries it reads and draws its f
 (`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the names
 are written in the backend's own file, so the viewer still names none.
 
-Nothing in `src/view/` names a backend: `source::tests::the_viewer_names_no_backend` checks the
-files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.
+Nothing in `src/view/` names a backend ([Layers](#layers)): `source::tests::the_viewer_names_no_backend`
+checks the files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.
 
 ### How each opens, and what it keeps
 

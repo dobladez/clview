@@ -70,7 +70,7 @@ fn main() -> ExitCode {
         None | Some("--help" | "-h") => view::print_help(source::BACKENDS),
         Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CARGO_PKG_VERSION"))),
         #[cfg(unix)]
-        _ => view::run(&args),
+        _ => view::run(&args, source::BACKENDS),
         #[cfg(not(unix))]
         _ => Err("needs a Unix terminal (macOS, Linux or FreeBSD)".into()),
     };
