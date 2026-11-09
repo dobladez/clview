@@ -174,9 +174,15 @@ hold), the zoom, and `? help`, with
 `…` before them while the pages on screen render. A narrow window drops the width, then the zoom,
 then `? help`. The
 name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
-at the end still differ), and a message (a page that failed, `fully zoomed in`, a page number
-being typed) sits just left of the right side, cutting the name shorter while it is there. Until
-the first key, the message is a reminder of the main keys.
+at the end still differ), and a message (a page that failed, `fully zoomed in`) sits just left of the
+right side, cutting the name shorter while it is there. Until the first key, the message is a
+reminder of the main keys.
+
+While you type a number, the status line says only the number and the keys that take it on this
+file: `7: g page · . per row` on a PDF; on a Markdown or HTML file the settings with numbers too, by
+name, `7: g page · . per row · + font · ] width · } margin`; in a list `7: Enter tile · . per row`.
+The name, where you are, the zoom and `? help` give it the room, and come back with the next key; a
+narrow window drops the last keys first.
 
 ### Copying a page
 

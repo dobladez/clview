@@ -218,6 +218,11 @@ a margin setting on `{` and `}`.
   depends on the margin asked, and a margin typed past what fits is laid out at the most at the font
   asked (`margin 12 (6)`). *Files:* `src/source/wordcraft.rs`, `tests/it/view_pager.rs`, the docs, the
   ADR. *Verify:* `cargo test -j 2 --bin clv wordcraft`, `cargo test -j 2 --test it the_margin_keys`.
+- [x] **The status line says the keys a number typed goes to** — the owner's request: while a number is
+  typed, the line is only the number and the keys that take it on this file, by name
+  (`7: g page · . per row · + font · ] width · } margin`; in a list `Enter tile`), cut to fit, the last
+  keys first. *Files:* `src/view/pager.rs`, `tests/it/view_pager.rs`, `docs/usage.md`, `CHANGELOG.md`.
+  *Verify:* `cargo test -j 2 --bin clv view::pager`, `cargo test -j 2 --test it a_number_typed`.
 
 ## Done
 
@@ -243,3 +248,5 @@ a margin setting on `{` and `}`.
   answer); "nothing at `auto`" was the room's.
 - 2026-11-09 — Revised: the margin yields to the font, the font's most whatever the margin asked
   (the owner's answer); a task added for it.
+- 2026-11-09 — A task added at the owner's request: the status line names the keys a number typed
+  goes to.

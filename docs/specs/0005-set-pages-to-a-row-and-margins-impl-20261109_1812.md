@@ -132,3 +132,21 @@ surprises, and what a later reader would want.
   new step ("12, laid out at 6 never happened": it said `margin 12` and `font 100% (70%)`), and
   `wordcraft::tests::margins_shorten_the_line_at_window_and_widen_the_page_at_a_width` (in 30 columns
   the margin was laid out at 12, the font lowered to 60%).
+
+## The status line says the keys a number typed goes to
+
+- **The owner's request**, since a number now feeds `,` `.` and the documents' keys as well as a page:
+  while digits are typed, `Nav::status` returns `Nav::typing`, the number and `Nav::takes_a_number`'s
+  keys, nothing else. They are `g page` (in a list `Enter tile`), `. per row`, then each declared
+  setting with numbers that what is shown has, and may change here (not a relayout setting in a list or
+  with `--pages`), by its up key and its own name, the one on the zoom keys first: so a document says
+  `+ font · ] width · } margin`. Cut to fit by dropping keys from the end, then the number cut
+  char-safely (`cut`), the line padded to the window and through `printable`. Typed digits now win over
+  a message too (a page that failed says so again after the next key).
+- **Seen failing first**, on the code before it: `pager::tests::a_number_typed_says_the_keys_that_take_it`,
+  the changed asserts in `the_status_line_fills_the_width_exactly`,
+  `a_lists_status_line_says_which_tile_of_how_many` and
+  `the_status_line_shows_the_filter_and_where_the_reader_is_among_the_matches`, and in
+  `tests/it/view_pager.rs` `a_number_typed_on_markdown_names_the_keys_that_take_it`,
+  `a_redraw_writes_only_the_rows_that_change` and `help_and_r_draw_every_row_again`; all said
+  `go to page 7`.

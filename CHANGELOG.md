@@ -46,6 +46,9 @@ works today. A version's section becomes the notes of its
 
 ### Changed
 
+- A number being typed fills the status line with the keys that take it on this file, `7: g page · .
+  per row`, and on a Markdown or HTML file `+ font · ] width · } margin` too; in a list `Enter tile`. It
+  said `go to page 7`, though `,` `.` and the documents' keys take the number as well.
 - Markdown and HTML side margins are 3 characters of code, from 2: a window 100 columns wide puts 94
   characters on a line, and a book of two pages needs 134 columns.
 - `--zoom` is now `--per-row auto|width|1-8`, since it sets a list's tiles to a row too. `--zoom` is

@@ -562,7 +562,7 @@ fn a_reply_cut_in_two_is_never_keys_and_esc_still_quits() {
         std::thread::sleep(Duration::from_millis(250));
         assert!(view.child.try_wait().unwrap().is_none(), "{first:?} then {rest:?} quit the pager");
     }
-    assert!(!view.text().contains("go to page"), "a reply typed a page number");
+    assert!(!view.text().contains(": g page"), "a reply typed a page number");
     // A key cut in two the same way is the key: Page Down.
     view.press("\x1b[6");
     std::thread::sleep(Duration::from_millis(250));
@@ -1276,7 +1276,7 @@ fn a_redraw_writes_only_the_rows_that_change() {
     let before = view.text().len();
     // A number being typed: the status line says so, and the page is as it was.
     view.press("2");
-    view.wait_until("the number said", |t| t[before..].contains("go to page 2"));
+    view.wait_until("the number said", |t| t[before..].contains(" 2: g page · . per row"));
     assert!(!has_cells(&view.text()[before..]), "{:?}", &view.text()[before..]);
     view.press("q");
     assert!(view.finish().success());
@@ -1302,7 +1302,7 @@ fn help_and_r_draw_every_row_again() {
     // Written again, and nothing changed since.
     view.press("2");
     let settled = view.text().len();
-    view.wait_until("the number said", |t| t[settled..].contains("go to page 2"));
+    view.wait_until("the number said", |t| t[settled..].contains(" 2: g page · . per row"));
     assert!(!view.text()[settled..].contains(TOP_ROW), "{:?}", &view.text()[settled..]);
     let before = view.text().len();
     view.press("r");
@@ -1841,6 +1841,24 @@ fn the_margin_keys_lay_the_document_out_again_and_stop_at_the_most_here() {
     view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
     view.press("}");
     view.wait_until("said", |t| bar(t).contains("open a document to reflow it"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// While a number is typed on Markdown, the status line says it and every key that takes it here, by
+/// name, and nothing else: not the name, not the place.
+#[cfg(feature = "word")]
+#[test]
+fn a_number_typed_on_markdown_names_the_keys_that_take_it() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("typed", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("7");
+    view.wait_until("the keys", |t| bar(last_draw(t)).contains(" 7: g page · . per row · + font · ] width · } margin "));
+    let line = bar(last_draw(&view.text()));
+    assert!(!line.contains("long.md") && !line.contains("page 1/") && !line.contains("? help"), "{line:?}");
     view.press("q");
     assert!(view.finish().success());
 }

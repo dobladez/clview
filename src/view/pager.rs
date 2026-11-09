@@ -1193,6 +1193,10 @@ impl Nav {
     /// always while it is typed, otherwise when there is no message.
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
         let width = usize::from(cols);
+        // A number being typed is all the line says: the number, and the keys that take it here.
+        if !self.typed.is_empty() {
+            return self.typing(width);
+        }
         let (place, widest) = self.place();
         let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
         let slot = if rendering { '…' } else { ' ' };
@@ -1208,11 +1212,10 @@ impl Nav {
         let shortest = rights.last().cloned().unwrap_or_default();
         let right = rights.iter().find(|r| chars(r) <= width).cloned().unwrap_or_else(|| shortest.chars().take(width).collect());
         let room = width.saturating_sub(chars(&right));
-        let said = match (&self.message, self.typed.is_empty()) {
-            (Some(message), _) => message.clone(),
-            (None, false) => format!("go to {} {}", self.unit(), self.typed),
+        let said = match &self.message {
+            Some(message) => message.clone(),
             // The keys leave the name room for its first characters at least.
-            (None, true) if self.hint => {
+            None if self.hint => {
                 let fits = |keys: &&&str| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
                 let keys = match (self.list, self.nested) {
                     (true, _) => &LIST_KEYS,
@@ -1226,7 +1229,7 @@ impl Nav {
                     None => hint,
                 }
             }
-            (None, true) => String::new(),
+            None => String::new(),
         };
         // A filter being typed is what the line says, with how to keep it or not when there is
         // room; one kept, when there is nothing else to say.
@@ -1247,6 +1250,49 @@ impl Nav {
         let gap = room.saturating_sub(1usize.saturating_add(chars(&name)).saturating_add(chars(&tail)));
         let left: String = format!(" {name}{}{tail}", " ".repeat(gap)).chars().chain(std::iter::repeat(' ')).take(room).collect();
         printable(&format!("{left}{right}"))
+    }
+
+    /// The status line while a number is typed, exactly `width` characters, none a control character:
+    /// the number and the keys that take it here ([`Nav::takes_a_number`]), as many of them as fit, the
+    /// first first; or as much of the number as fits.
+    fn typing(&self, width: usize) -> String {
+        let room = width.saturating_sub(1);
+        let keys = self.takes_a_number();
+        let mut fitted = None;
+        for n in (1..=keys.len()).rev() {
+            let line = format!("{}: {}", self.typed, keys.get(..n).unwrap_or_default().join(" · "));
+            if chars(&line) <= room {
+                fitted = Some(line);
+                break;
+            }
+        }
+        let line = fitted.unwrap_or_else(|| cut(&format!("{}: ", self.typed), room));
+        printable(&format!(" {line}").chars().chain(std::iter::repeat(' ')).take(width).collect::<String>())
+    }
+
+    /// The keys a number typed here goes to, as the status line names them: to a page (`g`), or in a
+    /// list a tile (`Enter`); to the pages to a row (`.`); and to each setting with numbers what is
+    /// shown has and lets change here (not one that lays out again, in a list or with `--pages`), by its
+    /// up key and its name, the one on the zoom keys first.
+    fn takes_a_number(&self) -> Vec<String> {
+        let first = if self.list { "Enter tile" } else { "g page" };
+        let mut keys = vec![first.to_owned(), ". per row".to_owned()];
+        let here = |setting: &&&Setting| {
+            setting.numbers.is_some() && self.has.contains(&setting.name) && !(setting.effect == Effect::Relayout && (self.list || self.picked))
+        };
+        let zoomed = self.settings.declared.iter().filter(here).filter(|setting| setting.keys == Keys::Zoom);
+        let rest = self.settings.declared.iter().filter(here).filter(|setting| setting.keys != Keys::Zoom);
+        for setting in zoomed.chain(rest) {
+            let up = match setting.keys {
+                Keys::Zoom => Some('+'),
+                Keys::Step(_, up) => Some(up),
+                Keys::Cycle(_) => None,
+            };
+            if let Some(up) = up {
+                keys.push(format!("{up} {}", setting.name));
+            }
+        }
+        keys
     }
 
     /// The widest a relayout setting's value is said on the status line, `…` included (`width 200…`), so
@@ -3479,7 +3525,7 @@ mod tests {
         press(&mut nav, &[Key::End]);
         assert!(nav.status("z.png", 100, false).ends_with("  10/10 · 3 per row · ? help "));
         press(&mut nav, &[Key::Char('4')]);
-        assert!(nav.status("z.png", 100, false).contains("  go to tile 4  "));
+        assert_eq!(nav.status("z.png", 100, false), format!("{:<100}", " 4: Enter tile · . per row"));
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
         assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
@@ -3613,7 +3659,37 @@ mod tests {
         assert!(two.status("report.pdf", 120, false).ends_with(" pages 3–4/12   · 2 per row · ? help "));
         let mut typing = nav;
         typing.key(Key::Char('7'));
-        assert!(typing.status("a.pdf", 80, false).contains("  go to page 7  "));
+        assert_eq!(typing.status("a.pdf", 80, false), format!("{:<80}", " 7: g page · . per row"));
+    }
+
+    /// While a number is typed, the status line is the number and the keys that take it here, and
+    /// nothing else: on a file's pages `g` and `.`; on a document, its settings with numbers too, by
+    /// their names, the font's on `+` first; in a list `Enter` and `.`; with `--pages`, no setting that
+    /// lays out again. Cut to fit, the last keys first, and as wide as the window whatever it is.
+    #[test]
+    fn a_number_typed_says_the_keys_that_take_it() {
+        let typed = |mut nav: Nav, digits: &str| {
+            for c in digits.chars() {
+                nav.key(Key::Char(c));
+            }
+            nav
+        };
+        let pdf = typed(reader(0, 12, 40, 40), "7");
+        assert_eq!(pdf.status("report.pdf", 60, true), format!("{:<60}", " 7: g page · . per row"), "the name, the place, the zoom gone");
+        let doc = typed(declaring_font(reader(0, 12, 40, 40), &["shade", "font", "width"], Some(170)), "72");
+        assert_eq!(doc.status("a.md", 80, false).trim_end(), " 72: g page · . per row · + font · ] width");
+        // Cut to fit: the last keys go first, then all but the number.
+        assert_eq!(doc.status("a.md", 30, false), format!("{:<30}", " 72: g page · . per row"));
+        assert_eq!(doc.status("a.md", 12, false), format!("{:<12}", " 72: g page"));
+        assert_eq!(doc.status("a.md", 5, false), " 72: ");
+        let picked = typed(Nav { picked: true, ..declaring_font(reader(0, 12, 40, 40), &["font", "width"], Some(170)) }, "3");
+        assert_eq!(picked.status("a.md", 80, false).trim_end(), " 3: g page · . per row");
+        let list = typed(declaring_font(Nav { list: true, ..reader(0, 12, 40, 40) }, &["font", "width"], Some(170)), "4");
+        assert_eq!(list.status("", 80, false).trim_end(), " 4: Enter tile · . per row");
+        let long = typed(doc, "9999999");
+        for cols in 0..=120 {
+            assert_eq!(chars(&long.status("a.md", cols, false)), usize::from(cols));
+        }
     }
 
     /// Where the reader is, the zoom and the key for the keys stay where they are whatever the
@@ -4000,7 +4076,7 @@ mod tests {
         press(&mut nav, &[Key::Enter]);
         assert!(squeezed(&nav.status("Beach.jpg", 100, false)).contains(" Beach.jpg /beach 1/8 · 1 of 3 · "));
         press(&mut nav, &[Key::Char('4')]);
-        assert!(nav.status("Beach.jpg", 100, false).contains("  go to tile 4  "));
+        assert_eq!(nav.status("Beach.jpg", 100, false).trim_end(), " 4: Enter tile · . per row");
         // Whatever is typed, the line is exactly as wide as the window.
         type_in(&mut nav, "/ünïcödé, 写真 and more");
         for cols in 0..=200 {
