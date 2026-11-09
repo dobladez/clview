@@ -177,3 +177,15 @@ surprises, and what a later reader would want.
   documents already went through `printed_page`; the pager and tmux tests run on pseudo-terminals
   without pixels.
 
+## Done
+
+- Every task committed with its gates green; each backend alone clippy-clean after task 3. The tests
+  named above were each seen failing before their fix. The docs say what shipped: `CHANGELOG.md`,
+  `docs/usage.md`, `docs/architecture.md`, ADR-0023 (ADR-0021 and ADR-0022 noting what it set aside).
+  README's Plans had no bullet for this. The manual checks in kitty and a private tmux were the
+  owner's, all passed.
+- **Discoveries, for the owner:** the flaky `a_job_runs_first_and_its_panic_is_caught` (`source::later`),
+  failing one run in five on `main` too, is a test to steady; the follow-ups ADR-0023 lists (a
+  configuration file for `BOOK_LEAST`, `PREVIEW` and the hold; the width and the font size kept
+  between runs; a font size for Word, RTF and OpenDocument) are its to hold.
+

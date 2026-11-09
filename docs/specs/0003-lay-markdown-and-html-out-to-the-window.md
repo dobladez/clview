@@ -1,6 +1,6 @@
 # Spec-0003: Markdown and HTML on pages the window's size, and a font size
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-07
 - **Related:** [Spec-0002](0002-reflow-markdown-and-html-to-a-width.md), `Done`, whose relayout this
   builds on and whose US Letter pages it replaces
@@ -306,7 +306,7 @@ Each task's commit passes the quality gates alone.
   task, each backend alone too (`cfg` attributes change).
 - [x] Tests added, each seen failing without the change: named, with what was reverted for each, in the
   [notes](0003-lay-markdown-and-html-out-to-the-window-impl-20261109_0025.md), under each task.
-- [ ] Manual, with `target/debug/clv` built last by a plain `cargo build`, always run by that path:
+- [x] Manual, with `target/debug/clv` built last by a plain `cargo build`, always run by that path:
   in kitty, a long Markdown file: one page a screen, two in a wide window, `+` and `-`, `[` and `]`
   keeping the height, `0]` and `0+`, the window resized; HTML through a pipe; `+` on a PDF; a
   list, its documents' portrait tiles and `+`; `--protocol ascii` on a Markdown file, legible; again
@@ -341,3 +341,4 @@ Each task's commit passes the quality gates alone.
   question added: where printing to a pipe lays out.
 - 2026-11-09 — Decided: printing to a pipe or a file keeps the tty's room; the preview's only with no
   tty. The open question closed.
+- 2026-11-09 — Done: the manual checks run in kitty and a private tmux by the owner, all passed.
