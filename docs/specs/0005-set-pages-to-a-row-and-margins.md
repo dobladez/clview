@@ -41,7 +41,9 @@ a margin setting on `{` and `}`.
 
 - **Keys:** `,` one more page (or tile) to a row, `.` one fewer. `N.` and `N,` set N, clamped;
   `0.` and `0,` go back to `auto`. They are viewer keys, in `VIEWER_KEYS`. At the ends they say
-  what `-` and `+` say now (`fully zoomed out`, `fully zoomed in`).
+  what `-` and `+` say now (`fully zoomed out`, `fully zoomed in`). "One more" and "one fewer"
+  count from what is drawn, as the zoom does now: from `auto` showing a book of two, `,` gives three
+  and `.` one.
 - **The most to a row** is the grid's, everywhere: `fit::max_per_row` of the pages area's columns,
   at most 8 (`MAX_PER_ROW`). One count, the one the grid draws, is used for the layout, the fit and
   the status line alike.
@@ -58,8 +60,11 @@ a margin setting on `{` and `}`.
     divided by N (checked arithmetic, at least a cell), and as tall as the room; the book rule is
     off. At `auto` it is as now: one page, or two where each half holds 60 characters of text.
   - `.` stops at one to a row, saying `1 per row, the least`; `--per-row width` there is 1.
-  - A column under 20 characters a line (`LEAST_COLUMNS`) is laid out at 20 and shown smaller, as a
-    small room is now; the font is not shrunk for it.
+  - `width` and `font` are bounded per column: `window`'s `named_at` and `width`'s `most` are a
+    column's line, and `font`'s most the largest at which a column holds 20 characters
+    (`LEAST_COLUMNS`). A font already past it is kept and laid out at it, as Spec-0003 does in a
+    small room; only where even 50% leaves a column under 20 characters is it laid out at 20 and
+    shown smaller, as a small room is now.
   - Laid out again **at once**, as a change of `width` or `font` is: the 500 ms hold stays for a
     change of the window's size alone.
 - **The last key wins:** a count to a row (`,`, `.`, `N.`) sets `width` back to `window`; a key that
@@ -85,8 +90,9 @@ a margin setting on `{` and `}`.
 
 - The documents' backend declares **`margin`**: `Numbers` 0 to 20, step 1, no unit; default 3,
   zero 3 (`0}`); `Keys::Step('{', '}')`; option `--margin N`; effect `Relayout`; message
-  `only Markdown and HTML have margins`. `SIDE_MARGIN` (2 today) goes; the default of 3 is a change
-  a reader sees, in `CHANGELOG.md`.
+  `only Markdown and HTML have margins`; `--margin` out of range is refused before any file opens
+  (`--margin: expected 0–20, got 30`), as `--width` and `--font` are. `SIDE_MARGIN` (2 today) goes;
+  the default of 3 is a change a reader sees, in `CHANGELOG.md`, and tests that assume 2 move to 3.
 - **In characters of the code face at the font size**, at each side, as the margins are now: N
   characters are N × F/100 cells on screen at font F. Top and bottom stay one row at the font size,
   as now.
@@ -109,7 +115,8 @@ a margin setting on `{` and `}`.
 
 **`--per-row`**
 
-- `--per-row auto|width|1-8` replaces `--zoom` in `--help`.
+- `--per-row auto|width|1-8` replaces `--zoom` in `--help`, its help line the one `--zoom` has now
+  (`auto: two side by side if they fit; width; or N pages to a row`), saying tiles in a list too.
 - `--zoom` is still taken, with the same values, through an alias (a new field on `OptionSpec`,
   hidden from `--help`); both given is an error. Given, it warns once, before anything else, through
   `printable`: `--zoom is now --per-row; --zoom will go in a later release`. To stderr when printing,
