@@ -1,6 +1,6 @@
 # Spec-0002: Reflow Markdown and HTML to a width in columns
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-07
 - **Related:** [Spec-0001](0001-settings-a-file-declares.md), `Done`, whose settings this builds on
   ([ADR-0021](../adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md));
@@ -246,7 +246,7 @@ task, not only by tests.
   what [Limits](../usage.md#limits) says a Markdown or HTML file costs at most (about 5 GB and 20
   seconds); otherwise the least is raised until they do. And the costliest of them in the pager,
   `]` pressed once it shows: the peak, old and new layouts held together, written in Limits.
-- [ ] Manual, with `target/debug/clv` built last by a plain `cargo build` (the gates leave it built
+- [x] Manual, with `target/debug/clv` built last by a plain `cargo build` (the gates leave it built
   with whatever features they built last), always run by that path: in kitty, `[`, `]` and `72]` on
   a long Markdown file; on HTML through a pipe (`cat page.html | target/debug/clv --pager
   /dev/stdin`); `]` on a PDF; in a list mixing them, `]` refused, and a Markdown file gone into after
@@ -272,3 +272,4 @@ task, not only by tests.
 - 2026-11-07 — Ready after a review: the width given to the fragment's import, so tables fit it;
   a copy under way stopped from the first task.
 - 2026-11-07 — Implementing ([notes](0002-reflow-markdown-and-html-to-a-width-impl-20261107_2307.md)).
+- 2026-11-08 — Done: the manual checks pass in kitty.
