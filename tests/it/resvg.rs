@@ -229,6 +229,13 @@ fn the_labels_a_browser_draws_are_told_by_one_rule() {
         (format!("<switch><g><switch>{fo}</switch></g>{fo}</switch>"), 1),
         (format!("<switch><rect width='1' height='1'/><g>{fo}</g></switch>"), 0),
         (format!("<defs><g id='l'>{fo}</g></defs><use href='#l'/>"), 1),
+        (format!("<defs><symbol id='l'>{fo}</symbol></defs><use href='#l'/>"), 1),
+        (format!("<defs><g id='l' display='none'>{fo}</g></defs><use href='#l'/>"), 0),
+        (format!("<defs><g id='l'>{fo}</g></defs><use href='#l' style='display:none'/>"), 0),
+        (format!("<defs><switch id='l'><rect width='1' height='1'/>{fo}</switch></defs><use href='#l'/>"), 0),
+        (format!("<defs><g id='l'>{fo}</g><g id='m'><use href='#l'/></g></defs><use href='#m'/>"), 1),
+        (format!("<defs><g id='l'>{fo}<use href='#l'/></g></defs><use href='#l'/>"), 1),
+        (format!("<g display='none'><use href='#l'/></g><defs><g id='l'>{fo}</g></defs>"), 0),
         (label("", &format!("<svg xmlns='http://www.w3.org/2000/svg'>{fo}</svg>")), 1),
     ];
     for (body, expected) in cases {
@@ -250,6 +257,33 @@ fn a_fallback_is_drawn_only_where_labels_are_not() {
         let expected = if cfg!(feature = "svg-html") { [0, 0, 0, 0] } else { [255, 0, 0, 255] };
         assert_eq!(picture.get_pixel(10, 10).0, expected, "{first}");
     }
+}
+
+/// A `<switch>`'s child taken asking for `requiredFeatures` is drawn, as a browser draws it, where
+/// labels are; where they aren't, usvg takes the fallback after it, as it did.
+#[test]
+fn a_switchs_child_taken_is_drawn_whatever_features_it_asks_for() {
+    let taken = "<g requiredFeatures='http://www.w3.org/TR/SVG11/feature#Extensibility'><rect width='40' height='20' fill='blue'/></g>";
+    let path = written("svg-features", "features.svg", svg(40, 20, &format!("<switch>{taken}<rect width='40' height='20' fill='red'/></switch>")));
+    let out = view(&path, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let picture = image::load_from_memory(&images(&out.stdout)[0].png).unwrap().into_rgba8();
+    let expected = if cfg!(feature = "svg-html") { [0, 0, 255, 255] } else { [255, 0, 0, 255] };
+    assert_eq!(picture.get_pixel(10, 10).0, expected);
+}
+
+/// A fallback an entity holds is left in the drawing, as is the entity: cutting it would cut the
+/// entity's declaration, and every element it makes elsewhere.
+#[test]
+fn a_fallback_from_an_entity_is_left_with_what_else_the_entity_makes() {
+    let entity = "<!DOCTYPE svg [<!ENTITY box \"<rect x='20' width='20' height='20' fill='blue'/>\">]>";
+    let body = format!("<switch>{}&box;</switch><g transform='translate(-20 0)'>&box;</g>", label("", "a"));
+    let path = written("svg-entity-fallback", "entity.svg", format!("{entity}{}", svg(40, 20, &body)));
+    let out = view(&path, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let picture = image::load_from_memory(&images(&out.stdout)[0].png).unwrap().into_rgba8();
+    // The rect the entity makes outside the switch, moved to the left half, is drawn.
+    assert_eq!(picture.get_pixel(10, 10).0, [0, 0, 255, 255]);
 }
 
 /// The fallbacks are taken out of a drawing already bounded: entities a fallback holds, past what
@@ -285,6 +319,8 @@ fn labels_past_their_limits_are_left_out_and_said() {
     said(&label("", &"<i/>".repeat(100_000)), "past 100000 elements", 1);
     let title = "t".repeat(1000);
     said(&label("", &format!("<i title='{title}'/>").repeat(9000)), "past 8 MiB of markup", 1);
+    // Quotes are six bytes each escaped: 1.5 MiB of them is 9 MiB.
+    said(&label("", &format!("<i title='{}'/>", "\"".repeat(3 << 19))), "past 8 MiB of markup", 1);
 }
 
 /// The libraries that parse and render SVG.

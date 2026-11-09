@@ -560,36 +560,41 @@ fn svg_element(node: roxmltree::Node, name: &str) -> bool {
     node.has_tag_name((SVG_NS, name))
 }
 
-/// The `<foreignObject>`s of `doc` a browser draws, in document order, and the ids its drawn
-/// `<use>`s refer to, found in one walk from its root: none in a definition (`defs`, `symbol`,
-/// …) or in another label; none that is, or whose ancestor is, hidden by its attributes or its
-/// `style`; and in each `<switch>`, only in the child it takes.
-fn drawn<'a, 'input>(doc: &'a roxmltree::Document<'input>) -> (Vec<roxmltree::Node<'a, 'input>>, Vec<&'a str>) {
+/// The `<foreignObject>`s of `doc` a browser draws, in document order, and its drawn `<use>`s,
+/// found in one walk from its root by [`shown_parts`]' rule: none in a definition (`defs`,
+/// `symbol`, …) or in another label; none that is, or whose ancestor is, hidden by its attributes
+/// or its `style`; and in each `<switch>`, only in the child it takes.
+fn drawn<'a, 'input>(doc: &'a roxmltree::Document<'input>) -> (Vec<roxmltree::Node<'a, 'input>>, Vec<roxmltree::Node<'a, 'input>>) {
     let (mut labels, mut uses, mut walk) = (Vec::new(), Vec::new(), vec![doc.root_element()]);
     while let Some(node) = walk.pop() {
-        if hidden(node) || UNSHOWN.iter().any(|name| svg_element(node, name)) {
+        if hidden(node) {
             continue;
         }
         if svg_element(node, "foreignObject") {
             labels.push(node);
             continue;
         }
-        if svg_element(node, "use")
-            && let Some(id) = node.attribute("href").or_else(|| node.attribute((XLINK_NS, "href"))).and_then(|h| h.trim().strip_prefix('#'))
-        {
-            uses.push(id);
+        if svg_element(node, "use") {
+            uses.push(node);
+            continue;
         }
         let next = walk.len();
-        match svg_element(node, "switch") {
-            true => walk.extend(taken(node)),
-            false => walk.extend(node.children().filter(roxmltree::Node::is_element)),
-        }
+        walk.extend(shown_parts(node));
         // Walked in document order.
         if let Some(children) = walk.get_mut(next..) {
             children.reverse();
         }
     }
     (labels, uses)
+}
+
+/// What a shown element `node` (neither a label nor a `<use>`) shows of its children: a
+/// `<switch>` the child it takes, any other its element children; none of them a definition.
+fn shown_parts<'a, 'input>(node: roxmltree::Node<'a, 'input>) -> impl Iterator<Item = roxmltree::Node<'a, 'input>> {
+    let switch = svg_element(node, "switch");
+    let taken = if switch { taken(node) } else { None };
+    let children = node.children().filter(move |_| !switch).filter(roxmltree::Node::is_element);
+    taken.into_iter().chain(children).filter(|n| !UNSHOWN.iter().any(|name| svg_element(*n, name)))
 }
 
 /// Whether `node` is hidden by its own attributes or `style`: `display: none`, `visibility:
@@ -622,28 +627,57 @@ fn taken<'a, 'input>(switch: roxmltree::Node<'a, 'input>) -> Option<roxmltree::N
 }
 
 /// How many labels of `doc` a browser would draw: those [`drawn`] finds, and those its `<use>`s
-/// repeat.
+/// show.
 fn label_count(doc: &roxmltree::Document) -> usize {
     let (labels, uses) = drawn(doc);
     labels.len().saturating_add(used_labels(doc, &uses))
 }
 
-/// The `<foreignObject>`s in what the `<use>`s of `doc` that refer to `uses` repeat: usvg copies
-/// the `<use>`, not the label, so they are left out.
-fn used_labels(doc: &roxmltree::Document, uses: &[&str]) -> usize {
+/// The labels the `<use>`s `uses` of `doc` show, each through what it refers to, by the rule
+/// [`drawn`] follows, nested `<use>`s too: usvg copies a `<use>`, not a label, so they are left
+/// out. What each element shows is counted once and remembered, however many uses (or targets
+/// holding one another) reach it, so counting visits each element at most twice; a `<use>` that
+/// refers back to one being counted shows nothing more.
+fn used_labels(doc: &roxmltree::Document, uses: &[roxmltree::Node]) -> usize {
     if uses.is_empty() {
         return 0;
     }
     let ids: HashMap<&str, roxmltree::Node> = doc.descendants().filter_map(|n| Some((n.attribute("id")?, n))).collect();
-    // Each target counted once, however many uses repeat it.
-    let mut counted: HashMap<&str, usize> = HashMap::new();
-    let mut sum = 0usize;
-    for id in uses {
-        let Some(target) = ids.get(id) else { continue };
-        let n = *counted.entry(id).or_insert_with(|| target.descendants().filter(|n| svg_element(*n, "foreignObject")).count());
-        sum = sum.saturating_add(n);
+    // What each element shows, once counted; and those being counted.
+    let mut shown: HashMap<roxmltree::NodeId, usize> = HashMap::new();
+    let mut counting: HashSet<roxmltree::NodeId> = HashSet::new();
+    // What a node shows through: a `<use>` its target (a `<symbol>` too, which it shows, but no
+    // other definition), any other its [`shown_parts`].
+    let parts = |node: roxmltree::Node<'_, '_>| -> Vec<roxmltree::NodeId> {
+        if hidden(node) || svg_element(node, "foreignObject") {
+            return Vec::new();
+        }
+        if svg_element(node, "use") {
+            let href = node.attribute("href").or_else(|| node.attribute((XLINK_NS, "href"))).and_then(|h| h.trim().strip_prefix('#'));
+            let target = href.and_then(|id| ids.get(id)).filter(|t| svg_element(**t, "symbol") || !UNSHOWN.iter().any(|name| svg_element(**t, name)));
+            return target.map(roxmltree::Node::id).into_iter().collect();
+        }
+        shown_parts(node).map(|n| n.id()).collect()
+    };
+    let mut total = 0usize;
+    for start in uses {
+        // Depth first, each node left once its parts are counted.
+        let mut walk = vec![(start.id(), false)];
+        while let Some((id, counted)) = walk.pop() {
+            let Some(node) = doc.get_node(id) else { continue };
+            if counted {
+                let own = usize::from(svg_element(node, "foreignObject") && !hidden(node));
+                let sum = parts(node).iter().filter_map(|p| shown.get(p)).fold(own, |sum, n| sum.saturating_add(*n));
+                counting.remove(&id);
+                shown.insert(id, sum);
+            } else if !shown.contains_key(&id) && counting.insert(id) {
+                walk.push((id, true));
+                walk.extend(parts(node).into_iter().filter(|p| !shown.contains_key(p) && !counting.contains(p)).map(|p| (p, false)));
+            }
+        }
+        total = total.saturating_add(shown.get(&start.id()).copied().unwrap_or(0));
     }
-    sum
+    total
 }
 
 /// A drawing's labels to draw: its stylesheets, and each label written out.
@@ -890,7 +924,9 @@ fn css_string(s: &str) -> String {
 #[cfg(feature = "svg-html")]
 fn presentation(node: roxmltree::Node) -> String {
     let mut out = String::new();
-    if let Some(families) = node.attribute("font-family").and_then(|v| svgtypes::parse_font_families(v).ok()) {
+    // A list longer than this is no font's: left out, rather than written out at its length.
+    let families = node.attribute("font-family").filter(|v| v.len() <= 4096).and_then(|v| svgtypes::parse_font_families(v).ok());
+    if let Some(families) = families {
         let names: Vec<String> = families
             .iter()
             .map(|f| match f {
@@ -927,24 +963,64 @@ fn presentation(node: roxmltree::Node) -> String {
 }
 
 /// The copy of the element `node` that opens around a label, named `name`, its `style` before
-/// `extra`.
+/// `extra`, onto `out`.
 #[cfg(feature = "svg-html")]
-fn copy_of(node: roxmltree::Node, name: &str, extra: &str, out: &mut String) {
-    out.push('<');
-    out.push_str(name);
+fn copy_of(node: roxmltree::Node, name: &str, extra: &str, out: &mut Markup) -> Result<(), Past> {
+    out.raw("<")?;
+    out.raw(name)?;
     for attribute in ["id", "class"] {
         if let Some(value) = node.attribute(attribute) {
-            out.push_str(&format!(" {attribute}=\""));
-            escaped(value, out);
-            out.push('"');
+            out.raw(" ")?;
+            out.raw(attribute)?;
+            out.raw("=\"")?;
+            out.escaped(value)?;
+            out.raw("\"")?;
         }
     }
-    out.push_str(" style=\"");
-    escaped(&presentation(node), out);
-    escaped(node.attribute("style").unwrap_or_default(), out);
-    out.push(';');
-    out.push_str(extra);
-    out.push_str("\">");
+    out.raw(" style=\"")?;
+    out.escaped(&presentation(node))?;
+    out.escaped(node.attribute("style").unwrap_or_default())?;
+    out.raw(";")?;
+    out.raw(extra)?;
+    out.raw("\">")
+}
+
+/// A label's markup as it is written out, in what is left of the labels' markup budget: what would
+/// take it past is refused before it is written, so the markup never holds more than the budget.
+#[cfg(feature = "svg-html")]
+struct Markup {
+    out: String,
+    room: usize,
+}
+
+#[cfg(feature = "svg-html")]
+impl Markup {
+    /// Whether `more` bytes still fit.
+    fn fits(&self, more: usize) -> Result<(), Past> {
+        match self.out.len().saturating_add(more) > self.room {
+            true => Err(Past::Budget(format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20))),
+            false => Ok(()),
+        }
+    }
+
+    fn raw(&mut self, s: &str) -> Result<(), Past> {
+        self.fits(s.len())?;
+        self.out.push_str(s);
+        Ok(())
+    }
+
+    /// `s`, escaped as [`escaped`] does, its length known before it is written.
+    fn escaped(&mut self, s: &str) -> Result<(), Past> {
+        let length = s.bytes().map(|b| match b {
+            b'&' => 5,
+            b'<' | b'>' => 4,
+            b'"' => 6,
+            _ => 1,
+        });
+        self.fits(length.fold(0usize, usize::saturating_add))?;
+        escaped(s, &mut self.out);
+        Ok(())
+    }
 }
 
 /// The label `fo`, `width` × `height`, written out, within what is left of `spent`'s budgets, and
@@ -957,42 +1033,38 @@ fn written_label(fo: roxmltree::Node, width: f32, height: f32, spent: &mut Spent
     chain.reverse();
     let mut label =
         Spent { markup: spent.markup, text: spent.text, elements: spent.elements.saturating_add(u64::try_from(chain.len()).unwrap_or(u64::MAX)) };
-    let mut out = String::new();
+    affordable(&label)?;
+    let mut out = Markup { out: String::new(), room: MAX_LABEL_MARKUP.saturating_sub(spent.markup) };
     // An `<svg>`'s copy is a `div`: an element named `svg` would be taken for a drawing.
     fn name<'a>(node: &roxmltree::Node<'a, '_>) -> &'a str {
         if svg_element(*node, "svg") { "div" } else { node.tag_name().name() }
     }
     for ancestor in &chain {
-        copy_of(*ancestor, name(ancestor), "display:contents !important", &mut out);
-        // An ancestor's style may be as long as the drawing: one past the budget ends it.
-        affordable(&label, &out)?;
+        copy_of(*ancestor, name(ancestor), "display:contents !important", &mut out)?;
     }
     let overflow = if visible { "visible" } else { "hidden" };
     let box_style = format!(
         "display:block !important;position:absolute !important;left:0 !important;top:0 !important;width:{width}px !important;\
          height:{height}px !important;margin:0 !important;box-sizing:border-box !important;overflow:{overflow} !important"
     );
-    copy_of(fo, "foreignObject", &box_style, &mut out);
+    copy_of(fo, "foreignObject", &box_style, &mut out)?;
     for child in fo.children() {
         written(child, Some(XHTML_NS), 1, &mut label, &mut out)?;
     }
-    out.push_str("</foreignObject>");
+    out.raw("</foreignObject>")?;
     for ancestor in chain.iter().rev() {
-        out.push_str("</");
-        out.push_str(name(ancestor));
-        out.push('>');
+        out.raw("</")?;
+        out.raw(name(ancestor))?;
+        out.raw(">")?;
     }
-    affordable(&label, &out)?;
-    *spent = Spent { markup: spent.markup.saturating_add(out.len()), ..label };
-    Ok((out, visible))
+    *spent = Spent { markup: spent.markup.saturating_add(out.out.len()), ..label };
+    Ok((out.out, visible))
 }
 
-/// Whether `spent`, and `out` written so far, are within the labels' budgets.
+/// Whether the text and the elements `spent` counts are within the labels' budgets; their markup
+/// [`Markup`] keeps within its own.
 #[cfg(feature = "svg-html")]
-fn affordable(spent: &Spent, out: &str) -> Result<(), Past> {
-    if spent.markup.saturating_add(out.len()) > MAX_LABEL_MARKUP {
-        return Err(Past::Budget(format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20)));
-    }
+fn affordable(spent: &Spent) -> Result<(), Past> {
     if spent.text > MAX_LABEL_TEXT {
         return Err(Past::Budget(format!("past {} MiB of text", MAX_LABEL_TEXT >> 20)));
     }
@@ -1008,13 +1080,12 @@ fn affordable(spent: &Spent, out: &str) -> Result<(), Past> {
 /// namespace; text, its entities expanded; each escaped. Comments and processing instructions
 /// are left out.
 #[cfg(feature = "svg-html")]
-fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mut Spent, out: &mut String) -> Result<(), Past> {
+fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mut Spent, out: &mut Markup) -> Result<(), Past> {
     if node.is_text() {
         let text = node.text().unwrap_or_default();
         spent.text = spent.text.saturating_add(text.len());
-        affordable(spent, out)?;
-        escaped(text, out);
-        return affordable(spent, out);
+        affordable(spent)?;
+        return out.escaped(text);
     }
     if !node.is_element() {
         return Ok(());
@@ -1023,43 +1094,52 @@ fn written(node: roxmltree::Node, parent: Option<&str>, depth: usize, spent: &mu
         return Err(Past::Nesting);
     }
     spent.elements = spent.elements.saturating_add(1);
+    affordable(spent)?;
     let (name, namespace) = (node.tag_name().name(), node.tag_name().namespace());
-    out.push('<');
-    out.push_str(name);
+    out.raw("<")?;
+    out.raw(name)?;
     if namespace != parent {
-        out.push_str(" xmlns=\"");
-        escaped(namespace.unwrap_or_default(), out);
-        out.push('"');
+        out.raw(" xmlns=\"")?;
+        out.escaped(namespace.unwrap_or_default())?;
+        out.raw("\"")?;
     }
     for attribute in node.attributes().filter(|a| a.namespace().is_none()) {
-        out.push(' ');
-        out.push_str(attribute.name());
-        out.push_str("=\"");
-        escaped(attribute.value(), out);
-        out.push('"');
+        out.raw(" ")?;
+        out.raw(attribute.name())?;
+        out.raw("=\"")?;
+        out.escaped(attribute.value())?;
+        out.raw("\"")?;
     }
-    out.push('>');
-    affordable(spent, out)?;
+    out.raw(">")?;
     for child in node.children() {
         written(child, namespace, depth.saturating_add(1), spent, out)?;
     }
-    out.push_str("</");
-    out.push_str(name);
-    out.push('>');
-    affordable(spent, out)
+    out.raw("</")?;
+    out.raw(name)?;
+    out.raw(">")
 }
 
 /// The text of `doc` without what follows the child a browser takes in each `<switch>` (draw.io's
 /// "[Not supported by viewer]" after its label, and its "Text is not SVG - cannot display" after
-/// an empty `requiredFeatures` group), or `None` when there is none: usvg would draw them.
+/// an empty `requiredFeatures` group), or `None` when there is none: usvg would draw them. The
+/// child taken loses its `requiredFeatures`, which usvg would refuse it for. A `<switch>` whose
+/// child taken or fallback comes from an entity keeps its fallbacks: its text is the entity's
+/// declaration, which other elements may come from too.
 #[cfg(feature = "svg-html")]
 fn without_fallbacks(doc: &roxmltree::Document, text: &str) -> Option<String> {
+    let body = doc.root_element().range();
+    let in_body = |r: &std::ops::Range<usize>| body.start <= r.start && r.end <= body.end;
     let mut cut: Vec<std::ops::Range<usize>> = Vec::new();
     for switch in doc.descendants().filter(|n| svg_element(*n, "switch")) {
-        if let Some(child) = taken(switch) {
-            // `next_siblings` starts at the node itself.
-            cut.extend(child.next_siblings().skip(1).filter(roxmltree::Node::is_element).map(|n| n.range()));
+        let Some(child) = taken(switch) else { continue };
+        // `next_siblings` starts at the node itself.
+        let fallbacks: Vec<std::ops::Range<usize>> = child.next_siblings().skip(1).filter(roxmltree::Node::is_element).map(|n| n.range()).collect();
+        let features = child.attribute_node("requiredFeatures").map(|a| a.range());
+        let ranges: Vec<std::ops::Range<usize>> = fallbacks.into_iter().chain(features).collect();
+        if !in_body(&child.range()) || !ranges.iter().all(|r| in_body(r) && r.start < r.end) {
+            continue;
         }
+        cut.extend(ranges);
     }
     if cut.is_empty() {
         return None;
@@ -1991,6 +2071,43 @@ mod tests {
         let warnings = guarded_parse(text.as_bytes()).unwrap().warnings;
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
         assert_eq!(warnings, ["500000 HTML labels (<foreignObject>) were not drawn"]);
+    }
+
+    /// The labels `<use>`s show are counted once an element, however its targets nest: 4,000
+    /// targets each holding the next inside a `defs`, with 100 elements beside it, each used, were
+    /// 800 million visits counted afresh for each target.
+    #[test]
+    fn labels_through_uses_are_counted_once_an_element() {
+        let filler = "<rect/>".repeat(100);
+        let (mut nested, mut used) = (String::from("<foreignObject width='1' height='1'/>"), String::new());
+        for i in (0..4000).rev() {
+            nested = format!("<g id='t{i}'><defs>{filler}{nested}</defs></g>");
+            used.push_str(&format!("<use href='#t{i}'/>"));
+        }
+        let text = svg(10, 10, &format!("<defs>{nested}</defs>{used}"));
+        // Counted before usvg parses it (which then refuses it, copying every use).
+        let doc = xml(&text).unwrap();
+        assert!(Scan::of(&doc).is_ok());
+        let started = std::time::Instant::now();
+        let counted = label_count(&doc);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
+        // Each target shows nothing: what it holds is in a `defs`.
+        assert_eq!(counted, 0);
+    }
+
+    /// A label's markup is refused before it is written past its budget: an attribute escaping to
+    /// more than is left is never appended.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn markup_past_its_budget_is_refused_before_it_is_written() {
+        let mut out = Markup { out: String::from("<i"), room: 10 };
+        assert!(out.escaped(r#"a"b"#).is_ok());
+        assert_eq!(out.out, "<ia&quot;b");
+        assert!(out.escaped("\"").is_err() && out.raw("xy").is_err());
+        assert_eq!((out.out.as_str(), out.out.len()), ("<ia&quot;b", 10));
+        let mut out = Markup { out: String::new(), room: MAX_LABEL_MARKUP };
+        assert!(out.escaped(&"\"".repeat((MAX_LABEL_MARKUP / 6) + 1)).is_err());
+        assert_eq!(out.out.capacity(), 0);
     }
 
     /// The labels found in `text`, placed on the drawing.

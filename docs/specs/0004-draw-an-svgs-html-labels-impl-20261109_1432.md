@@ -99,3 +99,28 @@ surprises, and what a later reader would want.
   rule tries with the document's wrappers, where the first one's 37,401 short rules passed 50
   million at element 1,337. `rules 10000 5000` was over by a little too: now `rules 9900 5000`.
 - **Every row of the ADR was measured again** with the tool as it now is.
+
+## Codex's review of task 2
+
+- **Labels through `<use>`s** are counted by the rule `drawn` follows (`shown_parts`, shared), in
+  one pass that remembers what each element shows: nested uses followed, a use referring back to
+  one being counted showing nothing more. The first version walked every target's descendants,
+  `defs` included, afresh: 4,000 nested targets took 2.9 s in a debug test, now 0.3 s with the
+  parse. A cost bound alone couldn't tell the two apart below that size: roxmltree walks
+  descendants as a run of its node array, 100 million in 0.4 s.
+- **A fallback an entity makes** is kept, with its `<switch>`'s other cuts: its range is in the
+  entity's declaration, and cutting it would cut every element the entity makes. A known
+  difference, for usage (task 4). Pruning the tree and writing it out again was the other way;
+  refusing the cut is simpler and as sound.
+- **The child taken loses its `requiredFeatures`** (its attribute's range cut with the
+  fallbacks), so usvg draws it: draw.io's `<g requiredFeatures=…>` with shapes in it.
+- **Markup** is written through `Markup`, which knows what an escaped string comes to before it
+  appends it; `affordable` keeps to the text and the elements. A `font-family` longer than 4 KiB
+  is left out rather than quoted at its length.
+- **Tests, each seen failing with its fix reverted:** `labels_through_uses_are_counted_once_an_element`
+  (the first version's per-target descendants: 2.9 s against a bound of 1); the rule's new cases
+  in `the_labels_a_browser_draws_are_told_by_one_rule` (the same revert: a hidden target, a
+  branch not taken, a nested use, a cycle, a hidden use, a use in a hidden group);
+  `a_switchs_child_taken_is_drawn_whatever_features_it_asks_for` (the attribute not cut);
+  `a_fallback_from_an_entity_is_left_with_what_else_the_entity_makes` (the body check taken
+  out); `markup_past_its_budget_is_refused_before_it_is_written` (escaped, then checked).

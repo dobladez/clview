@@ -136,7 +136,8 @@ hostile drawing, what it cost, and how to measure it again.
 
 - Usage's SVG drawings, its Limits and the known differences above, and Blitz's found so far:
   inline content straight in a `display: table` element isn't drawn (5 of a Mermaid flowchart's
-  24 labels blank). Architecture's backends table and How each opens. `CONTRIBUTING.md`'s library
+  24 labels blank). And clv's own: a `<switch>` whose child taken or fallback an entity makes
+  keeps its fallback, drawn as usvg draws it. Architecture's backends table and How each opens. `CONTRIBUTING.md`'s library
   rule, its count of features and its gates. `CHANGELOG.md`. An ADR,
   [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) (the next free number), why Blitz and how its cost is bounded, with
   what reproduces its evidence.
@@ -311,3 +312,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   all labels left out (ADR-0024: counting alone bounds memory, not time); a style resolved twice
   for the pictures it asks for; the styles fixture of fewer, larger rules, within 50 million;
   `stylo` a direct dependency from task 3, approved by the owner.
+- 2026-11-09 — Codex's review of task 2: labels through `<use>`s counted by the one rule, nested
+  uses too, in one pass; a fallback an entity makes kept (a known difference); the child taken
+  loses its `requiredFeatures`; markup refused before it is written past its budget.
