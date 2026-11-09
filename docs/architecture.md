@@ -303,8 +303,11 @@ change in the terminal, which changes it by more and the columns with it, does.
   `fit::max_per_row` of the room, unless `--pages` picks the pages or a `--width` of a number disagrees,
   which wins with a warning once the file is known to reflow; a list's preview room has none. The
   pager keeps its `room` at `auto` and adds the reader's count where it lays out and asks bounds
-  (`Pager::room_for`, from `Nav::columns`: the count drawn, on a document that `Nav::reflows`), so a
-  count is laid out for at once, while `Hold` still waits for a change of size. A count resets the
+  (`Pager::room_for`, from `Nav::columns_in`: the count asked, on a document that `Nav::reflows`, as
+  far as that room takes it, `fit::max_per_row` of its columns), so a count is laid out for at once,
+  while `Hold` still waits for a change of size: a window that changes how many to a row it takes
+  changes the count laid out in only with the room, once it has held, and in the new room. A level
+  starts at its zoom's count (`Nav::new`), so a relayout's level is bounded in it before its first draw. A count resets the
   settings that say how wide a page is (`Setting::sets_width`, the documents' `width`) to their
   default (`Nav::width_gives_way`); a key of one sets the count back to `auto` and returns
   `Step::Again`, which the pager presses again after `refresh_bounds`, so it steps from the bounds at

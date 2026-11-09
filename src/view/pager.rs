@@ -640,7 +640,9 @@ impl Nav {
             nested: false,
             top: 0,
             zoom,
-            per_row: 1,
+            // Until the first draw says how many it drew: as many as asked, so that a level made at a
+            // count (a relayout's) is laid out and bounded in it from the start.
+            per_row: if let Zoom::PerRow(n) = zoom { n.max(1) } else { 1 },
             grid_rows: 1,
             most_per_row: fit::MAX_PER_ROW,
             visible: 1,
@@ -964,15 +966,23 @@ impl Nav {
             && self.settings.declared.iter().any(|setting| setting.effect == Effect::Relayout && self.has.contains(&setting.name))
     }
 
-    /// How many pages to a row a document laid out for its room is laid out in ([`Room::per_row`]): the
-    /// count the grid draws, as asked; `None` at `auto`, or for anything else.
+    /// How many pages to a row a document laid out for its room is asked to be laid out in: the count
+    /// asked; `None` at `auto`, or for anything else.
     fn columns(&self) -> Option<u16> {
         match self.zoom {
             _ if !self.reflows() => None,
             Zoom::Auto => None,
             Zoom::Width => Some(1),
-            Zoom::PerRow(_) => Some(self.per_row.max(1)),
+            Zoom::PerRow(n) => Some(n.max(1)),
         }
+    }
+
+    /// [`Nav::columns`] in `room`, the room the document is laid out for ([`Room::per_row`]): as many as it
+    /// takes ([`fit::max_per_row`]), the count the grid draws once the window holds that room. Not the
+    /// last draw's: a window that changes size changes the count laid out in as it changes the room, once
+    /// it has held ([`Pager::watch_room`]), not at once and in the old room.
+    fn columns_in(&self, room: &Room) -> Option<u16> {
+        self.columns().map(|n| n.clamp(1, fit::max_per_row(room.cols)))
     }
 
     /// A count to a row was set, on a document laid out in columns: the settings that say how wide a
@@ -1454,7 +1464,7 @@ impl Level {
         if nav.reflows() && nav.zoom == Zoom::Width {
             nav.zoom_to(Some(Zoom::PerRow(1)), "");
         }
-        let room = Room { per_row: nav.columns(), ..room };
+        let room = Room { per_row: nav.columns_in(&room), ..room };
         nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
         nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
         Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
@@ -1976,9 +1986,9 @@ impl Pager<'_> {
     }
 
     /// The room the document on screen is laid out for: the window's ([`Pager::room`]), in as many
-    /// columns as the reader asked for ([`Nav::columns`]).
+    /// columns as the reader asked for, as far as that room takes them ([`Nav::columns_in`]).
     fn room_for(&self) -> Room {
-        Room { per_row: self.level.nav.columns(), ..self.room }
+        Room { per_row: self.level.nav.columns_in(&self.room), ..self.room }
     }
 
     /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
@@ -2690,6 +2700,12 @@ mod tests {
         nav.key(Key::Char('0'));
         assert_eq!(nav.key(Key::Char(']')), Step::Continue);
         assert_eq!((nav.columns(), width(&nav).0), (Some(3), Some(Value::Named("window"))));
+        // Before any draw, a level made at a count (a relayout's, or the first) is laid out in that many.
+        let fresh = declaring_both(Nav::new((0..20).collect(), 20, Zoom::PerRow(3)), &["width"]);
+        assert_eq!((fresh.per_row, fresh.columns()), (3, Some(3)));
+        // The room says how many it takes: a window that takes two lays out two, whatever was drawn.
+        let room = Room { cols: 26, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
+        assert_eq!((fresh.columns_in(&room), fresh.columns_in(&Room { cols: 100, ..room })), (Some(2), Some(3)));
         // A layout that failed puts the count back to what the document is laid out in.
         nav.put_back_columns(None);
         assert_eq!((nav.zoom, nav.columns()), (Zoom::Auto, None));

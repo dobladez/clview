@@ -1623,8 +1623,9 @@ mod tests {
     /// The side margins are characters of the code face at the font size, at each side: at `window` they
     /// come out of the line, and count against a book's 60 characters a half; at a width the line keeps
     /// its length and the page grows by them, never past the room. The bounds go in order: the font's
-    /// most within the margin asked, then the margin's most at the font laid out at; a margin past its
-    /// most is laid out at it, and where even none leaves 20 characters, at one at most.
+    /// most whatever the margin, then the margin's most at the font laid out at, so the margin yields to
+    /// the font; a margin past its most is laid out at it, and where even none leaves 20 characters, at
+    /// one at most.
     #[test]
     fn margins_shorten_the_line_at_window_and_widen_the_page_at_a_width() {
         let small = room(80, 23, 10.0, 20.0);

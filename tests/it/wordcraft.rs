@@ -222,6 +222,13 @@ fn varied(count: usize) -> String {
     (1..=count).map(|n| format!("Paragraph {n}:{}\n\n", " words of it".repeat(n % 40))).collect()
 }
 
+/// How far in from the left the ink on a light `page` starts, in pixels: its left margin.
+fn ink_left(page: &[u8]) -> f32 {
+    let page = ::image::load_from_memory(page).unwrap().to_rgb8();
+    let inked = page.enumerate_pixels().filter(|(_, _, pixel)| pixel.0.iter().all(|c| *c < 128)).map(|(x, _, _)| x);
+    inked.min().unwrap_or(u32::MAX) as f32
+}
+
 /// [`printed_page`] at the defaults: 100%, margins of 3.
 fn default_page(width: Option<f32>) -> Page {
     printed_page(width, 100.0, 3.0)
@@ -707,10 +714,18 @@ fn the_margin_shortens_the_line_or_widens_the_page() {
         let (three, ten) = (drawn(&path, &[]), drawn(&path, &["--margin", "10"]));
         assert!(shaped(&three, window.w, window.h) && shaped(&ten, at_ten.w, at_ten.h), "{name}: {three:?} {ten:?}");
         assert_eq!(drawn(&path, &["--margin", "3"]), three, "{name}: 3 is the default");
-        // One to a row, where no book can change the page: the same page, shorter lines, more pages.
-        let (one, one_ten) = (drawn(&path, &["--per-row", "1"]), drawn(&path, &["--per-row", "1", "--margin", "10"]));
-        let room = one.first().map(|&(w, h)| (w as f32, h as f32)).expect("a page");
-        assert!(shaped(&one_ten, room.0, room.1) && one_ten.len() > one.len(), "{name}: {} pages at 10, {} at 3", one_ten.len(), one.len());
+        // One to a row, where no book can change the page: the same page, its text starting further in, as
+        // far as the margin, whatever the room. Pages counted could tie in a very wide one.
+        let first = |args: &[&str]| {
+            let out = view(&path, &[&["--protocol", "kitty", "--theme", "light", "--per-row", "1"], args].concat());
+            images(&out.stdout).into_iter().next().map(|page| page.png).expect("a page")
+        };
+        let (one, one_ten) = (first(&[]), first(&["--margin", "10"]));
+        assert_eq!(png_size(&one), png_size(&one_ten), "{name}: the same page");
+        let (at_3, at_10) = (ink_left(&one), ink_left(&one_ten));
+        // A column of the room, in pixels: the page is the room's columns wide.
+        let column = png_size(&one).0 as f32 / f32::from(tty_window().map_or(60, |(cols, _, _)| cols));
+        assert!(at_10 > at_3 + 6.0 * column, "{name}: the text starts at {at_10} px at 10, {at_3} at 3");
         // At 40 characters, 10 at each side: 60 columns.
         let at_40 = printed_page(Some(40.0), 100.0, 10.0);
         assert!(shaped(&drawn(&path, &["--width", "40", "--margin", "10"]), at_40.w, at_40.h), "{name}");

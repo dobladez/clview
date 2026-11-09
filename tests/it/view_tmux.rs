@@ -737,6 +737,53 @@ fn inside_tmux_a_count_to_a_row_lays_markdown_out_in_columns_of_the_pane() {
     server.tmux(&["send-keys", "-t", &pane, "q"]);
 }
 
+/// A count to a row follows the window's size as the size does: once it has held, in the new room. At
+/// three to a row in 100 columns, a pane resized to 26 (which takes two) lays out two columns of 26, and
+/// never two of the old 100 first; back at 100, three of 100, never three of 26 first.
+#[cfg(feature = "word")]
+#[test]
+fn inside_tmux_a_count_to_a_row_follows_a_resize_once_it_has_held() {
+    let Some(Shell { server, pane, output, pdf }) = shell("columns-resize") else { return };
+    let notes = pdf.with_file_name("long.md");
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    std::fs::write(&notes, long).unwrap();
+    let shapes = |from: usize| sizes_sent(&output.lock().unwrap()[from..]);
+    let shaped = |(x, y): &(u32, u32), w: f32, h: f32| (*x as f32 / *y as f32 - w / h).abs() < 0.01;
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what} never happened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let resize = |cols: u16| {
+        server.tmux(&["set-option", "-g", "window-size", "manual"]);
+        server.tmux(&["resize-window", "-t", &pane, "-x", &cols.to_string(), "-y", "40"]);
+        let size = String::from_utf8_lossy(&server.tmux(&["display-message", "-p", "-t", &pane, "#{pane_width} #{pane_height}"])).into_owned();
+        let mut parts = size.split_whitespace().map(|n| n.parse::<u16>().unwrap());
+        (parts.next().unwrap(), parts.next().unwrap())
+    };
+    // A column of `per_row` to a row of `cols`, as tall as `rows` less the status line, by its shape.
+    let column = |cols: u16, rows: u16, per_row: u16| (f32::from((cols - 2 * (per_row - 1)) / per_row) * 5.64, f32::from(rows - 1) * 11.28);
+    let (cols, rows) = resize(100);
+    assert_eq!(cols, 100);
+    let from = output.lock().unwrap().len();
+    server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol kitty --per-row 3", notes.display()), "Enter"]);
+    let three = column(cols, rows, 3);
+    until("three columns of 100", &|| shapes(from).iter().any(|s| shaped(s, three.0, three.1)));
+    let from = output.lock().unwrap().len();
+    let (narrow, rows) = resize(26);
+    let (two, old_two) = (column(narrow, rows, 2), column(cols, rows, 2));
+    until("two columns of 26", &|| shapes(from).iter().any(|s| shaped(s, two.0, two.1)));
+    assert!(!shapes(from).iter().any(|s| shaped(s, old_two.0, old_two.1)), "two columns of the old room first: {:?}", shapes(from));
+    let from = output.lock().unwrap().len();
+    let (cols, rows) = resize(100);
+    let (three, three_narrow) = (column(cols, rows, 3), column(narrow, rows, 3));
+    until("three columns of 100 again", &|| shapes(from).iter().any(|s| shaped(s, three.0, three.1)));
+    assert!(!shapes(from).iter().any(|s| shaped(s, three_narrow.0, three_narrow.1)), "three columns of 26 first: {:?}", shapes(from));
+    server.tmux(&["send-keys", "-t", &pane, "q"]);
+}
+
 /// The pager's text cells are the pane's, however tmux shows it: drawn and turned with no passthrough
 /// and nothing asked of tmux about what reached the terminal.
 #[test]
