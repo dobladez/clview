@@ -15,8 +15,8 @@ it could mean that too, or something a reader of a reflowed page has more use fo
 A count to a row and a typed width (`width`, `[` `]`) both set how wide a reflowed page is, so they
 can disagree: three columns of a 100-column window hold 32 characters each, and `72]` asks for 72.
 
-And a page's width and its font size bound one another: the most each can be depends on the other,
-and the room.
+And a page's width, its font size and its side margins bound one another: the most each can be
+depends on the others, and the room.
 
 ## Decision
 
@@ -35,7 +35,11 @@ and the room.
   line, `--width N` with a count wins, with a warning, since there is no order to go by.
 - **The bounds, in order**, each worked out from the values asked: the page's width in cells (the
   room, the count and `width`); then `font`'s most, the largest at which that page, a column, holds
-  20 characters a line. A value past its most is kept and laid out at the most.
+  20 characters a line within the margin asked; then `margin`'s most, the largest at which a line
+  holds 20 characters at the font laid out at. A value past its most is kept and laid out at the most.
+  So a margin wider than a narrow page takes lowers the font laid out at first, said on the status line
+  (`font 100% (80%)`), and binds at the least size; in a room where even no margin leaves 20
+  characters, the margin is `min(asked, 1)`.
 
 ## Evidence
 

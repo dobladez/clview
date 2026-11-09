@@ -44,6 +44,7 @@ clv --password PW secret.pdf
 | `--width window` | Markdown and HTML on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
 | `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
 | `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
+| `--margin 5` | Markdown and HTML side margins of that many characters of code, 0 to 20 (3 by default) ([Documents](#a-page-the-windows-size)). With documents |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
@@ -97,6 +98,7 @@ In a file's pages:
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
+| `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit |
@@ -119,7 +121,7 @@ In a list:
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
-| `[`, `]` | nothing: only a document opened from the list reflows, and they say so |
+| `[`, `]`, `{`, `}` | nothing: only a document opened from the list reflows, and they say so |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
@@ -453,10 +455,10 @@ pages, on an M3 Max, and one slow to lay out holds up its opening. Shown, those 
 #### A page the window's size
 
 A Markdown or HTML page is the window, as on an e-reader: as tall as the pages area (the window less
-the status line), and as wide, or, where the window holds two pages of 60 characters each, two side by
-side like an open book, each half the window. A character of the code face (JetBrains Mono at 9.4 pt)
-is a cell of the window, so a window 100 columns wide puts 96 characters of code on a line, between
-margins of two columns at each side and a row above and below. A page fills the window at that size,
+the status line), and as wide, or, where the window holds two pages of 60 characters each between
+their margins, two side by side like an open book, each half the window. A character of the code face
+(JetBrains Mono at 9.4 pt) is a cell of the window, so a window 100 columns wide puts 94 characters of
+code on a line, between margins of three characters at each side and a row above and below. A page fills the window at that size,
 and is never shown larger: zoomed out, two or more to a row, it is smaller, as any page. In a window
 too small for 20 characters a line and 10 lines of text, the page holds those all the same, shown
 smaller to fit. Through a pipe or to a file, the pages are laid out for the terminal the command
@@ -502,9 +504,22 @@ a file disagree, and the width wins, with a warning. A layout that fails puts bo
 screen. In a list and with `--pages`, `,` and `.` are the zoom, as on a PDF; printed, `--per-row 3`
 lays the file out in three columns of the terminal's room.
 
+**Margins.** `}` and `{` lay a Markdown or HTML file out again with side margins a character wider or
+narrower, from 0 to 20 characters of code at each side, at the font size: 3, the default, is three
+cells at 100% and six at 200%. A number, then `}` or `{`, goes straight to it (`5}`), `0}` back to 3,
+and `--margin 5` says where to start. At `window` the margins come out of the line, so wider margins
+put fewer characters on it, and a book's halves need their 60 characters between them; at a width of
+your own the line keeps its length and the page grows by the margins, up to the window. `}` stops at
+the most where a line still holds 20 characters, and says so (`margin 6, the most here`); a wider
+margin, typed or given, holds 20 characters at a smaller font size where there is one, and is
+otherwise kept and laid out at the most (`margin 12 (5)`), or at a column where even none holds 20.
+The status line shows the margin while it isn't 3, and a font size laid out smaller than asked as
+`font 100% (80%)`. The top and bottom margins stay a row. In a list and with `--pages` they say why
+they do nothing, as `[` and `]` do.
+
 **A width of your own.** `]` and `[` lay a Markdown or HTML file out again to lines 4 characters
 wider or narrower, counted in the code face, from 20 up to the longest line the window holds, with
-`window` among the steps where it sits: in a window of 100 columns, 92, 96, `window`; in one wide
+`window` among the steps where it sits: in a window of 100 columns, 92, 94, `window`; in one wide
 enough for a book, `window` sits at a page's 60-odd characters, and the steps go on to the window's
 width. A number, then `]` or `[`, goes straight to it (`72]`), `0]` back to `window`, and
 `--width window|72` says where to start. The text area is that wide, between the same margins, and

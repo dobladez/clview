@@ -112,6 +112,52 @@ const FONT: Setting = Setting {
 };
 const FONT_DEFAULT: u32 = 100;
 
+/// How wide the side margins of Markdown and HTML are, in characters of the code face at the font size,
+/// at each side: 0 to 20, which lays the document out again. At `window` they come out of the line; at a
+/// width, the page grows by them, up to the window.
+const MARGIN: Setting = Setting {
+    name: "margin",
+    named: &[],
+    numbers: Some(Numbers { least: 0, most: 20, step: 1, unit: "" }),
+    default: Value::Number(MARGIN_DEFAULT),
+    zero: Value::Number(MARGIN_DEFAULT),
+    auto: None,
+    keys: Keys::Step('{', '}'),
+    option: OptionSpec {
+        name: "--margin",
+        short: None,
+        value: Some("N"),
+        help: "Markdown and HTML side margins of N characters of code (0-20)",
+        alias: None,
+    },
+    help: "Markdown and HTML margins a character narrower, or wider; 5} sets 5, 0} back to 3",
+    missing: "only Markdown and HTML have margins",
+    effect: Effect::Relayout,
+    sets_width: false,
+};
+const MARGIN_DEFAULT: u32 = 3;
+
+/// The margin `values` ask for, in characters: [`MARGIN`]'s, within its range, or the default where
+/// they say nothing.
+fn margin_wanted(values: &Values) -> u32 {
+    match values.get(MARGIN.name) {
+        Some(Value::Number(margin)) => margin_within(margin),
+        _ => MARGIN_DEFAULT,
+    }
+}
+
+/// The margin `--margin` gives, if given: the viewer refuses one out of the range before any file
+/// opens, and anything else is the default.
+fn margin_given(option: Option<&str>) -> u32 {
+    option.and_then(|given| given.parse().ok()).map_or(MARGIN_DEFAULT, margin_within)
+}
+
+/// `margin`, within [`MARGIN`]'s range.
+fn margin_within(margin: u32) -> u32 {
+    let Some(numbers) = MARGIN.numbers else { return MARGIN_DEFAULT };
+    margin.clamp(numbers.least, numbers.most.max(numbers.least))
+}
+
 /// The font size `values` ask for, as a percentage: [`FONT`]'s, within its range, or 100 where they say
 /// nothing.
 fn font_wanted(values: &Values) -> u32 {
@@ -133,10 +179,10 @@ fn font_within(percent: u32) -> u32 {
     percent.clamp(numbers.least, numbers.most.max(numbers.least))
 }
 
-/// The settings a document of `kind` has: paper, width and font size, for Markdown and HTML.
+/// The settings a document of `kind` has: paper, width, font size and margins, for Markdown and HTML.
 fn settings_of(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name, FONT.name],
+        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name],
         _ => &[],
     }
 }
@@ -195,9 +241,7 @@ const LEAST_LINES: u32 = 10;
 /// The characters a page holds at least for `window` to be two pages side by side, as an open book.
 const BOOK_LEAST: u32 = 60;
 
-/// The margins, in cells of the room: columns at each side, rows above and below. In a small room
-/// the sides shrink, to a cell at least.
-const SIDE_MARGIN: f32 = 2.0;
+/// The margin above and below, in rows of the room at 100%: the sides are [`MARGIN`]'s.
 const TOP_MARGIN: f32 = 1.0;
 
 /// The largest a page is laid out, in points, on a side: 200 inches, what a PDF allows.
@@ -223,11 +267,18 @@ fn text_columns(cols: u16, cw: f32, side: f32) -> f32 {
     (f32::from(cols) * cw).min(MAX_PAGE) - 2.0 * side
 }
 
-/// The margins at `room`'s cell shape: [`SIDE_MARGIN`] columns at each side and [`TOP_MARGIN`] rows
-/// above and below, in points, at the font size (a column being [`CODE_WIDTH`] whatever the size).
-fn margins(room: &Room) -> (f32, f32) {
-    let (cw, ch) = cell_points(room, FONT_DEFAULT);
-    (SIDE_MARGIN * cw, TOP_MARGIN * ch)
+/// The margin above and below at `room`'s cell shape, [`TOP_MARGIN`] rows, in points, at the text's
+/// size whatever the font size.
+fn top_margin(room: &Room) -> f32 {
+    let (_, ch) = cell_points(room, FONT_DEFAULT);
+    TOP_MARGIN * ch
+}
+
+/// A side margin of `margin` characters of the code face, in points: at any font size, a character is
+/// [`CODE_WIDTH`] points, `font`/100 of a cell on screen.
+fn side(margin: u32) -> f32 {
+    // At most 20, so exact.
+    margin_within(margin) as f32 * CODE_WIDTH
 }
 
 /// The cells a page of `room` is wide: the room's, or with `per_row` pages to a row of it, its share
@@ -238,34 +289,41 @@ fn page_cols(room: &Room) -> u16 {
     gaps.and_then(|gaps| room.cols.checked_sub(gaps)).and_then(|cols| cols.checked_div(n)).unwrap_or(0).max(1)
 }
 
-/// The page `width` is laid out on in `room` at `font` percent, in points such that a character of the
-/// code face is `font`/100 of a cell of the room when the page is shown as tall as it: always as tall
-/// as the room; at `window`, as wide as it, or half of it less the gap where each half holds
-/// [`BOOK_LEAST`] characters of text, or with a count to a row ([`Room::per_row`]) that share of it
-/// ([`page_cols`]), the book rule off; at a number, as wide as the characters take, never wider than
-/// that page. A font size past the most the page holds ([`font_most`]) is laid out at the most, as a
-/// width past the page's is; a page too small for [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text even at
-/// the least size loses a column of each side margin, then grows past the room (and is shown smaller).
-fn page_in(width: Width, room: &Room, font: u32) -> wordcraft_doc::SectionProps {
-    let (cw, ch) = cell_points(room, font.min(font_most(room)));
-    let (mut side, top) = margins(room);
+/// The cells a page laid out at `window` is wide in `room` with margins of `margin` characters: as
+/// wide as the room, or half of it less the gap where each half holds [`BOOK_LEAST`] characters of
+/// text between its margins at `font` percent, or with a count to a row ([`Room::per_row`]) its share
+/// ([`page_cols`]), the book rule off.
+fn window_cols(room: &Room, font: u32, margin: u32) -> u16 {
+    if room.per_row.is_some() {
+        return page_cols(room);
+    }
+    let half = room.cols.saturating_sub(room.gap) / 2;
+    let (cw, _) = cell_points(room, font);
+    if text_columns(half, cw, side(margin)) >= BOOK_LEAST as f32 * CODE_WIDTH { half } else { room.cols }
+}
+
+/// The page `width` is laid out on in `room` at `font` percent with side margins of `margin`
+/// characters, in points such that a character of the code face is `font`/100 of a cell of the room
+/// when the page is shown as tall as it: always as tall as the room; at `window`, as wide as it, or as
+/// [`window_cols`] says, the margins coming out of the line; at a number, the characters between the
+/// margins, the page growing by them, never wider than the room's share ([`page_cols`]). The bounds, in order, each
+/// from the values as asked: the page's cells; `font`'s most there ([`font_most`]), a font past it laid
+/// out at it; `margin`'s most at the font laid out at ([`margin_most`]), a margin past it laid out at it.
+/// Where even no margin leaves 20 characters a line, the margin is `min(margin, 1)` and the page grows
+/// past the room to [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text (and is shown smaller).
+fn page_in(width: Width, room: &Room, font: u32, margin: u32) -> wordcraft_doc::SectionProps {
+    let margin = margin_within(margin);
+    let font = font_within(font).min(font_most(room, margin));
+    let laid = margin_most(room, font).map_or(margin.min(1), |most| margin.min(most));
+    let (cw, ch) = cell_points(room, font);
+    let (side, top) = (side(laid), top_margin(room));
     let (least_w, least_h) = (LEAST_COLUMNS as f32 * CODE_WIDTH, LEAST_LINES as f32 * LINE);
-    let room_w = text_columns(page_cols(room), cw, side);
     let text_w = match width {
-        Width::Window if room.per_row.is_some() => room_w,
-        Width::Window => {
-            let half = text_columns(room.cols.saturating_sub(room.gap) / 2, cw, side);
-            if half >= BOOK_LEAST as f32 * CODE_WIDTH { half } else { room_w }
-        }
+        Width::Window => text_columns(window_cols(room, font, laid), cw, side),
         // At most 200, so exact.
-        Width::Columns(columns) => (columns as f32 * CODE_WIDTH).min(room_w),
+        Width::Columns(columns) => (columns as f32 * CODE_WIDTH).min(text_columns(page_cols(room), cw, side)),
     };
-    let text_w = if text_w < least_w {
-        side = CODE_WIDTH;
-        (text_w + 2.0 * (SIDE_MARGIN - 1.0) * CODE_WIDTH).max(least_w)
-    } else {
-        text_w
-    };
+    let text_w = text_w.max(least_w);
     let text_h = ((f32::from(room.rows) * ch).min(MAX_PAGE) - 2.0 * top).max(least_h);
     wordcraft_doc::SectionProps {
         page_w: text_w + 2.0 * side,
@@ -278,22 +336,29 @@ fn page_in(width: Width, room: &Room, font: u32) -> wordcraft_doc::SectionProps 
     }
 }
 
-/// Whether `room` holds a page of [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text at `font` percent, the
-/// side margins down to a column, a page as wide as its share of the room ([`page_cols`]): past the font
-/// size where it doesn't, the page grows past the room.
-fn fits(room: &Room, font: u32) -> bool {
+/// Whether `room` holds a page of [`LEAST_COLUMNS`] × [`LEAST_LINES`] of text at `font` percent between
+/// side margins of `margin` characters, a page as wide as its share of the room ([`page_cols`]): past
+/// the font size where it doesn't, the page grows past the room.
+fn fits(room: &Room, font: u32, margin: u32) -> bool {
     let (cw, ch) = cell_points(room, font);
-    let (_, top) = margins(room);
-    text_columns(page_cols(room), cw, CODE_WIDTH) >= LEAST_COLUMNS as f32 * CODE_WIDTH
-        && f32::from(room.rows) * ch - 2.0 * top >= LEAST_LINES as f32 * LINE
+    text_columns(page_cols(room), cw, side(margin)) >= LEAST_COLUMNS as f32 * CODE_WIDTH
+        && f32::from(room.rows) * ch - 2.0 * top_margin(room) >= LEAST_LINES as f32 * LINE
 }
 
-/// The largest font size, among [`FONT`]'s steps, at which `room` holds a page ([`fits`]): the least
-/// where none does.
-fn font_most(room: &Room) -> u32 {
+/// The largest font size, among [`FONT`]'s steps, at which `room` holds a page ([`fits`]) within side
+/// margins of `margin` characters: the least where none does.
+fn font_most(room: &Room, margin: u32) -> u32 {
     let Some(numbers) = FONT.numbers else { return FONT_DEFAULT };
     let mut steps = (numbers.least..=numbers.most).rev().filter(|font| font % numbers.step.max(1) == 0 || *font == numbers.least);
-    steps.find(|font| fits(room, *font)).unwrap_or(numbers.least)
+    steps.find(|font| fits(room, *font, margin)).unwrap_or(numbers.least)
+}
+
+/// The largest margin, in characters, at which a line of a page of `room` at `font` percent holds
+/// [`LEAST_COLUMNS`] characters: `None` where even none leaves that many.
+fn margin_most(room: &Room, font: u32) -> Option<u32> {
+    let numbers = MARGIN.numbers?;
+    let (cw, _) = cell_points(room, font);
+    (numbers.least..=numbers.most).rev().find(|margin| text_columns(page_cols(room), cw, side(*margin)) >= LEAST_COLUMNS as f32 * CODE_WIDTH)
 }
 
 /// The characters of the code face a line of `page` holds.
@@ -324,7 +389,7 @@ impl Backend for Wordcraft {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER, WIDTH, FONT]
+        &[PAPER, WIDTH, FONT, MARGIN]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
@@ -351,7 +416,9 @@ impl Backend for Wordcraft {
         let password = options.value("--password").map(String::from);
         let width = Width::given(options.value(WIDTH.option.name));
         let font = font_given(options.value(FONT.option.name));
-        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, width, font, &room));
+        let margin = margin_given(options.value(MARGIN.option.name));
+        let at = At { width, font, margin };
+        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room));
         let (stored, laid) = match input.reopenable()? {
             Reopenable::Disk(file) => {
                 let bytes = read(file).map_err(error)?;
@@ -371,7 +438,7 @@ impl Backend for Wordcraft {
         // reads it again.
         let laid = laid.map_err(error)?;
         let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, kind));
-        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, width, font, room, paragraphs })))))
+        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, at, room, paragraphs })))))
     }
 }
 
@@ -499,13 +566,27 @@ struct Document {
     /// What it is laid out at, and the room it is laid out for, exactly as given; Markdown and HTML
     /// lay out again at another ([`Source::relayout`]). The rest, with pages of their own, keep them
     /// only to say what they were opened with.
-    width: Width,
-    /// Its font size, a percentage ([`FONT`]).
-    font: u32,
+    at: At,
     room: Room,
     /// Each page's paragraphs, for Markdown and HTML, which lay out again: where the reader is, found
     /// again in the new layout ([`Source::anchor`]). Empty for the rest.
     paragraphs: Vec<Vec<Para>>,
+}
+
+/// What Markdown and HTML are laid out at, as asked: the width, the font size (a percentage, [`FONT`])
+/// and the side margins (characters, [`MARGIN`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct At {
+    width: Width,
+    font: u32,
+    margin: u32,
+}
+
+impl At {
+    /// What `values` ask for.
+    fn wanted(values: &Values) -> Self {
+        Self { width: Width::wanted(values), font: font_wanted(values), margin: margin_wanted(values) }
+    }
 }
 
 /// A paragraph on a page: which, in the document's order, and where.
@@ -643,20 +724,21 @@ impl Source for Paged {
             return (values, None);
         }
         // There is room: nothing else is in it.
-        let _ = values.set(WIDTH.name, self.0.width.value());
-        let _ = values.set(FONT.name, Value::Number(self.0.font));
+        let _ = values.set(WIDTH.name, self.0.at.width.value());
+        let _ = values.set(FONT.name, Value::Number(self.0.at.font));
+        let _ = values.set(MARGIN.name, Value::Number(self.0.at.margin));
         (values, Some(self.0.room))
     }
 
-    /// Markdown and HTML at another width or font size, or for another room: read again from where
-    /// their bytes are, and laid out at it.
+    /// Markdown and HTML at another width, font size or margin, or for another room: read again from
+    /// where their bytes are, and laid out at it.
     fn relayout(&self, values: Values, room: Room) -> Option<Job> {
-        let (width, font) = (Width::wanted(&values), font_wanted(&values));
-        if !self.reflows() || (width == self.0.width && font == self.0.font && room.same(&self.0.room)) {
+        let at = At::wanted(&values);
+        if !self.reflows() || (at == self.0.at && room.same(&self.0.room)) {
             return None;
         }
         let document = self.0.clone();
-        Some(Box::new(move || document.at(width, font, room).map(|paged| Box::new(paged) as Box<dyn Source + Send>)))
+        Some(Box::new(move || document.at(at, room).map(|paged| Box::new(paged) as Box<dyn Source + Send>)))
     }
 
     /// A page laid out for a room is as tall as that room at most: there a character of the code face
@@ -677,14 +759,21 @@ impl Source for Paged {
         if !self.reflows() {
             return None;
         }
+        // In order, each from the values as asked: the page's cells, the font's most there within the
+        // margin asked, the margin's most at the font laid out at.
+        let At { font, margin, .. } = At::wanted(&values);
+        let font_most = font_most(&room, margin);
         if setting == FONT.name {
-            return Some(Bounds { named_at: None, most: Some(font_most(&room)) });
+            return Some(Bounds { named_at: None, most: Some(font_most) });
+        }
+        if setting == MARGIN.name {
+            // Where even no margin leaves a line its 20 characters, it is laid out at one at most.
+            return Some(Bounds { named_at: None, most: Some(margin_most(&room, font.min(font_most)).unwrap_or(1)) });
         }
         if setting != WIDTH.name {
             return None;
         }
-        let font = font_wanted(&values);
-        let columns = |width| columns_of(&page_in(width, &room, font));
+        let columns = |width| columns_of(&page_in(width, &room, font, margin));
         Some(Bounds { named_at: Some(columns(Width::Window)), most: Some(columns(Width::Columns(u32::MAX))) })
     }
 
@@ -726,8 +815,7 @@ impl Document {
         let laid = laid
             .get_or_init(|| {
                 let bytes = self.bytes()?;
-                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), self.width, self.font, &self.room))
-                    .map(Arc::new)
+                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), self.at, &self.room)).map(Arc::new)
             })
             .clone()?;
         let page = laid.layout.pages.get(request.page).ok_or_else(|| format!("the document has no page {}", request.page.saturating_add(1)))?;
@@ -755,15 +843,15 @@ impl Document {
         Ok(Frame { request, width: drawn.width, height: drawn.height, rgba: Pixels::new(drawn.pixels), error: None, warnings, again: false })
     }
 
-    /// This document laid out again at `width` and `font` percent, for `room`, from its bytes: a new one,
-    /// this one as it is.
-    fn at(&self, width: Width, font: u32, room: Room) -> Result<Paged, String> {
+    /// This document laid out again `at` a width, a font size and margins, for `room`, from its bytes: a
+    /// new one, this one as it is.
+    fn at(&self, at: At, room: Room) -> Result<Paged, String> {
         let bytes = self.bytes()?;
-        let laid = caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), width, font, &room))?;
+        let laid = caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), at, &room))?;
         let Self { stored, kind, password, path, .. } = self;
         let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
         let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, *kind));
-        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes, width, font, room, paragraphs })))
+        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes, at, room, paragraphs })))
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
@@ -826,20 +914,10 @@ fn pixels(size: f32, scale: f32) -> Result<u64, String> {
 }
 
 /// The document in `bytes`, of `kind`, read with `password` if it is protected, and laid out into
-/// pages: Markdown and HTML at `width` and `font` percent on the page `room` gives them ([`page_in`]),
+/// pages: Markdown and HTML `at` a width, a font size and margins on the page `room` gives them ([`page_in`]),
 /// the rest on pages of their own. `path` is the file's, for the fields that show it, and `beside` the
 /// directory it is in, for the pictures it refers to.
-#[expect(clippy::too_many_arguments, reason = "each is a different part of what a document is laid out from, and for")]
-fn laid_out(
-    bytes: &[u8],
-    kind: Kind,
-    password: Option<&str>,
-    path: &str,
-    beside: Option<&Path>,
-    width: Width,
-    font: u32,
-    room: &Room,
-) -> Result<Laid, String> {
+fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>, at: At, room: &Room) -> Result<Laid, String> {
     let pictures = Pictures::beside(beside);
     let read = match kind {
         Kind::Package => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
@@ -847,8 +925,8 @@ fn laid_out(
         Kind::Compound => wordcraft_docbin::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Odt => imported("odt", bytes),
         Kind::Rtf => imported("rtf", bytes),
-        Kind::Markdown => markdown(bytes, &pictures, page_in(width, room, font)),
-        Kind::Html => html(bytes, &pictures, page_in(width, room, font)),
+        Kind::Markdown => markdown(bytes, &pictures, page_in(at.width, room, at.font, at.margin)),
+        Kind::Html => html(bytes, &pictures, page_in(at.width, room, at.font, at.margin)),
     };
     let mut document = read.map_err(|e| match e == wordcraft_docx::PASSWORD_REQUIRED {
         true => format!("{e}: give it with --password"),
@@ -1337,8 +1415,8 @@ mod tests {
     #[test]
     fn markdown_and_html_are_refused_past_their_limits() {
         let nowhere = Pictures::beside(None);
-        let markdown = |bytes: &[u8]| markdown(bytes, &nowhere, page_in(Width::Window, &ROOMLESS, 100));
-        let html = |bytes: &[u8]| html(bytes, &nowhere, page_in(Width::Window, &ROOMLESS, 100));
+        let markdown = |bytes: &[u8]| markdown(bytes, &nowhere, page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT));
+        let html = |bytes: &[u8]| html(bytes, &nowhere, page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT));
         let refused = |what: &str, read: &dyn Fn(&[u8]) -> Result<wordcraft_doc::Document, String>, bytes: &[u8]| {
             assert!(read(bytes).is_err_and(|e| e.contains(what)), "{what}");
         };
@@ -1420,9 +1498,9 @@ mod tests {
 
     /// How many pixels to a point the styling's tests look at a page.
     const SCALE: f32 = 2.0;
-    /// The page's left margin (two columns, 11.28 pt), and its width ([`ROOMLESS`]'s 100 columns,
+    /// The page's left margin (three columns, 16.92 pt), and its width ([`ROOMLESS`]'s 100 columns,
     /// 564 pt), in those pixels.
-    const MARGIN: u32 = 23;
+    const SIDE_PX: u32 = 34;
     const PAGE_WIDTH: u32 = 1128;
 
     /// The first page of this Markdown on `paper`, as wide as the room it is opened with none.
@@ -1465,57 +1543,58 @@ mod tests {
     }
 
     /// The page is the room, in points such that a character of the code face is a cell when the page
-    /// is as tall as the room: at `window` as wide as it, with margins of two columns and a row; at a
+    /// is as tall as the room: at `window` as wide as it, with margins of three columns and a row; at a
     /// number, that many characters between the same margins, never wider than the room; its height
-    /// always the room's. Where the room holds two pages of 60 characters, `window` is a book's page,
-    /// half the room less the gap.
+    /// always the room's. Where the room holds two pages of 60 characters between their margins,
+    /// `window` is a book's page, half the room less the gap.
     #[test]
     fn the_page_is_the_room_and_its_width_so_many_characters_of_the_code_face() {
         // 80 × 23 cells of 10 × 20 px: 451.2 × 259.44 pt, a column 5.64 pt and a row 11.28.
         let small = room(80, 23, 10.0, 20.0);
-        let page = page_in(Width::Window, &small, 100);
+        let page = page_in(Width::Window, &small, 100, MARGIN_DEFAULT);
         assert!(near(page.page_w, 80.0 * CODE_WIDTH) && near(page.page_h, 23.0 * 2.0 * CODE_WIDTH), "{} × {}", page.page_w, page.page_h);
-        assert!(near(page.margin_left, 2.0 * CODE_WIDTH) && near(page.margin_right, 2.0 * CODE_WIDTH), "{}", page.margin_left);
+        assert!(near(page.margin_left, 3.0 * CODE_WIDTH) && near(page.margin_right, 3.0 * CODE_WIDTH), "{}", page.margin_left);
         assert!(near(page.margin_top, 2.0 * CODE_WIDTH) && near(page.margin_bottom, 2.0 * CODE_WIDTH), "{}", page.margin_top);
-        assert!(near(page.text_width(), 76.0 * CODE_WIDTH) && columns_of(&page) == 76);
+        assert!(near(page.text_width(), 74.0 * CODE_WIDTH) && columns_of(&page) == 74);
         // The cell's shape is the page's: 10 × 16 cells make a shorter page, and a text cell's sampling
         // cell (1.25 × 2) the same one.
-        let squat = page_in(Width::Window, &room(80, 23, 10.0, 16.0), 100);
+        let squat = page_in(Width::Window, &room(80, 23, 10.0, 16.0), 100, MARGIN_DEFAULT);
         assert!(near(squat.page_w, page.page_w) && near(squat.page_h, 23.0 * 1.6 * CODE_WIDTH), "{}", squat.page_h);
-        let sampled = page_in(Width::Window, &room(80, 23, 1.25, 2.0), 100);
+        let sampled = page_in(Width::Window, &room(80, 23, 1.25, 2.0), 100, MARGIN_DEFAULT);
         assert!(near(sampled.page_w, squat.page_w) && near(sampled.page_h, squat.page_h));
         // A number: that many characters between the margins, as tall; wider than the room, the room's.
-        let narrow = page_in(Width::Columns(40), &small, 100);
-        assert!(near(narrow.text_width(), 40.0 * CODE_WIDTH) && near(narrow.page_w, 44.0 * CODE_WIDTH) && near(narrow.page_h, page.page_h));
-        assert!(near(page_in(Width::Columns(120), &small, 100).page_w, page.page_w), "never wider than the room");
-        assert_eq!(columns_of(&page_in(Width::Columns(120), &small, 100)), 76);
-        // A book: 132 columns hold two pages of (132 − 2) / 2 − 4 = 61 characters; 128 don't.
-        let wide = room(132, 40, 10.0, 20.0);
-        let book = page_in(Width::Window, &wide, 100);
-        assert!(near(book.page_w, 65.0 * CODE_WIDTH) && near(book.page_h, 40.0 * 2.0 * CODE_WIDTH), "{}", book.page_w);
-        assert_eq!(columns_of(&book), 61);
-        assert_eq!(columns_of(&page_in(Width::Window, &room(128, 40, 10.0, 20.0), 100)), 124, "one page, as wide as the room");
-        // A tiny room: the side margins shrink to a column, then the page grows past the room, 20
-        // characters and 10 lines of text at least, whatever the room says.
-        // A tiny room holds no page at any size, so it is laid out at the least, 50%, where 23 columns are 42
-        // characters; 10 columns aren't 20 even then, and the side margins shrink to a column before the page
-        // grows. Either way, 10 lines of text.
-        let tiny = page_in(Width::Window, &room(23, 5, 10.0, 20.0), 100);
-        assert!(near(tiny.margin_left, 2.0 * CODE_WIDTH) && columns_of(&tiny) == 42 && near(tiny.text_height(), 10.0 * LINE), "{tiny:?}");
-        let tinier = page_in(Width::Window, &room(10, 5, 10.0, 20.0), 100);
+        let narrow = page_in(Width::Columns(40), &small, 100, MARGIN_DEFAULT);
+        assert!(near(narrow.text_width(), 40.0 * CODE_WIDTH) && near(narrow.page_w, 46.0 * CODE_WIDTH) && near(narrow.page_h, page.page_h));
+        assert!(near(page_in(Width::Columns(120), &small, 100, MARGIN_DEFAULT).page_w, page.page_w), "never wider than the room");
+        assert_eq!(columns_of(&page_in(Width::Columns(120), &small, 100, MARGIN_DEFAULT)), 74);
+        // A book: 134 columns hold two pages of (134 − 2) / 2 − 6 = 60 characters; 132 don't.
+        let wide = room(134, 40, 10.0, 20.0);
+        let book = page_in(Width::Window, &wide, 100, MARGIN_DEFAULT);
+        assert!(near(book.page_w, 66.0 * CODE_WIDTH) && near(book.page_h, 40.0 * 2.0 * CODE_WIDTH), "{}", book.page_w);
+        assert_eq!(columns_of(&book), 60);
+        assert_eq!(columns_of(&page_in(Width::Window, &room(132, 40, 10.0, 20.0), 100, MARGIN_DEFAULT)), 126, "one page, as wide as the room");
+        // A tiny room holds no page at any size, so it is laid out at the least, 50%, where 23 columns are 46
+        // characters, 40 between the margins. At 50% 10 columns are 20 characters with no margin, so the
+        // margin is none; 9 aren't 20 even then, so the margin is a column and the page grows to 20
+        // characters. Either way, 10 lines of text.
+        let tiny = page_in(Width::Window, &room(23, 5, 10.0, 20.0), 100, MARGIN_DEFAULT);
+        assert!(near(tiny.margin_left, 3.0 * CODE_WIDTH) && columns_of(&tiny) == 40 && near(tiny.text_height(), 10.0 * LINE), "{tiny:?}");
+        let tinier = page_in(Width::Window, &room(10, 5, 10.0, 20.0), 100, MARGIN_DEFAULT);
+        assert!(near(tinier.margin_left, 0.0) && near(tinier.text_width(), 20.0 * CODE_WIDTH), "{tinier:?}");
+        let tiniest = page_in(Width::Window, &room(9, 5, 10.0, 20.0), 100, MARGIN_DEFAULT);
         assert!(
-            near(tinier.margin_left, CODE_WIDTH) && near(tinier.text_width(), 20.0 * CODE_WIDTH) && near(tinier.text_height(), 10.0 * LINE),
-            "{tinier:?}"
+            near(tiniest.margin_left, CODE_WIDTH) && near(tiniest.text_width(), 20.0 * CODE_WIDTH) && near(tiniest.text_height(), 10.0 * LINE),
+            "{tiniest:?}"
         );
         for odd in [room(0, 0, 10.0, 20.0), room(1, 1, 0.0, 0.0), room(5, 5, f32::NAN, f32::INFINITY), room(u16::MAX, u16::MAX, 1.0, 1.0e30)] {
-            let page = page_in(Width::Window, &odd, 100);
+            let page = page_in(Width::Window, &odd, 100, MARGIN_DEFAULT);
             assert!(
                 page.page_w.is_finite() && page.page_h.is_finite() && page.page_w <= MAX_PAGE + 100.0 && page.page_h <= MAX_PAGE + 100.0,
                 "{odd:?}"
             );
             assert!(page.text_width() >= 20.0 * CODE_WIDTH - 0.01 && page.text_height() >= 10.0 * LINE - 0.01, "{odd:?}");
         }
-        assert!(near(page_in(Width::Window, &room(u16::MAX, 40, 10.0, 20.0), 100).page_w, MAX_PAGE), "capped");
+        assert!(near(page_in(Width::Window, &room(u16::MAX, 40, 10.0, 20.0), 100, MARGIN_DEFAULT).page_w, MAX_PAGE), "capped");
         // From the option, and from the values: within the range either way.
         assert_eq!((Width::given(None), Width::given(Some("window")), Width::given(Some("40"))), (Width::Window, Width::Window, Width::Columns(40)));
         assert_eq!((Width::given(Some("300")), Width::given(Some("x"))), (Width::Columns(200), Width::Window));
@@ -1536,7 +1615,58 @@ mod tests {
             |columns: usize| lines_of(&looked_at_on(&format!("```\n{}\n```", "0".repeat(columns)), Paper::Printed, Some("40")), dark_ink).len();
         assert_eq!((lines(37), lines(38)), (1, 2));
         let frame = looked_at_on("One", Paper::Printed, Some("40"));
-        assert_eq!(frame.width, (44.0 * CODE_WIDTH * SCALE).ceil() as u32);
+        assert_eq!(frame.width, (46.0 * CODE_WIDTH * SCALE).ceil() as u32);
+    }
+
+    /// The side margins are characters of the code face at the font size, at each side: at `window` they
+    /// come out of the line, and count against a book's 60 characters a half; at a width the line keeps
+    /// its length and the page grows by them, never past the room. The bounds go in order: the font's
+    /// most within the margin asked, then the margin's most at the font laid out at; a margin past its
+    /// most is laid out at it, and where even none leaves 20 characters, at one at most.
+    #[test]
+    fn margins_shorten_the_line_at_window_and_widen_the_page_at_a_width() {
+        let small = room(80, 23, 10.0, 20.0);
+        let window = |font, margin| page_in(Width::Window, &small, font, margin);
+        let line = |font, margin| columns_of(&window(font, margin));
+        // At 100%: 80 characters, 74, 40.
+        assert_eq!((line(100, 0), line(100, 3), line(100, 20)), (80, 74, 40));
+        assert!(near(window(100, 0).margin_left, 0.0) && near(window(100, 20).margin_left, 20.0 * CODE_WIDTH));
+        assert!(near(window(100, 20).page_w, 80.0 * CODE_WIDTH), "the window's page, whatever the margins");
+        // At 50%: 160 characters; halves of 78, so a book at 0 and at 3 (72), none at 20 (120).
+        assert_eq!((line(50, 0), line(50, 3), line(50, 20)), (78, 72, 120));
+        // At 200%, past the 170% this room holds: 47 characters, 41; at 20, a font of 130% at most, 21.
+        assert_eq!((line(200, 0), line(200, 3), line(200, 20)), (47, 41, 21));
+        assert_eq!((font_most(&small, 3), font_most(&small, 20)), (170, 130));
+        // A width keeps its line, and the page grows by the margins, up to the room.
+        let width = |columns, margin| page_in(Width::Columns(columns), &small, 100, margin);
+        assert!(
+            near(width(40, 0).page_w, 40.0 * CODE_WIDTH)
+                && near(width(40, 3).page_w, 46.0 * CODE_WIDTH)
+                && near(width(40, 20).page_w, 80.0 * CODE_WIDTH)
+        );
+        assert_eq!((columns_of(&width(40, 20)), columns_of(&width(60, 20))), (40, 40), "never past the room");
+        // The font's most comes first, within the margin asked: in 30 columns a margin of 12 holds 20
+        // characters up to 60%, so 100% is laid out at 60%, 26 characters, the margin as asked.
+        let thirty = room(30, 23, 10.0, 20.0);
+        assert_eq!((font_most(&thirty, 12), margin_most(&thirty, 60)), (60, Some(15)));
+        let smaller = page_in(Width::Window, &thirty, 100, 12);
+        assert!(near(smaller.margin_left, 12.0 * CODE_WIDTH) && columns_of(&smaller) == 26, "{smaller:?}");
+        // Past the margin's most, where even 50% doesn't hold it: 15 columns, 30 characters at 50%, hold 20
+        // within 5 at most, so 12 is laid out at 5.
+        let fifteen = room(15, 23, 10.0, 20.0);
+        assert_eq!((font_most(&fifteen, 12), margin_most(&fifteen, 50)), (50, Some(5)));
+        let past = page_in(Width::Window, &fifteen, 100, 12);
+        assert!(near(past.margin_left, 5.0 * CODE_WIDTH) && columns_of(&past) == 20, "{past:?}");
+        // Where even none leaves 20 characters (9 columns, at the least size 18), one at most.
+        let nine = room(9, 23, 10.0, 20.0);
+        assert_eq!(margin_most(&nine, font_most(&nine, 3)), None);
+        assert!(near(page_in(Width::Window, &nine, 100, 3).margin_left, CODE_WIDTH));
+        assert!(near(page_in(Width::Window, &nine, 100, 0).margin_left, 0.0), "never more than asked");
+        // From the option and the values: within the range, 3 where they say nothing.
+        assert_eq!((margin_given(None), margin_given(Some("7")), margin_given(Some("30")), margin_given(Some("x"))), (3, 7, 20, 3));
+        let mut values = Values::default();
+        assert!(values.set(MARGIN.name, Value::Number(12)));
+        assert_eq!((margin_wanted(&Values::default()), margin_wanted(&values)), (3, 12));
     }
 
     /// With a count to a row ([`Room::per_row`]), `window` is a column: the room's columns less the gaps
@@ -1545,31 +1675,34 @@ mod tests {
     /// leaves a column under 20, it is laid out at 20 and grows, as a small room is.
     #[test]
     fn pages_to_a_row_are_columns_of_the_room() {
-        let wide = room(132, 40, 10.0, 20.0);
+        let wide = room(134, 40, 10.0, 20.0);
         let at = |per_row| Room { per_row, ..wide };
-        // Three to a row: (132 − 2 × 2) / 3 = 42 columns each, 38 characters between the margins.
-        let three = page_in(Width::Window, &at(Some(3)), 100);
-        let alone = page_in(Width::Window, &wide, 100);
-        assert!(near(three.page_w, 42.0 * CODE_WIDTH) && near(three.page_h, alone.page_h), "{} × {}", three.page_w, three.page_h);
-        assert_eq!(columns_of(&three), 38);
+        // Three to a row: (134 − 2 × 2) / 3 = 43 columns each, 37 characters between the margins.
+        let three = page_in(Width::Window, &at(Some(3)), 100, MARGIN_DEFAULT);
+        let alone = page_in(Width::Window, &wide, 100, MARGIN_DEFAULT);
+        assert!(near(three.page_w, 43.0 * CODE_WIDTH) && near(three.page_h, alone.page_h), "{} × {}", three.page_w, three.page_h);
+        assert_eq!(columns_of(&three), 37);
         // One to a row is the whole room, no book of two, which `auto` makes here.
-        assert_eq!((columns_of(&page_in(Width::Window, &at(Some(1)), 100)), columns_of(&alone)), (128, 61));
-        assert_eq!(columns_of(&page_in(Width::Window, &at(Some(2)), 100)), 61, "two: each half less the gap");
+        assert_eq!((columns_of(&page_in(Width::Window, &at(Some(1)), 100, MARGIN_DEFAULT)), columns_of(&alone)), (128, 60));
+        assert_eq!(columns_of(&page_in(Width::Window, &at(Some(2)), 100, MARGIN_DEFAULT)), 60, "two: each half less the gap");
         // A width within a column: past it, the column's.
-        assert_eq!(columns_of(&page_in(Width::Columns(72), &at(Some(3)), 100)), 38);
-        assert_eq!(columns_of(&page_in(Width::Columns(30), &at(Some(3)), 100)), 30);
-        // The font's most is a column's: 190% holds 20 characters in 42 columns, 200% doesn't.
-        assert_eq!((fits(&at(Some(3)), 190), fits(&at(Some(3)), 200), font_most(&at(Some(3))), font_most(&wide)), (true, false, 190, 300));
-        let past = page_in(Width::Window, &at(Some(3)), 300);
-        assert!(near(past.page_w, page_in(Width::Window, &at(Some(3)), 190).page_w) && columns_of(&past) == 20, "laid out at the most: {past:?}");
-        // Eight to a row of 40 columns: 3 each, under 20 characters even at 50%; laid out at 20, grown.
+        assert_eq!(columns_of(&page_in(Width::Columns(72), &at(Some(3)), 100, MARGIN_DEFAULT)), 37);
+        assert_eq!(columns_of(&page_in(Width::Columns(30), &at(Some(3)), 100, MARGIN_DEFAULT)), 30);
+        // The font's most is a column's: 160% holds 20 characters in 43 columns, 170% doesn't.
+        let three_most = (fits(&at(Some(3)), 160, MARGIN_DEFAULT), fits(&at(Some(3)), 170, MARGIN_DEFAULT), font_most(&at(Some(3)), MARGIN_DEFAULT));
+        assert_eq!((three_most, font_most(&wide, MARGIN_DEFAULT)), ((true, false, 160), 300));
+        let past = page_in(Width::Window, &at(Some(3)), 300, MARGIN_DEFAULT);
+        let most = page_in(Width::Window, &at(Some(3)), 160, MARGIN_DEFAULT);
+        assert!(near(past.page_w, most.page_w) && columns_of(&past) == 20, "laid out at the most: {past:?}");
+        // Eight to a row of 40 columns: 3 each, under 20 characters even at 50% and no margin; laid out at
+        // 20 with a margin of a column, grown.
         let narrow = Room { per_row: Some(8), ..room(40, 40, 10.0, 20.0) };
-        assert_eq!(font_most(&narrow), 50);
-        let grown = page_in(Width::Window, &narrow, 100);
+        assert_eq!(font_most(&narrow, MARGIN_DEFAULT), 50);
+        let grown = page_in(Width::Window, &narrow, 100, MARGIN_DEFAULT);
         assert!(near(grown.text_width(), 20.0 * CODE_WIDTH) && near(grown.margin_left, CODE_WIDTH), "{grown:?}");
         // However odd the count: a cell at least, never a panic.
         for per_row in [Some(0), Some(u16::MAX), Some(200)] {
-            let page = page_in(Width::Window, &at(per_row), 100);
+            let page = page_in(Width::Window, &at(per_row), 100, MARGIN_DEFAULT);
             assert!(page.page_w.is_finite() && page.text_width() >= 20.0 * CODE_WIDTH - 0.01, "{per_row:?}: {page:?}");
             assert!((1..=wide.cols).contains(&page_cols(&at(per_row))), "{per_row:?}");
         }
@@ -1582,36 +1715,43 @@ mod tests {
     fn a_font_size_shrinks_the_page_in_points_so_its_text_is_larger_on_screen() {
         // 80 × 30 cells hold 200%: half the page in points, half the characters, twice the text on screen.
         let tall = room(80, 30, 10.0, 20.0);
-        let (at_100, at_200) = (page_in(Width::Window, &tall, 100), page_in(Width::Window, &tall, 200));
+        let (at_100, at_200) = (page_in(Width::Window, &tall, 100, MARGIN_DEFAULT), page_in(Width::Window, &tall, 200, MARGIN_DEFAULT));
         assert!(near(at_200.page_w, at_100.page_w / 2.0) && near(at_200.margin_left, at_100.margin_left), "{} {}", at_200.page_w, at_100.page_w);
         assert!(near(at_200.page_h, at_100.page_h / 2.0), "{} {}", at_200.page_h, at_100.page_h);
-        assert_eq!((columns_of(&at_100), columns_of(&at_200)), (76, 36));
+        assert_eq!((columns_of(&at_100), columns_of(&at_200)), (74, 34));
         // A size past the most the room holds (170% at 80 × 23) is laid out at the most, as a width past
         // the room's is: the page never grows for a size the room can't hold.
         let small = room(80, 23, 10.0, 20.0);
-        let (at_170, at_300) = (page_in(Width::Window, &small, 170), page_in(Width::Window, &small, 300));
-        assert!(near(at_300.page_w, at_170.page_w) && near(at_300.page_h, at_170.page_h) && columns_of(&at_300) == 43, "{}", at_300.page_w);
+        let (at_170, at_300) = (page_in(Width::Window, &small, 170, MARGIN_DEFAULT), page_in(Width::Window, &small, 300, MARGIN_DEFAULT));
+        assert!(near(at_300.page_w, at_170.page_w) && near(at_300.page_h, at_170.page_h) && columns_of(&at_300) == 41, "{}", at_300.page_w);
         assert!(near(at_170.page_h, 23.0 * 2.0 * CODE_WIDTH * 100.0 / 170.0), "the room's height still: {}", at_170.page_h);
         // Where even the least size doesn't hold a page, the page grows to 20 × 10 of text and is shown
         // smaller.
-        let grown = page_in(Width::Window, &room(12, 5, 10.0, 20.0), 50);
+        let grown = page_in(Width::Window, &room(12, 5, 10.0, 20.0), 50, MARGIN_DEFAULT);
         assert!(near(grown.text_height(), 10.0 * LINE) && near(grown.page_h, 10.0 * LINE + 2.0 * grown.margin_top), "grown: {}", grown.page_h);
-        // At 50% the same window holds twice the characters: 156 a line, so two pages of 74 as a book.
-        let (small_100, at_50) = (page_in(Width::Window, &small, 100), page_in(Width::Window, &small, 50));
+        // At 50% the same window holds twice the characters: 154 a line, so two pages of 72 as a book.
+        let (small_100, at_50) = (page_in(Width::Window, &small, 100, MARGIN_DEFAULT), page_in(Width::Window, &small, 50, MARGIN_DEFAULT));
         assert!(
-            near(at_50.page_w, 39.0 * 2.0 * CODE_WIDTH) && near(at_50.page_h, small_100.page_h * 2.0) && columns_of(&at_50) == 74,
+            near(at_50.page_w, 39.0 * 2.0 * CODE_WIDTH) && near(at_50.page_h, small_100.page_h * 2.0) && columns_of(&at_50) == 72,
             "{}",
             at_50.page_w
         );
-        assert_eq!(columns_of(&page_in(Width::Columns(200), &small, 50)), 156);
+        assert_eq!(columns_of(&page_in(Width::Columns(200), &small, 50, MARGIN_DEFAULT)), 154);
         // A number is that many characters whatever the size, within the room.
-        assert_eq!(columns_of(&page_in(Width::Columns(40), &tall, 200)), 36, "the room's 36 at 200%");
-        assert_eq!(columns_of(&page_in(Width::Columns(40), &small, 50)), 40);
+        assert_eq!(columns_of(&page_in(Width::Columns(40), &tall, 200, MARGIN_DEFAULT)), 34, "the room's 34 at 200%");
+        assert_eq!(columns_of(&page_in(Width::Columns(40), &small, 50, MARGIN_DEFAULT)), 40);
         // The most: the largest size at which the room holds 20 × 10 of text; a tiny room holds none, and
         // gets the least.
-        assert_eq!((fits(&small, 170), fits(&small, 180)), (true, false));
-        assert_eq!((font_most(&small), font_most(&room(200, 50, 10.0, 20.0)), font_most(&room(12, 5, 10.0, 20.0))), (170, 370, 50));
-        assert_eq!(font_most(&room(0, 0, 0.0, 0.0)), 50);
+        assert_eq!((fits(&small, 170, MARGIN_DEFAULT), fits(&small, 180, MARGIN_DEFAULT)), (true, false));
+        assert_eq!(
+            (
+                font_most(&small, MARGIN_DEFAULT),
+                font_most(&room(200, 50, 10.0, 20.0), MARGIN_DEFAULT),
+                font_most(&room(12, 5, 10.0, 20.0), MARGIN_DEFAULT)
+            ),
+            (170, 370, 50)
+        );
+        assert_eq!(font_most(&room(0, 0, 0.0, 0.0), MARGIN_DEFAULT), 50);
         // From the option and the values: within the range.
         assert_eq!((font_given(None), font_given(Some("150")), font_given(Some("900")), font_given(Some("x"))), (100, 150, 400, 100));
         let mut values = Values::default();
@@ -1636,16 +1776,30 @@ mod tests {
         };
         let md = open("a.md", "One");
         let bounds = |cols: u16| md.bounds(WIDTH.name, room(cols, 23, 10.0, 20.0), Values::default()).unwrap();
-        assert_eq!(bounds(80), Bounds { named_at: Some(76), most: Some(76) });
-        assert_eq!(bounds(132), Bounds { named_at: Some(61), most: Some(128) });
+        assert_eq!(bounds(80), Bounds { named_at: Some(74), most: Some(74) });
+        assert_eq!(bounds(134), Bounds { named_at: Some(60), most: Some(128) });
         assert_eq!(bounds(12), Bounds { named_at: Some(20), most: Some(20) }, "a tiny room: the least a page holds");
         let mut at_200 = Values::default();
         assert!(at_200.set(FONT.name, Value::Number(200)));
         assert_eq!(
             md.bounds(WIDTH.name, room(80, 23, 10.0, 20.0), at_200),
-            Some(Bounds { named_at: Some(43), most: Some(43) }),
+            Some(Bounds { named_at: Some(41), most: Some(41) }),
             "laid out at 170%, the most"
         );
+        // The margin's most: the largest at which a line holds 20 characters at the font laid out at; 20,
+        // the setting's own, in 80 columns at 100%; 13 at 300%, laid out at 170%; in 12 columns, laid out at
+        // 50%, 2; in 9, where even none leaves 20 characters, a column.
+        let margin = |cols: u16, values| md.bounds(MARGIN.name, room(cols, 23, 10.0, 20.0), values).and_then(|bounds: Bounds| bounds.most);
+        let mut at_300 = Values::default();
+        assert!(at_300.set(FONT.name, Value::Number(300)));
+        assert_eq!(
+            (margin(80, Values::default()), margin(80, at_300), margin(12, Values::default()), margin(9, Values::default())),
+            (Some(20), Some(13), Some(2), Some(1))
+        );
+        // And the font's most is within the margin asked: at 20, 80 columns hold 20 characters up to 130%.
+        let mut wide_margin = Values::default();
+        assert!(wide_margin.set(MARGIN.name, Value::Number(20)));
+        assert_eq!(md.bounds(FONT.name, room(80, 23, 10.0, 20.0), wide_margin).and_then(|bounds| bounds.most), Some(130));
         assert_eq!(md.bounds(FONT.name, room(80, 23, 10.0, 20.0), Values::default()), Some(Bounds { named_at: None, most: Some(170) }));
         assert_eq!(md.bounds(PAPER.name, room(80, 23, 10.0, 20.0), Values::default()), None);
         let rtf = open("a.rtf", "{\\rtf1\\ansi One}");
@@ -1670,11 +1824,11 @@ mod tests {
         let table = "| One | Two |\n|---|---|\n| Three | Four |\n";
         let own = wordcraft_formats::html::import_with(&markdown_as_html(table), &|_| None);
         assert_eq!(grid(&own), 468.0, "the default page's");
-        let window = || page_in(Width::Window, &ROOMLESS, 100);
-        assert!(near(grid(&markdown(table.as_bytes(), &nowhere, window()).unwrap()), 96.0 * CODE_WIDTH), "the room's");
+        let window = || page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT);
+        assert!(near(grid(&markdown(table.as_bytes(), &nowhere, window()).unwrap()), 94.0 * CODE_WIDTH), "the room's");
         let cells = "<table><tr><td>One</td><td>Two</td></tr></table>";
-        assert!(near(grid(&html(cells.as_bytes(), &nowhere, window()).unwrap()), 96.0 * CODE_WIDTH));
-        let narrow = || page_in(Width::Columns(40), &ROOMLESS, 100);
+        assert!(near(grid(&html(cells.as_bytes(), &nowhere, window()).unwrap()), 94.0 * CODE_WIDTH));
+        let narrow = || page_in(Width::Columns(40), &ROOMLESS, 100, MARGIN_DEFAULT);
         for narrow in [markdown(table.as_bytes(), &nowhere, narrow()), html(cells.as_bytes(), &nowhere, narrow())] {
             assert!(near(grid(&narrow.unwrap()), 40.0 * CODE_WIDTH));
         }
@@ -1757,11 +1911,20 @@ mod tests {
             (Some(Value::Number(40)), Some(small), true)
         );
         let (w, h) = source.size(0).unwrap();
-        assert!(near(w, 44.0 * CODE_WIDTH) && near(h, 23.0 * 2.003 * CODE_WIDTH), "{w} × {h}");
+        assert!(near(w, 46.0 * CODE_WIDTH) && near(h, 23.0 * 2.003 * CODE_WIDTH), "{w} × {h}");
+        assert_eq!(source.laid_at().0.get(MARGIN.name), Some(Value::Number(MARGIN_DEFAULT)), "its margin, said");
         assert!(near(source.largest_scale(0).unwrap(), 23.0 * 20.03 / h) && source.largest_scale(99).is_none());
         assert!(source.relayout(at(40), small).is_none(), "at it already");
         assert!(source.relayout(at(40), room(80, 23, 10.1, 20.0)).is_none(), "the same room, within a little");
         assert!(source.relayout(at(40), room(80, 24, 10.0, 20.0)).is_some(), "another room");
+        // Another margin lays out again: at a width, the line keeps its 40 characters and the page grows by
+        // the margins, 5 at each side.
+        let mut margins = at(40);
+        assert!(margins.set(MARGIN.name, Value::Number(5)));
+        let wide_margins = source.relayout(margins, small).expect("a job")().unwrap();
+        assert_eq!(wide_margins.laid_at().0.get(MARGIN.name), Some(Value::Number(5)));
+        assert!(near(wide_margins.size(0).unwrap().0, 50.0 * CODE_WIDTH), "{:?}", wide_margins.size(0));
+        assert!(wide_margins.relayout(margins, small).is_none(), "at it already");
         let wider = source.relayout(at(76), small).expect("a job")().unwrap();
         assert_eq!(wider.laid_at().0.get(WIDTH.name), Some(Value::Number(76)));
         assert!(near(wider.size(0).unwrap().0, 80.0 * CODE_WIDTH));
@@ -1847,7 +2010,7 @@ mod tests {
     #[test]
     fn only_markdown_and_html_are_given_this_look() {
         let font = |bytes: &[u8], kind| {
-            let laid = laid_out(bytes, kind, None, "a", None, Width::Window, 100, &ROOMLESS).unwrap();
+            let laid = laid_out(bytes, kind, None, "a", None, At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT }, &ROOMLESS).unwrap();
             let document = laid.document.read().unwrap();
             document.styles.default_chr.font.clone().unwrap()
         };
@@ -1862,8 +2025,8 @@ mod tests {
     fn text_and_headings_take_this_look_not_a_web_pages() {
         let nowhere = Pictures::beside(None);
         let documents = [
-            markdown(b"# Head\n\nText", &nowhere, page_in(Width::Window, &ROOMLESS, 100)).unwrap(),
-            html(b"<h1>Head</h1><p>Text</p>", &nowhere, page_in(Width::Window, &ROOMLESS, 100)).unwrap(),
+            markdown(b"# Head\n\nText", &nowhere, page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT)).unwrap(),
+            html(b"<h1>Head</h1><p>Text</p>", &nowhere, page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT)).unwrap(),
         ];
         for document in &documents {
             let paragraphs = document.para_paths(StoryRef::Body);
@@ -1895,7 +2058,7 @@ mod tests {
             let frame = looked_at("Above\n\n```\none\n\nthree\n```\n\nBelow", paper);
             let empty = colour_at(&frame, 0, 0);
             // Inside its right edge, which the short text above and below it doesn't reach.
-            let x = PAGE_WIDTH - MARGIN - 4;
+            let x = PAGE_WIDTH - SIDE_PX - 4;
             let rows: Vec<u32> = (0..frame.height).filter(|y| colour_at(&frame, x, *y) != empty).collect();
             let (top, bottom) = (rows[0], *rows.last().unwrap());
             assert_eq!(rows.len() as u32, bottom - top + 1, "{paper:?}: a gap in it");
@@ -1904,7 +2067,7 @@ mod tests {
             // Its lines are fills that meet on parts of a pixel, by a step or two that doesn't show.
             let near = |colour: [u8; 3]| colour.iter().zip(wash).all(|(a, b)| a.abs_diff(b) <= 3);
             assert!((top + 1..bottom).all(|y| near(colour_at(&frame, x, y))), "{paper:?}: a seam in it");
-            for (x, inside) in [(MARGIN - 3, false), (MARGIN + 3, true), (PAGE_WIDTH - MARGIN - 3, true), (PAGE_WIDTH - MARGIN + 3, false)] {
+            for (x, inside) in [(SIDE_PX - 3, false), (SIDE_PX + 3, true), (PAGE_WIDTH - SIDE_PX - 3, true), (PAGE_WIDTH - SIDE_PX + 3, false)] {
                 assert_eq!(colour_at(&frame, x, middle) != empty, inside, "{paper:?}: at {x}");
             }
             (top, bottom, empty, wash, frame)
@@ -1955,9 +2118,9 @@ mod tests {
         let lines = lines_of(&frame, dark_ink);
         let [one, two] = lines[..] else { panic!("{lines:?}") };
         // As a word processor has it, it would be in the middle of the page.
-        assert!(one.left < MARGIN + 2 * 14 && two.left < MARGIN + 2 * 14, "{lines:?}");
+        assert!(one.left < SIDE_PX + 2 * 14 && two.left < SIDE_PX + 2 * 14, "{lines:?}");
         // The bar goes on between its paragraphs.
-        let bar = (MARGIN..one.left).find(|x| not_white(colour_at(&frame, *x, one.top))).expect("a bar");
+        let bar = (SIDE_PX..one.left).find(|x| not_white(colour_at(&frame, *x, one.top))).expect("a bar");
         assert!((one.top..=two.bottom).all(|y| not_white(colour_at(&frame, bar, y))), "the bar stops");
     }
 
@@ -1985,9 +2148,16 @@ mod tests {
     /// Only a bullet goes, since a numbered task keeps its number; and what is in a table is styled too.
     #[test]
     fn a_tasks_box_takes_the_place_of_its_bullet() {
-        let laid =
-            laid_out(b"- one\n- [x] two\n\n1. [x] three\n\n| [`a`](b) |\n|---|\n", Kind::Markdown, None, "a", None, Width::Window, 100, &ROOMLESS)
-                .unwrap();
+        let laid = laid_out(
+            b"- one\n- [x] two\n\n1. [x] three\n\n| [`a`](b) |\n|---|\n",
+            Kind::Markdown,
+            None,
+            "a",
+            None,
+            At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT },
+            &ROOMLESS,
+        )
+        .unwrap();
         let document = laid.document.read().unwrap();
         let paras: Vec<&wordcraft_doc::Paragraph> =
             document.para_paths(StoryRef::Body).iter().filter_map(|path| document.para(StoryRef::Body, path)).collect();

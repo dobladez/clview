@@ -480,15 +480,17 @@ struct Settings {
     changed: std::cell::Cell<bool>,
 }
 
-/// The relayout settings `source` has (`has`) and is laid out at a value of that isn't the default: for
-/// the status line, said as the keys say the value, with what a number past its most here is laid out
-/// at (`bounds`). None otherwise.
+/// The relayout settings `source` has (`has`) and is laid out at a value of that isn't the default, or
+/// that is past its most here: for the status line, said as the keys say the value, with what a number
+/// past its most here is laid out at (`bounds`), `font 100% (80%)` too. None otherwise.
 fn laid_at(settings: &Settings, source: &dyn Source, has: &[&str], bounds: &[(&'static str, Bounds)]) -> Option<String> {
     let (laid, _) = source.laid_at();
     let relayout = settings.declared.iter().filter(|setting| setting.effect == Effect::Relayout && has.contains(&setting.name));
     let shown = relayout.filter_map(|setting| {
-        let value = laid.get(setting.name).filter(|value| *value != setting.default)?;
-        Some(said_in(setting, value, bounds_of(bounds, setting.name)))
+        let bounds = bounds_of(bounds, setting.name);
+        let past = |value: &Value| matches!((value, bounds.and_then(|bounds| bounds.most)), (Value::Number(n), Some(most)) if *n > most);
+        let value = laid.get(setting.name).filter(|value| *value != setting.default || past(value))?;
+        Some(said_in(setting, value, bounds))
     });
     shown.reduce(|all, one| format!("{all} · {one}"))
 }
@@ -2934,6 +2936,10 @@ mod tests {
         let mut values = Values::default();
         assert!(values.set("font", Value::Number(100)));
         assert_eq!(laid_at(&nav.settings, &LaidAt(values), &nav.has, &nav.bounds), None, "the default");
+        // The default past the most here, as wide margins or a narrow column make it: said, with what it is
+        // laid out at.
+        let narrow = declaring_font(reader(0, 3, 40, 40), &["font"], Some(80));
+        assert_eq!(laid_at(&narrow.settings, &LaidAt(values), &narrow.has, &narrow.bounds), Some("font 100% (80%)".into()));
     }
 
     /// A source laid out at something, for the status line's sake.

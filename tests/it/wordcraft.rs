@@ -182,7 +182,7 @@ const COLUMN: f32 = 5.64;
 struct Page {
     w: f32,
     h: f32,
-    /// Its text's width and height, within the margins: two columns at each side, a row above and below.
+    /// Its text's width and height, within the margins: three columns at each side, a row above and below.
     text_w: f32,
     text_h: f32,
 }
@@ -199,15 +199,15 @@ fn printed_page(width: Option<f32>) -> Page {
         Some((cols, rows, shape)) => (cols, rows - 1, shape),
         None => (60, 40, 2.0),
     };
-    let room = f32::from(cols) * COLUMN - 4.0 * COLUMN;
-    let half = f32::from((cols - 2) / 2) * COLUMN - 4.0 * COLUMN;
+    let room = f32::from(cols) * COLUMN - 6.0 * COLUMN;
+    let half = f32::from((cols - 2) / 2) * COLUMN - 6.0 * COLUMN;
     let text_w = match width {
         Some(columns) => (columns * COLUMN).min(room),
         None if half >= 60.0 * COLUMN => half,
         None => room,
     };
     let (row, text_h) = (shape * COLUMN, f32::from(rows) * shape * COLUMN - 2.0 * shape * COLUMN);
-    Page { w: text_w + 4.0 * COLUMN, h: text_h + 2.0 * row, text_w, text_h }
+    Page { w: text_w + 6.0 * COLUMN, h: text_h + 2.0 * row, text_w, text_h }
 }
 
 /// The window the tests' controlling terminal reports, if they have one: its columns and rows, and the
@@ -672,6 +672,28 @@ fn the_width_lays_markdown_and_html_out_to_so_many_characters() {
     assert!(shaped(&drawn(&pdf, &["--width", "40", "--font", "200"]), 612.0, 792.0));
 }
 
+/// `--margin` sets Markdown and HTML's side margins, in characters of code at each side: at `window`
+/// the page is the room's and its lines shorter, so there are more pages; at a width the line keeps its
+/// length and the page grows by them. Refused out of its range; taken, and doing nothing, on a PDF.
+#[test]
+fn the_margin_shortens_the_line_or_widens_the_page() {
+    let window = printed_page(None);
+    let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {
+        let path = write(tmp("word-margin", name), document.as_bytes());
+        let (three, ten) = (drawn(&path, &[]), drawn(&path, &["--margin", "10"]));
+        assert!(shaped(&ten, window.w, window.h) && ten.len() > three.len(), "{name}: {} pages at 10, {} at 3", ten.len(), three.len());
+        assert_eq!(drawn(&path, &["--margin", "3"]), three, "{name}: 3 is the default");
+        // At 40 characters, 10 at each side: 60 columns.
+        let at_40 = printed_page(Some(40.0));
+        assert!(shaped(&drawn(&path, &["--width", "40", "--margin", "10"]), at_40.w + 14.0 * COLUMN, at_40.h), "{name}");
+        let out = view(&path, &["--protocol", "kitty", "--margin", "30"]);
+        assert!(!out.status.success() && text(&out.stderr).contains("--margin: expected 0–20, got 30"), "{}", text(&out.stderr));
+    }
+    let pdf = write(tmp("word-margin", "a.pdf"), &crate::fixtures::letter("One", 1));
+    assert!(shaped(&drawn(&pdf, &["--margin", "10"]), 612.0, 792.0));
+}
+
 /// `--per-row` lays Markdown and HTML out in that many columns of the room printing lays out for, the
 /// tty's or with none the preview's ([`printed_page`]): each its share of the room's columns less the
 /// gaps, as tall, and more pages of them; printed that many to a row. A typed `--width` disagrees with
@@ -681,7 +703,7 @@ fn per_row_lays_markdown_and_html_out_in_columns() {
     let window = printed_page(None);
     let cols = tty_window().map_or(60, |(cols, _, _)| cols);
     // Three where each holds 20 characters at 100%, else two.
-    let n = if (cols.saturating_sub(4) / 3).saturating_sub(4) >= 20 { 3 } else { 2 };
+    let n = if (cols.saturating_sub(4) / 3).saturating_sub(6) >= 20 { 3 } else { 2 };
     let column = f32::from((cols - 2 * (n - 1)) / n) * COLUMN;
     let long: String = (1..=60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
     for (name, document) in [("long.md", long.clone()), ("long.html", long.split("\n\n").map(|p| format!("<p>{p}</p>")).collect())] {

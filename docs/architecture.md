@@ -168,8 +168,8 @@ pager's `Nav` takes a key the viewer's keys don't take to the build's settings (
 says the setting's message if what is shown hasn't it; a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
 value; `Step` keys to the next among the steps down or up (`stepped`): the multiples of the step from
 the least up to the most here (the setting's, or the room's where that is under it), and the named
-value set among them (`Bounds::named_at`), after the number equal to it (`window` at 96 in a window
-of 100 columns: from 92 `]` goes to 96, then to `window`, which says `the most here`; in a window
+value set among them (`Bounds::named_at`), after the number equal to it (`window` at 94 in a window
+of 100 columns: from 92 `]` goes to 94, then to `window`, which says `the most here`; in a window
 that holds a book, `window` sits at a page's characters and the steps go on past it to the window's
 width), staying at the least or the most and saying so; a number typed before a numbered setting's
 key sets it, clamped to its range, used up whatever happens, and 0 to the setting's `zero`
@@ -316,17 +316,24 @@ change in the terminal, which changes it by more and the columns with it, does.
   shape tall (`cell_points`, the shape taken within reason, since a room is input), so at 200% the page
   is half as large in points and its text twice as large on screen. The page is always as tall as the
   room; at `window` as wide as it, or half of it less the gap where each half holds `BOOK_LEAST` (60)
-  characters of text, as an open book, or with a count its share of the room's columns less the gaps
-  (`page_cols`, checked, a cell at least), the book rule off; at a number, as wide as the characters
-  take, never wider than that page. `fits` and so `font_most` go by that page too. The margins are `SIDE_MARGIN` (2) columns at each side and `TOP_MARGIN` (1) row above and
-  below, at the text's size whatever the font size (`margins`). A font size past the most the room
-  holds (`font_most`) is laid out at the most, as a width past the room's is, the value kept; a page
-  too small for `LEAST_COLUMNS` × `LEAST_LINES` (20 × 10) of text even at the least size loses a
-  column of each side margin, then grows past the room (and is shown smaller). Sides are capped at `MAX_PAGE` (14,400 pt). `Source::bounds`
-  answers for `width`, at the font size the values want: `named_at` the columns of the `window` page's
-  text (`columns_of`), `most` those of a page as wide as the room; and for `font`: `most` the largest of
-  its steps at which the room holds a page without growing (`fits`, `font_most`), the least where none
-  does.
+  characters of text between its margins, as an open book, or with a count its share of the room's
+  columns less the gaps (`page_cols`, checked, a cell at least), the book rule off (`window_cols`); at a
+  number, the characters between the margins, the page growing by them, never wider than the room's
+  share. The side margins are the `margin` setting's (`MARGIN`, 0 to 20, `MARGIN_DEFAULT` 3), in
+  characters of the code face, so `margin` × `CODE_WIDTH` points at any font size (`side`); above and
+  below, `TOP_MARGIN` (1) row at the text's size whatever the font size (`top_margin`). The bounds are
+  worked out in order, each from the values as asked
+  ([ADR-0024](adr/0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md)): the
+  page's cells; `font`'s most, the largest of its steps at which that page holds `LEAST_COLUMNS` ×
+  `LEAST_LINES` (20 × 10) of text within the margin asked (`fits`, `font_most`), the least where none
+  does; `margin`'s most, the largest at which a line holds 20 characters at the font laid out at
+  (`margin_most`). A value past its most is laid out at it, the value kept; where even no margin leaves
+  20 characters, the margin is `min(asked, 1)` and the page grows past the room (and is shown
+  smaller). So a margin asked wider than a narrow page takes lowers the font laid out at, before the
+  margin's own most binds, at the least size. Sides are capped at `MAX_PAGE` (14,400 pt).
+  `Source::bounds` answers each of them: for `width`, `named_at` the columns of the `window` page's text
+  (`columns_of`) and `most` those of a page as wide as the room's share; for `font` and `margin`, `most`
+  as above (a column, for a margin where none holds 20 characters).
 - **Shown at its size.** `Source::largest_scale` is a default method answering `None`; the documents'
   backend answers, for Markdown and HTML, with the scale at which a page is as tall as its room
   (`rows × cell_h / page_h`). `fit::layout` takes it in `Size::largest` as it takes the 1.0 a natural

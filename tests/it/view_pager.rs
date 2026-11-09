@@ -1569,7 +1569,7 @@ fn page_count(text: &str) -> Option<usize> {
 #[cfg(feature = "word")]
 const WINDOW: (f32, f32) = (100.0 * 5.64, 59.0 * 11.28);
 #[cfg(feature = "word")]
-const NARROW: f32 = 44.0 * 5.64;
+const NARROW: f32 = 46.0 * 5.64;
 
 /// A document's page is the window's: as tall as the pages area, as wide. `40]` lays the document out
 /// again at 40 characters a line, the new pages narrower and as tall, the status line saying `width 40`
@@ -1591,7 +1591,7 @@ fn the_width_keys_lay_the_document_out_again_and_the_status_line_says_what_it_is
     view.wait_until("narrow pages, said", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
     let narrow_pages = page_count(&view.text()).unwrap();
     view.press("]");
-    view.wait_until("stepped", |t| bar(t).contains("· width 44 ·") && last_sent_shaped(t, 48.0 * 5.64, WINDOW.1));
+    view.wait_until("stepped", |t| bar(t).contains("· width 44 ·") && last_sent_shaped(t, 50.0 * 5.64, WINDOW.1));
     view.press("0]");
     view.wait_until("the window's again", |t| bar(t).contains("width window") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
     view.wait_until("fewer pages", |t| page_count(t).is_some_and(|count| count < narrow_pages));
@@ -1725,9 +1725,9 @@ fn a_layout_that_fails_keeps_the_old_pages_and_puts_the_value_back() {
     let text = view.text();
     let window = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - WINDOW.0 / WINDOW.1).abs() < 0.01;
     assert!(!bar(&text).contains("· width 40 ·") && sizes_sent(&text).iter().all(window), "{:?}", last_draw(&text));
-    // From `window` again, set at the 96 characters this window holds (the number first), not from 40.
+    // From `window` again, set at the 94 characters this window holds (the number first), not from 40.
     view.press("[");
-    view.wait_until("from window again", |t| bar(t).contains("width 96"));
+    view.wait_until("from window again", |t| bar(t).contains("width 94"));
     assert!(!view.text().contains("width 36"));
     view.press("q");
     assert!(view.finish().success());
@@ -1758,15 +1758,15 @@ fn a_count_to_a_row_lays_markdown_out_in_columns_and_the_last_key_wins() {
         bar(last_draw(t)).contains("· 3 per row ·") && t.contains("  pages 1–3/") && last_sent_shaped(t, THIRD, WINDOW.1)
     });
     since(&mut view, ",", "four", &|t| t.contains("  pages 1–4/") && last_sent_shaped(t, 23.0 * 5.64, WINDOW.1));
-    // A width: the count back to auto, the pages 76 columns wide, one to a row.
-    since(&mut view, "72]", "width 72", &|t| bar(last_draw(t)).contains("· width 72 · 1 per row ·") && last_sent_shaped(t, 76.0 * 5.64, WINDOW.1));
+    // A width: the count back to auto, the pages 78 columns wide, one to a row.
+    since(&mut view, "72]", "width 72", &|t| bar(last_draw(t)).contains("· width 72 · 1 per row ·") && last_sent_shaped(t, 78.0 * 5.64, WINDOW.1));
     // A count: the width back to window.
     since(&mut view, "3.", "three again", &|t| {
         last_sent_shaped(t, THIRD, WINDOW.1) && t.contains("  pages 1–3/") && !bar(last_draw(t)).contains("width")
     });
-    // `[` from window at auto, the window's 96 characters: not from a column's 28.
-    since(&mut view, "[", "from the window's width", &|t| bar(last_draw(t)).contains("· width 96 ·") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
-    assert!(!view.text().contains("width 28"));
+    // `[` from window at auto, the window's 94 characters: not from a column's 26.
+    since(&mut view, "[", "from the window's width", &|t| bar(last_draw(t)).contains("· width 94 ·") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
+    assert!(!view.text().contains("width 26"));
     since(&mut view, "3.0.", "auto again", &|t| bar(last_draw(t)).contains("· 1 per row ·") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
     view.press("q");
     assert!(view.finish().success());
@@ -1797,6 +1797,49 @@ fn printing_lays_markdown_out_in_columns_for_the_ttys_room() {
     assert!(column >= 3 && !text.contains(",c=32,r=19,"), "{column} columns: {:?}", &text[..text.len().min(400)]);
 }
 
+/// `}` and `{` lay a Markdown file out again with side margins a character wider or narrower, the
+/// status line saying the margin while it isn't 3, `0}` back to 3; `}` stops at the most the window
+/// holds, where a line keeps 20 characters (6 in a column of 32), and says so. In a list they
+/// say to open a document.
+#[cfg(feature = "word")]
+#[test]
+fn the_margin_keys_lay_the_document_out_again_and_stop_at_the_most_here() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("margins", "long.md"), &["--pager", "--width", "40"], 100, 60);
+    // Narrow pages, two to a row.
+    view.wait_until("page 1", |t| t.contains("  pages 1–2/") && last_sent_shaped(t, NARROW, WINDOW.1));
+    view.press("}");
+    view.wait_until("margin 4", |t| bar(last_draw(t)).contains("· width 40 · margin 4 ·") && last_sent_shaped(t, 48.0 * 5.64, WINDOW.1));
+    view.press("0}");
+    // Said as the key's message, and gone from the slot on the right.
+    view.wait_until("3 again", |t| {
+        bar(last_draw(t)).contains(" margin 3 ") && !bar(last_draw(t)).contains("· margin") && last_sent_shaped(t, NARROW, WINDOW.1)
+    });
+    view.press("q");
+    assert!(view.finish().success());
+    // In three columns of 32, a line keeps 20 characters within 6 at most.
+    let mut view = Session::start_on(KITTY, &long_markdown("margins-most", "long.md"), &["--pager"], 100, 60);
+    view.wait_until("page 1, again", |t| t.contains("  page 1/"));
+    view.press("3.");
+    view.wait_until("three columns", |t| last_sent_shaped(t, THIRD, WINDOW.1));
+    view.press("6}}");
+    view.wait_until("the most here", |t| bar(t).contains("margin 6, the most here"));
+    view.press("q");
+    assert!(view.finish().success());
+    let dir = crate::view::tmp("margins-list", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    long_markdown("margins-list", "shelf/a.md");
+    long_markdown("margins-list", "shelf/b.md");
+    let mut view = Session::start_on(KITTY, &dir, &[], 100, 60);
+    view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
+    view.press("}");
+    view.wait_until("said", |t| bar(t).contains("open a document to reflow it"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// A key that changes both the count and the width is one change: when its layout fails, both go back
 /// to what is on screen, and the next step starts from there.
 #[cfg(feature = "word")]
@@ -1809,7 +1852,7 @@ fn a_count_whose_layout_fails_puts_the_count_and_the_width_back() {
     let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
     view.wait_until("page 1", |t| t.contains("  page 1/"));
     view.press("72]");
-    view.wait_until("width 72", |t| bar(last_draw(t)).contains("· width 72 ·") && last_sent_shaped(t, 76.0 * 5.64, WINDOW.1));
+    view.wait_until("width 72", |t| bar(last_draw(t)).contains("· width 72 ·") && last_sent_shaped(t, 78.0 * 5.64, WINDOW.1));
     std::fs::remove_file(&path).unwrap();
     let before = view.text().len();
     view.press("3.");
@@ -1818,7 +1861,7 @@ fn a_count_whose_layout_fails_puts_the_count_and_the_width_back() {
     let text = view.text();
     assert!(bar(last_draw(&text)).contains("· width 72 · 1 per row ·"), "both back: {:?}", last_draw(&text));
     // The old pages, drawn three to a row until the layout came back, and nothing laid out in columns.
-    let as_laid = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - 76.0 * 5.64 / WINDOW.1).abs() < 0.01;
+    let as_laid = |(w, h): &(u32, u32)| (*w as f32 / *h as f32 - 78.0 * 5.64 / WINDOW.1).abs() < 0.01;
     assert!(sizes_sent(&text[before..]).iter().all(as_laid), "nothing laid out: {:?}", sizes_sent(&text[before..]));
     // From one to a row again: `,` is two, not four.
     let before = view.text().len();
@@ -2023,8 +2066,8 @@ fn the_zoom_keys_are_the_font_size_on_a_markdown_file_and_the_zoom_on_a_pdf() {
 }
 
 /// Where `window` sits among the widths depends on the font size: `150+` then `[`, typed together before
-/// the layout at 150% lands, steps down from `window` to the 62 characters a 100-column window holds at
-/// 150% (the most there, a step of its own, `window` sitting after it), not to the 96 it held at 100%.
+/// the layout at 150% lands, steps down from `window` to the 60 characters a 100-column window holds at
+/// 150% (the most there, a step of its own, `window` sitting after it), not to the 94 it held at 100%.
 #[cfg(feature = "word")]
 #[test]
 fn a_width_key_after_a_font_key_steps_by_the_bounds_at_the_new_size() {
@@ -2034,8 +2077,8 @@ fn a_width_key_after_a_font_key_steps_by_the_bounds_at_the_new_size() {
     let mut view = Session::start_on(KITTY, &long_markdown("font-bounds", "long.md"), &["--pager"], 100, 60);
     view.wait_until("page 1", |t| t.contains("  page 1/") && last_sent_shaped(t, WINDOW.0, WINDOW.1));
     view.press("150+[");
-    view.wait_until("width 62 at 150%", |t| bar(t).contains("· width 62 · font 150% ·"));
-    assert!(!view.text().contains("width 96"), "stepped from the bounds at 100%");
+    view.wait_until("width 60 at 150%", |t| bar(t).contains("· width 60 · font 150% ·"));
+    assert!(!view.text().contains("width 94"), "stepped from the bounds at 100%");
     view.press("q");
     assert!(view.finish().success());
 }

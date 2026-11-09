@@ -208,7 +208,7 @@ a margin setting on `{` and `}`.
   *Verify:* `cargo test -j 2 --test it wordcraft` (printed columns with a tty and without),
   `cargo test -j 2 --test it view_pager` (`3.`, `3.72]`, `3.[`, `0.`, `--pages` zooming, a failed
   layout restoring both, text cells), `cargo test -j 2 --test it view_tmux` (columns in a pane).
-- [ ] **Margins on `{` `}`** — the setting at 3, its bounds in the order above, the book counting
+- [x] **Margins on `{` `}`** — the setting at 3, its bounds in the order above, the book counting
   them, `--margin`, `min(asked, 1)` in a small room, the changelog line. *Files:*
   `src/source/wordcraft.rs`, `tests/it/wordcraft.rs`, `tests/it/view_pager.rs`. *Verify:*
   `cargo test -j 2 --bin clv wordcraft` (`page_in` at margins 0, 3 and 20, at 50%, 100% and 200%;

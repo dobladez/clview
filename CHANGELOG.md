@@ -35,11 +35,17 @@ works today. A version's section becomes the notes of its
   one. A count and a width you type both say how wide a page is, so the last you set wins: `3.` puts the
   width back to `window`, `72]` the count back to `auto`. `--width 72` with `--per-row 3` lays out at
   the width, with a warning. Printed, `--per-row 3` prints three-column pages.
+- Markdown and HTML margins: `}` and `{` widen or narrow the side margins a character at a time, from 0
+  to 20 characters of code, `5}` to 5, `0}` back to 3; `--margin N` says where to start. At the window's
+  width they shorten the line; at a width of your own the page grows by them. The status line shows the
+  margin when it isn't 3, and a font size laid out smaller than asked (`font 100% (80%)`).
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 
 ### Changed
 
+- Markdown and HTML side margins are 3 characters of code, from 2: a window 100 columns wide puts 94
+  characters on a line, and a book of two pages needs 134 columns.
 - `--zoom` is now `--per-row auto|width|1-8`, since it sets a list's tiles to a row too. `--zoom` is
   still taken, with a warning, and will go in a later release.
 - `--help` lists `--theme` among the documents' options, as it comes with them; it is still taken

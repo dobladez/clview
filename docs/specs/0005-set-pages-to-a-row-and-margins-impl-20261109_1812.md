@@ -83,3 +83,35 @@ surprises, and what a later reader would want.
   `Room::same` (→ `source::tests::a_room_is_the_same_within_a_little_of_its_cell`, and the text-cells test:
   no layout); the printed room's count (→ both printing tests); the conflict's warning (→ the printing
   test's stderr).
+
+## Task 3: margins on `{` `}`
+
+- **`MARGIN`**, the setting, replaces `SIDE_MARGIN`: 0 to 20 characters, step 1, default and zero 3,
+  `Keys::Step('{', '}')`, `--margin N`, `Relayout`. A margin is `margin × CODE_WIDTH` points (`side`), so
+  N characters are N × F/100 cells at font F; top and bottom stay `TOP_MARGIN` (`top_margin`).
+- **What a document is laid out at** is now one value, `At { width, font, margin }`, as asked; `laid_at`
+  says all three, `relayout` compares all three, and `laid_out` lost its `too_many_arguments` expect.
+- **The order of the bounds**, as the spec says: `font_most(room, margin asked)` over the room's share
+  (`page_cols`), then `margin_most(room, font laid out at)`, then the page (`window_cols` decides the book
+  with the margin laid out at). A consequence the spec's example (`margin 12 (9)`) doesn't show: since the
+  font's most is worked out within the margin asked, a margin wider than a narrow page takes lowers the
+  font laid out at first, and the margin's most binds only at the least size. Stepping `}` stops where
+  the next margin would need a smaller font (`margin 6, the most here` in a 32-column column); a typed
+  `12}` lowers the font instead. To make that visible, the status line now says a value laid out past
+  its most even at its default (`font 100% (80%)`), which it hid before (`laid_at` in `pager.rs`, a file
+  not in this task's list).
+- **`min(asked, 1)`** where even no margin leaves 20 characters; where none leaves exactly 20, the most is
+  0 and the margin 0 (a 10-column room at 50%).
+- **3 for 2 moves numbers**: 80 columns hold 74, 100 hold 94, a book needs 134 columns (two pages of 60).
+  The backend's tests, `tests/it/view_pager.rs` (`NARROW`, the steps `94`, `60` at 150%) and
+  `tests/it/wordcraft.rs`'s `printed_page` moved with it; the styling tests' pixel margin is `SIDE_PX`
+  34, renamed from `MARGIN`, which the setting now names.
+- **Seen failing**, each by reverting and copying back (`cmp`): margins ignored in `page_in` (→
+  `wordcraft::tests::margins_shorten_the_line_at_window_and_widen_the_page_at_a_width` and three more
+  unit tests, `wordcraft::the_margin_shortens_the_line_or_widens_the_page`,
+  `view_pager::the_margin_keys_lay_the_document_out_again_and_stop_at_the_most_here`); `margin_most`
+  unbounded (→ the bounds test, the margins test, the pager test's `the most here`); `font_most`
+  ignoring the margin asked (→ the margins and bounds tests); `min(asked, 1)` as `asked` (→ the margins
+  and page tests); the default said past its most (→
+  `pager::tests::the_zoom_keys_are_a_documents_font_size_where_it_has_one_and_the_zoom_elsewhere`); the
+  margin left out of `laid_at` (→ `wordcraft::tests::markdown_and_html_say_their_width_and_room_and_lay_out_again_at_another`).
