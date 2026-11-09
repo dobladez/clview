@@ -116,3 +116,19 @@ surprises, and what a later reader would want.
   and page tests); the default said past its most (→
   `pager::tests::the_zoom_keys_are_a_documents_font_size_where_it_has_one_and_the_zoom_elsewhere`); the
   margin left out of `laid_at` (→ `wordcraft::tests::markdown_and_html_say_their_width_and_room_and_lay_out_again_at_another`).
+
+## The margin yields to the font
+
+- **The owner's answer** to the consequence noted under task 3: the font is kept, and a typed margin is
+  capped to what fits at it. `font_most` and `fits` no longer take the margin: the font's most is the
+  largest at which the page holds 20 characters within margins of a column (Spec-0003's rule), whatever
+  the margin asked; `margin_most` at the font laid out at then caps the margin. In three columns of 32,
+  `12}` is `margin 12 (6)`, the text at 100%; the spec's order (its item 2), the ADR, the manual and the
+  architecture say so.
+- **`font 100% (80%)` stays.** Margins no longer lower the font, but a count to a row still can: five to
+  a row of 100 columns (18 each) hold 20 characters up to 80%, so a default 100% is laid out at 80%, and
+  the status line says so.
+- **Seen failing first**, before the fix, on the code of task 3: `view_pager::the_margin_keys_lay_the_document_out_again_and_stop_at_the_most_here`'s
+  new step ("12, laid out at 6 never happened": it said `margin 12` and `font 100% (70%)`), and
+  `wordcraft::tests::margins_shorten_the_line_at_window_and_widen_the_page_at_a_width` (in 30 columns
+  the margin was laid out at 12, the font lowered to 60%).

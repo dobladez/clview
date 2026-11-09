@@ -37,8 +37,10 @@ works today. A version's section becomes the notes of its
   the width, with a warning. Printed, `--per-row 3` prints three-column pages.
 - Markdown and HTML margins: `}` and `{` widen or narrow the side margins a character at a time, from 0
   to 20 characters of code, `5}` to 5, `0}` back to 3; `--margin N` says where to start. At the window's
-  width they shorten the line; at a width of your own the page grows by them. The status line shows the
-  margin when it isn't 3, and a font size laid out smaller than asked (`font 100% (80%)`).
+  width they shorten the line; at a width of your own the page grows by them, and a margin wider than
+  the page takes is laid out at the most it does, the text at its size (`margin 12 (6)`). The status
+  line shows the margin when it isn't 3, and a font size laid out smaller than asked, 100% too, as
+  `font 100% (80%)`.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
 

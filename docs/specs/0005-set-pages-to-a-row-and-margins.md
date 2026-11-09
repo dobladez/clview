@@ -103,8 +103,8 @@ a margin setting on `{` and `}`.
   margins.
 - **The order bounds are worked out in**, each from the values as asked:
   1. The page's width in cells: the room, `per_row` and `width`.
-  2. `font`'s most: the largest font at which that page holds 20 characters a line within the
-     margin asked.
+  2. `font`'s most: the largest font at which that page holds 20 characters a line within margins
+     of a column, whatever the margin asked: the margin yields to the font, which stays as asked.
   3. `margin`'s most: the largest margin at which a line holds 20 characters at the font laid out
      at. `}` stops there, saying `margin 9, the most here`, from `Source::bounds` as `width`'s and
      `font`'s most are.
@@ -214,6 +214,10 @@ a margin setting on `{` and `}`.
   `src/source/wordcraft.rs`, `tests/it/wordcraft.rs`, `tests/it/view_pager.rs`. *Verify:*
   `cargo test -j 2 --bin clv wordcraft` (`page_in` at margins 0, 3 and 20, at 50%, 100% and 200%;
   the most of each bound), `cargo test -j 2 --test it wordcraft`.
+- [x] **The margin yields to the font** — the owner's answer after task 3: `font`'s most no longer
+  depends on the margin asked, and a margin typed past what fits is laid out at the most at the font
+  asked (`margin 12 (6)`). *Files:* `src/source/wordcraft.rs`, `tests/it/view_pager.rs`, the docs, the
+  ADR. *Verify:* `cargo test -j 2 --bin clv wordcraft`, `cargo test -j 2 --test it the_margin_keys`.
 
 ## Done
 
@@ -236,3 +240,5 @@ a margin setting on `{` and `}`.
 - 2026-11-09 — Implementing ([notes](0005-set-pages-to-a-row-and-margins-impl-20261109_1812.md)).
 - 2026-11-09 — Revised: the status line at `auto` says the count `auto` drew, as now (the owner's
   answer); "nothing at `auto`" was the room's.
+- 2026-11-09 — Revised: the margin yields to the font, the font's most whatever the margin asked
+  (the owner's answer); a task added for it.

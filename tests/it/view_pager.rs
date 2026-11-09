@@ -1826,6 +1826,11 @@ fn the_margin_keys_lay_the_document_out_again_and_stop_at_the_most_here() {
     view.wait_until("three columns", |t| last_sent_shaped(t, THIRD, WINDOW.1));
     view.press("6}}");
     view.wait_until("the most here", |t| bar(t).contains("margin 6, the most here"));
+    // The margin yields to the font: 12 typed is kept and laid out at 6, the text at its size.
+    let before = view.text().len();
+    view.press("12}");
+    view.wait_until("12, laid out at 6", |t| bar(last_draw(&t[before..])).contains("· margin 12 (6) ·"));
+    assert!(!bar(last_draw(&view.text())).contains("font"), "the font as asked: {:?}", bar(last_draw(&view.text())));
     view.press("q");
     assert!(view.finish().success());
     let dir = crate::view::tmp("margins-list", "shelf");

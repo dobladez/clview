@@ -325,12 +325,13 @@ change in the terminal, which changes it by more and the columns with it, does.
   worked out in order, each from the values as asked
   ([ADR-0024](adr/0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md)): the
   page's cells; `font`'s most, the largest of its steps at which that page holds `LEAST_COLUMNS` ×
-  `LEAST_LINES` (20 × 10) of text within the margin asked (`fits`, `font_most`), the least where none
-  does; `margin`'s most, the largest at which a line holds 20 characters at the font laid out at
-  (`margin_most`). A value past its most is laid out at it, the value kept; where even no margin leaves
-  20 characters, the margin is `min(asked, 1)` and the page grows past the room (and is shown
-  smaller). So a margin asked wider than a narrow page takes lowers the font laid out at, before the
-  margin's own most binds, at the least size. Sides are capped at `MAX_PAGE` (14,400 pt).
+  `LEAST_LINES` (20 × 10) of text within margins of a column, whatever the margin asked (`fits`,
+  `font_most`), the least where none does; `margin`'s most, the largest at which a line holds 20
+  characters at the font laid out at (`margin_most`), so the margin yields to the font. A value past
+  its most is laid out at it, the value kept, and the status line says so even for a default
+  (`pager::laid_at`: `font 100% (80%)` in a narrow column); where even no margin leaves 20 characters,
+  the margin is `min(asked, 1)` and the page grows past the room (and is shown smaller). Sides are
+  capped at `MAX_PAGE` (14,400 pt).
   `Source::bounds` answers each of them: for `width`, `named_at` the columns of the `window` page's text
   (`columns_of`) and `most` those of a page as wide as the room's share; for `font` and `margin`, `most`
   as above (a column, for a margin where none holds 20 characters).

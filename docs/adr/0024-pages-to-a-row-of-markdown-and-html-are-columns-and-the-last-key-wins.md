@@ -35,11 +35,10 @@ depends on the others, and the room.
   line, `--width N` with a count wins, with a warning, since there is no order to go by.
 - **The bounds, in order**, each worked out from the values asked: the page's width in cells (the
   room, the count and `width`); then `font`'s most, the largest at which that page, a column, holds
-  20 characters a line within the margin asked; then `margin`'s most, the largest at which a line
-  holds 20 characters at the font laid out at. A value past its most is kept and laid out at the most.
-  So a margin wider than a narrow page takes lowers the font laid out at first, said on the status line
-  (`font 100% (80%)`), and binds at the least size; in a room where even no margin leaves 20
-  characters, the margin is `min(asked, 1)`.
+  20 characters a line, whatever the margin asked; then `margin`'s most, the largest at which a line
+  holds 20 characters at the font laid out at. A value past its most is kept and laid out at the most:
+  the margin yields to the font, which stays as asked (`margin 12 (6)`); in a room where even no
+  margin leaves 20 characters, the margin is `min(asked, 1)`.
 
 ## Evidence
 
@@ -55,6 +54,9 @@ and `cargo test -j 2 --bin clv wordcraft` (`page_in` at a count, and each bound)
 - **A count and a width both held**, the width within a column: a width typed for one column would
   be cut by the next count, and a count would be undone by a width wider than a column, each key
   silently overruled by the other. One wins, the last, so what was pressed is what is shown.
+- **The font yielding to the margin**, the font's most worked out within the margin asked: a margin
+  typed wider than a column takes would make the text smaller, which the reader didn't ask for. The
+  owner chose on 2026-11-09 that the margin yields.
 - **Settings past their most refused**, as a step past the most is: a font size typed for a wide
   window would be lost on narrowing it, or on a count. Kept and laid out at the most, as ADR-0023 keeps
   a width past the window's.

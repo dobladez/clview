@@ -496,7 +496,8 @@ them), each as tall as the window and its text at the font size, three to a row;
 `.` one fewer, down to one, where `.` stops and says `1 per row, the least`: a page is never wider than
 the window, and `--per-row width` is one to a row here. `0.` goes back to `auto`, one page or a book of
 two. They lay out again at once, as `[` `]` and `+` `-` do. A narrow column holds fewer sizes of text:
-the font size's most is the largest at which a column holds 20 characters a line. A count and a width
+the font size's most is the largest at which a column holds 20 characters a line, and a size past it,
+100% too, is said with what it is laid out at (`font 100% (80%)`). A count and a width
 of your own are both about how wide a page is, so the last you set wins: `3.` puts the width back to
 `window`, and `72]`, `[` or `]` put the count back to `auto` first, stepping from where `window` sits
 there; `0.` and `0]` change only their own. On the command line, `--width 72` and `--per-row 3` on such
@@ -510,11 +511,10 @@ cells at 100% and six at 200%. A number, then `}` or `{`, goes straight to it (`
 and `--margin 5` says where to start. At `window` the margins come out of the line, so wider margins
 put fewer characters on it, and a book's halves need their 60 characters between them; at a width of
 your own the line keeps its length and the page grows by the margins, up to the window. `}` stops at
-the most where a line still holds 20 characters, and says so (`margin 6, the most here`); a wider
-margin, typed or given, holds 20 characters at a smaller font size where there is one, and is
-otherwise kept and laid out at the most (`margin 12 (5)`), or at a column where even none holds 20.
-The status line shows the margin while it isn't 3, and a font size laid out smaller than asked as
-`font 100% (80%)`. The top and bottom margins stay a row. In a list and with `--pages` they say why
+the most where a line still holds 20 characters at the font size, and says so (`margin 6, the most
+here`); a wider margin, typed or given, is kept and laid out at the most (`margin 12 (6)`), or at a
+column where even none holds 20: the margin yields to the font size, which stays as asked. The status
+line shows the margin while it isn't 3. The top and bottom margins stay a row. In a list and with `--pages` they say why
 they do nothing, as `[` and `]` do.
 
 **A width of your own.** `]` and `[` lay a Markdown or HTML file out again to lines 4 characters
