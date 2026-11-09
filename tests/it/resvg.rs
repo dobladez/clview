@@ -593,6 +593,20 @@ fn the_deepest_label_is_drawn_on_its_threads_stack() {
     assert_eq!(picture.get_pixel(100, 100).0, BLUE);
 }
 
+/// A stylesheet's font faces and pictures by `data:` URL are no links not followed where labels
+/// are drawn, which fetch them: only its others are. Where they aren't, usvg follows none of them,
+/// and says so.
+#[test]
+fn a_stylesheets_data_urls_are_links_only_where_labels_are_not_drawn() {
+    let css = "@font-face{font-family:X;src:url(data:font/woff2;base64,AAAA)} .l{background:url(data:image/png;base64,AAAA)} \
+               .m{background:url(https://example.com/a.png)}";
+    let body = format!("<style>{css}</style>{}", label("class='l m'", ""));
+    let expected = if cfg!(feature = "svg-html") { 1 } else { 4 };
+    let warnings = warned("svg-data-links", &body);
+    let links = warnings.iter().find(|w| w.contains("not followed"));
+    assert_eq!(links.map(|w| w.split(' ').next().unwrap().parse::<usize>().unwrap()), Some(expected), "{warnings:?}");
+}
+
 /// The libraries that parse and render SVG.
 const LIBRARIES: [&str; 6] = ["resvg", "usvg", "tiny_skia", "tiny-skia", "roxmltree", "fontdb"];
 

@@ -190,3 +190,15 @@ surprises, and what a later reader would want.
 - **A discovery, for its home:** the drawing's scan counts a stylesheet's `@font-face`, and its
   `data:` URLs, as links not followed, so a tldraw drawing says "2 links … not followed" while its
   labels draw that font. Older than this spec (ADR-0003's scan).
+
+## Links the labels follow
+
+- **A stylesheet's `data:` URLs**, and its `@font-face` itself, are no links not followed where
+  labels are drawn, which fetch them: the scan counted them, so a tldraw drawing said "2 links …
+  not followed" while its labels drew its font. Its other URLs still count; a build without
+  `svg-html` counts all of them as before. `a_stylesheets_data_urls_are_links_only_where_labels_are_not_drawn`
+  failed with the `data:` URLs counted (3 for 1), and with `@font-face` counted (2).
+- **A known issue, not this spec's:** usvg's stylesheet parser (simplecss) takes time as the
+  square of a declaration's length. A `<style>` of one `box-shadow` list of 40,000 shadows
+  (about 600 KB) took 45 s to open in clv's debug build, labels or not: ADR-0003's scan doesn't
+  bound it. Raised with the owner as a follow-up.

@@ -1453,7 +1453,10 @@ impl<'a, 'input> Scan<'a, 'input> {
     /// in it, with the property it sets and the selector of its rule.
     fn stylesheet(&mut self, text: &'a str) {
         self.rules = self.rules.saturating_add(u64::try_from(text.matches('{').count()).unwrap_or(u64::MAX));
-        for rule in ["@import", "@font-face"] {
+        // A font face is a link usvg doesn't follow; where labels are drawn they fetch its `data:`
+        // URLs, and its others are counted as any URL is.
+        let rules: &[&str] = if cfg!(feature = "svg-html") { &["@import"] } else { &["@import", "@font-face"] };
+        for rule in rules {
             if text.contains(rule) {
                 self.links.insert(rule);
             }
@@ -1492,7 +1495,7 @@ impl<'a, 'input> Scan<'a, 'input> {
         // Presentation attributes, then the stylesheets' rules, then the style attribute.
         let mut set = Properties::default();
         for attribute in node.attributes() {
-            self.property(&mut set, attribute.name(), attribute.value());
+            self.property(&mut set, attribute.name(), attribute.value(), false);
         }
         if !self.css.is_empty() {
             let class = node.attribute("class").unwrap_or_default();
@@ -1503,13 +1506,13 @@ impl<'a, 'input> Scan<'a, 'input> {
                 .map(|r| (r.property, r.value))
                 .collect();
             for (property, value) in matched {
-                self.property(&mut set, property, value);
+                self.property(&mut set, property, value, true);
             }
         }
         if let Some(style) = node.attribute("style") {
             for declaration in style.split(';') {
                 if let Some((property, value)) = declaration.split_once(':') {
-                    self.property(&mut set, property.trim(), value);
+                    self.property(&mut set, property.trim(), value, false);
                 }
             }
         }
@@ -1573,7 +1576,9 @@ impl<'a, 'input> Scan<'a, 'input> {
     }
 
     /// Notes in `set` what `property: value` refers to, if anything.
-    fn property(&mut self, set: &mut Properties<'a>, property: &str, value: &'a str) {
+    /// `stylesheet` says it comes from a `<style>`, whose `data:` URLs the labels fetch, where
+    /// they are drawn: those aren't links not followed.
+    fn property(&mut self, set: &mut Properties<'a>, property: &str, value: &'a str, stylesheet: bool) {
         if !value.contains("url(") {
             // A colour or `none` ends a reference inherited; `inherit` keeps it.
             let cleared = if value.trim() == "inherit" { None } else { Some(None) };
@@ -1594,6 +1599,7 @@ impl<'a, 'input> Scan<'a, 'input> {
             let url = url.get(..url.find(['"', '\'', ')']).unwrap_or(url.len())).unwrap_or(url);
             match url.strip_prefix('#') {
                 Some(id) => ids.push(id.trim_end()),
+                None if cfg!(feature = "svg-html") && stylesheet && url.trim_start().starts_with("data:") => {}
                 None => {
                     self.links.insert(url);
                 }
