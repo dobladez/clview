@@ -90,6 +90,8 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 - More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
   its pages; an epub's pictures, and a document's in an archive.
 - Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
+- HTML documents through Blitz, which draws an SVG's HTML labels, weighed against wordcraft's
+  importer: Blitz lays out one long page, where documents are pages the window's size.
 
 ## Working on clview
 
