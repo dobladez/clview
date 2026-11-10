@@ -227,10 +227,22 @@ flow-root, flex or grid child is dropped as "probably a table caption"), where C
 gives each run of them an anonymous `table-row` and `table-cell`. Mermaid's edge labels are such a
 box (`display: table` holding a `<span>`), and came out blank: six of a 44 KB flowchart's. Its git
 `main` (4647f4a2, 2026-11-10) does the same. The owner reversed the spec's "it is Blitz's to fix":
-the worker wraps each such run in a row and a cell of its own (`anonymous_cells`), decided by
-Stylo's computed `display` once the styles resolve, before layout: the structure a browser makes,
-so the layout is the same, not a different one (a `block` in its place would lose the table's
-shrink-to-fit and `vertical-align`). The repro (a red square and text in such a box, three
+the worker makes the anonymous boxes itself (`anonymous_cells`), decided by Stylo's computed
+`display` once the styles resolve, before layout: in a table or a row group, each run of cells
+and content shares one anonymous row, and in a row each run of content gets one anonymous cell,
+the structure a browser makes, so the layout is the same, not a different one (a `block` in its
+place would lose the table's shrink-to-fit and `vertical-align`). Blitz makes anonymous boxes of
+its own only for layout (`NodeData::AnonymousBlock`, styled as Servo's anonymous-box pseudo), and
+not as table parts, and nothing outside it can; so the wrappers are elements, named `clv-row` and
+`clv-cell` so that no author rule but one on `*` reaches them, their one declaration
+(`display`) set as a style property. The tree is edited in place, each box's children listed anew
+once (the mutator's `remove_node`, once per node, scanned the box's children each time: 2.8 s for
+16,000 runs among 64,000 children, and the square of the count), and the moved nodes keep the
+styles Stylo gave them where they were written, since only the unstyled wrappers are visited at
+the next resolve (the mutator would have restyled the box's subtree, and a cell third among the
+table's children would have lost its `#t > :nth-child(3)`). Blitz's construction damage, which
+would single out the edited boxes for layout, is its own, so the document is laid out anew whole
+(`set_incremental_layout(false)`), once, and only when something moved. The repro (a red square and text in such a box, three
 controls that draw) is `tests/data/blitz-table.html`; `blitz_still_drops_inline_content_in_a_table`
 renders it through Blitz without the workaround and fails, saying to remove the workaround, the
 day Blitz draws it. CONTRIBUTING's "Moving Blitz" says what else to read then.

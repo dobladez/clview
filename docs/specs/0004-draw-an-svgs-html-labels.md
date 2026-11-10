@@ -560,3 +560,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   them, once the styles resolve. A repro and issue draft for Blitz's tracker went to the owner;
   `tests/data/blitz-table.html` is its case, and `blitz_still_drops_inline_content_in_a_table`
   fails the day Blitz draws it. CONTRIBUTING gains a "Moving Blitz" checklist.
+- 2026-11-10 — Codex's review of the workaround: cells and the content between them share one
+  anonymous row, the content alone in anonymous cells, as CSS has it; the moved nodes keep the
+  rules that matched them where they were written (the wrappers are `clv-row` and `clv-cell`
+  elements, which only a rule on `*` reaches: usage's known difference); and the tree is edited
+  in place, each box's children listed anew once, not a scan per node moved.

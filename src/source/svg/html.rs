@@ -470,9 +470,10 @@ fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>)
     // A picture a style asks for (`background-image`) is fetched as the styles resolve, and
     // answered after: they resolve again with it.
     doc.resolve(0.0);
-    anonymous_cells(&mut doc);
-    doc.handle_messages();
-    doc.resolve(0.0);
+    if anonymous_cells(&mut doc) {
+        doc.handle_messages();
+        doc.resolve(0.0);
+    }
     let boxes = boxes(&doc);
     let mut recorded = Vec::with_capacity(labels.len());
     let mut slots = boxes.into_iter();
@@ -580,83 +581,192 @@ const FALLBACKS: &[(&[u8; 4], &[&str])] = &[
 const EMOJI: &[&str] = &["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla"];
 
 /// Blitz 0.3.0-beta.4 lays out none of a `display: table` box's children that aren't table parts:
-/// CSS 2.1 (§17.2.1) gives each run of them an anonymous row and cell, and Blitz's
-/// `collect_table_cells` drops them ("probably a table caption": Blitz's issue #1430, its PRs #781,
-/// #783 and #1370), so Mermaid's edge labels, a `<span>` in a `display: table` box, came out
-/// blank. Until Blitz does it, this does, once the
-/// styles have resolved and before layout: each such run, in each table, wrapped in a row and a
-/// cell of its own, as a browser wraps it. `blitz_still_drops_inline_content_in_a_table` fails once
-/// Blitz draws them: then take this out.
-fn anonymous_cells(doc: &mut BaseDocument) {
-    use blitz_dom::{QualName, local_name, ns};
-    use style::values::specified::box_::{DisplayInside, DisplayOutside};
-    // Each run of such children, found before anything moves.
-    let mut runs: Vec<Vec<NodeId>> = Vec::new();
+/// CSS 2.1 (§17.2.1) gives them anonymous boxes, and Blitz's `collect_table_cells` drops them
+/// ("probably a table caption": Blitz's issue #1430, its PRs #783 and #1370), so Mermaid's edge
+/// labels, a `<span>` in a `display: table` box, came out blank. Until Blitz does it, this does,
+/// once the styles have resolved and before layout, as CSS does: in a table or a row group, each
+/// run of children that are cells or content shares one anonymous row; in a row, its own or an
+/// anonymous one, each run of content gets one anonymous cell. The wrappers are elements named
+/// `clv-row` and `clv-cell`, so no rule on a name or a class reaches them (a rule on `*` does);
+/// the nodes moved into them keep the styles Stylo gave them in the tree as written, so the rules
+/// that matched them there still hold, `#t > :nth-child(3)` included. The tree is edited in place,
+/// each box's children listed anew once, so it costs what the labels hold.
+/// Says whether anything moved, so that the styles and layout need resolving again.
+/// `blitz_still_drops_inline_content_in_a_table` fails once Blitz draws them: then take this out.
+fn anonymous_cells(doc: &mut BaseDocument) -> bool {
+    // What each box holds, read before anything moves.
+    let mut plans: Vec<(NodeId, Vec<Wrapped>)> = Vec::new();
     let mut walk = vec![doc.root_element().id];
     while let Some(id) = walk.pop() {
         let Some(node) = doc.get_node(id) else { continue };
         walk.extend(node.children.iter().copied());
-        if !node.primary_styles().is_some_and(|s| s.clone_display().inside() == DisplayInside::Table) {
-            continue;
+        let Some(inside) = node.primary_styles().map(|s| s.clone_display().inside()) else { continue };
+        let kinds: Vec<(NodeId, Kind)> = node.children.iter().map(|child| (*child, kind(doc, *child))).collect();
+        use style::values::specified::box_::DisplayInside as I;
+        let plan = match inside {
+            I::Table | I::TableRowGroup | I::TableHeaderGroup | I::TableFooterGroup => rows_in(&kinds),
+            I::TableRow => cells_in(&kinds),
+            _ => None,
+        };
+        if let Some(plan) = plan {
+            plans.push((id, plan));
         }
-        let mut run = Vec::new();
-        for child in node.children.iter().copied() {
-            let Some(c) = doc.get_node(child) else { continue };
-            // A table part, which stays where it is; spaces, which make no box, and go with a
-            // run under way; or content, which a run gathers.
-            enum Kind {
-                Part,
-                Spaces,
-                Content,
+    }
+    if plans.is_empty() {
+        return false;
+    }
+    for (parent, plan) in plans {
+        let mut wrappers = Vec::new();
+        let children = realized(doc, parent, plan, &mut wrappers);
+        if let Some(node) = doc.get_node_mut(parent) {
+            node.children = children.into_iter().collect();
+        }
+        // Stylo visits a wrapper, unstyled, when the path down to it is marked dirty; what it
+        // holds keeps its styles, and the next resolve recascades the inherited ones under it.
+        for wrapper in wrappers {
+            if let Some(node) = doc.get_node(wrapper) {
+                node.mark_ancestors_dirty();
             }
-            let kind = match (c.element_data(), c.text_data()) {
-                (None, Some(text)) if text.content.trim().is_empty() => Kind::Spaces,
-                (None, Some(_)) => Kind::Content,
-                (None, None) => Kind::Part,
-                (Some(_), _) => match c.primary_styles() {
-                    None => Kind::Part,
-                    Some(style) => {
-                        let display = style.clone_display();
-                        let part = matches!(display.outside(), DisplayOutside::None | DisplayOutside::TableCaption | DisplayOutside::InternalTable)
-                            || display.inside() == DisplayInside::Contents
-                            || style.clone_position().is_absolutely_positioned();
-                        if part { Kind::Part } else { Kind::Content }
-                    }
-                },
-            };
-            match kind {
-                Kind::Content => run.push(child),
-                Kind::Spaces if !run.is_empty() => run.push(child),
-                Kind::Spaces => {}
-                Kind::Part => {
-                    if !run.is_empty() {
-                        runs.push(std::mem::take(&mut run));
-                    }
+        }
+    }
+    // Every box is laid out anew at the next resolve: the construction damage that would single
+    // out the edited ones is Blitz's own, not reachable from outside, and a label's tree is laid
+    // out once more at most.
+    doc.set_incremental_layout(false);
+    true
+}
+
+/// What a child is to the table box that holds it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Stays where it is: a caption, a column, a hidden or absolutely positioned child, a
+    /// `display: contents` one, a comment.
+    Part,
+    /// A row or a row group: a row of its own at table level.
+    Row,
+    Cell,
+    /// Anything else, which CSS gives an anonymous cell (and row).
+    Content,
+    /// Text of spaces alone, which makes no box: it goes with a run under way.
+    Spaces,
+}
+
+fn kind(doc: &BaseDocument, id: NodeId) -> Kind {
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    let Some(node) = doc.get_node(id) else { return Kind::Part };
+    match (node.element_data(), node.text_data()) {
+        (None, Some(text)) if text.content.trim().is_empty() => Kind::Spaces,
+        (None, Some(_)) => Kind::Content,
+        (None, None) => Kind::Part,
+        (Some(_), _) => {
+            let Some(style) = node.primary_styles() else { return Kind::Part };
+            let display = style.clone_display();
+            if style.clone_position().is_absolutely_positioned() {
+                return Kind::Part;
+            }
+            match (display.outside(), display.inside()) {
+                (DisplayOutside::None | DisplayOutside::TableCaption, _) | (_, DisplayInside::Contents) => Kind::Part,
+                (_, DisplayInside::TableRow | DisplayInside::TableRowGroup | DisplayInside::TableHeaderGroup | DisplayInside::TableFooterGroup) => {
+                    Kind::Row
                 }
+                (_, DisplayInside::TableColumn | DisplayInside::TableColumnGroup) => Kind::Part,
+                (_, DisplayInside::TableCell) => Kind::Cell,
+                _ => Kind::Content,
             }
         }
+    }
+}
+
+/// A box's children as they will be: each as it was, or a new wrapper of a `display` holding some.
+enum Wrapped {
+    Keep(NodeId),
+    Wrap(&'static str, Vec<Wrapped>),
+}
+
+/// The children of a table or a row group regrouped: each run of cells and content in one
+/// anonymous row, the content in it in anonymous cells; `None` where nothing needs one.
+fn rows_in(kinds: &[(NodeId, Kind)]) -> Option<Vec<Wrapped>> {
+    let in_a_row = |k: Kind| matches!(k, Kind::Cell | Kind::Content);
+    if !kinds.iter().any(|(_, k)| matches!(k, Kind::Content)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut run: Vec<(NodeId, Kind)> = Vec::new();
+    let close = |run: &mut Vec<(NodeId, Kind)>, out: &mut Vec<Wrapped>| {
         if !run.is_empty() {
-            runs.push(run);
+            let cells = cells_in(run).unwrap_or_else(|| run.iter().map(|(id, _)| Wrapped::Keep(*id)).collect());
+            out.push(Wrapped::Wrap("table-row", cells));
+            run.clear();
+        }
+    };
+    for (id, k) in kinds.iter().copied() {
+        if in_a_row(k) || (k == Kind::Spaces && !run.is_empty()) {
+            run.push((id, k));
+        } else {
+            close(&mut run, &mut out);
+            out.push(Wrapped::Keep(id));
         }
     }
-    let div = || QualName::new(None, ns!(html), local_name!("div"));
-    let mut mutator = doc.mutate();
-    for run in runs {
-        let Some(first) = run.first().copied() else { continue };
-        let (row, cell) = (mutator.create_element(div(), Vec::new()), mutator.create_element(div(), Vec::new()));
-        mutator.set_style_property(row, "display", "table-row");
-        mutator.set_style_property(cell, "display", "table-cell");
-        mutator.insert_nodes_before(first, &[row]);
-        mutator.append_children(row, &[cell]);
-        // Taken out of the document first: Blitz's table code cleared the construction a
-        // dropped child was due, and a node moved within the document isn't marked for it
-        // again, so a block inside (Mermaid's `<p>` in its `<span>`) would stay unbuilt; a
-        // subtree put back in is marked whole.
-        for child in &run {
-            mutator.remove_node(*child);
-        }
-        mutator.append_children(cell, &run);
+    close(&mut run, &mut out);
+    Some(out)
+}
+
+/// The children of a row regrouped: each run of content in one anonymous cell; `None` where
+/// nothing needs one.
+fn cells_in(kinds: &[(NodeId, Kind)]) -> Option<Vec<Wrapped>> {
+    if !kinds.iter().any(|(_, k)| matches!(k, Kind::Content)) {
+        return None;
     }
+    let mut out = Vec::new();
+    let mut run: Vec<Wrapped> = Vec::new();
+    for (id, k) in kinds.iter().copied() {
+        if k == Kind::Content || (k == Kind::Spaces && !run.is_empty()) {
+            run.push(Wrapped::Keep(id));
+        } else {
+            if !run.is_empty() {
+                out.push(Wrapped::Wrap("table-cell", std::mem::take(&mut run)));
+            }
+            out.push(Wrapped::Keep(id));
+        }
+    }
+    if !run.is_empty() {
+        out.push(Wrapped::Wrap("table-cell", run));
+    }
+    Some(out)
+}
+
+/// `items` made the children of `parent`: a wrapper created for each `Wrap`, named so that no
+/// rule on a name reaches it, its `display` as inline style, which only a rule on `*` could
+/// outweigh, in the document with its parent and children set; the kept nodes given their parent.
+/// The wrappers made are listed in `wrappers`.
+fn realized(doc: &mut BaseDocument, parent: NodeId, items: Vec<Wrapped>, wrappers: &mut Vec<NodeId>) -> Vec<NodeId> {
+    use blitz_dom::node::NodeFlags;
+    use blitz_dom::{ElementData, LocalName, NodeData, QualName, ns};
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let id = match item {
+            Wrapped::Keep(id) => id,
+            Wrapped::Wrap(display, inner) => {
+                let name = QualName::new(None, ns!(html), LocalName::from(if display == "table-row" { "clv-row" } else { "clv-cell" }));
+                let wrapper = doc.create_node(NodeData::Element(Box::new(ElementData::new(name, Vec::new()))));
+                // Its one style, as a style attribute's declaration: an author rule on its name
+                // can't exist, and one on `*` is the known difference.
+                doc.set_style_property(wrapper, "display", display);
+                let children = realized(doc, wrapper, inner, wrappers);
+                if let Some(node) = doc.get_node_mut(wrapper) {
+                    node.children = children.into_iter().collect();
+                    node.flags.insert(NodeFlags::IS_IN_DOCUMENT);
+                }
+                wrappers.push(wrapper);
+                wrapper
+            }
+        };
+        if let Some(node) = doc.get_node_mut(id) {
+            node.parent = Some(parent);
+        }
+        out.push(id);
+    }
+    out
 }
 
 /// `label` replayed through `to` into `size` pixels: premultiplied RGBA, row by row.
@@ -998,13 +1108,12 @@ mod tests {
         assert_eq!(data_url(",a%41b%zz"), Some(b"aAb%zz".to_vec()));
     }
 
-    /// `html` laid out and painted by Blitz at 240 × 200, with [`anonymous_cells`] or without: how
-    /// many red pixels each 48-pixel band holds. No fonts: the fixtures' red boxes need none.
-    fn red_by_band(html: &str, workaround: bool) -> [usize; 4] {
+    /// `html` as Blitz has it at 240 × 200, its styles and layout resolved once. No fonts: the
+    /// fixtures' coloured boxes need none.
+    fn laid_out(html: &str) -> HtmlDocument {
         use parley::fontique::{Collection, CollectionOptions};
-        let (w, h) = (240u32, 200u32);
         let config = DocumentConfig {
-            viewport: Some(Viewport::new(w, h, 1.0, ColorScheme::Light)),
+            viewport: Some(Viewport::new(240, 200, 1.0, ColorScheme::Light)),
             font_ctx: Some(FontContext {
                 collection: Collection::new(CollectionOptions { shared: false, system_fonts: false }),
                 source_cache: Default::default(),
@@ -1014,17 +1123,100 @@ mod tests {
         let mut doc = HtmlDocument::from_html(html, config);
         doc.handle_messages();
         doc.resolve(0.0);
+        doc
+    }
+
+    /// `html` laid out and painted by Blitz at 240 × 200, with [`anonymous_cells`] or without:
+    /// premultiplied RGBA.
+    fn rendered(html: &str, workaround: bool) -> Vec<u8> {
+        let (w, h) = (240u32, 200u32);
+        let mut doc = laid_out(html);
         if workaround {
             anonymous_cells(&mut doc);
         }
         doc.resolve(0.0);
         let mut scene = Scene::new();
         blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, w, h, 0, 0);
-        let rgba = render_to_buffer::<VelloCpuImageRenderer, _>(|s| s.append_scene(scene.clone(), Affine::IDENTITY), w, h);
-        let red = |x: u32, y: u32| rgba.get(((y * w + x) * 4) as usize..).is_some_and(|p| p[0] > 150 && p[1] < 100);
+        render_to_buffer::<VelloCpuImageRenderer, _>(|s| s.append_scene(scene.clone(), Affine::IDENTITY), w, h)
+    }
+
+    /// How many red pixels each 48-pixel band of `html` rendered holds.
+    fn red_by_band(html: &str, workaround: bool) -> [usize; 4] {
+        let rgba = rendered(html, workaround);
+        let red = |x: u32, y: u32| rgba.get(((y * 240 + x) * 4) as usize..).is_some_and(|p| p[0] > 150 && p[1] < 100);
         std::array::from_fn(|band| {
-            (band as u32 * 48..(band as u32 + 1) * 48).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| red(x, y)).count()
+            (band as u32 * 48..(band as u32 + 1) * 48).flat_map(|y| (0..240).map(move |x| (x, y))).filter(|&(x, y)| red(x, y)).count()
         })
+    }
+
+    /// The box (x0, y0, x1, y1, exclusive) of the pixels of `rgba` (240 wide) that `is` says.
+    fn box_of(rgba: &[u8], is: impl Fn(&[u8]) -> bool) -> Option<(u32, u32, u32, u32)> {
+        let mut found: Option<(u32, u32, u32, u32)> = None;
+        for (i, pixel) in rgba.chunks(4).enumerate() {
+            if is(pixel) {
+                let (x, y) = ((i % 240) as u32, (i / 240) as u32);
+                found = Some(found.map_or((x, y, x + 1, y + 1), |(x0, y0, x1, y1)| (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1))));
+            }
+        }
+        found
+    }
+
+    const RED: fn(&[u8]) -> bool = |p| p[0] > 150 && p[1] < 100 && p[2] < 100;
+    const GREEN: fn(&[u8]) -> bool = |p| p[1] > 100 && p[0] < 100 && p[2] < 100;
+    const BLUE: fn(&[u8]) -> bool = |p| p[2] > 150 && p[0] < 100 && p[1] < 100;
+
+    /// Cells and the content between them share one anonymous row, the content alone in an
+    /// anonymous cell (CSS 2.1 §17.2.1): a red cell, a blue inline box and a green cell come out
+    /// side by side on one line, where Blitz alone drops the box and draws the cells together.
+    #[test]
+    fn cells_and_the_content_between_them_share_a_row() {
+        let cell = |colour: &str| format!("<div style='display:table-cell;width:20px;height:20px;background:{colour}'></div>");
+        let html = format!(
+            "<html><body style='margin:0'><div style='display:table'>{}<span style='display:inline-block;width:20px;height:20px;background:blue'></span>{}</div></body></html>",
+            cell("red"),
+            cell("green")
+        );
+        let with = rendered(&html, true);
+        assert_eq!(
+            [box_of(&with, RED), box_of(&with, BLUE), box_of(&with, GREEN)],
+            [Some((0, 0, 20, 20)), Some((20, 0, 40, 20)), Some((40, 0, 60, 20))],
+            "one row of three"
+        );
+        let without = rendered(&html, false);
+        assert_eq!(
+            [box_of(&without, RED), box_of(&without, BLUE), box_of(&without, GREEN)],
+            [Some((0, 0, 20, 20)), None, Some((20, 0, 40, 20))],
+            "Blitz alone"
+        );
+    }
+
+    /// The nodes moved into a wrapper keep the styles the rules gave them in the tree as written:
+    /// a cell third among the table's children stays `#t > :nth-child(3)`'s, blue, though the two
+    /// spans before it are wrapped in a row and a cell, and it with them; and a rule on `div`
+    /// doesn't reach the wrappers.
+    #[test]
+    fn wrapping_leaves_the_tables_rules_as_they_matched() {
+        let html = "<html><head><style>#t > :nth-child(3){background:blue} div{margin:0} .s{display:inline-block;width:10px;height:20px;background:red}</style></head>\
+            <body style='margin:0'><div id='t' style='display:table'><span class='s'></span><span class='s'></span><div style='display:table-cell;width:20px;height:20px'></div></div></body></html>";
+        let with = rendered(html, true);
+        assert_eq!([box_of(&with, RED), box_of(&with, BLUE)], [Some((0, 0, 20, 20)), Some((20, 0, 40, 20))], "the spans, then the cell still blue");
+        let without = rendered(html, false);
+        assert_eq!([box_of(&without, RED), box_of(&without, BLUE)], [None, Some((0, 0, 20, 20))], "Blitz alone");
+    }
+
+    /// The wrapping costs what the box holds: 16,000 runs of three among 64,000 children are listed
+    /// anew once, not taken out of the table one at a time, each a scan of the rest, which took
+    /// 2.8 s here and grew with the square.
+    #[test]
+    fn anonymous_cells_cost_their_elements() {
+        let html = format!(
+            "<html><body><div style='display:table'>{}</div></body></html>",
+            "<span>x</span><b>y</b><i>z</i><div style='display:table-row'></div>".repeat(16_000)
+        );
+        let mut doc = laid_out(&html);
+        let started = std::time::Instant::now();
+        assert!(anonymous_cells(&mut doc));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
     }
 
     /// Blitz 0.3.0-beta.4 draws nothing of inline content directly in a `display: table` box

@@ -479,3 +479,48 @@ Three findings, all fixed:
   named its temporary file by the same keys as `a_picture_is_drawn_once_and_only_those_a_page_shows`
   (`clview-picture-<pid>-a-b.png`), so the two, in parallel, wrote and read one file and one of
   them sometimes found it half written. It has a key of its own now.
+
+## Codex's review of the workaround (the last round on it)
+
+- **Cells and the content between them share one row.** The first version gave each run of
+  non-cell content a row of its own and left the cells where they were, so a red cell, a blue
+  inline box and a green cell came out as a row of the two cells and a second row for the box (the
+  box at y = 23 with the workaround, nowhere without it). Now, in a table or a row group, each run
+  of cells and content shares one anonymous row, and in a row (its own or an anonymous one) each
+  run of content gets one anonymous cell: CSS 2.1 §17.2.1's two fixups, as `rows_in` and
+  `cells_in`, planned from Stylo's computed `display` before anything moves. Test:
+  `cells_and_the_content_between_them_share_a_row`, the three side by side on one line.
+- **The moved nodes keep the rules that matched them.** Blitz 0.3.0-beta.4 makes anonymous boxes
+  only for layout (`NodeData::AnonymousBlock`, styled as Servo's anonymous-box pseudo) and never as
+  table parts; nothing public creates one. So the wrappers stay elements, named `clv-row` and
+  `clv-cell` so that no rule on a name, a class or an id reaches them, their one declaration set
+  with `set_style_property`; a rule on `*` does reach them, said in usage's known differences. The
+  tree is edited directly rather than through the `DocumentMutator`, which sets a restyle of the
+  box's subtree and would have matched the moved nodes anew in their new place: Stylo visits only
+  the unstyled wrappers (their ancestors marked dirty), and recascades what they hold from them, so
+  a cell third among the table's children keeps `#t > :nth-child(3)`'s blue. Test:
+  `wrapping_leaves_the_tables_rules_as_they_matched`, which also checks a rule on `div` doesn't
+  reach the wrappers.
+- **Linear.** Each box's children are listed anew once (`realized`), and each node's `parent` set
+  once; the mutator's `remove_node` per node scanned the box's children each time (and
+  `append_children` again). Measured on 16,000 runs of three among 64,000 children, the
+  workaround alone: 2.8 s before, under the 0.1 s the whole test takes now. Test:
+  `anonymous_cells_cost_their_elements`, bounded at 1 s on the function alone (a bound on the whole
+  run, as the earlier cost tests have, would have let the old version through: Blitz's layout of
+  the 32,000 rows is most of it either way).
+- **How the wrappers get laid out.** Blitz singles out boxes to construct anew by construction
+  damage bits that are its own (`pub(crate)`), not in `RestyleDamage::all()`; without them the
+  table kept its old layout children and dropped the wrappers. So `anonymous_cells` turns
+  incremental layout off (`set_incremental_layout(false)`): the document is laid out anew whole at
+  the next resolve, once, and `recorded` resolves again only when something moved (it returns
+  whether anything did), which is also what a label without tables costs now: nothing.
+- **Seen failing** against the committed version, with the three tests appended to it: the row
+  test (the box on a second line), the rules test (the cell no longer blue) and the cost test
+  (2.5 s). A first version of the green predicate asked for more green than CSS's `green`
+  (0, 128, 0) has, and failed on both; fixed before the comparison.
+- **Two Blitz limits met on the way**, neither this round's: parley's inline layout holds at most
+  65,535 styles in one paragraph (`too many styles`, a panic) and blitz-dom's table layout counts
+  rows in a `u16` (a debug build panics past 65,535 rows; a release build wraps). Either kills the
+  worker, and the drawing's labels are left out with a warning, as any panic in it is.
+- **The Mermaid drawing** renders byte-for-byte as it did after the first workaround: its edge
+  labels are one `<span>` in a `display: table` box each, one row and one cell either way.

@@ -441,6 +441,10 @@ Where clv draws a label otherwise than a browser:
   a namespace, a sibling or a structural pseudo-class (`:nth-child`) match.
 - A `<switch>` whose child taken, or fallback, an entity makes keeps its fallback, drawn as resvg
   draws it.
+- Content straight in a `display: table` box or row (Mermaid's edge labels), which Blitz alone
+  leaves out, is laid out in the anonymous row and cell CSS gives it, as elements named `clv-row`
+  and `clv-cell`: a rule on `*` reaches them (its padding on the cell, say), where a browser's
+  anonymous boxes take no rule. The content keeps the rules that matched it where it was written.
 - What an `overflow: visible` label draws past its box is drawn up to 4,096 pixels each way, and cut
   there.
 - Its text can't be selected or copied.

@@ -45,6 +45,11 @@ it prints, never by name.
    fixture `tests/data/blitz-table.html`; the workaround `anonymous_cells`; upstream, Blitz's issue
    #1430, fixed for text and inline alike by PR #783's anonymous table boxes and by PR #1370's
    table layout, measured on their branches on 2026-11-10, while #781 alone leaves the text out).
+   The three tests beside it (`cells_and_the_content_between_them_share_a_row`,
+   `wrapping_leaves_the_tables_rules_as_they_matched`, `anonymous_cells_cost_their_elements`) go
+   with the workaround; so does usage's known difference on `clv-row` and `clv-cell`. The
+   workaround leans on `set_style_property`, `set_incremental_layout` and on Stylo visiting an
+   unstyled element whose ancestors are marked dirty: check them if it moves.
    The hang test
    `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` in
    `tests/it/resvg.rs` leans on blitz-paint's `text-decoration-inset` loop and its dotted border
