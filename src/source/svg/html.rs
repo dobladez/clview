@@ -592,7 +592,8 @@ const EMOJI: &[&str] = &["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoj
 /// that matched them there still hold, `#t > :nth-child(3)` included. The tree is edited in place,
 /// each box's children listed anew once, so it costs what the labels hold.
 /// Says whether anything moved, so that the styles and layout need resolving again.
-/// `blitz_still_drops_inline_content_in_a_table` fails once Blitz draws them: then take this out.
+/// `blitz_still_drops_inline_content_in_a_table` fails once Blitz draws them: then take this out,
+/// and close dobladez/clview#1, which tracks it.
 fn anonymous_cells(doc: &mut BaseDocument) -> bool {
     // What each box holds, read before anything moves.
     let mut plans: Vec<(NodeId, Vec<Wrapped>)> = Vec::new();
@@ -1225,7 +1226,8 @@ mod tests {
     /// main at 4647f4a2 (2026-11-10) does the same; Blitz tracks it as issue #1430. Of its open
     /// PRs, #781 draws the box but not the text, #783 (anonymous table boxes) and #1370 (Taffy's
     /// table layout) draw both, as measured on their branches that day. With the workaround, the
-    /// first box draws as its controls do.
+    /// first box draws as its controls do. dobladez/clview#1 tracks the workaround: close it when
+    /// this test fails and the workaround comes out.
     #[test]
     fn blitz_still_drops_inline_content_in_a_table() {
         let html = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/blitz-table.html")).unwrap();
@@ -1233,7 +1235,7 @@ mod tests {
         assert!(bands[1..].iter().all(|red| *red > 400), "the controls: {bands:?}");
         assert_eq!(
             bands[0], 0,
-            "Blitz now draws inline content in display: table (its issue #1430; PR #783 or #1370 landed): remove the workaround (`anonymous_cells` in src/source/svg/html.rs) and this test"
+            "Blitz now draws inline content in display: table (its issue #1430; PR #783 or #1370 landed): remove the workaround (`anonymous_cells` in src/source/svg/html.rs) and this test, and close dobladez/clview#1"
         );
         let fixed = red_by_band(&html, true);
         assert!(fixed[0] > 400 && fixed[1..] == bands[1..], "with the workaround: {fixed:?}");

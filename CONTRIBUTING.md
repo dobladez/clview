@@ -49,7 +49,8 @@ it prints, never by name.
    `wrapping_leaves_the_tables_rules_as_they_matched`, `anonymous_cells_cost_their_elements`) go
    with the workaround; so does usage's known difference on `clv-row` and `clv-cell`. The
    workaround leans on `set_style_property`, `set_incremental_layout` and on Stylo visiting an
-   unstyled element whose ancestors are marked dirty: check them if it moves.
+   unstyled element whose ancestors are marked dirty: check them if it moves. When the workaround
+   comes out, close [dobladez/clview#1](https://github.com/dobladez/clview/issues/1), which tracks it.
    The hang test
    `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` in
    `tests/it/resvg.rs` leans on blitz-paint's `text-decoration-inset` loop and its dotted border

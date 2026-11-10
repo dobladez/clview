@@ -473,7 +473,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - [ ] Manual, in kitty with a window over 6,000 pixels wide, and again zoomed in with `+`: a tldraw
   drawing shows every label in its own font; a draw.io 21 drawing (labels `100%` wide, set in
   `<font face>`) shows them as Chrome does, with no "Text is not SVG" line; a Mermaid flowchart
-  shows its labels but those in `display: table`. Built with `--no-default-features --features svg`,
+  shows all its labels, those in `display: table` too. Built with `--no-default-features --features svg`,
   the same tldraw drawing says how many labels it didn't draw.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
@@ -565,3 +565,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   rules that matched them where they were written (the wrappers are `clv-row` and `clv-cell`
   elements, which only a rule on `*` reaches: usage's known difference); and the tree is edited
   in place, each box's children listed anew once, not a scan per node moved.
+- 2026-11-10 — Tracked in dobladez/clview#1: the workaround's canary, its doc comment and
+  CONTRIBUTING's checklist say to close it when the workaround comes out; the manual Done item
+  asks for a Mermaid flowchart's labels in `display: table` too, which the workaround draws.
