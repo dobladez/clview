@@ -401,7 +401,7 @@ fn help_and_version() {
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = text(&out.stdout);
     let is = "Command-line Viewer: view graphic files without leaving your terminal";
-    let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CARGO_PKG_VERSION"));
+    let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CLV_VERSION"));
     assert!(out.status.success() && help.starts_with(&start), "{help}");
     assert!(help.contains("\n\nGeneral Options:\n  --pages ") && help.contains("\n  --per-row auto|width|1-8 "), "{help}");
     assert!(!help.contains("--zoom"), "the old name is not shown: {help}");
@@ -431,7 +431,10 @@ fn help_and_version() {
     assert_eq!(shown("Documents", "Word (.docx "), cfg!(feature = "word"), "{help}");
     assert_eq!(shown("Spreadsheets", "Excel (.xlsx "), cfg!(feature = "sheet"), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();
-    assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CLV_VERSION")));
+    // Cargo.toml's version, alone or followed by the commit as build metadata (build.rs).
+    let commit = env!("CLV_VERSION").strip_prefix(env!("CARGO_PKG_VERSION"));
+    assert!(commit.is_some_and(|commit| commit.is_empty() || commit.starts_with('+')), "{}", env!("CLV_VERSION"));
 }
 
 /// A file is shown by the first backend that opens it, going by its first bytes, not its name.

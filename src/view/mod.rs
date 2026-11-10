@@ -453,8 +453,9 @@ pub(super) fn run(args: &[String], backends: &'static [&'static dyn Backend]) ->
     })
 }
 
-/// Which clview this is, then what it is, in a line each: `--help`'s first two.
-const IS: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"), "\n", env!("CARGO_PKG_DESCRIPTION"));
+/// Which clview this is, then what it is, in a line each: `--help`'s first two. The version is
+/// `build.rs`'s, which names the commit of a build that is not a release.
+const IS: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CLV_VERSION"), "\n", env!("CARGO_PKG_DESCRIPTION"));
 
 /// Where the manual is, for someone with only the binary: `--help`'s line before the last.
 const MANUAL: &str = concat!("Manual: ", env!("CARGO_PKG_REPOSITORY"), "/blob/main/docs/usage.md");

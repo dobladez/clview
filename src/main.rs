@@ -13,6 +13,12 @@ mod source;
 #[cfg(unix)]
 mod view;
 
+// The build script, for its tests: its `main` and git calls run only when cargo builds.
+#[cfg(test)]
+#[path = "../build.rs"]
+#[allow(dead_code)]
+mod build;
+
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -68,7 +74,7 @@ fn main() -> ExitCode {
         // Nothing given at all: what to give.
         #[cfg(unix)]
         None | Some("--help" | "-h") => view::print_help(source::BACKENDS),
-        Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CARGO_PKG_VERSION"))),
+        Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CLV_VERSION"))),
         #[cfg(unix)]
         _ => view::run(&args, source::BACKENDS),
         #[cfg(not(unix))]

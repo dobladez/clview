@@ -43,6 +43,9 @@ works today. A version's section becomes the notes of its
   `font 100% (80%)`.
 - Homebrew, on macOS or Linux: `brew install dobladez/tap/clv`, and `brew upgrade clv` for each new
   version. No `xattr` step on macOS.
+- A `clv` built from source between releases says which commit in `--help` and `--version`:
+  `0.3.0+50.g3f677cb` is 50 commits past 0.3.0, at commit `3f677cb`, with `.dirty` after it when built
+  with changes not committed. A release still says `0.3.0`.
 
 ### Changed
 

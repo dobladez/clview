@@ -169,7 +169,8 @@ visible window doesn't do. Measure memory in a visible window.
 Bump `version` in `Cargo.toml`, turn `CHANGELOG.md`'s `## Unreleased` into `## <version> (<date>)`
 under a new empty `## Unreleased`, commit, tag `v<version>` and push the tag:
 `.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
-as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, and
+as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, or a
+binary whose `--version` names a commit after that version ([`build.rs`](build.rs) says how), and
 `tests/docs.rs` fails on a version the changelog has nothing for. Run by hand, it only builds.
 
 Once the release is published, its `homebrew` job writes the formula (`.github/homebrew-formula.sh`)

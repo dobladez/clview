@@ -63,6 +63,9 @@ when the window is wide enough, as the pager first shows them.
 formats this build shows, with the libraries each shows them through. It starts with clview's
 version and what clview is, in a line each, and ends with a link to this manual and where to report
 issues and ideas: <https://github.com/dobladez/clview>.
+A `clv` built from source between releases says which commit in that version, as `--version` does:
+`0.3.0+50.g3f677cb` is 50 commits past 0.3.0, at commit `3f677cb`, and `.dirty` after it says it
+was built with changes not committed.
 
 In kitty and Ghostty, [inside tmux](#inside-tmux) too, clv's icon sits to the right of the help's
 first lines, smaller or not at all when the window is narrow. Everywhere else, and through a pipe

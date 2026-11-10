@@ -71,6 +71,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
 | `assets/` | The icon `--help` shows: its drawing, and the PNG built into the binary |
+| `build.rs` | The version `--help` and `--version` show, as `CLV_VERSION`: `Cargo.toml`'s, and past a release the commit, from `git describe` (`0.3.0+50.g3f677cb`, `.dirty` when tracked files changed). It reruns when a commit, a tag or a staged file changes the answer, and gives the version alone without git or outside clview's checkout |
 
 ## The viewer (`src/view/`)
 
