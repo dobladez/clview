@@ -121,6 +121,7 @@ The counts are task 1's, measured
 | The XML | the file, svgz, entities, as now | ADR-0003's | before **every** parse, the fallbacks' included | refused |
 | Finding labels | labels drawn; their elements in all, within the drawing's million; their depth, within the drawing's 1,024 levels | 1,024; 100,000 | while the drawing is scanned | the rest left out, with a warning |
 | Their markup | markup and wrappers written out; their text | 8 MiB; 1 MiB | while written out | the rest left out, with a warning |
+| Their nesting | levels from a `<foreignObject>` down, counted by the viewer's writer itself: the drawing's scan skips some elements (`<metadata>`, `<defs>`) by name, so its 1,024 levels don't reach everything a label holds | 1,024 | while written out, in the viewer | that label left out, with a warning |
 | Styles | rules times the labels' elements, as ADR-0003 counts them | 50 million, with the drawing's | before the worker | all labels left out, with a warning |
 | Fonts | each `data:` font, its size unpacked read from its header before it is unpacked, a WOFF's tables checked against its file (one stored larger than it unpacks, out of the file or over another is as large as any); in all | 32 MiB; 64 MiB | in the worker's net provider | that font refused |
 | Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | in the worker's net provider | that picture refused |
@@ -129,15 +130,25 @@ The counts are task 1's, measured
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | while written out | cut |
 | The worker's time | CPU seconds laying the labels out and recording them; then each render's | 10 s; 5 s. Wall clock three times each | the kernel (`RLIMIT_CPU`, the worker arms it before each request); the viewer | the worker dies: all labels left out, with a warning |
 | The worker's memory | its heap, every allocation | 1 GiB | the worker's allocator | the worker aborts: the same |
-| Workers | drawings with labels being shown at once | 4 | before a worker starts | that drawing's labels left out, with a warning |
+| Workers | drawings with labels being shown at once | 6 | before a worker starts | that drawing's labels left out, with a warning |
+| The pipe | a request's sending and its answer, under one deadline; replies held in the viewer | the request's wall clock; one reply | the viewer, from outside the blocked call | the worker killed: all labels left out, with a warning |
 | Painting | each label's part of the page, twice (painted, then drawn over the page), and the part's pixels as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
 
 - A drawing's labels cost about one document, not one each: their styles parsed and their fonts
   loaded once, in one worker a drawing, alive while the drawing is shown.
-- At most four workers live at once, so the worst case is 4 GiB of heap. The pager may hold up to
-  six drawings' pools at once (the four parts wanted most recently and the level's): in a list of
-  drawings with labels, a fifth or sixth tile shown at once draws its drawing without its labels,
-  with a warning, rather than wait.
+- At most six workers live at once, as many as the pager holds drawings' pools (the four parts
+  wanted most recently and the level's, and the printer's renderer), so no tile shown at once is
+  refused; the worst case is 6 GiB of heap. Past six, a drawing's labels are left out, with a
+  warning, rather than wait.
+- One deadline covers a request, its sending and its answer. The request is written on a thread
+  of its own while the caller waits with the deadline; at the deadline the viewer kills the
+  worker, which ends a blocked write (the pipe broken) and a blocked read (its end). So a worker
+  that stops reading, and fills the pipe while the viewer writes a large request, is killed at
+  the deadline, without using CPU and so out of `RLIMIT_CPU`'s reach, and the render isn't hung.
+- The viewer holds at most one reply: its reader reads a frame only when a reply is awaited,
+  handing it over through a channel of one, and a frame that isn't the answer to the request
+  outstanding (its kind wrong, or a second one) kills the worker. What a worker writes unasked
+  waits in the pipe's own buffer, which the kernel bounds.
 - A worker that dies, for whatever reason (killed, out of memory, a panic, a crash, an answer
   that isn't one), isn't started again for that drawing: its labels are left out until the
   drawing is opened again, with a warning saying which. The drawing is drawn.
@@ -205,8 +216,9 @@ The counts are task 1's, measured
 - `src/source/worker.rs` — new: a worker process of clv's own, for any backend. The viewer's
   side: `spawn` (`current_exe()`, `--worker <name>`, stdin and stdout piped, stderr null, the
   environment cleared but for `HOME`, `XDG_*` and `FONTCONFIG_*`, which fonts need), frames
-  (kind, length, payload; each reply's length capped), a reader thread, `recv_timeout`, kill and
-  reap, the live count. The worker's side: `serve` (the heap limit set, `RLIMIT_CPU` armed before
+  (kind, length, payload; each reply's length capped), a writer thread a request and a reader
+  reading only when a reply is awaited (a channel of one), one deadline for both enforced by
+  killing the worker, kill and reap, the live count. The worker's side: `serve` (the heap limit set, `RLIMIT_CPU` armed before
   each request, the frame loop). The `Worker` trait. The process's allocator, `cap`, with its
   limit `usize::MAX` in the viewer. Names no library but `cap` and `rustix`.
 - `src/source.rs` — `WORKERS`, this build's workers, one line a feature, beside `BACKENDS`;
@@ -214,7 +226,9 @@ The counts are task 1's, measured
 - `src/main.rs` — `--worker <name>` before `view::run`, handed to `source::serve` with `WORKERS`.
 - `src/source/svg.rs` — finds the labels and places them, as task 2 built it; `prepared` hands
   them to `html::prepare` and tells the warnings; `Drawn::render` counts each label's part of the
-  page in the estimate. Loses the nesting limit and the commands' share of the estimate. Keeps
+  page in the estimate. Keeps a nesting limit, 1,024 levels from a `<foreignObject>`, counted by
+  `written` itself (no longer 64, which was Blitz's stack's). Loses the commands' share of the
+  estimate. Keeps
   `LOADING` (no element that loads a stylesheet or a document reaches the worker; a label's
   `<style>` joins the drawing's). Names no Blitz crate.
 - `src/source/svg/html.rs` — the only file naming Blitz and what it paints with. The worker
@@ -267,7 +281,8 @@ The counts are task 1's, measured
   CPU budget, for a worker that isn't running. No estimate of Blitz's painting: three reviews
   found CSS it missed, and the next would too.
 - **A worker a drawing,** owned by the `Drawn` the render's first parse makes (a pool's, or the
-  printer's renderer's), killed when it goes. At most four alive; past four, a drawing's labels
+  printer's renderer's), killed when it goes. At most six alive, as many as the pager holds
+  pools, the worst case 6 GiB of heap; past six, a drawing's labels
   are left out, with a warning, rather than wait (a wait on a render thread for a slot another
   `Drawn` holds could wait for ever). A pool's threads share the worker, one request at a time:
   two scales of one drawing replay in turn, not at once. A render no longer wanted is dropped
@@ -282,9 +297,10 @@ The counts are task 1's, measured
 - **The cheap bounds stay before the worker** (labels, elements, markup, text, styles, what is
   fetched and how large): exact, and they spare the worker for a real drawing with one bad
   label. Deleted with the estimate: the paint work, the recorder's budget, the 24,576-pixel
-  element bound, the 8 MiB thread, `catch_unwind`, the nesting limit (the drawing's 1,024 levels
-  bound it; the worker lays out on a thread of 64 MiB, which holds 1,024 nested grids
-  unoptimized), the version guard. Round 3's generated-text count, never committed, isn't taken
+  element bound, the 8 MiB thread, `catch_unwind`, the version guard. The nesting limit becomes
+  1,024 levels, counted by the viewer's writer (the drawing's scan skips `<metadata>` and `<defs>`
+  by name, so it doesn't bound a label's depth, and `written` recurses in the viewer); the worker
+  lays out on a thread of 64 MiB, which holds 1,024 nested grids unoptimized. Round 3's generated-text count, never committed, isn't taken
   up: what styles write is heap and CPU, capped. Kept, because they are rules and not bounds: no
   stylesheet or document is ever fetched (`LOADING` before the worker, `without_imports` in it,
   so Stylo stays), and a WOFF's tables are checked against its file before wuff unpacks them,
@@ -295,7 +311,11 @@ The counts are task 1's, measured
 - **Tests run the real worker** through the binary (`tests/it/`); the viewer's unit tests that
   draw labels run the worker's code on a thread through `std::io::pipe()`s, the same frames, no
   caps (the test harness can't be re-executed as `clv --worker`). `worker.rs`'s own tests use
-  `sleep`, `sh` and `yes` as workers.
+  `sleep`, `sh` and `yes` as workers; its CPU cap's test runs its own test binary again as the
+  worker (the harness's `--exact` filter and an environment variable, as ADR-0024's stack test
+  ran a child), `serve` with a test worker that spins without allocating and a budget of a
+  second: killed by `SIGXCPU` at its budget, and, with the arming removed, by the wall clock
+  instead, which the test tells apart.
 - **Branch:** `spec-0004` from `main`; task 5 on it after task 4.
 - **On by default,** though it adds about 11 MB to the binary, and Blitz is a beta: a drawing
   without labels never starts a worker.
@@ -351,17 +371,23 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   kill, count; serve, the heap limit, `RLIMIT_CPU` armed a request; the `Worker` trait; the
   allocator), `WORKERS` and `--worker`; `html.rs` split into the worker (`Labels`) and `Painted`
   over the pipe, pixels back; the deletions (`paint_work` and its helpers, `Recorder`, the 8 MiB
-  thread, `catch_unwind`, `cost`, `system_fonts`, the nesting limit, `peniko`, the version
-  guard); the WOFF table check in `font_size`; the page's estimate counting parts only; the
+  thread, `catch_unwind`, `cost`, `system_fonts`, `peniko`, the version guard); the nesting limit
+  at 1,024, in the writer; the WOFF table check in `font_size`; the page's estimate counting parts only; the
   in-process seam for the unit tests; `cap` and `rustix`'s `time` in `Cargo.toml`. *Files:*
   `src/source/worker.rs`, `src/source.rs`, `src/main.rs`, `src/source/svg.rs`,
   `src/source/svg/html.rs`, `Cargo.toml`, `tests/it/resvg.rs`. *Verify:* `cargo test -j 2 --test it
   resvg` with `--features svg-html` and with `--no-default-features --features pdf,svg`;
   `worker.rs`'s tests with `--no-default-features`: a `sleep` killed on the wall clock and
   reaped, `sh -c 'exit 3'` and `sh -c 'kill -SEGV $$'` told apart, `yes` refused past the length
-  cap, an unknown kind refused, a `Pixels` of the wrong length refused, the fifth worker refused;
-  through the binary, round 3's cases: the `text-decoration-inset: -1e20px` hang killed on CPU
-  time with its warning (`2px` drawn); a 2,000,000-pixel dotted border, and a 64 KiB `content`
+  cap, an unknown kind refused, a `Pixels` of the wrong length refused, the seventh worker
+  refused; a worker that never reads, sent a request larger than the pipe holds, killed at the
+  deadline and the render returning; a worker writing valid frames without end, killed at its
+  first unasked frame, the viewer holding at most one; the CPU cap, a spinning worker that
+  allocates nothing killed by `SIGXCPU`, failing with only the arming removed. Through the
+  binary, round 3's cases: the `text-decoration-inset: -1e20px` hang killed by a cap (its memory
+  grows without the recorder, so the heap's comes first: a regression for either cap), with its
+  warning (`2px` drawn); a label 20,000 levels deep under an XHTML `<metadata>` left out with its
+  warning, no crash; a 2,000,000-pixel dotted border, and a 64 KiB `content`
   on 100,000 elements, each aborted at the heap cap with its warning; a WOFF whose table is
   stored larger than it unpacks refused alone, the label drawn without it
   (`a_woffs_inconsistent_tables_are_refused`); 10,000 elements clipped by a 1,000-point polygon,
@@ -394,7 +420,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   500 MB (viewer and worker together: `-l` on the viewer, the worker's maximum resident set from
   `ps` while it lives); the whole open takes some 8 s, usvg's stylesheet parse twice, a known
   issue in usage. 50 labels sharing a 400 KB font drawn in at most 1 s; the hang killed within
-  11 s of CPU and the bomb within a second, each with its warning; a drawing with one label shown
+  its budget (by whichever cap it reaches first) and the bomb within a second, each with its
+  warning; a drawing with one label shown
   within 100 ms more than the same drawing without it.
 - [ ] A worker's death leaves no process behind: after the hang and the bomb, `pgrep -f
   'clv --worker'` finds none; after `clv` is killed with SIGKILL while a worker lives, the worker
@@ -452,3 +479,9 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   (approved by the owner); ADR-0025. Task 5 and a docs task added; tasks 2 to 4 stand as built.
   The Cost item's 3 s covers the labels' work, the whole open some 8 s (usvg's stylesheet parse,
   a known issue).
+- 2026-11-09 — Codex's review of the worker: a nesting limit kept in the viewer's writer, 1,024
+  levels, since the drawing's scan skips `<metadata>` and `<defs>`; one deadline for a request's
+  sending and its answer, enforced by killing the worker; at most one reply held, an unasked one
+  killing the worker; the CPU cap tested by a worker that spins without allocating, the
+  `-1e20px` hang a regression for either cap. Six workers, not four, as many as the pager's
+  pools (owner's decision): the worst case 6 GiB.
