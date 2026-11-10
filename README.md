@@ -83,6 +83,9 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 ## Plans
 
+- Add proper support for ebooks (epub, etc.)
+- Add a config file for customization and remembering settings
+- Remember positions of previously opened files
 - Let go of a list's files once the reader has moved on: a PDF opened holds its whole file until
   the list is left.
 - Hold the grid's count to a row until a Markdown or HTML document's new layout lands: after `3.`
