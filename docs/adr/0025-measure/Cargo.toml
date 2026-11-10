@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 # Standalone, its own workspace: not part of clv's build. Measures what Spec-0004's labels cost,
-# for ADR-0024: `cargo build --release` here, then `target/release/measure`.
+# for ADR-0025: `cargo build --release` here, then `target/release/measure`.
 [workspace]
 
 [dependencies]

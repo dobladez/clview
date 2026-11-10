@@ -593,7 +593,7 @@ fn the_links_a_labels_worker_doesnt_follow_are_said() {
 }
 
 /// A label nested as deeply as labels may be, in nested grids (Blitz's costliest nesting), is laid
-/// out and drawn on its worker's stack, in a debug build too (ADR-0025).
+/// out and drawn on its worker's stack, in a debug build too (ADR-0026).
 #[cfg(feature = "svg-html")]
 #[test]
 fn the_deepest_label_is_drawn_on_its_workers_stack() {

@@ -1,12 +1,12 @@
 //! An SVG's HTML labels, laid out and painted by Blitz (Stylo's styles, Taffy's layout, Parley's
 //! text) through anyrender into vello_cpu: the one file that names Blitz and what it paints with
-//! (ADR-0024). `svg.rs` finds the labels, places them and writes them out; this lays them out in
+//! (ADR-0025). `svg.rs` finds the labels, places them and writes them out; this lays them out in
 //! one document, records each label's painting once, and replays a label into the part of a page
 //! it lands on, at whatever scale that page is drawn.
 //!
 //! All of that runs in a worker process of its own, a drawing's ([`LABELS`]): Blitz's costs
 //! can't be bounded before they are spent, so the worker's CPU time and heap are, as they are
-//! spent, and past them it is killed and the drawing's labels left out (ADR-0025). The viewer's
+//! spent, and past them it is killed and the drawing's labels left out (ADR-0026). The viewer's
 //! side ([`Painted`]) asks it to lay the labels out ([`PREPARE`]), and for each part of a page a
 //! label lands on, its pixels ([`RENDER`]). What a label fetches is still bounded before Blitz
 //! has it: `data:` URLs only, each font and picture sized from its header.
@@ -31,7 +31,7 @@ use super::Label;
 /// Who lays the labels out, credited with the backend's own.
 pub(super) const CREDIT: &str = "Blitz";
 
-/// The largest side of a label laid out, in CSS pixels: past it, it is left out (ADR-0024).
+/// The largest side of a label laid out, in CSS pixels: past it, it is left out (ADR-0025).
 pub(super) const MAX_LAYOUT_SIDE: f32 = 16_384.0;
 
 /// How far past its box an `overflow: visible` label is drawn, each way, in CSS pixels.
@@ -83,7 +83,7 @@ const MALFORMED: u8 = 2;
 
 /// The CPU seconds laying a drawing's labels out and recording them may take, and a render:
 /// five times the slowest measured within the limits before them, and about what a page's own
-/// render is held to (ADR-0025).
+/// render is held to (ADR-0026).
 const PREPARE_CPU: u64 = 10;
 const RENDER_CPU: u64 = 5;
 
@@ -502,7 +502,7 @@ fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>)
 /// The worker's fonts: the system's as the drawing's own text has them, the files `svg.rs` found
 /// for it, each mapped by Blitz's own font cache (never read into memory) and registered into its
 /// collection, and the generic families set as `svg.rs` sets them for the drawing's text; nothing
-/// asked of fontconfig or CoreText, so a static build has them too (ADR-0025's update). A file
+/// asked of fontconfig or CoreText, so a static build has them too (ADR-0026's update). A file
 /// fontique can't read is skipped.
 fn fonts() -> FontContext {
     use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache, SourceId, SourceInfo, SourceKind};

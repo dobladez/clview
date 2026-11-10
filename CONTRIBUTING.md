@@ -55,8 +55,8 @@ it prints, never by name.
    `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` in
    `tests/it/resvg.rs` leans on blitz-paint's `text-decoration-inset` loop and its dotted border
    paths: if it fails, the caps still hold, and the fixtures need another hostile drawing.
-2. Measure the worker's caps again: `docs/adr/0024-measure/`'s drawings through the release binary
-   as [ADR-0025](docs/adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s
+2. Measure the worker's caps again: `docs/adr/0025-measure/`'s drawings through the release binary
+   as [ADR-0026](docs/adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s
    Evidence says, and its `fonts()` against the system's fonts (the same families as before).
 3. Check usage's known differences for the labels against real drawings: the tldraw, draw.io 21
    and Mermaid files the spike's `NOTES.md` names (`spike/blitz-foreignobject` branch), or the

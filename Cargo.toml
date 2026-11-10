@@ -46,11 +46,11 @@ flate2 = { version = "1.1", optional = true }
 imagesize = { version = "0.15", optional = true }
 # An SVG's HTML labels (`<foreignObject>`: tldraw, draw.io, Mermaid), laid out and painted by
 # Blitz (Stylo's styles, Taffy's layout, Parley's text) through anyrender into vello_cpu, in Rust:
-# `source/svg/html.rs`, ADR-0024, in a worker process of clv's own (ADR-0025). Pinned, for their
+# `source/svg/html.rs`, ADR-0025, in a worker process of clv's own (ADR-0026). Pinned, for their
 # API: blitz-paint 0.3.0-beta.4's shapes are what the memory test's drawing grows by. Without
 # Blitz's default features, which bring its own SVG (usvg, without this backend's bounds) and the
 # system's fonts through fontconfig on Linux, which a static musl build can't link: the worker
-# registers the fonts fontdb finds for resvg instead (ADR-0025's update). With WOFF fonts. No
+# registers the fonts fontdb finds for resvg instead (ADR-0026's update). With WOFF fonts. No
 # JavaScript, no network.
 blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff"], optional = true }
 blitz-html = { version = "=0.3.0-beta.4", optional = true }
@@ -141,7 +141,7 @@ sheet = ["dep:gridcraft-engine", "dep:zip", "dep:serde_json", "pdf"]
 # The CPU time a worker process has used (`time`), to cap what it may use next (`process`).
 rustix = { version = "1", features = ["process", "termios", "time"] }
 # The allocator of the whole process, which counts what it holds: a worker process sets it a
-# limit, past which an allocation fails and the worker aborts (`source/worker.rs`, ADR-0025);
+# limit, past which an allocation fails and the worker aborts (`source/worker.rs`, ADR-0026);
 # the viewer's has none.
 cap = "0.1.2"
 # The system's clipboard, for the pager's `c` on a terminal on this machine that has no clipboard

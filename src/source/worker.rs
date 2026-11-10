@@ -1,6 +1,6 @@
 //! A worker process of clv's own: clv started again as `clv --worker <name>`, for work on a file's
 //! bytes that can't be bounded before it is done, so is bounded as it is done, where the kernel
-//! and the allocator enforce it ([ADR-0025](../../docs/adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-time-and-heap.md)).
+//! and the allocator enforce it ([ADR-0026](../../docs/adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-time-and-heap.md)).
 //!
 //! The viewer's side ([`spawn`], [`Link`]) starts one, its stdin and stdout pipes of frames and its
 //! stderr null, and asks it one request at a time under one deadline, its sending and its answer

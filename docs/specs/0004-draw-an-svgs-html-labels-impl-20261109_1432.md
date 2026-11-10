@@ -5,7 +5,7 @@ surprises, and what a later reader would want.
 
 ## Task 1: measured
 
-- **Where the tool lives:** the owner put it in `docs/adr/0024-measure/` on this branch, a crate of
+- **Where the tool lives:** the owner put it in `docs/adr/0025-measure/` on this branch, a crate of
   its own with its own `[workspace]`, rather than on the spike's branch as the task's wording has
   it; nothing was committed to the spike. It isn't in the task's *Files:*. Its fixtures are
   generated (`measure gen`), never kept; the real drawings it was compared on are clients' files,
@@ -24,7 +24,7 @@ surprises, and what a later reader would want.
 - **Limits that moved** from the spec's starting table: label elements 100,000 (new), commands
   200,000 (from a million), overflow 4,096 CSS pixels (the spec named no number); and the nesting
   limit's thread. The owner chose a thread of 8 MiB for Blitz (option C) over 64 on 2 MiB sized
-  by release builds, or 32 on 2 MiB. Each is reasoned in ADR-0024.
+  by release builds, or 32 on 2 MiB. Each is reasoned in ADR-0025.
 - **One document a label** for 1,024 labels under 3 MiB of styles was stopped after 10 minutes:
   this stylesheet costs 1.7 s a label (16 labels: 27 s), more than the spike's (111 s for 1,024).
 - **wuff** sizes a WOFF 1 table's output by its header's `origLength`, unbounded: the hostile font
@@ -32,7 +32,7 @@ surprises, and what a later reader would want.
   padded length, or wuff refuses it before unpacking.
 - **Blitz requests a repeated `data:` URL once** a document (1,024 labels of 256 distinct pictures
   made 256 requests).
-- **Verify:** every row of the ADR's tables was run again from `docs/adr/0024-measure/` under
+- **Verify:** every row of the ADR's tables was run again from `docs/adr/0025-measure/` under
   `/usr/bin/time -l`; the numbers are the second run's, within a few percent of the first.
 
 ## Task 2: labels found, behind `svg-html`
@@ -57,7 +57,7 @@ surprises, and what a later reader would want.
   a root with neither absolute takes 100 × 100, usvg's size for a drawing that draws nothing.
 - **Cargo.lock:** Blitz's tree moved serde_spanned (1.1.2 to 1.1.3), toml_datetime (1.1.2 to
   1.1.3) and toml_writer (1.1.3 to 1.2.0), which its crates need; wuff stays at clv's 0.2.9. The
-  measuring tool's lock is now clv's, so the two build the same versions; ADR-0024's numbers were
+  measuring tool's lock is now clv's, so the two build the same versions; ADR-0025's numbers were
   measured again with it, the same within noise, and its versions line says so.
 - **CI** builds `svg-html` alone and `pdf,svg`, as the spec asks; the integration tests with the
   labels found (`--features svg-html`) run there once task 3 makes the feature a default.
@@ -336,7 +336,7 @@ Three findings, all fixed:
 
 ## Task 6: the docs
 
-- ADR-0025 written from the design's measurements (the throwaway crates' numbers: what macOS
+- ADR-0026 written from the design's measurements (the throwaway crates' numbers: what macOS
   enforces, spawn, fonts, the pipe) and the release build's, measured as its Evidence says, with
   the fixtures in the session's scratchpad: `styles 1024 3072` opens in 8.0 s, the worker's share
   0.32 s of CPU and 95 MB (usvg's stylesheet parse is the rest: usage's Known issues); `font 50
@@ -346,7 +346,7 @@ Three findings, all fixed:
   within three seconds. `/usr/bin/time -l`'s maximum resident set covers a reaped child, so it
   reports the worker's peak for the bombs (about 1 GiB); the worker's own numbers were sampled
   from `ps`.
-- ADR-0024 stays Accepted, its status line naming what ADR-0025 supersedes (the estimate, the
+- ADR-0025 stays Accepted, its status line naming what ADR-0026 supersedes (the estimate, the
   thread); its measure tool stays, as the stage limits' evidence.
 - Usage gains `## Known issues`, which README's Plans links instead of these notes.
 - **Left for the owner:** Done's manual checks in kitty (the tldraw, draw.io and Mermaid

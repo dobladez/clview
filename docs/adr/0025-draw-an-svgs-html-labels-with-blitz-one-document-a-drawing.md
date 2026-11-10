@@ -1,8 +1,8 @@
-# ADR-0024: Draw an SVG's HTML labels with Blitz, one document a drawing, each stage bounded
+# ADR-0025: Draw an SVG's HTML labels with Blitz, one document a drawing, each stage bounded
 
 - **Status:** Accepted; its estimate of the painting (decision 4's paint work and recording rows)
   and its thread (decision 3) superseded by
-  [ADR-0025](0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md),
+  [ADR-0026](0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md),
   which runs Blitz in a worker process capped on CPU time and heap. The one document a drawing and
   the stages before Blitz stand.
 - **Date:** 2026-11-09
@@ -82,7 +82,7 @@ the page within that part, and the part's pixels.
 ## Evidence
 
 Measured 2026-11-09 on an Apple M3 Max (14 cores, 36 GiB), macOS 26.6.2, Rust 1.95.0, with the
-measuring tool [`0024-measure/`](0024-measure/src/main.rs) beside this ADR: a crate of its own, in
+measuring tool [`0025-measure/`](0025-measure/src/main.rs) beside this ADR: a crate of its own, in
 its own workspace, outside clv's build, with blitz-dom, blitz-html, blitz-paint and blitz-traits
 0.3.0-beta.4, anyrender 0.14.0, anyrender_vello_cpu 0.18.0 (vello_cpu 0.3.0), stylo 0.22.0, taffy
 0.15.1, parley 0.12.0, wuff 0.2.9 and image 0.25.10: its `Cargo.lock` is clv's, so every crate the two
@@ -93,7 +93,7 @@ writes each drawing, synthetic; `measure run <x.svg>` finds its labels as the sp
 each label through a recorder that keeps at most 200,000 commands and counts the rest, and replays
 each into the page at `--scale` (1 unless said), past the commands' limit not at all. It prints
 each stage's time and counts, the commands painted in all, and the rules times the elements of its
-document, as ADR-0003 counts them. Built with `cargo build --release` in `docs/adr/0024-measure/`;
+document, as ADR-0003 counts them. Built with `cargo build --release` in `docs/adr/0025-measure/`;
 each line is `target/release/measure gen <kind> … > x.svg`, then
 `/usr/bin/time -l target/release/measure run x.svg …`, its `real` time and maximum resident set.
 

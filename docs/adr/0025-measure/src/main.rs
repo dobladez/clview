@@ -1,4 +1,4 @@
-//! Measures what an SVG's HTML labels cost through Blitz, for Spec-0004 and ADR-0024.
+//! Measures what an SVG's HTML labels cost through Blitz, for Spec-0004 and ADR-0025.
 //!
 //! - `measure gen <kind> [args…] > x.svg` writes a synthetic drawing (`measure gen` lists them).
 //! - `measure run <x.svg> [--each] [--scale S] [--out page.png]` finds its `<foreignObject>`s,
@@ -200,7 +200,7 @@ fn drawing(text: &str) -> Drawing {
 // ---------------------------------------------------------------------------------------------
 // The recording, its commands counted as they are painted.
 
-/// The most commands recorded, all labels together (ADR-0024).
+/// The most commands recorded, all labels together (ADR-0025).
 const MAX_COMMANDS: usize = 200_000;
 
 /// An anyrender `Scene` that keeps a command only while `budget` has room: past it, it counts
@@ -317,12 +317,12 @@ impl PaintScene for Recorder<'_> {
 // ---------------------------------------------------------------------------------------------
 // The paint estimate, as clv's `source/svg/html.rs` makes it.
 
-/// The most work the estimate allows: about 0.1 s of painting with nothing kept (ADR-0024).
+/// The most work the estimate allows: about 0.1 s of painting with nothing kept (ADR-0025).
 const MAX_PAINT_WORK: u64 = 20_000_000;
 
 // The paint estimate. It follows blitz-paint 0.3.0-beta.4's painting, which the version guard
 // pins: `box_shadow.rs`, and `background.rs`'s `compute_layer_size`,
-// `raster_axis_tiling` and `gradient_axis_tiling` (ADR-0024).
+// `raster_axis_tiling` and `gradient_axis_tiling` (ADR-0025).
 
 /// Commands an inset or outset shadow paints at most: an inset one pushes two layers, fills,
 /// shadows and pops.
@@ -332,7 +332,7 @@ const PER_SHADOW: u64 = 6;
 const PER_GRADIENT: u64 = 500;
 
 /// A dot of a dotted border, or a dash of a dashed one, in steps: blitz-paint builds an edge's
-/// dots into one path, some 170 bytes a dot (ADR-0024), held as a command is.
+/// dots into one path, some 170 bytes a dot (ADR-0025), held as a command is.
 const DOT_STEPS: u64 = 20;
 
 /// A pixel of a dotted, dashed or wavy text decoration, in steps: a wave is a path of a segment

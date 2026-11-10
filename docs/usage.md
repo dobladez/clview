@@ -455,7 +455,7 @@ What a drawing costs is bounded before it is spent
 fails with why. A render once begun can't be stopped: a page within the limits but slow still takes
 its time on a render thread, while the keys work. Its HTML labels are the exception: their
 worker is bounded as it spends, and killed past its time or its memory
-([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
 One cost the limits don't count is a [known issue](#known-issues): a stylesheet's parse.
 
 ### Documents

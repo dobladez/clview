@@ -101,7 +101,7 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
   long declaration in a `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open,
   labels or not, which the drawing's limits don't count. A cap on a `<style>`'s size before it is
   parsed, or usvg and resvg in a worker process as the labels' Blitz is
-  ([ADR-0025](docs/adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+  ([ADR-0026](docs/adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
 
 ## Working on clview
 

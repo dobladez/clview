@@ -1,11 +1,11 @@
-# ADR-0025: An SVG's HTML labels in a worker process, capped on CPU time and heap
+# ADR-0026: An SVG's HTML labels in a worker process, capped on CPU time and heap
 
 - **Status:** Accepted
 - **Date:** 2026-11-09
 
 ## Context
 
-[ADR-0024](0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) draws an SVG's
+[ADR-0025](0025-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) draws an SVG's
 HTML labels with Blitz, one document a drawing, each stage bounded before it is spent: counts
 before Blitz, and an estimate of its painting (shadows, layers' tiles, a dotted border's dots,
 a decoration's lines) after layout, before it was done, since a painting once begun can't be
@@ -49,7 +49,7 @@ so `pre_exec` and `libc` are out.
    tiles start none (`Request::tile`), nor do the pictures a document's page that is a tile refers
    to.
 4. **What crosses the pipe is pixels.** The viewer sends the drawing's stylesheets and each
-   label's markup, size and overflow; the worker lays them out as ADR-0024 decided, keeps each
+   label's markup, size and overflow; the worker lays them out as ADR-0025 decided, keeps each
    label's recording, and answers each render with the premultiplied RGBA of a label's part of
    the page, exactly the size asked. Everything read from the worker is untrusted: each frame's
    kind and length against a cap, counts against what was sent, a reason as a code the viewer
@@ -99,11 +99,11 @@ malloc's slack.
 | 64 MiB of pixels (a 4,096 × 4,096 part) through a pipe to `cat`, and back | 21 ms one way, 22 ms the round trip |
 | A thread of 64 MiB | holds 100,000 frames of some 600 bytes |
 
-**The caps, on the drawings ADR-0024 measured and round 3's cases**, through the release binary
+**The caps, on the drawings ADR-0025 measured and round 3's cases**, through the release binary
 with `--protocol kitty` under `/usr/bin/time -l`, whose maximum resident set is the larger of the
 viewer's and the worker's (a reaped child's counts), the worker's own set and CPU time sampled
 from `ps` every 10 ms while it lives (`measure gen styles 1024 3072` and `font 50 400` from
-ADR-0024's tool; the rest written by hand as `tests/it/resvg.rs` writes them):
+ADR-0025's tool; the rest written by hand as `tests/it/resvg.rs` writes them):
 
 | Drawing | What happens | Time, memory |
 |---|---|---|

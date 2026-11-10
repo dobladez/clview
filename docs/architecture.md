@@ -64,7 +64,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
 | `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and painted by Blitz for `svg.rs`, in a worker process: the one file that names Blitz, both sides of that worker |
-| `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and heap capped by itself, killed past them, at most six alive ([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)) |
+| `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and heap capped by itself, killed past them, at most six alive ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
@@ -237,8 +237,8 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   keeps each label's region. Each render asks the worker for a label's part of the page
   (`Painted::paint`, pixels back, exactly the size asked), that part in the page's estimate, and
   draws every part over resvg's pixels at its opacity once all have come
-  ([ADR-0024](adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md),
-  [ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+  ([ADR-0025](adr/0025-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md),
+  [ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
   The worker arms `RLIMIT_CPU` before each request (10 s to lay out, 5 s a render) and caps its
   heap at 1 GiB through the `cap` allocator; the viewer waits three times the CPU budget, then
   kills it, and a worker gone (killed, aborted, ended, or answering what wasn't asked) is never
@@ -249,7 +249,7 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   `svg.rs` hands it each font file's path (`label_fonts`), fontique maps and registers each
   (`fonts` in `html.rs`), the generic families set as for resvg and each script's fallback
   families from a list (`FALLBACKS`), so Blitz's own font discovery (fontconfig on Linux, which a
-  static build can't link) isn't built ([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s update). Blitz asks for a URL without saying what for, so the labels' markup
+  static build can't link) isn't built ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s update). Blitz asks for a URL without saying what for, so the labels' markup
   holds no element that loads a stylesheet or a document (`LOADING`), and a label's `<style>`
   joins the drawing's stylesheets, which Stylo reads and writes out again without `@import`
   (`without_imports`). The labels' nesting is held to 1,024 levels by the writer (`written`),

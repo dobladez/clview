@@ -607,12 +607,12 @@ fn entity_value(declaration: &str) -> Option<&str> {
 #[cfg(feature = "svg-html")]
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
-/// The most HTML labels drawn: painting each one walks every label's box (ADR-0024).
+/// The most HTML labels drawn: painting each one walks every label's box (ADR-0025).
 #[cfg(feature = "svg-html")]
 const MAX_LABELS: usize = 1_024;
 
 /// The most elements all of a drawing's labels hold, within its [`MAX_ELEMENTS`]: the painter
-/// holds some 1.7 KB an element (ADR-0024).
+/// holds some 1.7 KB an element (ADR-0025).
 #[cfg(feature = "svg-html")]
 const MAX_LABEL_ELEMENTS: u64 = 100_000;
 
@@ -620,7 +620,7 @@ const MAX_LABEL_ELEMENTS: u64 = 100_000;
 #[cfg(feature = "svg-html")]
 const MAX_LABEL_MARKUP: usize = 8 << 20;
 
-/// The most text in a drawing's labels: 1 MiB lays out in 0.4 seconds (ADR-0024).
+/// The most text in a drawing's labels: 1 MiB lays out in 0.4 seconds (ADR-0025).
 #[cfg(feature = "svg-html")]
 const MAX_LABEL_TEXT: usize = 1 << 20;
 
@@ -628,7 +628,7 @@ const MAX_LABEL_TEXT: usize = 1 << 20;
 /// the writer recurses once a level, on a render thread, and the drawing's own bound on its
 /// depth ([`MAX_DEPTH`]) doesn't reach every element a label holds, since its scan skips some by
 /// name (`<metadata>`, `<defs>`). As deep as the drawing may nest: the worker lays them out on a
-/// stack of 64 MiB, which holds 1,024 nested grids in a debug build (ADR-0025).
+/// stack of 64 MiB, which holds 1,024 nested grids in a debug build (ADR-0026).
 #[cfg(feature = "svg-html")]
 const MAX_LABEL_DEPTH: usize = 1_024;
 
