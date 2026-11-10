@@ -352,3 +352,51 @@ Three findings, all fixed:
 - **Left for the owner:** Done's manual checks in kitty (the tldraw, draw.io and Mermaid
   drawings at over 6,000 pixels and zoomed; the `svg`-only build's warning; a worker made to panic
   by hand showing the warning and nothing else).
+
+## Codex's review of the branch
+
+- **A quadratic walk for the labels' stylesheets:** each XHTML `<style>` was asked whether a
+  `<foreignObject>` is among its ancestors, so 100,000 `<style>`s nested under a `<metadata>`
+  (which the drawing's scan skips by name, so its depth doesn't refuse them) were some 5 billion
+  visits in the viewer, while opening, before any worker or deadline. `label_styles` walks once,
+  knowing when it is inside a `<foreignObject>`. `label_styles_are_found_in_one_walk` (100,000
+  nested, within 10 s) failed with the old walk back: 11.3 s in the debug build.
+- **The musl release builds can't link fontconfig** (the owner's call, not fixed here). Blitz's
+  `system-fonts` is parley's `system`, which is fontique's, which on Linux is
+  `yeslogic-fontconfig-sys` 6.0.1, whose build script runs `pkg_config::find_library("fontconfig")
+  .unwrap()` unless its `dlopen` feature is on or `RUST_FONTCONFIG_DLOPEN` is set in the
+  environment. `release.yml` builds `x86_64-unknown-linux-musl` on `ubuntu-latest` and
+  `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`, with `musl-tools` and nothing for pkg-config,
+  so pkg-config refuses to cross-compile and both Linux artifacts fail at that build script.
+  Reproduced here with `cargo check --target x86_64-unknown-linux-musl -p yeslogic-fontconfig-sys`
+  (the script panics with "pkg-config has not been configured to support cross-compilation"), and
+  seen passing that script with `RUST_FONTCONFIG_DLOPEN=1`. The options, with what a Linux user
+  of the static binary would see:
+  1. **`RUST_FONTCONFIG_DLOPEN=1` in `release.yml`'s musl steps**, or fontique's
+     `fontconfig-dlopen` feature in `Cargo.toml` for every build: the builds pass; at run time a
+     static musl binary can't `dlopen`, fontique's `SystemFonts::new` sees the library missing and
+     holds no fonts (no panic: `Self::default()`). Labels draw, their boxes and pictures and any
+     font the drawing embeds (tldraw), but text in the system's fonts draws nothing, and draw.io's
+     fallback text is cut all the same: worse than today's fallback for draw.io and Mermaid. Same
+     binary size. The feature in `Cargo.toml` also spares every Linux developer the fontconfig
+     headers at build time (a dynamic build then `dlopen`s fontconfig where it is installed).
+  2. **`svg-html` off in the musl release builds** (`--no-default-features --features
+     pdf,image,svg,zip,tar,word,sheet` there): Linux users keep today's drawings, the fallbacks
+     shown and a warning counting the labels not drawn; the binary some 11 MB smaller. macOS
+     keeps the labels. The simplest honest release.
+  3. **fontconfig built static for musl** in CI (fontconfig, freetype, expat from source or an
+     Alpine toolchain): labels with the system's fonts where `/etc/fonts` is configured; heavy,
+     fragile CI, and fontconfig's own files still needed at run time.
+  4. **Linux builds against glibc** (`x86_64-unknown-linux-gnu`) with `dlopen`: fontconfig found at
+     run time on nearly every desktop; but one binary no longer runs on any distribution, the
+     reason the release is musl.
+  5. **Fonts without fontconfig:** fontique has no directory scanner on Linux, but fontdb (resvg's,
+     already loading the system's fonts in `svg.rs` through its own `fonts.conf` parser) does, and
+     a face's `Source::SharedFile` holds the mapped file as an `Arc<dyn AsRef<[u8]>>`, which is a
+     peniko `Blob`: the worker could register fontdb's faces into fontique's collection
+     (`Collection::register_fonts`, no copy) and set the generic families as `svg.rs` does for
+     resvg. Labels and the drawing's own text would then use the same fonts on every system, with
+     no fontconfig at build or run time, and Blitz's `system-fonts` could go. A change of its own
+     (fontdb named outside `svg.rs`, an ADR), the proper fix.
+  Recommended now: 2 for the coming release, with the `fontconfig-dlopen` feature from 1 so that
+  no build needs fontconfig's headers; 5 as the follow-up, in README's Plans.

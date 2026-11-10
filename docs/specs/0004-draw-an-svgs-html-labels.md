@@ -543,3 +543,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   CHANGELOG; CONTRIBUTING; README's Plans; `CLAUDE.md`. Done's manual checks in kitty are the
   owner's: the tldraw, draw.io and Mermaid drawings, and that nothing a worker writes reaches the
   terminal.
+- 2026-11-09 — Codex's review of the branch: the labels' stylesheets found in one walk, as the
+  labels are (each `<style>` asked for its ancestors was the square of a nest the scan doesn't
+  bound: 100,000 under a `<metadata>`, 11 s in a debug build, before anything is drawn). Its other
+  finding, that Blitz's `system-fonts` link fontconfig at build time, which the musl release builds
+  can't, is the owner's to decide: the notes have the options.

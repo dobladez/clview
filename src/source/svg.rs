@@ -836,15 +836,8 @@ fn found_labels(doc: &roxmltree::Document, notes: &Notes, style_work: u64, viewp
     let root = doc.root_element();
     let view_box = root.attribute("viewBox").and_then(|v| v.parse::<svgtypes::ViewBox>().ok()).filter(|v| v.w > 0.0 && v.h > 0.0);
     let aspect = root.attribute("preserveAspectRatio").and_then(|v| v.parse().ok()).unwrap_or_default();
-    // The `<font>` hints first, of no specificity, so the drawing's own rules win. A label's own
-    // `<style>`s join the drawing's, as a browser takes them: the painter is given no element
-    // that loads a stylesheet ([`LOADING`]).
-    let styles: Vec<&str> = doc
-        .descendants()
-        .filter(|n| svg_element(*n, "style") || (n.has_tag_name((XHTML_NS, "style")) && n.ancestors().any(|a| svg_element(a, "foreignObject"))))
-        .filter_map(|n| n.text())
-        .collect();
-    let css = format!("{}\n{}", font_hints(doc), styles.join("\n"));
+    // The `<font>` hints first, of no specificity, so the drawing's own rules win.
+    let css = format!("{}\n{}", font_hints(doc), label_styles(doc).join("\n"));
     let mut spent = Spent { markup: css.len(), ..Spent::default() };
     let mut found = Found { css, labels: Vec::new(), view: view_box.map(|v| (v, aspect)), style_work };
     let mut spent_out: Option<String> = (spent.markup > MAX_LABEL_MARKUP).then(|| format!("past {} MiB of markup", MAX_LABEL_MARKUP >> 20));
@@ -906,6 +899,31 @@ fn opacity(node: roxmltree::Node) -> f32 {
             }
         })
         .product()
+}
+
+/// The text of the stylesheets `doc`'s labels take, in document order: the drawing's `<style>`s,
+/// and the XHTML `<style>`s inside a `<foreignObject>`, a label's own, which join the drawing's as
+/// a browser takes them (the painter is given no element that loads a stylesheet, [`LOADING`]).
+/// One walk, knowing when it is inside a `<foreignObject>`: asking each `<style>` for its
+/// ancestors would be the square of a nest, and a nest the drawing's scan doesn't bound (under a
+/// `<metadata>`) can be 100,000 deep.
+#[cfg(feature = "svg-html")]
+fn label_styles<'a>(doc: &'a roxmltree::Document) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut walk = vec![(doc.root_element(), false)];
+    while let Some((node, inside)) = walk.pop() {
+        let inside = inside || svg_element(node, "foreignObject");
+        if svg_element(node, "style") || (inside && node.has_tag_name((XHTML_NS, "style"))) {
+            out.extend(node.text());
+        }
+        let next = walk.len();
+        walk.extend(node.children().filter(roxmltree::Node::is_element).map(|child| (child, inside)));
+        // Walked in document order.
+        if let Some(children) = walk.get_mut(next..) {
+            children.reverse();
+        }
+    }
+    out
 }
 
 /// The most `<font>` hints written as rules.
@@ -2386,6 +2404,24 @@ mod tests {
         let warnings = guarded_parse(text.as_bytes()).unwrap().notes.warnings(true);
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
         assert_eq!(warnings, ["500000 HTML labels (<foreignObject>) were not drawn"]);
+    }
+
+    /// The stylesheets a drawing's labels take are found in one walk: 100,000 nested XHTML
+    /// `<style>`s under a `<metadata>`, which the drawing's scan skips, so its depth doesn't
+    /// refuse them, each asked for its ancestors, would be 5 billion visits (6 s on a release
+    /// build, before anything is drawn).
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn label_styles_are_found_in_one_walk() {
+        let nested = format!("<metadata xmlns:h='{XHTML_NS}'>{}x{}</metadata>", "<h:style>".repeat(100_000), "</h:style>".repeat(100_000));
+        let text = svg(10, 10, &format!("{nested}<foreignObject width='1' height='1'><h:style xmlns:h='{XHTML_NS}'>i{{}}</h:style></foreignObject>"));
+        let started = std::time::Instant::now();
+        let found = labels(&text);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert_eq!(found.len(), 1);
+        // The drawing's own `<style>`s, and the label's; not the nest's, outside any label.
+        let doc = xml(&text).unwrap();
+        assert_eq!(label_styles(&doc), ["i{}"]);
     }
 
     /// The labels `<use>`s show are counted once an element, however its targets nest: 4,000
