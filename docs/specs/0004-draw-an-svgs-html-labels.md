@@ -1,6 +1,6 @@
 # Spec-0004: Draw an SVG's HTML labels
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-09
 - **Related:** [ADR-0002](../adr/0002-render-svg-with-resvg.md) (resvg draws the drawing);
   [ADR-0003](../adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) (what a
@@ -467,10 +467,10 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - [x] A worker's death leaves no process behind: after the hang and the bomb, `pgrep -f
   'clv --worker'` finds none; after `clv` is killed with SIGKILL while a worker lives, the worker
   exits.
-- [ ] Nothing a worker writes reaches the terminal: in kitty, a drawing whose label panics Blitz
+- [x] Nothing a worker writes reaches the terminal: in kitty, a drawing whose label panics Blitz
   (none known; a worker made to panic by hand while testing) shows the warning and nothing
   else.
-- [ ] Manual, in kitty with a window over 6,000 pixels wide, and again zoomed in with `+`: a tldraw
+- [x] Manual, in kitty with a window over 6,000 pixels wide, and again zoomed in with `+`: a tldraw
   drawing shows every label in its own font; a draw.io 21 drawing (labels `100%` wide, set in
   `<font face>`) shows them as Chrome does, with no "Text is not SVG" line; a Mermaid flowchart
   shows all its labels, those in `display: table` too. Built with `--no-default-features --features svg`,
@@ -568,3 +568,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-10 — Tracked in dobladez/clview#1: the workaround's canary, its doc comment and
   CONTRIBUTING's checklist say to close it when the workaround comes out; the manual Done item
   asks for a Mermaid flowchart's labels in `display: table` too, which the workaround draws.
+- 2026-11-10 — Rebased onto main, where Spec-0005's ADR-0024 had taken the number: the labels'
+  ADR is 0025 and the worker's 0026.
+- 2026-11-10 — Done. The owner checked by hand in kitty: the tldraw, draw.io 21 and Mermaid
+  drawings (its `display: table` labels too), plain and zoomed in with `+`; the `svg`-only build's
+  warning; and a worker made to panic shows only the warning (the lead checked that headless too).

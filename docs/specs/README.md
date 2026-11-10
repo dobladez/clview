@@ -37,7 +37,7 @@ fails while it disagrees with them.
 | 0001 | [Let a file declare its settings and their keys](0001-settings-a-file-declares.md) | Done |
 | 0002 | [Reflow Markdown and HTML to a width in columns](0002-reflow-markdown-and-html-to-a-width.md) | Done |
 | 0003 | [Markdown and HTML on pages the window's size, and a font size](0003-lay-markdown-and-html-out-to-the-window.md) | Done |
-| 0004 | [Draw an SVG's HTML labels](0004-draw-an-svgs-html-labels.md) | Implementing |
+| 0004 | [Draw an SVG's HTML labels](0004-draw-an-svgs-html-labels.md) | Done |
 | 0005 | [Pages to a row on their own keys, and a document's margins](0005-set-pages-to-a-row-and-margins.md) | Done |
 
 ## Lifecycle
