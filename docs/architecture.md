@@ -38,11 +38,12 @@ The code is three layers, and what each may depend on is a rule
 - **The core depends on the contract alone.** Nothing in it names a module of `src/source/`:
   whatever the viewer needs of a source, `source.rs` declares or re-exports. The viewer doesn't
   even name `BACKENDS`: `main.rs`, wiring it all up, is the one core file that does, and hands the
-  list to `view::run` and `view::print_help`. So the core builds and its tests run with no backend
-  at all (`cargo clippy --no-default-features`).
-- **The contract names the extensions in one place**, `BACKENDS`, each line behind its feature,
-  and uses the core only for its options' types (`args`); its tests also check no backend claims
-  one of the viewer's keys.
+  list to `view::run` and `view::print_help`; likewise `WORKERS`, the worker processes a backend
+  may run clv again as (`clv --worker <name>`, which `main.rs` hands to `source::serve`). So the
+  core builds and its tests run with no backend at all (`cargo clippy --no-default-features`).
+- **The contract names the extensions in two places**, `BACKENDS` and `WORKERS`, each line behind
+  its feature, and uses the core only for its options' types (`args`); its tests also check no
+  backend claims one of the viewer's keys.
 - **An extension depends on the contract, and on the core's utilities**: `args` for its options,
   `encode` for a picture a document holds. Never on `src/view/`. Never on another backend by name:
   the spreadsheet backend prints a PDF and asks `BACKENDS` which backend opens it, through the
@@ -57,12 +58,13 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 
 | Where | What it does |
 |---|---|
-| `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer; command-line options and page lists |
+| `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer, and `source::WORKERS` to `source::serve` when clv is run again as a worker; command-line options and page lists |
 | `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/view/` | The viewer, below |
-| `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`) and `BACKENDS` |
+| `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
-| `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and replayed by Blitz for `svg.rs`: the one file that names Blitz |
+| `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and painted by Blitz for `svg.rs`, in a worker process: the one file that names Blitz, both sides of that worker |
+| `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and heap capped by itself, killed past them, at most six alive ([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
@@ -226,18 +228,29 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   (`<foreignObject>`, the `svg-html` feature, `svg/html.rs`) are found by `svg.rs` in one walk
   (`drawn`), placed through the drawing's viewports and written out from the parsed tree inside
   copies of their context (`found_labels`); what follows the child a `<switch>` takes is cut from
-  the text before usvg parses it (`without_fallbacks`). The render's parse, not the open's, lays them
-  out with Blitz in one document a drawing, each label a slot placed by a transform, on a thread of
-  its own with an 8 MiB stack (`prepare`); estimates the painting (`paint_work`), and records each
-  label once into an anyrender `Scene` through a `Recorder` that keeps at most 200,000 commands.
-  Each render replays a label into the part of the page it lands on, that part and its commands in
-  the page's estimate, and draws it over resvg's pixels at its opacity
-  ([ADR-0024](adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)). Its net
-  provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its header.
-  Blitz asks it for a URL without saying what for, so the labels' markup holds no element that
-  loads a stylesheet or a document (`LOADING`), and a label's `<style>` joins the drawing's
-  stylesheets, which Stylo reads and writes out again without `@import` (`without_imports`).
-  The system's fonts are found once a run.
+  the text before usvg parses it (`without_fallbacks`). The render's parse keeps them (`Labelled`);
+  the first render that isn't a list's tile's (`Request::tile`) hands them to a worker process
+  (`html::prepare`, through `worker::spawn("svg-html")`: `clv --worker svg-html`, stdin and
+  stdout pipes, stderr null, the environment cleared but for what fonts need), which lays them
+  out with Blitz in one document a drawing, each label a slot placed by a transform, on a thread
+  of 64 MiB, records each label once into an anyrender `Scene`, and keeps the scenes; the viewer
+  keeps each label's region. Each render asks the worker for a label's part of the page
+  (`Painted::paint`, pixels back, exactly the size asked), that part in the page's estimate, and
+  draws every part over resvg's pixels at its opacity once all have come
+  ([ADR-0024](adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md),
+  [ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+  The worker arms `RLIMIT_CPU` before each request (10 s to lay out, 5 s a render) and caps its
+  heap at 1 GiB through the `cap` allocator; the viewer waits three times the CPU budget, then
+  kills it, and a worker gone (killed, aborted, ended, or answering what wasn't asked) is never
+  asked again: the drawing's labels are left out with why, until it is opened again. The
+  worker's net provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its
+  header, a WOFF's tables checked against its file; the links it doesn't follow come back, hashed
+  with the drawing's own. Blitz asks for a URL without saying what for, so the labels' markup
+  holds no element that loads a stylesheet or a document (`LOADING`), and a label's `<style>`
+  joins the drawing's stylesheets, which Stylo reads and writes out again without `@import`
+  (`without_imports`). The labels' nesting is held to 1,024 levels by the writer (`written`),
+  since the drawing's scan skips some elements by name. A document's page that is a tile draws
+  the pictures it refers to as tiles too (`picture::Promise::draw`), drawn again for a page.
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
   export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
   pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps

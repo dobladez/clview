@@ -417,6 +417,14 @@ display"). A label is drawn as a browser draws it, as far as Blitz goes:
   label's link to a picture or a font elsewhere isn't followed, and is counted with the drawing's;
   no stylesheet or document is loaded (`<link>`, `@import`, `<iframe>`, `<object>`), even as a
   `data:` URL. A label's own `<style>` applies as the drawing's do.
+- In a process of its own: Blitz runs in a worker clv starts for the drawing (`clv --worker`,
+  which `--help` doesn't list), held to its CPU time and its memory ([limits](#limits)); past
+  either, the worker is killed and all of the drawing's labels are left out, with a warning,
+  until the drawing is opened again, and the drawing is drawn without them. The worker starts
+  some 40 ms after the drawing's first page is asked for, and goes with the drawing.
+- Not in a list: a list's tiles show drawings without their labels (a draw.io tile shows no
+  fallback text either), and `c` on a tile copies it without them. Opening a drawing from the list
+  shows its labels, as printing it does.
 - Built without the `svg-html` feature, clv draws no labels, and a warning says how many weren't
   drawn.
 
@@ -439,7 +447,10 @@ What a drawing costs is bounded before it is spent
 ([ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md)): past its
 [limits](#limits), it is refused, what is too much of it is left out with a warning, or a page
 fails with why. A render once begun can't be stopped: a page within the limits but slow still takes
-its time on a render thread, while the keys work.
+its time on a render thread, while the keys work. Its HTML labels are the exception: their
+worker is bounded as it spends, and killed past its time or its memory
+([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+One cost the limits don't count is a [known issue](#known-issues): a stylesheet's parse.
 
 ### Documents
 
@@ -758,15 +769,23 @@ limit, it does as the last column says. How large a page is drawn is under
 | An SVG's content, what it repeats counted: its entities expanded, each `use` copied, a marker for each vertex it marks, and the clip path, mask, filter or paint a shape refers to for each shape | 128 MiB, a million elements, 1024 levels deep, or stylesheet rules times elements past 50 million | refused before it is parsed |
 | An SVG's text, its `use`s counted | 200,000 characters, or about three seconds to lay out (a `<text>` of 70,000 characters, or of 20,000 in 1,300 `<tspan>`s) | that text is left out, with a warning, and the rest drawn |
 | What an SVG embeds | a picture of 64 MiB decoded; a drawing four deep | past that, or a drawing that is broken, it is left out and the rest drawn |
-| What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, each HTML label's part of the page and its commands, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
-| An SVG's HTML labels | 1,024 labels; 100,000 elements in all; 8 MiB of markup and 1 MiB of text; 64 levels from a `<foreignObject>` down; their stylesheets' rules times their elements, with the drawing's, 50 million | past a count, the rest are left out; nested deeper, that label; past the rules, all; with a warning |
-| An HTML label's size | 16,384 pixels a side; any element of it, or line of its text, 24,576 (so a label of much text, its lines past that, is left out) | that label is left out, with a warning |
-| What an HTML label fetches | `data:` URLs, 1,024 of them; a font unpacking to 32 MiB, 64 MiB of them; a picture decoding to 64 MiB, 256 MiB of them | refused: the label is drawn without it |
-| Painting a drawing's HTML labels, estimated before it starts: shadows, background and mask layers' tiles, a dotted border's dots, a dotted, dashed or wavy decoration's lines; then the commands recorded | 20 million steps (about a tenth of a second); 200,000 commands | all its labels are left out, with a warning |
+| What an SVG's page takes to render: a layer for each group with opacity, a clip path, a mask or a filter, a filter's buffers, a pattern's tile, each HTML label's part of the page, and the pixels painted | 1 GiB held at once; 4,000 million pixels painted (about seven seconds) | the page fails with why; the same drawing smaller, its tile in a list, still renders |
+| An SVG's HTML labels | 1,024 labels; 100,000 elements in all; 8 MiB of markup and 1 MiB of text; 1,024 levels from a `<foreignObject>` down; their stylesheets' rules times their elements, with the drawing's, 50 million | past a count, the rest are left out; nested deeper, that label; past the rules, all; with a warning |
+| An HTML label's size | 16,384 pixels a side | that label is left out, with a warning |
+| What an HTML label fetches | `data:` URLs, 1,024 of them; a font unpacking to 32 MiB, 64 MiB of them, a WOFF whose tables don't fit its file refused; a picture decoding to 64 MiB, 256 MiB of them | refused: the label is drawn without it |
+| The worker that lays a drawing's HTML labels out and paints them, a process of its own: its CPU time laying them out, then each render's; its memory | 10 s, then 5 s a render, or three times that on the clock; 1 GiB | the worker is killed, and all of the drawing's labels are left out, with a warning, until it is opened again |
+| Drawings whose HTML labels are shown at once, each with its worker | 6 | the next drawing's labels are left out, with a warning |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
+
+## Known issues
+
+- **An SVG's stylesheets take time as the square of a declaration's length to parse.** One long
+  declaration in a `<style>` (a `box-shadow` list of 600 KB) takes some 45 seconds to open, labels
+  or not, and a stylesheet of 3 MiB some 8; the [limits](#limits) above count rules times elements,
+  not that. The parse runs in `clv`'s own process, so it can't be stopped; `q` still quits.
 | A spreadsheet's file | 64 MiB | refused |
 | An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |
 | A sheet's XML, as gridcraft reads it | a million elements (about 37,000 rows of twelve columns) | the sheet is cut short, with a warning |

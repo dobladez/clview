@@ -333,3 +333,22 @@ Three findings, all fixed:
   error. The error names no name now ("no such worker in this build").
   `a_bad_worker_name_is_refused_without_repeating_it` failed with the name back in it: the escape
   in stderr.
+
+## Task 6: the docs
+
+- ADR-0025 written from the design's measurements (the throwaway crates' numbers: what macOS
+  enforces, spawn, fonts, the pipe) and the release build's, measured as its Evidence says, with
+  the fixtures in the session's scratchpad: `styles 1024 3072` opens in 8.0 s, the worker's share
+  0.32 s of CPU and 95 MB (usvg's stylesheet parse is the rest: usage's Known issues); `font 50
+  400` in 0.10 s; one label costs 30–90 ms over none; the hang and the two bombs die in 0.20,
+  0.27 and 0.30 s at the heap cap, the polygons draw in 0.19 s and the shared wavy line in 1.23 s
+  (the worker 1.15 s of CPU); no worker is left after a kill, and one whose `clv` is killed goes
+  within three seconds. `/usr/bin/time -l`'s maximum resident set covers a reaped child, so it
+  reports the worker's peak for the bombs (about 1 GiB); the worker's own numbers were sampled
+  from `ps`.
+- ADR-0024 stays Accepted, its status line naming what ADR-0025 supersedes (the estimate, the
+  thread); its measure tool stays, as the stage limits' evidence.
+- Usage gains `## Known issues`, which README's Plans links instead of these notes.
+- **Left for the owner:** Done's manual checks in kitty (the tldraw, draw.io and Mermaid
+  drawings at over 6,000 pixels and zoomed; the `svg`-only build's warning; a worker made to panic
+  by hand showing the warning and nothing else).

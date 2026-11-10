@@ -17,7 +17,10 @@ documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs i
 - `src/source/`'s other files serve them: `dir.rs` (a directory as a `Container`), `joined.rs`,
   `later.rs` and `folder.rs` (a list's tiles, a file not opened until its tile is wanted, and its
   folders), `picture.rs` (the pictures a document refers to, drawn by the backends), `svg/html.rs`
-  (an SVG's HTML labels, through Blitz, for `svg.rs`), `threads.rs` (render threads for a backend with nothing better), `head.rs` and
+  (an SVG's HTML labels, through Blitz, for `svg.rs`), `worker.rs` (a worker process of clv's own,
+  `clv --worker <name>`, for a backend's work that can only be bounded as it is spent: its CPU
+  time and heap capped, killed past them; `source::WORKERS` lists them, as `BACKENDS` does
+  backends), `threads.rs` (render threads for a backend with nothing better), `head.rs` and
   `tree.rs` (what a zip's first files say, and the directories an archive's names make).
 
 ## Specs

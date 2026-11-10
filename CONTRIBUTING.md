@@ -63,8 +63,9 @@ it prints, never by name.
   pulldown-cmark only in `src/source/wordcraft.rs`, `tests/it/wordcraft.rs` (which checks it) and
   `Cargo.toml`; gridcraft only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks
   it) and `Cargo.toml`; Blitz and what it paints an SVG's HTML labels with (blitz, anyrender,
-  kurbo, peniko, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
-  checks it) and `Cargo.toml`.
+  kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
+  checks it) and `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
+  `src/source/worker.rs`, `tests/it/view.rs` (which checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend
   with nothing better (images, drawings) lends its render function to `source/threads.rs`.
@@ -136,8 +137,10 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
   XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
 - **`tests/it/resvg.rs`**: the SVG backend through the viewer: what it draws, the limits a drawing is
-  held to, its HTML labels, the versions their limits were measured with, and that nothing else
-  names its libraries or Blitz's.
+  held to, its HTML labels and the worker process they are drawn in (killed past its CPU time or
+  its heap, with the drawings that reach each), and that nothing else names its libraries or
+  Blitz's. The worker's own tests, with `sleep`, `sh` and `yes` as workers, are unit tests in
+  `src/source/worker.rs`; the pager's, that a list's tiles start none, in `tests/it/view_pager.rs`.
 - **`tests/it/wordcraft.rs`** and **`tests/it/gridcraft.rs`**: documents and workbooks as pages, a
   protected one opened with its password, their pins, and that nothing else names their libraries.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as

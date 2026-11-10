@@ -9,7 +9,7 @@
   bounded by its marks and text, measured the same way);
   [Spec-0003](0003-lay-markdown-and-html-out-to-the-window.md) (why HTML documents through Blitz are
   another question); [SVG drawings](../usage.md#svg-drawings), [Limits](../usage.md#limits),
-  [How each opens](../architecture.md#how-each-opens-and-what-it-keeps); ADR-0025, written by
+  [How each opens](../architecture.md#how-each-opens-and-what-it-keeps); [ADR-0025](../adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md), written by
   task 6 and linked then (Blitz in a worker process of clv's own, capped on CPU time and heap,
   which replaces ADR-0024's estimate and thread). It delivers no Plans bullet, and adds two: HTML documents through Blitz,
   weighed; and a stylesheet's parse bounded, by a cap on a `<style>`'s size before usvg or by
@@ -129,7 +129,7 @@ the estimate; each of those cases is a worker killed, or a font refused, and tes
 Before the worker, each stage is bounded by limits named in the code and listed in usage's
 [Limits](../usage.md#limits), as ADR-0003 bounds the rest of a drawing; the worker is bounded
 as a whole, by the kernel and its own allocator
-(ADR-0025).
+([ADR-0025](../adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
 The counts are task 1's, measured
 ([ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)).
 
@@ -294,7 +294,7 @@ The counts are task 1's, measured
   `background-image` asks for; laid out once; each label painted once at scale 1 into an
   anyrender `Scene` of its own, kept; the document dropped. Each render replays a label's scene
   through its transform into the part of the page it lands on. Unchanged, inside the worker.
-- **Blitz in a worker process** (ADR-0025):
+- **Blitz in a worker process** ([ADR-0025](../adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)):
   clv itself, `--worker svg-html` (hidden from `--help`), stdin and stdout pipes, stderr null, a
   minimal environment. In-process, neither time nor memory can be capped: a thread can't be
   stopped, Blitz has no cancellation, and a refused allocation aborts the viewer. The worker caps
@@ -434,7 +434,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   drawn; the placed, overflow, opacity, rules, picture, hints and links tests as before; each new
   test seen failing with its cap removed (a budget of `usize::MAX`, a wall of an hour; the table
   check with its ranges unchecked).
-- [ ] **The docs** — ADR-0025 written (Accepted), with the measurements (what macOS enforces,
+- [x] **The docs** — ADR-0025 written (Accepted), with the measurements (what macOS enforces,
   spawn, fonts, the pipe) and the alternatives (a footprint watchdog, `RLIMIT_AS`, scenes over
   the pipe, a process a render, the allowlist), and linked where this spec names it; ADR-0024's status "Accepted; its estimate and its
   thread superseded by ADR-0025"; usage's Limits (the worker's rows in, the estimate's out), SVG
@@ -450,10 +450,10 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, with
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, with
   `--features svg-html` alone and `--no-default-features --features pdf,svg` too.
-- [ ] Tests added, each seen failing without its change, the change reverted named beside it.
-- [ ] **Cost**, on a release build under `/usr/bin/time -l`, on the machine the ADR names (an Apple
+- [x] Tests added, each seen failing without its change, the change reverted named beside it.
+- [x] **Cost**, on a release build under `/usr/bin/time -l`, on the machine the ADR names (an Apple
   M3 Max, as ADR-0003's): the 1,024 labels under 3 MiB of styles drawn, none left out, the labels'
   work (from the request to the worker to its answer, measured about 0.6 s) in at most 3 s, and
   500 MB (viewer and worker together: `-l` on the viewer, the worker's maximum resident set from
@@ -462,7 +462,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   its budget (by whichever cap it reaches first) and the bomb within a second, each with its
   warning; a drawing with one label shown
   within 100 ms more than the same drawing without it.
-- [ ] A worker's death leaves no process behind: after the hang and the bomb, `pgrep -f
+- [x] A worker's death leaves no process behind: after the hang and the bomb, `pgrep -f
   'clv --worker'` finds none; after `clv` is killed with SIGKILL while a worker lives, the worker
   exits.
 - [ ] Nothing a worker writes reaches the terminal: in kitty, a drawing whose label panics Blitz
@@ -473,7 +473,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `<font face>`) shows them as Chrome does, with no "Text is not SVG" line; a Mermaid flowchart
   shows its labels but those in `display: table`. Built with `--no-default-features --features svg`,
   the same tldraw drawing says how many labels it didn't draw.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
@@ -536,3 +536,10 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   reader, which takes each frame's first byte as it comes, and reaped at once, its place given up;
   all of a page's labels painted before any is drawn, so a worker gone on one leaves none on the
   page; `--worker`'s error names no name.
+- 2026-11-09 — Task 6, the docs: ADR-0025 Accepted, with the measurements on the release build
+  (the styles drawing's worker 0.32 s of CPU and 95 MB, the whole open 8 s; the font drawing
+  0.10 s; the hang and the bombs killed in 0.2–0.3 s; a label some 30–90 ms over none);
+  ADR-0024's status; usage's SVG drawings, Limits and a new Known issues; architecture;
+  CHANGELOG; CONTRIBUTING; README's Plans; `CLAUDE.md`. Done's manual checks in kitty are the
+  owner's: the tldraw, draw.io and Mermaid drawings, and that nothing a worker writes reaches the
+  terminal.

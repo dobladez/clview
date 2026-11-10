@@ -1,6 +1,10 @@
 # ADR-0024: Draw an SVG's HTML labels with Blitz, one document a drawing, each stage bounded
 
-- **Status:** Accepted
+- **Status:** Accepted; its estimate of the painting (decision 4's paint work and recording rows)
+  and its thread (decision 3) superseded by
+  [ADR-0025](0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md),
+  which runs Blitz in a worker process capped on CPU time and heap. The one document a drawing and
+  the stages before Blitz stand.
 - **Date:** 2026-11-09
 
 ## Context

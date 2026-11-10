@@ -97,9 +97,11 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 - Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
 - HTML documents through Blitz, which draws an SVG's HTML labels, weighed against wordcraft's
   importer: Blitz lays out one long page, where documents are pages the window's size.
-- Bound what an SVG's stylesheets take to parse, before they are parsed: one long declaration in a
-  `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open, labels or not, which the
-  drawing's limits don't count ([notes](docs/specs/0004-draw-an-svgs-html-labels-impl-20261109_1432.md#links-the-labels-follow)).
+- Bound what an SVG's stylesheets take to parse, a [known issue](docs/usage.md#known-issues): one
+  long declaration in a `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open,
+  labels or not, which the drawing's limits don't count. A cap on a `<style>`'s size before it is
+  parsed, or usvg and resvg in a worker process as the labels' Blitz is
+  ([ADR-0025](docs/adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
 
 ## Working on clview
 

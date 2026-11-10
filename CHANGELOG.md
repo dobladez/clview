@@ -11,9 +11,12 @@ works today. A version's section becomes the notes of its
 - An SVG drawing's HTML labels (`<foreignObject>`, which tldraw, draw.io and Mermaid label their
   drawings with) are drawn, by Blitz, over the drawing, in the drawing's styles and the fonts it
   embeds; draw.io's fallbacks ("[Not supported by viewer]", "Text is not SVG - cannot display")
-  aren't. A drawing showed them without their text, or with those fallbacks. What its labels cost is
-  bounded, and a label past it left out with a warning; a build without the `svg-html` feature says
-  how many labels it didn't draw.
+  aren't. A drawing showed them without their text, or with those fallbacks. Blitz runs in a
+  process of its own, held to its time and memory: past either, the drawing's labels are left out
+  with a warning and the drawing drawn without them; what the labels may cost before it is
+  bounded, and a label past it left out with a warning. A list's tiles show drawings without
+  their labels; opening one shows them. A build without the `svg-html` feature says how many
+  labels it didn't draw.
 
 - Markdown and HTML pages are the window's size, as on an e-reader: as tall as the pages area and as
   wide, or two side by side like an open book where the window holds two pages of 60 characters, a
