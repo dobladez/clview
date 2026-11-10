@@ -9,8 +9,11 @@
   bounded by its marks and text, measured the same way);
   [Spec-0003](0003-lay-markdown-and-html-out-to-the-window.md) (why HTML documents through Blitz are
   another question); [SVG drawings](../usage.md#svg-drawings), [Limits](../usage.md#limits),
-  [How each opens](../architecture.md#how-each-opens-and-what-it-keeps). It delivers no Plans
-  bullet, and adds one: HTML documents through Blitz, weighed.
+  [How each opens](../architecture.md#how-each-opens-and-what-it-keeps); ADR-0025, written by
+  task 6 and linked then (Blitz in a worker process of clv's own, capped on CPU time and heap,
+  which replaces ADR-0024's estimate and thread). It delivers no Plans bullet, and adds two: HTML documents through Blitz,
+  weighed; and a stylesheet's parse bounded, by a cap on a `<style>`'s size before usvg or by
+  usvg in the worker.
 
 ## Summary
 
@@ -20,12 +23,24 @@ draw.io's fallback in its place ("[Not supported by viewer]", "Text is not SVG -
 This spec draws them: each `<foreignObject>` a browser would draw is laid out and painted by
 [Blitz](https://github.com/DioxusLabs/blitz), an HTML and CSS engine in Rust on Servo's style
 system, at the scale it is shown, placed by the drawing's transforms, and laid **over** what resvg
-draws; the fallbacks a browser skips are skipped. It is a new feature, `svg-html`, on by default
-once its bounds are in: the SVG backend still builds without it. What the labels cost is bounded
-before it is spent, stage by stage, as ADR-0003 bounds the rest of a drawing, and a label left out
-(past a limit, or in a build without the feature) is counted in a warning. It makes finished code
-of the spike on the branch `spike/blitz-foreignobject` (its `spike/NOTES.md` has the evidence so
-far); its first task measures what the spike left open, and sets the limits below by it.
+draws; the fallbacks a browser skips are skipped. It is a new feature, `svg-html`, on by default:
+the SVG backend still builds without it.
+
+Blitz runs in a **worker process**: clv started again as `clv --worker svg-html`, its stdin and
+stdout pipes, nothing it writes reaching the terminal. The worker caps its own CPU time and heap
+and dies past either; the viewer kills it past a wall-clock backstop. What a drawing's labels
+may cost before they reach the worker (how many, their markup, their text, their styles, what
+they fetch) is bounded as before, cheaply, in the viewer. Nothing Blitz, Stylo, Parley or
+vello_cpu does on a drawing's bytes runs in the viewer's process. A label left out (past a
+limit, or in a build without the feature) is counted in a warning; a worker killed leaves all of
+that drawing's labels out, with a warning, and the drawing drawn.
+
+It makes finished code of the spike on the branch `spike/blitz-foreignobject`. Tasks 1 to 4
+built it in-process, bounded by an estimate of Blitz's painting; three reviews each found CSS
+the estimate missed (a `text-decoration-inset` of `-1e20px` loops for ever; `content` strings
+copied once an element; clip paths; a shared decoration painted once a label; a dotted border a
+million pixels long; a WOFF whose tables lie). Task 5 moves Blitz into the worker and deletes
+the estimate; each of those cases is a worker killed, or a font refused, and tested as such.
 
 ## Requirements
 
@@ -79,8 +94,9 @@ far); its first task measures what the spike left open, and sets the limits belo
   specificity (`:where(…)`), before the drawing's styles. `face` a list of names; `color` a CSS
   colour; `size` 1 to 7, or `+n`/`-n` from 3, clamped to 1–7. A value that doesn't parse is ignored;
   each is quoted or parsed, never pasted, so a drawing can't write rules of its own.
-- Text is drawn with the system's fonts, looked for once a run, and those the drawing embeds as
-  `data:` URLs (WOFF, WOFF2, TTF, OTF, as tldraw embeds its own), which stay the drawing's own.
+- Text is drawn with the system's fonts, looked for once a drawing, in its worker, and those the
+  drawing embeds as `data:` URLs (WOFF, WOFF2, TTF, OTF, as tldraw embeds its own), which stay the
+  drawing's own.
 - Pictures in a label, `data:` URLs of a PNG, JPEG, GIF or WebP, told by their bytes rather than
   their MIME type, are drawn. `svg-html` brings their decoders itself, whether or not the image
   backend is built. An SVG in a label is left out, so nothing reaches usvg around ADR-0003's bounds;
@@ -93,32 +109,43 @@ far); its first task measures what the spike left open, and sets the limits belo
 
 **What it costs**
 
-Every stage is bounded before it is spent, by limits named in the code and listed in usage's
-[Limits](../usage.md#limits). The numbers below are task 1's, measured: [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) has each stage's
-hostile drawing, what it cost, and how to measure it again.
+Before the worker, each stage is bounded by limits named in the code and listed in usage's
+[Limits](../usage.md#limits), as ADR-0003 bounds the rest of a drawing; the worker is bounded
+as a whole, by the kernel and its own allocator
+(ADR-0025).
+The counts are task 1's, measured
+([ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)).
 
 | Stage | What is counted | Limit | Where | Past it |
 |---|---|---|---|---|
 | The XML | the file, svgz, entities, as now | ADR-0003's | before **every** parse, the fallbacks' included | refused |
-| Finding labels | labels drawn; their elements in all, and their depth, in the drawing's | 1,024; 100,000, within the drawing's million; its 1024 levels | while the drawing is scanned | the rest left out, with a warning |
-| Their markup | markup and wrappers written out; their text | 8 MiB; 1 MiB of text | while written out | the rest left out, with a warning |
-| Their nesting | levels from a `<foreignObject>` down | 64, on Blitz's thread of 8 MiB | while written out | that label left out |
-| Styles | rules times the labels' elements, as ADR-0003 counts them | 50 million, with the drawing's | before Blitz | all labels left out, with a warning |
-| Fonts | each `data:` font, its size unpacked read from its header before it is unpacked; in all | 32 MiB; 64 MiB | in the net provider | that font refused |
-| Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | in the net provider | that picture refused |
-| Requests | `data:` URLs answered | 1,024 | in the net provider | refused |
-| Layout | a label's laid-out size; any element of it, or line of its text | 16,384 CSS pixels a side; 24,576 (with the overflow each way) | after layout, before recording | that label left out |
+| Finding labels | labels drawn; their elements in all, within the drawing's million; their depth, within the drawing's 1,024 levels | 1,024; 100,000 | while the drawing is scanned | the rest left out, with a warning |
+| Their markup | markup and wrappers written out; their text | 8 MiB; 1 MiB | while written out | the rest left out, with a warning |
+| Styles | rules times the labels' elements, as ADR-0003 counts them | 50 million, with the drawing's | before the worker | all labels left out, with a warning |
+| Fonts | each `data:` font, its size unpacked read from its header before it is unpacked, a WOFF's tables checked against its file (one stored larger than it unpacks, out of the file or over another is as large as any); in all | 32 MiB; 64 MiB | in the worker's net provider | that font refused |
+| Pictures | each decoded, from its header; in all | 64 MiB; 256 MiB | in the worker's net provider | that picture refused |
+| Requests | `data:` URLs answered | 1,024 | in the worker's net provider | refused |
+| Layout | a label's laid-out size | 16,384 CSS pixels a side | in the worker, after layout | that label left out |
 | Overflow | what an `overflow: visible` label draws past its box | 4,096 CSS pixels each way | while written out | cut |
-| Paint work | each element's shadows; each background and mask layer's tiles, a gradient's stops too; each dotted or dashed border's dots; each line of text a dotted, dashed or wavy decoration draws along; the document's own `html` and `body` once a label: as blitz-paint 0.3.0-beta.4 paints them (ADR-0024) | 20 million | after layout, before painting | all labels left out, with a warning |
-| Recording | commands recorded, all labels | 200,000 | as they are painted: a recorder keeps none past it | all labels left out, with a warning |
-| Painting | each label's part of the page, twice, and 2 KiB a command held; each command's box on the page, and the part's pixels, as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
+| The worker's time | CPU seconds laying the labels out and recording them; then each render's | 10 s; 5 s. Wall clock three times each | the kernel (`RLIMIT_CPU`, the worker arms it before each request); the viewer | the worker dies: all labels left out, with a warning |
+| The worker's memory | its heap, every allocation | 1 GiB | the worker's allocator | the worker aborts: the same |
+| Workers | drawings with labels being shown at once | 4 | before a worker starts | that drawing's labels left out, with a warning |
+| Painting | each label's part of the page, twice (painted, then drawn over the page), and the part's pixels as work | in the page's estimate: 1 GiB held, 4,000 million pixels | before the page renders | the page fails with why, as now |
 
 - A drawing's labels cost about one document, not one each: their styles parsed and their fonts
-  loaded once.
-- If Blitz fails or panics while the labels are prepared, all of that drawing's labels are left
-  out, with a warning, and the drawing drawn; if one label's painting fails, only it is.
-- A label's nesting is bounded before Blitz runs, at a depth that never overflows the stack of
-  the thread Blitz runs on, in a debug build too.
+  loaded once, in one worker a drawing, alive while the drawing is shown.
+- At most four workers live at once, so the worst case is 4 GiB of heap. The pager may hold up to
+  six drawings' pools at once (the four parts wanted most recently and the level's): in a list of
+  drawings with labels, a fifth or sixth tile shown at once draws its drawing without its labels,
+  with a warning, rather than wait.
+- A worker that dies, for whatever reason (killed, out of memory, a panic, a crash, an answer
+  that isn't one), isn't started again for that drawing: its labels are left out until the
+  drawing is opened again, with a warning saying which. The drawing is drawn.
+- Everything the viewer reads from a worker is untrusted: each frame's kind and length checked,
+  pixels exactly the size asked for, counts no larger than what was sent; a reason is a code,
+  and the viewer's own words say it.
+- The worker's cost to start: about 5 ms to spawn, about 35 ms to find the system's fonts, once a
+  drawing with labels.
 
 **Builds**
 
@@ -129,8 +156,10 @@ hostile drawing, what it cost, and how to measure it again.
 - Blitz and what it paints with (the names `blitz`, `anyrender`, `kurbo`, `stylo`, `parley`,
   `taffy`, `wuff`) are named only in `src/source/svg/html.rs`, `tests/it/resvg.rs` and
   `Cargo.toml`, checked by a test. Not `vello`, which pdfcraft's pin names.
-- A test fails when the Blitz crates or anyrender move from the versions the limits were measured
-  with, as `the_render_estimate_is_for_the_resvg_this_builds` does for resvg.
+- The Blitz crates stay pinned `=0.3.0-beta.4`, for their API: no limit follows blitz-paint's
+  internals now, so no test guards their versions (task 3's version guard is deleted with the
+  estimate).
+- `cap`, the worker's allocator, is named only in `src/source/worker.rs` and `Cargo.toml`.
 
 **Docs**
 
@@ -140,98 +169,136 @@ hostile drawing, what it cost, and how to measure it again.
   keeps its fallback, drawn as usvg draws it. Architecture's backends table and How each opens. `CONTRIBUTING.md`'s library
   rule, its count of features and its gates. `CHANGELOG.md`. An ADR,
   [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) (the next free number), why Blitz and how its cost is bounded, with
-  what reproduces its evidence.
+  what reproduces its evidence; and ADR-0025, the worker.
+- Usage gains `## Known issues`, after Limits: usvg's stylesheet parser (simplecss) takes time as
+  the square of a stylesheet's size, once to open and once to render, labels or not (a 3 MiB
+  stylesheet some 8 s to open; a 600 KB declaration 45 s in a debug build). README's Plans bullet
+  links it.
 
 ## Out of scope
 
-- A `<foreignObject>` reached through `<use>`: usvg copies the `<use>`, not the label. None of the
-  exports seen do it; it is left out and counted in the warning.
+- A `<foreignObject>` reached through `<use>`: usvg copies the `<use>`, not the label. Left out
+  and counted in the warning.
 - Clip paths and masks on a label's ancestors, and a nested `<svg>`'s clip: a label is drawn
-  unclipped. The exports seen don't clip their labels.
-- A label among the shapes in their paint order, or inside their groups' opacity: it is drawn over
-  the drawing.
+  unclipped.
+- A label among the shapes in their paint order, or inside their groups' opacity: drawn over the
+  drawing.
 - A stylesheet's `display: none` on a label's ancestor.
-- Working around Blitz's `display: table` bug in clv: it is Blitz's to fix.
-- HTML and Markdown documents through Blitz rather than wordcraft's importer: Blitz lays out one
-  long page, and Spec-0003 makes pages the window's size. In README's Plans.
+- Working around Blitz's `display: table` bug in clv.
+- HTML and Markdown documents through Blitz rather than wordcraft's importer. In README's Plans.
 - What a label would fetch: web fonts by URL, stylesheets, `<iframe>`s; Blitz runs no scripts.
 - Selecting or copying a label's text.
 - Moving Blitz past `=0.3.0-beta.4`.
+- **usvg and resvg in the worker too**, which would bound a stylesheet's parse (simplecss takes
+  time as the square of a stylesheet's size: some 8 s for 3 MiB). A design of its own: the
+  whole page's pixels each render, ADR-0003's estimate rethought. `worker.rs` serves it when it
+  comes; a bound on a `<style>`'s size before usvg is the cheaper first step. In README's Plans.
+- Starting a dead worker again for the same drawing; a worker shared between drawings; a worker
+  answering two requests at once.
+- Rendering labels while the worker is kept alive across drawings (a worker outlives only its
+  `Drawn`).
 
 ## Approach
 
 **Files:**
 
-- `src/source/svg.rs` — finds the labels and places them, from the one parsed document the
-  fallbacks are removed from, after ADR-0003's bounds on the XML: the spike's `drawn_label`,
-  `without_fallbacks`, `viewport`, `view_transform`, `font_rules` and `found_labels`, made to the
-  rules above (the eligibility rule, the viewport stack, markup written from the tree, the
-  `<foreignObject>` in its context, hints of no specificity); the labels counted in `Scan` and in
-  `Estimate`; the warning without `svg-html`; the labels painted after `resvg::render`. It names no
-  Blitz crate, its comments included.
-- `src/source/svg/html.rs` — the only file naming Blitz and what it paints with: `Painter`, the
-  net provider (`data:` fonts and pictures only, each sized from its header before it is handed on),
-  the system's fonts in a process-wide `OnceLock`, the drawing's own fonts with its document, and
-  `CREDIT`.
-- `Cargo.toml` — the Blitz crates pinned `=0.3.0-beta.4` without their default features (which
-  leaves out Blitz's own SVG, usvg without clv's bounds), with `woff` and `system-fonts`;
-  `anyrender` 0.14, `anyrender_vello_cpu` 0.18, `kurbo` 0.13 (built already for Blitz) and
-  `svgtypes` 0.16, each with its comment; from task 3, `stylo` `=0.22.0` too (built already for
-  Blitz, which doesn't re-export it), for the paint work estimate to read Stylo's computed values,
-  named only in `html.rs` and in the version guard; `svg-html = ["svg", "dep:image", …]`, so its
-  decoders come with it; among the defaults from task 3.
-- `tests/it/resvg.rs` — the tests; `nothing_but_svg_html_names_blitz`; the version guard.
-- `.github/workflows/ci.yml` — `--features svg-html` alone among the backends built alone, and
-  `--no-default-features --features pdf,svg`, so the integration tests (gated on `pdf`) run the
-  SVG backend without HTML too.
-- `docs/adr/0024-…`, `docs/usage.md`, `docs/architecture.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
-  `README.md`, and `CLAUDE.md`'s Layout (`svg/html.rs`).
+- `src/source/worker.rs` — new: a worker process of clv's own, for any backend. The viewer's
+  side: `spawn` (`current_exe()`, `--worker <name>`, stdin and stdout piped, stderr null, the
+  environment cleared but for `HOME`, `XDG_*` and `FONTCONFIG_*`, which fonts need), frames
+  (kind, length, payload; each reply's length capped), a reader thread, `recv_timeout`, kill and
+  reap, the live count. The worker's side: `serve` (the heap limit set, `RLIMIT_CPU` armed before
+  each request, the frame loop). The `Worker` trait. The process's allocator, `cap`, with its
+  limit `usize::MAX` in the viewer. Names no library but `cap` and `rustix`.
+- `src/source.rs` — `WORKERS`, this build's workers, one line a feature, beside `BACKENDS`;
+  `the_viewer_names_no_backend` lets `main.rs` alone name it.
+- `src/main.rs` — `--worker <name>` before `view::run`, handed to `source::serve` with `WORKERS`.
+- `src/source/svg.rs` — finds the labels and places them, as task 2 built it; `prepared` hands
+  them to `html::prepare` and tells the warnings; `Drawn::render` counts each label's part of the
+  page in the estimate. Loses the nesting limit and the commands' share of the estimate. Keeps
+  `LOADING` (no element that loads a stylesheet or a document reaches the worker; a label's
+  `<style>` joins the drawing's). Names no Blitz crate.
+- `src/source/svg/html.rs` — the only file naming Blitz and what it paints with. The worker
+  (`Labels`, a `Worker`): one document a drawing, the slots, the net provider (`data:` fonts and
+  pictures only, each sized from its header), each label recorded once, the replays into a part
+  of a page. The viewer's side (`Painted`): `prepare` through `worker::spawn("svg-html")`, the
+  regions, `paint` asking for a part's pixels. Loses `paint_work`, `Recorder`, the 8 MiB
+  thread, `catch_unwind`, `cost`, `system_fonts`. Keeps `without_imports` (no stylesheet is ever
+  fetched, a rule rather than a bound) and gains the WOFF table check in `font_size`. `CREDIT`
+  stays.
+- `Cargo.toml` — the Blitz crates pinned `=0.3.0-beta.4` without their default features, with
+  `woff` and `system-fonts`; `anyrender` 0.14, `anyrender_vello_cpu` 0.18, `kurbo` 0.13,
+  `svgtypes` 0.16, each with its comment; `cap` 0.1.2, the worker's allocator, with its comment;
+  `rustix` with `time` for the CPU used; `stylo` `=0.22.0` for `without_imports` alone, its
+  comment said so. `peniko` out. `svg-html = ["svg", "dep:image", …]`, among the defaults.
+- `tests/it/resvg.rs` — the tests; `nothing_but_svg_html_names_blitz` without `peniko`; the
+  version guard out.
+- `.github/workflows/ci.yml` — as task 2 left it.
+- `docs/adr/0025-…`, `docs/adr/0024-…` (its status), `docs/adr/README.md`, `docs/usage.md`,
+  `docs/architecture.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `README.md`, and `CLAUDE.md`'s
+  Layout (`worker.rs`).
 
 **Patterns to follow:**
 
 - Limits as named constants with their reason beside them, as ADR-0003's are in `svg.rs`.
 - Warnings through `Notes`, as `left_out_text` gives them.
-- The naming test as `nothing_but_this_backend_names_resvg` is; the version guard as
-  `the_render_estimate_is_for_the_resvg_this_builds` is.
+- The naming test as `nothing_but_this_backend_names_resvg` is.
 - Fixtures made by the tests, as `svg(width, height, body)` in `tests/it/resvg.rs` makes them, and
   told by coloured boxes (`background`, `border`), which need no font, so a machine without fonts
   passes. Text is looked at by hand: a font in `tests/data` would not be synthetic.
 
 **Decided:**
 
-- **resvg still draws the drawing; Blitz only its labels.** The ADR says why each alternative
-  was left: Blitz for the whole SVG (it hands an SVG to usvg with default options and paints
-  usvg's tree, so it drops `<foreignObject>` too, and has none of ADR-0003's bounds); Gecko (not
-  embeddable); Servo (a browser's weight for a drawing's labels); wordcraft's HTML importer (it
-  lays out pages, not CSS boxes, no flex, and is another backend's library).
-- **One Blitz document a drawing,** as task 1 measured it
-  ([ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md)). Each
-  label in a box of its own (a slot), packed in rows about as wide as all of them would be square,
-  8 CSS pixels apart, each placed by `transform: translate()`, never `left`/`top`: Blitz culls by a
-  box that counts an element's position twice, and slots placed by `left` and `top` carry their
-  neighbours' empty clip layers, the square of the labels in all. Its styles resolved twice, so
-  the pictures a `background-image` asks for as they resolve are there; laid out once; its paint
-  work estimated; each label painted once at scale 1, the viewport scrolled to its slot and sized to it, into an anyrender
-  `Scene` of its own, kept with the usvg tree, and the document dropped. Each render replays a
-  label's scene through its transform into the part of the page it lands on. A scene keeps the
-  fonts and pictures it paints with (seen drawn after the document was dropped); Blitz paints no
-  `Resource` or custom paint. Its pixels are the same as one document a label's, on tldraw,
-  draw.io and Mermaid drawings.
-- **The stack:** Blitz's work for a drawing (building its document, laying it out, recording its
-  labels) runs on a thread of its own with an 8 MiB stack (`source/later.rs`'s `STACK`, or a
-  constant of the same size beside it), joined before the labels are kept. The render threads keep
-  the 2 MiB `source/threads.rs` gives them, and only replay. Task 1 measured nesting on both
-  stacks, in a child process each (ADR-0024): on 2 MiB an unoptimized build overflows at 58 nested
-  grids, on 8 MiB it holds 240 (release 1,440; clv's dev profile, which optimizes its dependencies,
-  holds 392 on 2 MiB), so the limit is 64 and the test at the limit nests grids, in a debug build. A thread that can't be spawned is a Blitz failure: all the labels left out,
-  with a warning, never a panic.
-- **Panics** print through the viewer's hook, which makes them printable and keeps them off the
-  pager (`src/view/mod.rs`'s `run`); `catch_unwind` around Blitz turns them into the warnings above.
-- **Branch:** `spec-0004` from `main`, the spike's code ported to it; `spike/` stays on the spike's
-  branch, its evidence carried into the ADR.
-- **On by default**, though it adds 11.4 MB (+21%) and 75 crates to the binary, and Blitz is a
-  beta: a drawing without labels never starts it. Default only from task 3, once every limit above
-  is in.
+- **resvg still draws the drawing; Blitz only its labels.** ADR-0024 says why each alternative
+  was left: Blitz for the whole SVG, Gecko, Servo, wordcraft's HTML importer.
+- **One Blitz document a drawing,** as task 1 measured it (ADR-0024): each label in a slot placed
+  by `transform: translate()`, 8 CSS pixels apart; its styles resolved twice, for the pictures a
+  `background-image` asks for; laid out once; each label painted once at scale 1 into an
+  anyrender `Scene` of its own, kept; the document dropped. Each render replays a label's scene
+  through its transform into the part of the page it lands on. Unchanged, inside the worker.
+- **Blitz in a worker process** (ADR-0025):
+  clv itself, `--worker svg-html` (hidden from `--help`), stdin and stdout pipes, stderr null, a
+  minimal environment. In-process, neither time nor memory can be capped: a thread can't be
+  stopped, Blitz has no cancellation, and a refused allocation aborts the viewer. The worker caps
+  itself where the kernel and the allocator enforce it: `RLIMIT_CPU` (rustix, safe; enforced on
+  macOS and Linux, the soft limit raised again before each request, measured), and the heap
+  through the `cap` allocator, exact to the byte and portable (`RLIMIT_AS`, `RLIMIT_DATA` and
+  `RLIMIT_RSS` are refused by macOS, measured; a polled footprint overshoots by what a poll
+  interval allocates, about 150 MB). The viewer's wall clock is the backstop, three times the
+  CPU budget, for a worker that isn't running. No estimate of Blitz's painting: three reviews
+  found CSS it missed, and the next would too.
+- **A worker a drawing,** owned by the `Drawn` the render's first parse makes (a pool's, or the
+  printer's renderer's), killed when it goes. At most four alive; past four, a drawing's labels
+  are left out, with a warning, rather than wait (a wait on a render thread for a slot another
+  `Drawn` holds could wait for ever). A pool's threads share the worker, one request at a time:
+  two scales of one drawing replay in turn, not at once. A render no longer wanted is dropped
+  when it finishes, as `source/threads.rs` does; the worker is killed only past its limits.
+- **A dead worker isn't started again** for that drawing: a deterministic death would be repeated
+  every render. A new `Drawn` (the drawing opened again) starts afresh.
+- **What crosses the pipe** is pixels, not scenes: the worker keeps the scenes and answers each
+  render with a part's RGBA (64 MiB for a 4,096-pixel page's worth in 21 ms, measured; a real
+  label's part is kilobytes). anyrender's scenes serialize (its `serde` feature), but a glyph run
+  carries its whole font file and a fill its decoded picture, and the viewer would replay them
+  with vello_cpu and skrifa in-process, which is what the worker is for.
+- **The cheap bounds stay before the worker** (labels, elements, markup, text, styles, what is
+  fetched and how large): exact, and they spare the worker for a real drawing with one bad
+  label. Deleted with the estimate: the paint work, the recorder's budget, the 24,576-pixel
+  element bound, the 8 MiB thread, `catch_unwind`, the nesting limit (the drawing's 1,024 levels
+  bound it; the worker lays out on a thread of 64 MiB, which holds 1,024 nested grids
+  unoptimized), the version guard. Round 3's generated-text count, never committed, isn't taken
+  up: what styles write is heap and CPU, capped. Kept, because they are rules and not bounds: no
+  stylesheet or document is ever fetched (`LOADING` before the worker, `without_imports` in it,
+  so Stylo stays), and a WOFF's tables are checked against its file before wuff unpacks them,
+  which refuses one font instead of losing all the labels to the heap cap.
+- **Panics**: a worker's kills it, and its labels are left out with a warning ("Blitz failed on
+  them": its stderr is null, so its message is lost); the viewer's hook stays for the viewer's
+  own.
+- **Tests run the real worker** through the binary (`tests/it/`); the viewer's unit tests that
+  draw labels run the worker's code on a thread through `std::io::pipe()`s, the same frames, no
+  caps (the test harness can't be re-executed as `clv --worker`). `worker.rs`'s own tests use
+  `sleep`, `sh` and `yes` as workers.
+- **Branch:** `spec-0004` from `main`; task 5 on it after task 4.
+- **On by default,** though it adds about 11 MB to the binary, and Blitz is a beta: a drawing
+  without labels never starts a worker.
 
 ## Open questions
 
@@ -280,15 +347,61 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/adr/0024-…`. *Verify:* `cargo test -j 2 --test docs`,
   and the manual checks in Done.
 
+- [ ] **Blitz in a worker, the estimate deleted** — `source/worker.rs` (spawn, frames, caps,
+  kill, count; serve, the heap limit, `RLIMIT_CPU` armed a request; the `Worker` trait; the
+  allocator), `WORKERS` and `--worker`; `html.rs` split into the worker (`Labels`) and `Painted`
+  over the pipe, pixels back; the deletions (`paint_work` and its helpers, `Recorder`, the 8 MiB
+  thread, `catch_unwind`, `cost`, `system_fonts`, the nesting limit, `peniko`, the version
+  guard); the WOFF table check in `font_size`; the page's estimate counting parts only; the
+  in-process seam for the unit tests; `cap` and `rustix`'s `time` in `Cargo.toml`. *Files:*
+  `src/source/worker.rs`, `src/source.rs`, `src/main.rs`, `src/source/svg.rs`,
+  `src/source/svg/html.rs`, `Cargo.toml`, `tests/it/resvg.rs`. *Verify:* `cargo test -j 2 --test it
+  resvg` with `--features svg-html` and with `--no-default-features --features pdf,svg`;
+  `worker.rs`'s tests with `--no-default-features`: a `sleep` killed on the wall clock and
+  reaped, `sh -c 'exit 3'` and `sh -c 'kill -SEGV $$'` told apart, `yes` refused past the length
+  cap, an unknown kind refused, a `Pixels` of the wrong length refused, the fifth worker refused;
+  through the binary, round 3's cases: the `text-decoration-inset: -1e20px` hang killed on CPU
+  time with its warning (`2px` drawn); a 2,000,000-pixel dotted border, and a 64 KiB `content`
+  on 100,000 elements, each aborted at the heap cap with its warning; a WOFF whose table is
+  stored larger than it unpacks refused alone, the label drawn without it
+  (`a_woffs_inconsistent_tables_are_refused`); 10,000 elements clipped by a 1,000-point polygon,
+  and a `body::before` wavy underline under 1,000 labels, each drawn or left out within the wall
+  budget (measured in the ADR); a `<link>` and an `@import` of font-shaped CSS not applied, as
+  committed; a directory of 12 drawings printed with every label; a label nested 1,000 deep
+  drawn; the placed, overflow, opacity, rules, picture, hints and links tests as before; each new
+  test seen failing with its cap removed (a budget of `usize::MAX`, a wall of an hour; the table
+  check with its ranges unchecked).
+- [ ] **The docs** — ADR-0025 written (Accepted), with the measurements (what macOS enforces,
+  spawn, fonts, the pipe) and the alternatives (a footprint watchdog, `RLIMIT_AS`, scenes over
+  the pipe, a process a render, the allowlist), and linked where this spec names it; ADR-0024's status "Accepted; its estimate and its
+  thread superseded by ADR-0025"; usage's Limits (the worker's rows in, the estimate's out), SVG
+  drawings ("in a process of its own") and `## Known issues` (the stylesheet case); architecture's
+  Files (`worker.rs`), How each opens, Layers (a worker is an extension's; `main.rs` names
+  `WORKERS`); CHANGELOG; `CONTRIBUTING.md`'s library rule (`cap` in `worker.rs` alone) and tests;
+  README's Plans (a stylesheet's parse bounded, linking `docs/usage.md#known-issues`);
+  `CLAUDE.md`'s Layout. *Files:* `docs/adr/0025-…`, `docs/adr/0024-…`, `docs/adr/README.md`,
+  `docs/usage.md`, `docs/architecture.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `README.md`,
+  `CLAUDE.md`. *Verify:* `cargo test -j 2 --test docs`, and the manual checks in Done.
+
 ## Done
 
 - [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, with
   `--features svg-html` alone and `--no-default-features --features pdf,svg` too.
 - [ ] Tests added, each seen failing without its change, the change reverted named beside it.
 - [ ] **Cost**, on a release build under `/usr/bin/time -l`, on the machine the ADR names (an Apple
-  M3 Max, as ADR-0003's): the 1,024 labels under 3 MiB of styles drawn, none left out, in at most
-  3 s and 500 MB; 50 labels sharing a 400 KB font drawn in at most 1 s; each stage's hostile drawing
-  within its limit, or left out with its warning.
+  M3 Max, as ADR-0003's): the 1,024 labels under 3 MiB of styles drawn, none left out, the labels'
+  work (from the request to the worker to its answer, measured about 0.6 s) in at most 3 s, and
+  500 MB (viewer and worker together: `-l` on the viewer, the worker's maximum resident set from
+  `ps` while it lives); the whole open takes some 8 s, usvg's stylesheet parse twice, a known
+  issue in usage. 50 labels sharing a 400 KB font drawn in at most 1 s; the hang killed within
+  11 s of CPU and the bomb within a second, each with its warning; a drawing with one label shown
+  within 100 ms more than the same drawing without it.
+- [ ] A worker's death leaves no process behind: after the hang and the bomb, `pgrep -f
+  'clv --worker'` finds none; after `clv` is killed with SIGKILL while a worker lives, the worker
+  exits.
+- [ ] Nothing a worker writes reaches the terminal: in kitty, a drawing whose label panics Blitz
+  (none known; a worker made to panic by hand while testing) shows the warning and nothing
+  else.
 - [ ] Manual, in kitty with a window over 6,000 pixels wide, and again zoomed in with `+`: a tldraw
   drawing shows every label in its own font; a draw.io 21 drawing (labels `100%` wide, set in
   `<font face>`) shows them as Chrome does, with no "Text is not SVG" line; a Mermaid flowchart
@@ -328,3 +441,14 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   from a browser) and Limits, architecture, CHANGELOG, README's credit, `CLAUDE.md`; ADR-0024
   Accepted. README's Plans gains bounding what an SVG's stylesheets take to parse, at the owner's
   word (a long declaration takes some 45 seconds, labels or not).
+- 2026-11-09 — Codex's review, round 3: no stylesheet or document fetched (`LOADING`,
+  `without_imports`), a label's own opacity applied once, the styles fixture of rules some 750
+  bytes; its estimate fixes set aside.
+- 2026-11-09 — Worker process, owner's decision, after three reviews of the estimate: Blitz into a
+  worker process, capped on CPU time (10 s to lay out, 5 s a render, three times that on the
+  wall) and heap (1 GiB), killed past either, at most four alive; the estimate, the recorder's
+  budget, the 8 MiB thread, `catch_unwind`, the nesting limit and the version guard deleted,
+  round 3's generated-text count not taken up; its WOFF table check kept; `peniko` out, `cap` in
+  (approved by the owner); ADR-0025. Task 5 and a docs task added; tasks 2 to 4 stand as built.
+  The Cost item's 3 s covers the labels' work, the whole open some 8 s (usvg's stylesheet parse,
+  a known issue).
