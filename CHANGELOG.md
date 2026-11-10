@@ -6,6 +6,8 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+## 0.4.0 (2026-11-10)
+
 ### Added
 
 - An SVG drawing's HTML labels (`<foreignObject>`, which tldraw, draw.io and Mermaid label their
