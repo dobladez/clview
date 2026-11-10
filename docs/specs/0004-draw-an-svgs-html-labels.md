@@ -102,6 +102,23 @@ the estimate; each of those cases is a worker killed, or a font refused, and tes
   backend is built. An SVG in a label is left out, so nothing reaches usvg around ADR-0003's bounds;
   so are a stylesheet or a document by a `data:` URL (`@import`, `<iframe>`, `<link>`).
 
+**In a list's tiles**
+
+- A list's tiles show drawings without their HTML labels: a tile's render starts no worker. Its
+  `<switch>` fallbacks are still cut (in the viewer, before usvg, with no Blitz), so a draw.io
+  tile shows no "Text is not SVG - cannot display" or "[Not supported by viewer]", and it gives no
+  warning of labels not drawn. `c` on a tile copies the tile's picture, without labels.
+- A drawing opened, from a list too, and a drawing printed (a list's printed too) draw their
+  labels as before.
+- The viewer says which renders are a list's tiles, in the contract (`src/source.rs`): a field of
+  `Request`, `tile`, which the pager sets for a list's tiles and their copies, and nothing else
+  does. Not an option to open with: a list's file is opened once ([`Later`](../../src/source/later.rs)
+  keeps it open), and going into its tile shows that same source, through a pool of its own. As
+  a list's tiles keep the layout they were opened with ([`Effect::Relayout`](../../src/source.rs)),
+  a tile is drawn as a tile, by what it is asked for. A drawing's labels are found and written out
+  when it is parsed, whatever it is shown as; its worker starts at its first render that isn't a
+  tile's.
+
 **What it reads**
 
 - Nothing but `data:` URLs: no network, no files. A link a label doesn't follow is counted in the
@@ -136,10 +153,11 @@ The counts are task 1's, measured
 
 - A drawing's labels cost about one document, not one each: their styles parsed and their fonts
   loaded once, in one worker a drawing, alive while the drawing is shown.
-- At most six workers live at once, as many as the pager holds drawings' pools (the four parts
-  wanted most recently and the level's, and the printer's renderer), so no tile shown at once is
-  refused; the worst case is 6 GiB of heap. Past six, a drawing's labels are left out, with a
-  warning, rather than wait.
+- At most six workers live at once, the worst case 6 GiB of heap, a backstop: since tiles start
+  none, a worker is a drawing opened or printed, and the pager shows one drawing at a time (its
+  level's), the printer prints one at a time. The worst case is reached only by six drawings with
+  labels shown other than as tiles at once, which neither does. Past six, a drawing's labels are
+  left out, with a warning, rather than wait.
 - One deadline covers a request, its sending and its answer. The request is written on a thread
   of its own while the caller waits with the deadline; at the deadline the viewer kills the
   worker, which ends a blocked write (the pipe broken) and a blocked read (its end). So a worker
@@ -222,7 +240,10 @@ The counts are task 1's, measured
   each request, the frame loop). The `Worker` trait. The process's allocator, `cap`, with its
   limit `usize::MAX` in the viewer. Names no library but `cap` and `rustix`.
 - `src/source.rs` — `WORKERS`, this build's workers, one line a feature, beside `BACKENDS`;
-  `the_viewer_names_no_backend` lets `main.rs` alone name it.
+  `the_viewer_names_no_backend` lets `main.rs` alone name it. `Request::tile`: the render is a
+  list's tile.
+- `src/view/pager.rs` — `tile` set on the requests of a list's level (its tiles, and a tile's
+  copy); names no backend.
 - `src/main.rs` — `--worker <name>` before `view::run`, handed to `source::serve` with `WORKERS`.
 - `src/source/svg.rs` — finds the labels and places them, as task 2 built it; `prepared` hands
   them to `html::prepare` and tells the warnings; `Drawn::render` counts each label's part of the
@@ -281,8 +302,8 @@ The counts are task 1's, measured
   CPU budget, for a worker that isn't running. No estimate of Blitz's painting: three reviews
   found CSS it missed, and the next would too.
 - **A worker a drawing,** owned by the `Drawn` the render's first parse makes (a pool's, or the
-  printer's renderer's), killed when it goes. At most six alive, as many as the pager holds
-  pools, the worst case 6 GiB of heap; past six, a drawing's labels
+  printer's renderer's), killed when it goes; none for a list's tiles. At most six alive, a
+  backstop, the worst case 6 GiB of heap; past six, a drawing's labels
   are left out, with a warning, rather than wait (a wait on a render thread for a slot another
   `Drawn` holds could wait for ever). A pool's threads share the worker, one request at a time:
   two scales of one drawing replay in turn, not at once. A render no longer wanted is dropped
@@ -374,7 +395,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   thread, `catch_unwind`, `cost`, `system_fonts`, `peniko`, the version guard); the nesting limit
   at 1,024, in the writer; the WOFF table check in `font_size`; the page's estimate counting parts only; the
   in-process seam for the unit tests; `cap` and `rustix`'s `time` in `Cargo.toml`. *Files:*
-  `src/source/worker.rs`, `src/source.rs`, `src/main.rs`, `src/source/svg.rs`,
+  `src/source/worker.rs`, `src/source.rs`, `src/main.rs`, `src/view/pager.rs`, `src/source/svg.rs`,
   `src/source/svg/html.rs`, `Cargo.toml`, `tests/it/resvg.rs`. *Verify:* `cargo test -j 2 --test it
   resvg` with `--features svg-html` and with `--no-default-features --features pdf,svg`;
   `worker.rs`'s tests with `--no-default-features`: a `sleep` killed on the wall clock and
@@ -393,7 +414,10 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   (`a_woffs_inconsistent_tables_are_refused`); 10,000 elements clipped by a 1,000-point polygon,
   and a `body::before` wavy underline under 1,000 labels, each drawn or left out within the wall
   budget (measured in the ADR); a `<link>` and an `@import` of font-shaped CSS not applied, as
-  committed; a directory of 12 drawings printed with every label; a label nested 1,000 deep
+  committed; a directory of 12 drawings printed with every label; in the pager, a list of two
+  labelled drawings starting no worker and its tiles warning of nothing, a draw.io tile with no
+  fallback text, and going into one drawing its labels (`Request::tile` checked through the
+  viewer, `the_viewer_names_no_backend` still passing); a label nested 1,000 deep
   drawn; the placed, overflow, opacity, rules, picture, hints and links tests as before; each new
   test seen failing with its cap removed (a budget of `usize::MAX`, a wall of an hour; the table
   check with its ranges unchecked).
@@ -401,7 +425,9 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   spawn, fonts, the pipe) and the alternatives (a footprint watchdog, `RLIMIT_AS`, scenes over
   the pipe, a process a render, the allowlist), and linked where this spec names it; ADR-0024's status "Accepted; its estimate and its
   thread superseded by ADR-0025"; usage's Limits (the worker's rows in, the estimate's out), SVG
-  drawings ("in a process of its own") and `## Known issues` (the stylesheet case); architecture's
+  drawings ("in a process of its own"; a list's tiles show drawings without their HTML labels,
+  and opening one shows them; `c` on a tile copies it without them) and `## Known issues` (the
+  stylesheet case); architecture's
   Files (`worker.rs`), How each opens, Layers (a worker is an extension's; `main.rs` names
   `WORKERS`); CHANGELOG; `CONTRIBUTING.md`'s library rule (`cap` in `worker.rs` alone) and tests;
   README's Plans (a stylesheet's parse bounded, linking `docs/usage.md#known-issues`);
@@ -485,3 +511,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   killing the worker; the CPU cap tested by a worker that spins without allocating, the
   `-1e20px` hang a regression for either cap. Six workers, not four, as many as the pager's
   pools (owner's decision): the worst case 6 GiB.
+- 2026-11-09 — No labels in a list's tiles, owner's decision: a tile's render (`Request::tile`, set
+  by the pager) starts no worker and warns of no labels, its fallbacks still cut; a drawing opened
+  or printed draws them. Six workers stay, a backstop no longer reached.
