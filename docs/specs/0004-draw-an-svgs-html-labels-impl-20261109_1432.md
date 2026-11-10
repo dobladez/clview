@@ -308,3 +308,28 @@ were held, uncommitted; the two that hold in either design are fixed:
   33 tests with the hang, two bombs and 1,000 nested grids, runs in 2 s in parallel.
 - **Not done here, for task 6:** the ADR's measurements on a release build, usage and
   architecture, CHANGELOG.
+
+## Codex's review of task 5
+
+Three findings, all fixed:
+
+- **A worker that died between requests stayed a zombie**, holding its place among the six until
+  the drawing's next render or its drop: the reader read only when an answer was awaited, so an
+  end between requests went unseen. The reader now takes each frame's first byte as it comes
+  (`first_byte`, retried on `Interrupted`: a resize's signal mustn't pass for an end), and the
+  rest only when asked and within its length; at the end of the worker's answers it reaps it and
+  gives its place up itself, through the state it shares with the viewer's `Link` (`Shared`:
+  the process, the place, why it is gone). `a_worker_that_ends_between_requests_is_reaped_and_
+  gives_up_its_place` (a fake that answers once and exits: counted among none and reaped within
+  the wait, then "exit 0" when asked again) failed with the reader waiting to be asked first,
+  as before: still counted after 5 s.
+- **Labels painted before the worker went stayed on the page** while the warning said all were
+  left out, and later renders drew none: `draw_labels` composited each as it came. All are
+  painted first and drawn only if every one came (each part's pixels being in the page's estimate,
+  so all held at once are too). `a_worker_gone_on_one_label_leaves_out_those_painted_before_it`
+  (a blue label, then a 1,400,000-pixel dotted border) failed with the composite as it was: blue
+  at the first label.
+- **`--worker` repeated a bad name raw on stderr**, past `printable`: the name was in `serve`'s
+  error. The error names no name now ("no such worker in this build").
+  `a_bad_worker_name_is_refused_without_repeating_it` failed with the name back in it: the escape
+  in stderr.

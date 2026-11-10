@@ -3,7 +3,7 @@
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use base64::Engine as _;
 
@@ -825,4 +825,14 @@ fn a_file_redirected_in_among_others_is_read_whole() {
 #[test]
 fn nothing_but_the_worker_names_cap() {
     crate::fixtures::named_only_in(&["src/source/worker.rs", "tests/it/view.rs"], &[], &["cap::"]);
+}
+
+/// What `--worker` is given reaches no terminal as it is: a name no worker has is refused without
+/// repeating it, so an escape sequence in it stays out of stderr.
+#[test]
+fn a_bad_worker_name_is_refused_without_repeating_it() {
+    let out = Command::new(BIN).args(["--worker", "bad\x1b]2;injected\x07"]).stdin(Stdio::null()).output().unwrap();
+    assert!(!out.status.success());
+    assert!(!out.stderr.contains(&b'\x1b'), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text(&out.stderr).contains("no such worker"), "{}", text(&out.stderr));
 }

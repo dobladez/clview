@@ -532,3 +532,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   as strings, hashed with the drawing's, since a count said one link twice; the `content` bomb at
   99,000 elements (100,000 are past their limit before the worker); the writer's 1,024 levels
   reachable only under a name the scan skips, plain nesting being the drawing's to refuse first.
+- 2026-11-09 — Codex's review of task 5: a worker that ends between requests is seen ending by its
+  reader, which takes each frame's first byte as it comes, and reaped at once, its place given up;
+  all of a page's labels painted before any is drawn, so a worker gone on one leaves none on the
+  page; `--worker`'s error names no name.

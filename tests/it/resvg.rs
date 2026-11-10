@@ -673,3 +673,15 @@ const HTML_LIBRARIES: [&str; 7] = ["blitz", "anyrender", "kurbo", "stylo", "parl
 fn nothing_but_svg_html_names_blitz() {
     crate::fixtures::named_only_in(&["src/source/svg/html.rs", "tests/it/resvg.rs"], &[], &HTML_LIBRARIES);
 }
+
+/// When the worker goes on one label, the labels painted before it aren't drawn either: the page
+/// and its warning agree, and so do the drawing's later renders, which draw none.
+#[cfg(feature = "svg-html")]
+#[test]
+fn a_worker_gone_on_one_label_leaves_out_those_painted_before_it() {
+    let blue = fo("x='0' y='0' width='20' height='10'", &filled("blue"));
+    let bomb = fo("x='0' y='10' width='40' height='10'", "<div style='width:1400000px;height:5px;border:1px dotted red'/>");
+    let (picture, warnings) = page("svg-gone", 40, 20, &format!("{blue}{bomb}"), &[]);
+    assert_eq!(picture.get_pixel(100, 100).0, NONE, "the first label, painted before the worker went");
+    assert!(warnings.iter().any(|w| w == "2 HTML labels (<foreignObject>) were left out, Blitz took too much memory on them"), "{warnings:?}");
+}

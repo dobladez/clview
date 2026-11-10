@@ -1983,16 +1983,19 @@ impl Drawn {
     }
 
     /// Its `labels`, each replayed into its part of the page and drawn over `pixmap` at its
-    /// opacity: over the whole drawing, not among its shapes. If their worker goes, none of them
-    /// is drawn, now or again, and why is told.
+    /// opacity: over the whole drawing, not among its shapes. All are painted before any is
+    /// drawn: if their worker goes on one of them, none is drawn, now or again, and why is told,
+    /// so every render of the drawing agrees with its warning.
     fn draw_labels(&self, labels: &Prepared, pixmap: &mut Pixmap, parts: &[Option<Part>]) {
         use resvg::tiny_skia::{IntSize, PixmapPaint};
         let (placed, painted) = labels;
+        // Each part's pixels are in the page's estimate, so all of them held at once are too.
+        let mut drawn = Vec::new();
         for (index, part) in parts.iter().enumerate() {
             let (Some(((x, y), to, size)), Some((_, opacity))) = (part, placed.get(index)) else { continue };
-            let rgba = match painted.paint(index, *to, *size) {
-                Ok(Some(rgba)) => rgba,
-                Ok(None) => continue,
+            match painted.paint(index, *to, *size) {
+                Ok(Some(rgba)) => drawn.push(((*x, *y), *size, *opacity, rgba)),
+                Ok(None) => {}
                 Err(why) => {
                     if let Some(labelled) = &self.labels {
                         labelled.failed.get_or_init(|| {
@@ -2004,10 +2007,12 @@ impl Drawn {
                     }
                     return;
                 }
-            };
-            let Some(drawn) = IntSize::from_wh(size.0, size.1).and_then(|size| Pixmap::from_vec(rgba, size)) else { continue };
-            let paint = PixmapPaint { opacity: *opacity, ..PixmapPaint::default() };
-            pixmap.draw_pixmap(*x, *y, drawn.as_ref(), &paint, Transform::identity(), None);
+            }
+        }
+        for ((x, y), size, opacity, rgba) in drawn {
+            let Some(part) = IntSize::from_wh(size.0, size.1).and_then(|size| Pixmap::from_vec(rgba, size)) else { continue };
+            let paint = PixmapPaint { opacity, ..PixmapPaint::default() };
+            pixmap.draw_pixmap(x, y, part.as_ref(), &paint, Transform::identity(), None);
         }
     }
 }

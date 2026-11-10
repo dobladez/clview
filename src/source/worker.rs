@@ -26,6 +26,7 @@ use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The allocator of the whole process: the system's, counted. The viewer's has no limit; a
@@ -131,7 +132,7 @@ type Frame = (u8, u32, Vec<u8>);
 
 /// A worker, from the viewer's side: what it is asked, one request at a time.
 pub(crate) struct Link {
-    process: Process,
+    shared: Arc<Shared>,
     /// Frames to write, to the writer's thread, and what writing each came to.
     to: SyncSender<Vec<u8>>,
     written: Receiver<std::io::Result<()>>,
@@ -140,10 +141,59 @@ pub(crate) struct Link {
     read: Receiver<Result<Frame, Died>>,
     /// The last request's number.
     number: u32,
-    /// Why it is gone, once it is: never asked again.
-    dead: Option<Died>,
+}
+
+/// What the viewer and the thread reading a worker's answers both hold of it: its process, its
+/// place among the workers alive, and why it is gone, once it is. The reader ends it when its
+/// answers end, so a worker that dies between requests is reaped, and its place given up, before
+/// anything asks it again.
+struct Shared(Mutex<Inner>);
+
+struct Inner {
+    process: Process,
     /// Its place among the workers alive, given up once it is gone.
     alive: Option<Alive>,
+    /// Why it is gone, once it is: never asked again.
+    dead: Option<Died>,
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Why it is gone, if it is.
+    fn dead(&self) -> Option<Died> {
+        self.lock().dead.clone()
+    }
+
+    /// The worker killed and reaped, gone for `died` (the first reason given stands), which is
+    /// returned; its place among the workers alive given up.
+    fn end(&self, died: Died) -> Died {
+        let mut inner = self.lock();
+        inner.process.kill();
+        inner.alive = None;
+        inner.dead.get_or_insert(died).clone()
+    }
+
+    /// Why the worker is gone, as it ended by itself: its status, killed if it hasn't ended.
+    fn ended(&self) -> Died {
+        let status = self.status().or_else(|| {
+            // Its pipes closed, it may be ending: a moment to end before it is killed.
+            std::thread::sleep(Duration::from_millis(50));
+            self.status()
+        });
+        self.end(status.map_or_else(|| Died::Ended("its pipes closed".into()), why))
+    }
+
+    /// How the worker's process ended, if it has.
+    fn status(&self) -> Option<ExitStatus> {
+        match &mut self.lock().process {
+            Process::Child(child) => child.try_wait().ok().flatten(),
+            #[cfg(test)]
+            Process::Thread => None,
+        }
+    }
 }
 
 /// What a worker runs as.
@@ -214,13 +264,17 @@ fn started(mut command: Command, alive: Alive) -> Result<Link, Died> {
     linked(Process::Child(child), Box::new(stdin), Box::new(stdout), alive)
 }
 
-/// A link to a worker writing to `to` and reading from `from`, through a thread each.
+/// A link to a worker writing to `to` and reading from `from`, through a thread each. The reader
+/// takes each frame's first byte as it comes, so a worker whose answers end between requests is
+/// seen ending, and the rest of the frame only when an answer is awaited, within its length: so
+/// the viewer holds at most one answer, and what a worker writes unasked waits in the pipe.
 fn linked(process: Process, mut to: Box<dyn Write + Send>, mut from: Box<dyn Read + Send>, alive: Alive) -> Result<Link, Died> {
     let (frames, take) = sync_channel::<Vec<u8>>(1);
     let (wrote, written) = sync_channel(1);
     let (ask, asked) = sync_channel::<usize>(1);
     let (give, read) = sync_channel(1);
-    let mut link = Link { process, to: frames, written, ask, read, number: 0, dead: None, alive: Some(alive) };
+    let shared = Arc::new(Shared(Mutex::new(Inner { process, alive: Some(alive), dead: None })));
+    let mut link = Link { shared: shared.clone(), to: frames, written, ask, read, number: 0 };
     let writer = std::thread::Builder::new().name("to worker".into()).spawn(move || {
         while let Ok(frame) = take.recv() {
             if wrote.send(to.write_all(&frame).and_then(|()| to.flush())).is_err() {
@@ -229,9 +283,13 @@ fn linked(process: Process, mut to: Box<dyn Write + Send>, mut from: Box<dyn Rea
         }
     });
     let reader = std::thread::Builder::new().name("from worker".into()).spawn(move || {
-        while let Ok(longest) = asked.recv() {
-            let frame =
-                read_frame(&mut from, |_| Some(longest)).map_err(|_| Died::Malformed).and_then(|f| f.ok_or(Died::Ended("its answers ended".into())));
+        loop {
+            let Some(kind) = first_byte(&mut from) else {
+                let _ = give.send(Err(shared.ended()));
+                return;
+            };
+            let Ok(longest) = asked.recv() else { return };
+            let frame = rest_of_frame(kind, &mut from, longest).map_err(|_| Died::Malformed);
             let ended = frame.is_err();
             if give.send(frame).is_err() || ended {
                 return;
@@ -267,8 +325,8 @@ impl Link {
     /// `longest` bytes: its kind and payload. The worker is killed, and never asked again, past
     /// the deadline, on an answer that isn't one (longer, or another request's), or when it is gone.
     pub(crate) fn request(&mut self, kind: u8, payload: Vec<u8>, wall: Duration, longest: usize) -> Result<(u8, Vec<u8>), Died> {
-        if let Some(died) = &self.dead {
-            return Err(died.clone());
+        if let Some(died) = self.shared.dead() {
+            return Err(died);
         }
         let deadline = Instant::now().checked_add(wall);
         self.number = self.number.wrapping_add(1);
@@ -302,44 +360,46 @@ impl Link {
 
     /// Why the worker is gone, as it ended by itself: its status, killed if it hasn't ended.
     fn ended(&mut self) -> Died {
-        let died = match &mut self.process {
-            Process::Child(child) => {
-                let status = match child.try_wait() {
-                    Ok(Some(status)) => Some(status),
-                    // Its pipes closed, it may be ending: a moment to end before it is killed.
-                    _ => {
-                        std::thread::sleep(Duration::from_millis(50));
-                        child.try_wait().ok().flatten()
-                    }
-                };
-                status.map_or(Died::Ended("its pipes closed".into()), why)
-            }
-            #[cfg(test)]
-            Process::Thread => Died::Ended("its thread ended".into()),
-        };
-        self.end(died)
+        self.shared.ended()
     }
 
     /// The worker killed and reaped, gone for `died`, which is returned; its place among the
     /// workers alive given up.
     fn end(&mut self, died: Died) -> Died {
-        self.process.kill();
-        self.alive = None;
-        self.dead.get_or_insert(died).clone()
+        self.shared.end(died)
     }
-}
 
-impl Link {
     /// The worker killed for an answer that isn't one, which its caller found: why it is gone.
     pub(crate) fn refuse(&mut self) -> Died {
         self.end(Died::Malformed)
+    }
+
+    /// Whether the worker's process has ended and been reaped.
+    #[cfg(test)]
+    fn reaped(&self) -> bool {
+        match &mut self.shared.lock().process {
+            Process::Child(child) => matches!(child.try_wait(), Ok(Some(_))),
+            Process::Thread => true,
+        }
     }
 }
 
 impl Drop for Link {
     /// The worker killed and reaped: nothing outlives the viewer's use of it.
     fn drop(&mut self) {
-        self.process.kill();
+        self.shared.end(Died::Ended("let go of".into()));
+    }
+}
+
+/// The first byte of the next frame of `from`, waited for; `None` once `from` ends, or fails.
+fn first_byte(from: &mut dyn Read) -> Option<u8> {
+    let mut first = [0u8; 1];
+    loop {
+        match from.read(&mut first) {
+            Ok(1) => return Some(first[0]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            _ => return None,
+        }
     }
 }
 
@@ -359,18 +419,22 @@ fn why(status: ExitStatus) -> Died {
 /// its payload; `None` where `from` ends before one starts. A kind `longest` refuses, or a frame
 /// longer, is an error.
 fn read_frame(from: &mut dyn Read, longest: impl Fn(u8) -> Option<usize>) -> std::io::Result<Option<Frame>> {
+    let Some(kind) = first_byte(from) else { return Ok(None) };
+    let Some(longest) = longest(kind) else { return Err(std::io::Error::from(std::io::ErrorKind::InvalidData)) };
+    rest_of_frame(kind, from, longest).map(Some)
+}
+
+/// The rest of a frame of `kind` from `from`, its first byte read: its request's number and its
+/// payload, of at most `longest` bytes, else an error.
+fn rest_of_frame(kind: u8, from: &mut dyn Read, longest: usize) -> std::io::Result<Frame> {
     use std::io::{Error, ErrorKind};
-    let mut header = [0u8; 9];
-    match from.read(&mut header[..1])? {
-        0 => return Ok(None),
-        _ => from.read_exact(&mut header[1..])?,
-    }
-    let [kind, n0, n1, n2, n3, l0, l1, l2, l3] = header;
+    let mut header = [0u8; 8];
+    from.read_exact(&mut header)?;
+    let [n0, n1, n2, n3, l0, l1, l2, l3] = header;
     let (number, length) = (u32::from_le_bytes([n0, n1, n2, n3]), u32::from_le_bytes([l0, l1, l2, l3]));
     let length = usize::try_from(length).map_err(|_| Error::from(ErrorKind::InvalidData))?;
-    match longest(kind) {
-        Some(most) if length <= most => {}
-        _ => return Err(Error::from(ErrorKind::InvalidData)),
+    if length > longest {
+        return Err(Error::from(ErrorKind::InvalidData));
     }
     let mut payload = Vec::new();
     payload.try_reserve_exact(length).map_err(|_| Error::from(ErrorKind::OutOfMemory))?;
@@ -378,7 +442,7 @@ fn read_frame(from: &mut dyn Read, longest: impl Fn(u8) -> Option<usize>) -> std
     if payload.len() != length {
         return Err(Error::from(ErrorKind::UnexpectedEof));
     }
-    Ok(Some((kind, number, payload)))
+    Ok((kind, number, payload))
 }
 
 /// A frame of `kind`, answering request `number`, written to `to`.
@@ -395,7 +459,8 @@ fn write_frame(to: &mut dyn Write, kind: u8, number: u32, payload: &[u8]) -> std
 /// ends, its heap and CPU time limited.
 pub(crate) fn serve(name: &str, workers: &[&'static dyn Worker]) -> Result<(), String> {
     let Some(worker) = workers.iter().copied().find(|w| w.name() == name) else {
-        return Err(format!("no worker named `{name}` in this build"));
+        // Not the name: it is the command line's, and goes to stderr as it is.
+        return Err("no such worker in this build".into());
     };
     HEAP.set_limit(MAX_HEAP).map_err(|()| "its heap is already past its limit".to_string())?;
     let thread = std::thread::Builder::new()
@@ -466,8 +531,7 @@ mod tests {
         let begun = Instant::now();
         assert_eq!(ask(&mut link, 1, 64), Err(Died::TimedOut));
         assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
-        let Process::Child(child) = &mut link.process else { panic!("a process") };
-        assert!(child.try_wait().unwrap().is_some(), "reaped");
+        assert!(link.reaped(), "reaped");
         assert_eq!(ask(&mut link, 1, 64), Err(Died::TimedOut), "never asked again");
     }
 
@@ -478,9 +542,26 @@ mod tests {
         let mut link = fake("exec sleep 60").unwrap();
         let begun = Instant::now();
         assert_eq!(link.request(7, vec![0; 16 << 20], Duration::from_secs(1), 64), Err(Died::TimedOut));
-        let Process::Child(child) = &mut link.process else { panic!("a process") };
-        assert!(child.try_wait().unwrap().is_some(), "reaped");
+        assert!(link.reaped(), "reaped");
         assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+    }
+
+    /// A worker that ends between requests, after answering, is seen ending: reaped, and its place
+    /// among the workers alive given up, before anything asks it again; asked again, it is gone.
+    #[test]
+    fn a_worker_that_ends_between_requests_is_reaped_and_gives_up_its_place() {
+        static COUNTED: AtomicUsize = AtomicUsize::new(0);
+        let mut command = Command::new("sh");
+        command.args(["-c", r"head -c 10 >/dev/null; printf '\007\001\000\000\000\001\000\000\000x'; exit 0"]);
+        let mut link = started(command, Alive::take(&COUNTED, MAX_WORKERS).unwrap()).unwrap();
+        assert_eq!(COUNTED.load(Ordering::SeqCst), 1);
+        assert_eq!(ask(&mut link, 10, 64), Ok((7, b"x".to_vec())));
+        let begun = Instant::now();
+        while COUNTED.load(Ordering::SeqCst) == 1 || !link.reaped() {
+            assert!(begun.elapsed() < Duration::from_secs(5), "still counted among the workers alive, or a zombie");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(ask(&mut link, 10, 64), Err(Died::Ended("exit 0".into())));
     }
 
     /// How a worker ended is told: an exit, a crash, its CPU time, its heap.
@@ -499,8 +580,7 @@ mod tests {
         // `yes`: a frame of kind `y`, request 0x0a790a79, 0x0a790a79 bytes long.
         let mut link = fake("exec yes").unwrap();
         assert_eq!(ask(&mut link, 10, 1 << 20), Err(Died::Malformed));
-        let Process::Child(child) = &mut link.process else { panic!("a process") };
-        assert!(child.try_wait().unwrap().is_some(), "killed and reaped");
+        assert!(link.reaped(), "killed and reaped");
         // An answer to request 2, to request 1.
         let mut link = fake(r"head -c 10 >/dev/null; printf '\007\002\000\000\000\001\000\000\000x'; sleep 60").unwrap();
         assert_eq!(ask(&mut link, 10, 64), Err(Died::Malformed));
