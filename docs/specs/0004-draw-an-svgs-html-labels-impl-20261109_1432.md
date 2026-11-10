@@ -400,3 +400,37 @@ Three findings, all fixed:
      (fontdb named outside `svg.rs`, an ADR), the proper fix.
   Recommended now: 2 for the coming release, with the `fontconfig-dlopen` feature from 1 so that
   no build needs fontconfig's headers; 5 as the follow-up, in README's Plans.
+
+## Label fonts through fontdb (the owner's decision on the musl builds)
+
+- **No `unsafe`, so no fontdb mapping:** fontdb's `make_shared_face_data`, which would have
+  given the mapped file as an `Arc`, is an `unsafe fn`; its `Source::File` is what
+  `load_system_fonts` leaves (the `memmap-fonts` feature maps on each access, inside fontdb).
+  fontique's own `SourceCache::get` maps a path (unsafe inside fontique) and gives a `Blob`,
+  which `register_fonts` takes: the worker maps every font file once and reads none into its
+  heap (some 700 MB of fonts on this machine).
+- **`html.rs` names no resvg library** after all: `svg.rs` hands it paths and bytes (`FontFile`)
+  and generic family names (`Generic`), so CONTRIBUTING's naming rule and its test stay as they
+  were; the first wording of its comment did name fontdb, and the naming test caught it.
+- **Fallbacks were the surprise:** with the files registered and the generics set, named Latin
+  families rendered identically, but CJK text vanished and the generic rows differed, since a
+  collection built from files has no script fallback. `FALLBACKS` (a script to a list of the
+  usual families, the ones present registered) and `GenericFamily::Emoji` restored all sixteen
+  Latin lines pixel for pixel and the CJK, emoji, Greek and Cyrillic lines, in fonts from the
+  list: Hiragino Sans for Han here, where CoreText cascaded to PingFang. The comparison: two
+  drawings of sixteen and three labelled lines, rendered with the binary before and after,
+  decoded and compared line by line (the script is in the session's scratchpad).
+- **Measured:** fontdb's load and the registration 18–23 ms against CoreText's 33–39 ms in a
+  throwaway crate; `cargo check --target x86_64-unknown-linux-musl --no-default-features
+  --features svg-html` passes (the std for musl downloaded at the third try; a full musl build
+  needs the linker CI installs). `cargo tree -i yeslogic-fontconfig-sys` names nothing for the
+  defaults, for `svg-html` alone and for the musl target; the lock loses yeslogic-fontconfig-sys,
+  dlib, libloading and objc2-core-text.
+- **Tests seen failing:** `a_labels_text_in_a_generic_family_is_drawn_in_the_systems_fonts`
+  (skipped with a warning where the drawing's own `<text>` draws nothing) with the registration
+  left out; `the_labels_fonts_come_without_fontconfig` with `system-fonts` back in Blitz's
+  features, which puts fontconfig's bindings back in the lock.
+- **On the release build, after:** a drawing with one label opens in 0.06 s warm (0.07 before),
+  the worker's resident set 12 MB more for the font files it maps; the styles drawing in 8.2 s
+  with the worker at 96 MB, the font drawing in 0.08 s. The gates, each backend alone included,
+  all pass.

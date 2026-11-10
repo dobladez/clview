@@ -548,3 +548,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   bound: 100,000 under a `<metadata>`, 11 s in a debug build, before anything is drawn). Its other
   finding, that Blitz's `system-fonts` link fontconfig at build time, which the musl release builds
   can't, is the owner's to decide: the notes have the options.
+- 2026-11-09 — Fonts via fontdb, owner's decision: the worker registers the font files fontdb
+  finds for resvg into Blitz's collection, mapped by fontique, with the generic families as
+  resvg's and each script's fallbacks from a list; Blitz's `system-fonts` off, so fontconfig
+  leaves the build and the musl release builds pass (ADR-0025's update).

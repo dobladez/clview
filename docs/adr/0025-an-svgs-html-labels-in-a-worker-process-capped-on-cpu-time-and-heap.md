@@ -169,3 +169,52 @@ binary itself spinning as a worker.
   (simplecss takes time as the square of a declaration's length), in README's Plans.
 - **Revisit when:** Blitz gains cancellation or bounds of its own; `RLIMIT_AS` or a memory
   limit reaches macOS; the owner wants a drawing's labels back after a transient failure.
+
+## Update 2026-11-09: the worker's fonts through fontdb, not fontconfig
+
+**Context.** Blitz's `system-fonts` feature is parley's `system`, which is fontique's, which on
+Linux is `yeslogic-fontconfig-sys`: its build script runs `pkg_config::find_library("fontconfig")
+.unwrap()` unless its `dlopen` feature is on or `RUST_FONTCONFIG_DLOPEN` is set. The release
+builds (`.github/workflows/release.yml`) cross-compile from GNU Linux to musl with nothing set
+up for pkg-config, so both Linux artifacts failed at that script: reproduced here with
+`cargo check --target x86_64-unknown-linux-musl -p yeslogic-fontconfig-sys` ("pkg-config has
+not been configured to support cross-compilation"), and seen passing with
+`RUST_FONTCONFIG_DLOPEN=1`. With `dlopen`, a static musl binary can't load fontconfig at run
+time: fontique's `SystemFonts::new` sees the library missing and holds no fonts, so labels
+would draw their boxes, pictures and embedded fonts but no text in the system's fonts, while
+draw.io's fallback text is cut all the same.
+
+**Decision (the owner's: option 5 of those weighed).** The worker gets the system's fonts
+from fontdb, as the drawing's own text has them: `svg.rs` loads them once a process
+(`system_fonts`, fontdb's own `fonts.conf` parser on Linux, its directory scan elsewhere) and
+hands the worker each font file's path, or the bytes fontdb holds of it (`label_fonts`); the
+worker maps each path through fontique's own source cache (`SourceCache::get`, a memory map
+inside fontique: clv forbids `unsafe`, and fontdb's `make_shared_face_data` is an `unsafe fn`)
+and registers it (`Collection::register_fonts`), never reading a file into its heap. The
+generic families are set as `svg.rs` sets them for resvg, and `system-ui` with `sans-serif`;
+emoji to Apple Color Emoji, Noto Color Emoji or Segoe UI Emoji; and since a collection built
+from files has no script fallback (CoreText's cascade, fontconfig's matching), each script
+falls back to a list of the usual families the system has (`FALLBACKS`: PingFang, Hiragino,
+Noto Sans CJK and the rest for Han, kana and hangul; Geeza Pro and Noto for Arabic; and so on).
+Blitz's `system-fonts` feature is off, parley a direct dependency without its `system` feature:
+`yeslogic-fontconfig-sys`, `dlib`, `libloading` and `objc2-core-text` leave the lock, for every
+feature set and target (`cargo tree -i yeslogic-fontconfig-sys` names nothing).
+
+**Evidence.** On this machine (1,222 faces in 644 files), fontdb's load and fontique's
+registration take 18–23 ms in all (fontdb 10–15 ms, mapping and registering 8 ms), against
+CoreText's own enumeration in fontique at 33–39 ms; the same 408 families come out, Helvetica,
+Arial, Times New Roman, Menlo, Comic Sans MS and Apple Color Emoji among them (PingFang SC is in
+neither: it lives in an asset catalogue). Sixteen lines of text in named families (Helvetica,
+Arial, Times New Roman, Courier New, Menlo, Comic Sans MS, Georgia, Verdana, draw.io's
+`trebuchet ms, verdana, arial, sans-serif`) and in the generic ones (`sans-serif`, `serif`,
+`monospace`, `cursive`, `fantasy`, `system-ui`, a name no font has) render pixel for pixel as
+before. What differs: CJK, emoji, Greek and Cyrillic text falls back to a family from the list
+(Hiragino Sans for Han here, where CoreText cascaded to PingFang), so its glyphs may differ, and
+a script not in the list falls back to nothing, as the drawing's own text wouldn't either.
+`cargo check --target x86_64-unknown-linux-musl --no-default-features --features svg-html`
+passes with the change (the full musl build needs a musl linker, which CI has).
+
+**Alternatives.** `dlopen` alone (fonts lost in a static binary); `svg-html` off in the Linux
+release (labels lost there); fontconfig built static for musl (heavy, and fontconfig's files
+still needed at run time); glibc builds (one binary no longer runs on any distribution); reading
+font files into the worker's heap (some 700 MB of fonts on this machine, against a 1 GiB cap).

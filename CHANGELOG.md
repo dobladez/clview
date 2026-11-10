@@ -15,8 +15,9 @@ works today. A version's section becomes the notes of its
   process of its own, held to its time and memory: past either, the drawing's labels are left out
   with a warning and the drawing drawn without them; what the labels may cost before it is
   bounded, and a label past it left out with a warning. A list's tiles show drawings without
-  their labels; opening one shows them. A build without the `svg-html` feature says how many
-  labels it didn't draw.
+  their labels; opening one shows them. The labels' system fonts are the ones the drawing's own
+  text has, found the same way on every system. A build without the `svg-html` feature says how
+  many labels it didn't draw.
 
 - Markdown and HTML pages are the window's size, as on an e-reader: as tall as the pages area and as
   wide, or two side by side like an open book where the window holds two pages of 60 characters, a

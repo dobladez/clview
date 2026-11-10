@@ -1940,6 +1940,67 @@ fn system_fonts() -> Arc<fontdb::Database> {
         .clone()
 }
 
+/// The system's fonts for a drawing's HTML labels, as its own text has them: each font file fontdb
+/// found, by its path (the worker maps it, as fontdb does for resvg's text: never read into
+/// memory), or as the bytes fontdb holds of it; and the family set for each generic family, as
+/// [`system_fonts`] sets them for resvg. What it reads is what fontdb reads for resvg's text: the
+/// system's font directories, each face's header.
+#[cfg(feature = "svg-html")]
+pub(super) struct LabelFonts {
+    pub(super) files: Vec<FontFile>,
+    pub(super) generics: Vec<(Generic, String)>,
+}
+
+/// A font file fontdb found, once however many faces it holds.
+#[cfg(feature = "svg-html")]
+pub(super) enum FontFile {
+    Path(PathBuf),
+    Bytes(Arc<dyn AsRef<[u8]> + Send + Sync>),
+}
+
+/// A generic family, as CSS names it.
+#[cfg(feature = "svg-html")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Generic {
+    Serif,
+    SansSerif,
+    Monospace,
+    Cursive,
+    Fantasy,
+}
+
+/// [`LabelFonts`], from the fonts fontdb found.
+#[cfg(feature = "svg-html")]
+pub(super) fn label_fonts() -> LabelFonts {
+    let db = system_fonts();
+    let (mut files, mut paths, mut bytes) = (Vec::new(), HashSet::new(), HashSet::new());
+    for face in db.faces() {
+        match &face.source {
+            fontdb::Source::File(path) => {
+                if paths.insert(path.clone()) {
+                    files.push(FontFile::Path(path.clone()));
+                }
+            }
+            fontdb::Source::Binary(data) | fontdb::Source::SharedFile(_, data) => {
+                // A collection's faces share one source: its address tells it.
+                if bytes.insert(Arc::as_ptr(data).cast::<u8>() as usize) {
+                    files.push(FontFile::Bytes(data.clone()));
+                }
+            }
+        }
+    }
+    let generics = [
+        (Generic::Serif, fontdb::Family::Serif),
+        (Generic::SansSerif, fontdb::Family::SansSerif),
+        (Generic::Monospace, fontdb::Family::Monospace),
+        (Generic::Cursive, fontdb::Family::Cursive),
+        (Generic::Fantasy, fontdb::Family::Fantasy),
+    ];
+    let generics =
+        generics.into_iter().map(|(generic, family)| (generic, db.family_name(&family).to_owned())).filter(|(_, name)| !name.is_empty()).collect();
+    LabelFonts { files, generics }
+}
+
 impl Drawn {
     fn render(&self, request: Request) -> Result<Frame, String> {
         let (width, height) = self.size;

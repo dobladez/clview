@@ -458,7 +458,7 @@ fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>)
         // Within u32: the labels' document is at most some 800,000 pixels a side.
         viewport: Some(Viewport::new(size.0.ceil().max(1.0) as u32, size.1.ceil().max(1.0) as u32, 1.0, ColorScheme::Light)),
         net_provider: Some(net.clone()),
-        font_ctx: Some(FontContext::default()),
+        font_ctx: Some(fonts()),
         // A base a relative link resolves against (Blitz's own, a `data:` URL, can't be one, and
         // it panics), to a file not read: told of, as any other link.
         base_url: Some("file:///".into()),
@@ -496,6 +496,87 @@ fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>)
     let links = std::mem::take(&mut *net.links.lock().unwrap_or_else(PoisonError::into_inner));
     (recorded, links)
 }
+
+/// The worker's fonts: the system's as the drawing's own text has them, the files `svg.rs` found
+/// for it, each mapped by Blitz's own font cache (never read into memory) and registered into its
+/// collection, and the generic families set as `svg.rs` sets them for the drawing's text; nothing
+/// asked of fontconfig or CoreText, so a static build has them too (ADR-0025's update). A file
+/// fontique can't read is skipped.
+fn fonts() -> FontContext {
+    use parley::fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache, SourceId, SourceInfo, SourceKind};
+    let found = super::label_fonts();
+    let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+    let mut source_cache = SourceCache::default();
+    for file in found.files {
+        let blob = match file {
+            super::FontFile::Path(path) => source_cache.get(&SourceInfo::new(SourceId::new(), SourceKind::Path(Arc::from(path)))),
+            super::FontFile::Bytes(bytes) => Some(Blob::new(bytes)),
+        };
+        if let Some(blob) = blob {
+            collection.register_fonts(blob, None);
+        }
+    }
+    for (generic, name) in found.generics {
+        let Some(id) = collection.family_id(&name) else { continue };
+        let generics: &[GenericFamily] = match generic {
+            super::Generic::Serif => &[GenericFamily::Serif, GenericFamily::UiSerif],
+            super::Generic::SansSerif => &[GenericFamily::SansSerif, GenericFamily::SystemUi, GenericFamily::UiSansSerif, GenericFamily::UiRounded],
+            super::Generic::Monospace => &[GenericFamily::Monospace, GenericFamily::UiMonospace],
+            super::Generic::Cursive => &[GenericFamily::Cursive],
+            super::Generic::Fantasy => &[GenericFamily::Fantasy],
+        };
+        for generic in generics {
+            collection.set_generic_families(*generic, std::iter::once(id));
+        }
+    }
+    for (tag, names) in FALLBACKS {
+        let ids: Vec<_> = names.iter().filter_map(|name| collection.family_id(name)).collect();
+        collection.set_fallbacks(parley::fontique::Script::from_bytes(**tag), ids.into_iter());
+    }
+    let emoji: Vec<_> = EMOJI.iter().filter_map(|name| collection.family_id(name)).collect();
+    collection.set_generic_families(GenericFamily::Emoji, emoji.into_iter());
+    FontContext { collection, source_cache }
+}
+
+/// The families a script's text falls back to where the family a label names has no glyph for
+/// it, which the system's own matching (fontconfig, CoreText) would supply and the collection
+/// built from files can't: Apple's, Google's Noto, then the usual free ones, those the system has,
+/// in that order. A script not here falls back to nothing, as the drawing's own text wouldn't.
+const FALLBACKS: &[(&[u8; 4], &[&str])] = &[
+    (b"Latn", &["Helvetica", "Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    (b"Grek", &["Helvetica", "Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    (b"Cyrl", &["Helvetica", "Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    (b"Zyyy", &["Helvetica", "Arial", "DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    (
+        b"Hani",
+        &[
+            "PingFang SC",
+            "Hiragino Sans",
+            "Hiragino Kaku Gothic ProN",
+            "STHeiti",
+            "Heiti SC",
+            "Apple SD Gothic Neo",
+            "Noto Sans CJK SC",
+            "Noto Sans CJK JP",
+            "Noto Sans SC",
+            "Source Han Sans",
+            "WenQuanYi Micro Hei",
+            "Droid Sans Fallback",
+        ],
+    ),
+    (b"Hira", &["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Droid Sans Fallback"]),
+    (b"Kana", &["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "Droid Sans Fallback"]),
+    (b"Hang", &["Apple SD Gothic Neo", "AppleGothic", "Noto Sans CJK KR", "Noto Sans KR", "NanumGothic", "Droid Sans Fallback"]),
+    (b"Arab", &["Geeza Pro", "Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans"]),
+    (b"Hebr", &["Arial Hebrew", "Noto Sans Hebrew", "DejaVu Sans"]),
+    (b"Thai", &["Thonburi", "Noto Sans Thai", "Garuda"]),
+    (b"Deva", &["Kohinoor Devanagari", "Devanagari MT", "Noto Sans Devanagari", "Lohit Devanagari"]),
+    (b"Beng", &["Kohinoor Bangla", "Bangla MN", "Noto Sans Bengali"]),
+    (b"Taml", &["Tamil MN", "Noto Sans Tamil"]),
+];
+
+/// The families emoji are drawn with, the first the system has.
+const EMOJI: &[&str] = &["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla"];
 
 /// `label` replayed through `to` into `size` pixels: premultiplied RGBA, row by row.
 fn painted(label: &Recorded, to: [f64; 6], size: (u32, u32)) -> Option<Vec<u8>> {

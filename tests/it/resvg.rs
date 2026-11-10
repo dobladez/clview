@@ -685,3 +685,29 @@ fn a_worker_gone_on_one_label_leaves_out_those_painted_before_it() {
     assert_eq!(picture.get_pixel(100, 100).0, NONE, "the first label, painted before the worker went");
     assert!(warnings.iter().any(|w| w == "2 HTML labels (<foreignObject>) were left out, Blitz took too much memory on them"), "{warnings:?}");
 }
+
+/// A label's text set in a generic family is drawn in the system's fonts, the same fonts the
+/// drawing's own text has (fontdb's, registered into the worker's collection: no fontconfig, so
+/// a static build has them too). Skipped, with a warning, where this machine has no fonts: then
+/// the drawing's own `<text>` draws nothing either.
+#[cfg(feature = "svg-html")]
+#[test]
+fn a_labels_text_in_a_generic_family_is_drawn_in_the_systems_fonts() {
+    let text = "<text x='1' y='17' font-family='sans-serif' font-size='18' fill='red'>III</text>";
+    let label = fo("x='20' y='0' width='20' height='20'", "<div style='font:18px sans-serif;color:blue'>III</div>");
+    let (picture, _) = page("svg-generic", 40, 20, &format!("{text}{label}"), &[]);
+    let inked = |x0: u32, x1: u32, channel: usize| (x0..x1).any(|x| (0..picture.height()).any(|y| picture.get_pixel(x, y).0[channel] > 128));
+    if !inked(0, 400, 0) {
+        eprintln!("warning: no font on this machine draws the drawing's own text: the labels' fonts can't be tested here");
+        return;
+    }
+    assert!(inked(400, 800, 2), "the label's text, in blue");
+}
+
+/// The labels' fonts come from fontdb, never fontconfig, which a static Linux build couldn't link:
+/// nothing in the build names fontconfig's bindings.
+#[test]
+fn the_labels_fonts_come_without_fontconfig() {
+    let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap();
+    assert!(!lock.contains("name = \"yeslogic-fontconfig-sys\""), "fontconfig is in the build: Blitz's `system-fonts`, or parley's `system`, is on");
+}

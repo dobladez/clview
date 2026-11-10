@@ -412,8 +412,12 @@ display"). A label is drawn as a browser draws it, as far as Blitz goes:
 - Styled by the drawing's `<style>`s as if inside its ancestors (their ids, classes, styles, and
   font and colour attributes), so a rule such as Mermaid's `#id .nodeLabel` reaches it; `<font>`'s
   `face`, `color` and `size` as hints, under any rule of the drawing's.
-- With the system's fonts, and those the drawing embeds as `data:` URLs (WOFF, WOFF2, TrueType,
-  OpenType); with the pictures it embeds as `data:` URLs (PNG, JPEG, GIF, WebP). Nothing else: a
+- With the system's fonts, the same ones the drawing's own text has (found the same way, so a
+  static Linux build has them too), and those the drawing embeds as `data:` URLs (WOFF, WOFF2,
+  TrueType, OpenType); a generic family (`sans-serif`, `monospace`…) is the one the drawing's text
+  gets for it. Text in a script the named family lacks (CJK, Arabic, emoji…) falls back to the
+  usual families for it that the system has, rather than to whatever the system would pick. With
+  the pictures it embeds as `data:` URLs (PNG, JPEG, GIF, WebP). Nothing else: a
   label's link to a picture or a font elsewhere isn't followed, and is counted with the drawing's;
   no stylesheet or document is loaded (`<link>`, `@import`, `<iframe>`, `<object>`), even as a
   `data:` URL. A label's own `<style>` applies as the drawing's do.

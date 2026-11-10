@@ -48,9 +48,11 @@ imagesize = { version = "0.15", optional = true }
 # Blitz (Stylo's styles, Taffy's layout, Parley's text) through anyrender into vello_cpu, in Rust:
 # `source/svg/html.rs`, ADR-0024, in a worker process of clv's own (ADR-0025). Pinned, for their
 # API: blitz-paint 0.3.0-beta.4's shapes are what the memory test's drawing grows by. Without
-# Blitz's default features, which bring its own SVG (usvg, without this backend's bounds); with
-# WOFF fonts and the system's. No JavaScript, no network.
-blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff", "system-fonts"], optional = true }
+# Blitz's default features, which bring its own SVG (usvg, without this backend's bounds) and the
+# system's fonts through fontconfig on Linux, which a static musl build can't link: the worker
+# registers the fonts fontdb finds for resvg instead (ADR-0025's update). With WOFF fonts. No
+# JavaScript, no network.
+blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff"], optional = true }
 blitz-html = { version = "=0.3.0-beta.4", optional = true }
 blitz-paint = { version = "=0.3.0-beta.4", default-features = false, optional = true }
 blitz-traits = { version = "=0.3.0-beta.4", optional = true }
@@ -58,6 +60,10 @@ anyrender = { version = "=0.14.0", optional = true }
 anyrender_vello_cpu = { version = "=0.18.0", optional = true }
 # The transforms anyrender takes; Blitz builds it already.
 kurbo = { version = "0.13", optional = true }
+# Parley's font collection (fontique), to register the system's fonts fontdb found into Blitz's
+# font context, and its generic families; Blitz builds it already. Without its `system` feature,
+# which is fontconfig on Linux.
+parley = { version = "=0.12.0", default-features = false, features = ["std"], optional = true }
 # Stylo, to read a drawing's stylesheets as Blitz will and write them out again without their
 # `@import`s, so no stylesheet is ever fetched; Blitz builds it already, and doesn't re-export it.
 stylo = { version = "=0.22.0", optional = true }
@@ -112,6 +118,7 @@ svg-html = [
     "dep:anyrender",
     "dep:anyrender_vello_cpu",
     "dep:kurbo",
+    "dep:parley",
     "dep:stylo",
     "dep:svgtypes",
 ]

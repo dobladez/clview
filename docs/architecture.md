@@ -245,7 +245,11 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   asked again: the drawing's labels are left out with why, until it is opened again. The
   worker's net provider (`DataOnly`) answers `data:` fonts and pictures only, each sized from its
   header, a WOFF's tables checked against its file; the links it doesn't follow come back, hashed
-  with the drawing's own. Blitz asks for a URL without saying what for, so the labels' markup
+  with the drawing's own. The worker's system fonts are fontdb's, the ones resvg draws text with:
+  `svg.rs` hands it each font file's path (`label_fonts`), fontique maps and registers each
+  (`fonts` in `html.rs`), the generic families set as for resvg and each script's fallback
+  families from a list (`FALLBACKS`), so Blitz's own font discovery (fontconfig on Linux, which a
+  static build can't link) isn't built ([ADR-0025](adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s update). Blitz asks for a URL without saying what for, so the labels' markup
   holds no element that loads a stylesheet or a document (`LOADING`), and a label's `<style>`
   joins the drawing's stylesheets, which Stylo reads and writes out again without `@import`
   (`without_imports`). The labels' nesting is held to 1,024 levels by the writer (`written`),
