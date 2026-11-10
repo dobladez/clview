@@ -218,3 +218,19 @@ passes with the change (the full musl build needs a musl linker, which CI has).
 release (labels lost there); fontconfig built static for musl (heavy, and fontconfig's files
 still needed at run time); glibc builds (one binary no longer runs on any distribution); reading
 font files into the worker's heap (some 700 MB of fonts on this machine, against a 1 GiB cap).
+
+## Update 2026-11-10: inline content in a `display: table` box, wrapped for Blitz
+
+Blitz 0.3.0-beta.4 lays out none of a `display: table` box's children that aren't table parts
+(`blitz-dom/src/layout/table.rs`, `collect_table_cells`: a text child returns at once, a flow,
+flow-root, flex or grid child is dropped as "probably a table caption"), where CSS 2.1 §17.2.1
+gives each run of them an anonymous `table-row` and `table-cell`. Mermaid's edge labels are such a
+box (`display: table` holding a `<span>`), and came out blank: six of a 44 KB flowchart's. Its git
+`main` (4647f4a2, 2026-11-10) does the same. The owner reversed the spec's "it is Blitz's to fix":
+the worker wraps each such run in a row and a cell of its own (`anonymous_cells`), decided by
+Stylo's computed `display` once the styles resolve, before layout: the structure a browser makes,
+so the layout is the same, not a different one (a `block` in its place would lose the table's
+shrink-to-fit and `vertical-align`). The repro (a red square and text in such a box, three
+controls that draw) is `tests/data/blitz-table.html`; `blitz_still_drops_inline_content_in_a_table`
+renders it through Blitz without the workaround and fails, saying to remove the workaround, the
+day Blitz draws it. CONTRIBUTING's "Moving Blitz" says what else to read then.

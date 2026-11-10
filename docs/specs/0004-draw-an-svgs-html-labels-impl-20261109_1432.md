@@ -434,3 +434,48 @@ Three findings, all fixed:
   the worker's resident set 12 MB more for the font files it maps; the styles drawing in 8.2 s
   with the worker at 96 MB, the font drawing in 0.08 s. The gates, each backend alone included,
   all pass.
+
+## Labels in `display: table` (the owner's decision)
+
+- **The cause**, found for the upstream report: blitz-dom's `collect_table_cells` drops a table's
+  children that aren't table parts (text returns at once; flow, flow-root, flex and grid children
+  fall into an arm commented "probably a table caption"), so no anonymous row or cell exists where
+  CSS 2.1 §17.2.1 makes one. The repro (a red square and text in a `display: table` box, three
+  controls) renders the same on the pinned 0.3.0-beta.4 and on git main 4647f4a2: the first box
+  empty, the controls drawn. The repro, PNGs and an issue draft are in the session's scratchpad,
+  for the owner to file.
+- **The workaround** is the CSS structure itself: once the styles resolve, each run of such
+  children, in each `display: table` box, is moved into a `<div>` styled `table-row` holding a
+  `<div>` styled `table-cell` (`anonymous_cells`, blitz-dom's `DocumentMutator`), decided by
+  Stylo's computed `display` (a stylesheet's `display: table` counts too). Spaces between parts
+  make no box and go with a run under way; table parts, `display: contents` and absolutely
+  positioned children stay where they are. No Chrome reference was rendered: the equivalence is
+  by the spec's own structure.
+- **The canary** `blitz_still_drops_inline_content_in_a_table` renders `tests/data/blitz-table.html`
+  through Blitz without the workaround (no fonts: the fixture's boxes are red squares) and asserts
+  the first band empty and the controls drawn; then with it, the first band drawn. It fails with
+  "Blitz now draws inline content in display: table: remove the workaround…" the day Blitz does.
+- **Other canaries weighed:** the hang test already fails the day Blitz's decoration loop is fixed
+  (said in CONTRIBUTING's checklist); the paint order, clipping and selector differences are clv's
+  own choices, not Blitz bugs, so nothing to watch for; Blitz's panic on a relative URL with a
+  `data:` base is avoided by `base_url`, harmless either way.
+- **Tests seen failing** with `anonymous_cells` not called: `inline_content_in_a_display_table_
+  label_is_drawn` (no blue), and the canary's last assertion with it made a no-op.
+- **Upstream already tracks it**, the lead found: Blitz's issue #1430 (a block child of a table, the
+  same CSS 2.1 fixup), PR #781 (anonymous cells for non-table children, blitz 0.3.0-beta.2), #783
+  and #786 on top of it, and #1370 (Taffy's table layout in place of the grid flattening, on
+  main). The issue text went to the owner as a comment for #1430 instead, with the inline case and
+  the Mermaid impact; the canary's message and CONTRIBUTING's checklist name them. The repro was
+  run on each PR's branch too (`refs/pull/N/head`, each with the anyrender its blitz-paint wants):
+  #781 draws the inline box but not the text (a text node directly in the table is still
+  dropped), #783 and #1370 draw both, as the controls are drawn; the pinned beta.4 and main draw
+  neither. So the canary stays until #783's anonymous boxes or #1370's table layout land.
+- **A probe that misled for a while:** the box-only probes through `clv` seemed blank by their
+  output's size (5 KB), which was the PNG of a box with no text; decoded, they held the box. The
+  real finding of that round was the detaching: moved nodes keep the construction flags Blitz's
+  table code cleared, so a block inside a moved run (Mermaid's `<p>`) stayed unbuilt until each
+  node was taken out of the document and put back.
+- **A flaky test of mine, fixed on the way:** `a_picture_drawn_as_a_tile_is_drawn_again_for_a_page`
+  named its temporary file by the same keys as `a_picture_is_drawn_once_and_only_those_a_page_shows`
+  (`clview-picture-<pid>-a-b.png`), so the two, in parallel, wrote and read one file and one of
+  them sometimes found it half written. It has a key of its own now.

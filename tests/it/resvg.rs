@@ -711,3 +711,17 @@ fn the_labels_fonts_come_without_fontconfig() {
     let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap();
     assert!(!lock.contains("name = \"yeslogic-fontconfig-sys\""), "fontconfig is in the build: Blitz's `system-fonts`, or parley's `system`, is on");
 }
+
+/// Inline content directly in a `display: table` box, Mermaid's edge labels, is drawn, as a
+/// browser draws it: Blitz 0.3.0-beta.4 drops it, and the worker wraps it in the anonymous row and
+/// cell CSS gives it (`anonymous_cells`).
+#[cfg(feature = "svg-html")]
+#[test]
+fn inline_content_in_a_display_table_label_is_drawn() {
+    let table = fo(
+        "width='20' height='10'",
+        "<div style='display:table;width:20px;height:10px'><span style='display:inline-block;width:20px;height:10px;background:blue'></span></div>",
+    );
+    let (picture, warnings) = page("svg-table", 40, 20, &table, &[]);
+    assert_eq!((picture.get_pixel(100, 100).0, warnings.as_slice()), (BLUE, &[][..]));
+}

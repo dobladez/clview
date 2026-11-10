@@ -527,7 +527,7 @@ mod tests {
     #[cfg(feature = "image")]
     #[test]
     fn a_picture_drawn_as_a_tile_is_drawn_again_for_a_page() {
-        let promised = promised(&["a", "b"], &picture(), MAX_HELD);
+        let promised = promised(&["a", "b", "tile"], &picture(), MAX_HELD);
         assert_eq!(drawn_as(&promised, &["a"], true).0.len(), 1);
         assert!(drawn_as(&promised, &["a"], true).0.is_empty(), "a tile's, drawn once");
         let (changes, _) = drawn_as(&promised, &["a"], false);

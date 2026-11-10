@@ -8,3 +8,5 @@ black and (128, 64, 32), written as a PPM by hand. Nothing here comes from elsew
 | `three-by-two.jxl` | `cjxl -d 0` (libjxl 0.11.1): lossless |
 | `turned.jxl` | `cjxl` (libjxl 0.11.1) from a 16 × 8 JPEG, red on the left and blue on the right, made by ImageMagick, with an EXIF orientation of 6 spliced in by hand: JPEG XL's own orientation, and its EXIF, say to turn it a quarter clockwise |
 | `three-by-two.avif` | `avifenc -y 444 -q 100` (libavif 1.3.0) from the same picture as a PNG: YUV with libavif's default matrix coefficients, 6 (BT.601) |
+
+| `blitz-table.html` | Written by hand: a red inline-block square and text directly in a `display: table` box, which Blitz 0.3.0-beta.4 draws nothing of, and three controls it draws (the same in a `table-cell` child, in a `table-cell` box alone, in a `block` box). The canary `blitz_still_drops_inline_content_in_a_table` in `src/source/svg/html.rs` renders it; the Blitz issue clv's owner reported used it |

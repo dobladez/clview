@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  body { margin: 0; font: 16px sans-serif; }
+  .box { width: 200px; height: 40px; margin: 4px; background: #eef; border: 1px solid #99f; }
+  .ink { display: inline-block; width: 24px; height: 24px; background: #c33; vertical-align: middle; }
+</style></head><body>
+  <!-- The bug: inline content directly in a display: table box draws nothing, not even this red box. -->
+  <div class="box" style="display: table"><span class="ink"></span> table: inline content directly in it</div>
+  <!-- Controls, which draw. -->
+  <div class="box" style="display: table"><div style="display: table-cell"><span class="ink"></span> table &gt; table-cell</div></div>
+  <div class="box" style="display: table-cell"><span class="ink"></span> table-cell alone</div>
+  <div class="box" style="display: block"><span class="ink"></span> block</div>
+</body></html>

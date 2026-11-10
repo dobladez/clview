@@ -194,7 +194,8 @@ The counts are task 1's, measured
 
 - Usage's SVG drawings, its Limits and the known differences above, and Blitz's found so far:
   inline content straight in a `display: table` element isn't drawn (5 of a Mermaid flowchart's
-  24 labels blank). And clv's own: a `<switch>` whose child taken or fallback an entity makes
+  24 labels blank; worked around in the worker since 2026-11-10, with a canary test for the day
+  Blitz draws it: the Changelog). And clv's own: a `<switch>` whose child taken or fallback an entity makes
   keeps its fallback, drawn as usvg draws it. Architecture's backends table and How each opens. `CONTRIBUTING.md`'s library
   rule, its count of features and its gates. `CHANGELOG.md`. An ADR,
   [ADR-0024](../adr/0024-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) (the next free number), why Blitz and how its cost is bounded, with
@@ -213,7 +214,8 @@ The counts are task 1's, measured
 - A label among the shapes in their paint order, or inside their groups' opacity: drawn over the
   drawing.
 - A stylesheet's `display: none` on a label's ancestor.
-- Working around Blitz's `display: table` bug in clv.
+- Working around Blitz's `display: table` bug in clv. *Reversed 2026-11-10 by the owner:* worked
+  around in the worker, with a canary test for the day Blitz fixes it.
 - HTML and Markdown documents through Blitz rather than wordcraft's importer. In README's Plans.
 - What a label would fetch: web fonts by URL, stylesheets, `<iframe>`s; Blitz runs no scripts.
 - Selecting or copying a label's text.
@@ -552,3 +554,9 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   finds for resvg into Blitz's collection, mapped by fontique, with the generic families as
   resvg's and each script's fallbacks from a list; Blitz's `system-fonts` off, so fontconfig
   leaves the build and the musl release builds pass (ADR-0025's update).
+- 2026-11-10 — Labels in `display: table` drawn, owner's decision: Blitz 0.3.0-beta.4 (and its
+  git main) lays out none of a table box's children that aren't table parts, so Mermaid's edge
+  labels came out blank; the worker wraps each run of them in the anonymous row and cell CSS gives
+  them, once the styles resolve. A repro and issue draft for Blitz's tracker went to the owner;
+  `tests/data/blitz-table.html` is its case, and `blitz_still_drops_inline_content_in_a_table`
+  fails the day Blitz draws it. CONTRIBUTING gains a "Moving Blitz" checklist.

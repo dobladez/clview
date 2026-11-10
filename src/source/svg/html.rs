@@ -470,6 +470,7 @@ fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>)
     // A picture a style asks for (`background-image`) is fetched as the styles resolve, and
     // answered after: they resolve again with it.
     doc.resolve(0.0);
+    anonymous_cells(&mut doc);
     doc.handle_messages();
     doc.resolve(0.0);
     let boxes = boxes(&doc);
@@ -577,6 +578,86 @@ const FALLBACKS: &[(&[u8; 4], &[&str])] = &[
 
 /// The families emoji are drawn with, the first the system has.
 const EMOJI: &[&str] = &["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji", "Twemoji Mozilla"];
+
+/// Blitz 0.3.0-beta.4 lays out none of a `display: table` box's children that aren't table parts:
+/// CSS 2.1 (§17.2.1) gives each run of them an anonymous row and cell, and Blitz's
+/// `collect_table_cells` drops them ("probably a table caption": Blitz's issue #1430, its PRs #781,
+/// #783 and #1370), so Mermaid's edge labels, a `<span>` in a `display: table` box, came out
+/// blank. Until Blitz does it, this does, once the
+/// styles have resolved and before layout: each such run, in each table, wrapped in a row and a
+/// cell of its own, as a browser wraps it. `blitz_still_drops_inline_content_in_a_table` fails once
+/// Blitz draws them: then take this out.
+fn anonymous_cells(doc: &mut BaseDocument) {
+    use blitz_dom::{QualName, local_name, ns};
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    // Each run of such children, found before anything moves.
+    let mut runs: Vec<Vec<NodeId>> = Vec::new();
+    let mut walk = vec![doc.root_element().id];
+    while let Some(id) = walk.pop() {
+        let Some(node) = doc.get_node(id) else { continue };
+        walk.extend(node.children.iter().copied());
+        if !node.primary_styles().is_some_and(|s| s.clone_display().inside() == DisplayInside::Table) {
+            continue;
+        }
+        let mut run = Vec::new();
+        for child in node.children.iter().copied() {
+            let Some(c) = doc.get_node(child) else { continue };
+            // A table part, which stays where it is; spaces, which make no box, and go with a
+            // run under way; or content, which a run gathers.
+            enum Kind {
+                Part,
+                Spaces,
+                Content,
+            }
+            let kind = match (c.element_data(), c.text_data()) {
+                (None, Some(text)) if text.content.trim().is_empty() => Kind::Spaces,
+                (None, Some(_)) => Kind::Content,
+                (None, None) => Kind::Part,
+                (Some(_), _) => match c.primary_styles() {
+                    None => Kind::Part,
+                    Some(style) => {
+                        let display = style.clone_display();
+                        let part = matches!(display.outside(), DisplayOutside::None | DisplayOutside::TableCaption | DisplayOutside::InternalTable)
+                            || display.inside() == DisplayInside::Contents
+                            || style.clone_position().is_absolutely_positioned();
+                        if part { Kind::Part } else { Kind::Content }
+                    }
+                },
+            };
+            match kind {
+                Kind::Content => run.push(child),
+                Kind::Spaces if !run.is_empty() => run.push(child),
+                Kind::Spaces => {}
+                Kind::Part => {
+                    if !run.is_empty() {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                }
+            }
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+    }
+    let div = || QualName::new(None, ns!(html), local_name!("div"));
+    let mut mutator = doc.mutate();
+    for run in runs {
+        let Some(first) = run.first().copied() else { continue };
+        let (row, cell) = (mutator.create_element(div(), Vec::new()), mutator.create_element(div(), Vec::new()));
+        mutator.set_style_property(row, "display", "table-row");
+        mutator.set_style_property(cell, "display", "table-cell");
+        mutator.insert_nodes_before(first, &[row]);
+        mutator.append_children(row, &[cell]);
+        // Taken out of the document first: Blitz's table code cleared the construction a
+        // dropped child was due, and a node moved within the document isn't marked for it
+        // again, so a block inside (Mermaid's `<p>` in its `<span>`) would stay unbuilt; a
+        // subtree put back in is marked whole.
+        for child in &run {
+            mutator.remove_node(*child);
+        }
+        mutator.append_children(cell, &run);
+    }
+}
 
 /// `label` replayed through `to` into `size` pixels: premultiplied RGBA, row by row.
 fn painted(label: &Recorded, to: [f64; 6], size: (u32, u32)) -> Option<Vec<u8>> {
@@ -915,6 +996,55 @@ mod tests {
         }
         assert_eq!(net.answer("data:,a%41b"), None, "not a font or a picture");
         assert_eq!(data_url(",a%41b%zz"), Some(b"aAb%zz".to_vec()));
+    }
+
+    /// `html` laid out and painted by Blitz at 240 × 200, with [`anonymous_cells`] or without: how
+    /// many red pixels each 48-pixel band holds. No fonts: the fixtures' red boxes need none.
+    fn red_by_band(html: &str, workaround: bool) -> [usize; 4] {
+        use parley::fontique::{Collection, CollectionOptions};
+        let (w, h) = (240u32, 200u32);
+        let config = DocumentConfig {
+            viewport: Some(Viewport::new(w, h, 1.0, ColorScheme::Light)),
+            font_ctx: Some(FontContext {
+                collection: Collection::new(CollectionOptions { shared: false, system_fonts: false }),
+                source_cache: Default::default(),
+            }),
+            ..DocumentConfig::default()
+        };
+        let mut doc = HtmlDocument::from_html(html, config);
+        doc.handle_messages();
+        doc.resolve(0.0);
+        if workaround {
+            anonymous_cells(&mut doc);
+        }
+        doc.resolve(0.0);
+        let mut scene = Scene::new();
+        blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, w, h, 0, 0);
+        let rgba = render_to_buffer::<VelloCpuImageRenderer, _>(|s| s.append_scene(scene.clone(), Affine::IDENTITY), w, h);
+        let red = |x: u32, y: u32| rgba.get(((y * w + x) * 4) as usize..).is_some_and(|p| p[0] > 150 && p[1] < 100);
+        std::array::from_fn(|band| {
+            (band as u32 * 48..(band as u32 + 1) * 48).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| red(x, y)).count()
+        })
+    }
+
+    /// Blitz 0.3.0-beta.4 draws nothing of inline content directly in a `display: table` box
+    /// ([`anonymous_cells`] works around it): the first box of `tests/data/blitz-table.html`, a red
+    /// square and text in such a box, comes out empty, while its three controls draw. Blitz's git
+    /// main at 4647f4a2 (2026-11-10) does the same; Blitz tracks it as issue #1430. Of its open
+    /// PRs, #781 draws the box but not the text, #783 (anonymous table boxes) and #1370 (Taffy's
+    /// table layout) draw both, as measured on their branches that day. With the workaround, the
+    /// first box draws as its controls do.
+    #[test]
+    fn blitz_still_drops_inline_content_in_a_table() {
+        let html = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/blitz-table.html")).unwrap();
+        let bands = red_by_band(&html, false);
+        assert!(bands[1..].iter().all(|red| *red > 400), "the controls: {bands:?}");
+        assert_eq!(
+            bands[0], 0,
+            "Blitz now draws inline content in display: table (its issue #1430; PR #783 or #1370 landed): remove the workaround (`anonymous_cells` in src/source/svg/html.rs) and this test"
+        );
+        let fixed = red_by_band(&html, true);
+        assert!(fixed[0] > 400 && fixed[1..] == bands[1..], "with the workaround: {fixed:?}");
     }
 
     /// Only `data:` URLs are answered, at most 1,024 a drawing; what else a label asks for is

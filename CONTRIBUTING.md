@@ -36,6 +36,27 @@ The spreadsheet backend's gridcraft likewise, from `tests/it/gridcraft.rs` and
 `src/source/gridcraft.rs`; it reaches the PDF backend only by asking which backend opens the PDF
 it prints, never by name.
 
+**Moving Blitz** (the SVG backend's HTML labels, `src/source/svg/html.rs`): every `=` pin in
+`Cargo.toml` moves together (`blitz-dom`, `blitz-html`, `blitz-paint`, `blitz-traits`, `anyrender`,
+`anyrender_vello_cpu`, `stylo`, `parley`; `wuff` and `kurbo` as they need). Then:
+
+1. Read the canaries, tests that assert a Blitz bug clv works around is still there, and fail with
+   what to remove when it isn't: `blitz_still_drops_inline_content_in_a_table` in `html.rs` (its
+   fixture `tests/data/blitz-table.html`; the workaround `anonymous_cells`; upstream, Blitz's issue
+   #1430, fixed for text and inline alike by PR #783's anonymous table boxes and by PR #1370's
+   table layout, measured on their branches on 2026-11-10, while #781 alone leaves the text out).
+   The hang test
+   `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` in
+   `tests/it/resvg.rs` leans on blitz-paint's `text-decoration-inset` loop and its dotted border
+   paths: if it fails, the caps still hold, and the fixtures need another hostile drawing.
+2. Measure the worker's caps again: `docs/adr/0024-measure/`'s drawings through the release binary
+   as [ADR-0025](docs/adr/0025-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)'s
+   Evidence says, and its `fonts()` against the system's fonts (the same families as before).
+3. Check usage's known differences for the labels against real drawings: the tldraw, draw.io 21
+   and Mermaid files the spike's `NOTES.md` names (`spike/blitz-foreignobject` branch), or the
+   synthetic stand-ins in `tests/it/resvg.rs`, in kitty, zoomed, against Chrome.
+4. `tests/it/resvg.rs`'s `nothing_but_svg_html_names_blitz` says which crates may be named where.
+
 ## Rules
 
 - **Never panic.** Every file, every byte the terminal sends back and every argument is untrusted

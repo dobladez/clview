@@ -439,8 +439,6 @@ Where clv draws a label otherwise than a browser:
 - Not clipped by its ancestors' clip paths or masks, or by a nested `<svg>`'s bounds.
 - A stylesheet's `display: none` on an ancestor isn't seen; nor may a rule on an SVG element's name,
   a namespace, a sibling or a structural pseudo-class (`:nth-child`) match.
-- Text directly in a `display: table` element isn't drawn (Blitz's: 5 of a Mermaid flowchart's 24
-  labels blank).
 - A `<switch>` whose child taken, or fallback, an entity makes keeps its fallback, drawn as resvg
   draws it.
 - What an `overflow: visible` label draws past its box is drawn up to 4,096 pixels each way, and cut
