@@ -1185,13 +1185,39 @@ fn a_lists_tiles_start_no_worker_for_a_drawings_labels_and_opening_one_does() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// `clv --help` on a `cols` × `rows` pseudo-terminal of type `term`, as it arrives there with the
-/// newlines put back: the pseudo-terminal writes each as `\r\n`.
+/// `clv --help` on a `cols` × `rows` pseudo-terminal of type `term`, as it arrives there, its
+/// carriage returns included: see [`newlines`].
 fn help_on(term: &str, cols: u16, rows: u16) -> String {
     let terminal = Terminal { term: Some(term), ..PLAIN };
     let mut help = Session::start_on(terminal, Path::new("--help"), &[], cols, rows);
     assert!(help.finish().success());
-    help.text().replace("\r\n", "\n")
+    help.text()
+}
+
+/// `text`, as a pseudo-terminal wrote it, with its newlines put back: the pseudo-terminal writes
+/// each as `\r\n`, and as `\r\r\n` where its output queue filled between the two (macOS's tty
+/// driver, with onlcr, writes the `\r` again when the `\n` didn't fit), at an offset the help's
+/// length decides; so any run of `\r` before a `\n` is one `\r\n`, and then a `\n`. A `\r` with no
+/// `\n` after it (clv's own, back to column 0) stays.
+fn newlines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut returns = 0;
+    for c in text.chars() {
+        match c {
+            '\r' => returns += 1,
+            '\n' => {
+                returns = 0;
+                out.push('\n');
+            }
+            other => {
+                out.extend(std::iter::repeat_n('\r', returns));
+                returns = 0;
+                out.push(other);
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\r', returns));
+    out
 }
 
 /// `clv --help` through a pipe: the text alone.
@@ -1210,11 +1236,15 @@ fn help_shows_the_icon_beside_its_first_lines_where_the_terminal_is_known_to_sho
     let (end, _) = plain.match_indices('\n').nth(4).unwrap();
     let (top, rest) = plain.split_at(end + 1);
     for term in ["xterm-kitty", "xterm-ghostty"] {
-        let shown = help_on(term, 120, 40);
+        let raw = help_on(term, 120, 40);
+        let shown = newlines(&raw);
         // 10 × 20 cells, as no pixel size is reported: 5 rows are 10 columns, ending at column 100.
         let up = format!("{top}\x1b[5A\r\x1b[90C\x1b_Ga=T,f=100,t=d,q=2,C=1,c=10,r=5,");
         assert!(shown.starts_with(&up), "{term}: {:?}", &shown[..up.len().min(shown.len())]);
-        assert!(shown.ends_with(&format!("\x1b\\\x1b[5B\r{rest}")), "{term}: {:?}", &shown[shown.len().saturating_sub(rest.len() + 20)..]);
+        // clv's `\r` after the icon comes before a newline, where `newlines` folds it with the
+        // pseudo-terminal's own: it is checked as written, two `\r` at least before that `\n`.
+        assert!(raw.contains("\x1b[5B\r\r\n"), "{term}: no return to column 0 after the icon");
+        assert!(shown.ends_with(&format!("\x1b\\\x1b[5B{rest}")), "{term}: {:?}", &shown[shown.len().saturating_sub(rest.len() + 20)..]);
         assert_eq!(printed(&shown), 1, "{term}");
         assert!(!shown.contains("\x1b[c") && !shown.contains("a=q"), "{term}: the terminal was asked something");
     }
@@ -1227,9 +1257,9 @@ fn help_is_the_same_text_where_the_icon_cant_show() {
         return;
     }
     let plain = help_text();
-    assert_eq!(help_on("xterm-256color", 120, 40), plain, "a terminal not known to show it");
-    assert_eq!(help_on("xterm-kitty", 70, 40), plain, "no room beside the lines");
-    assert_eq!(help_on("xterm-kitty", 120, 3), plain, "too few rows");
+    assert_eq!(newlines(&help_on("xterm-256color", 120, 40)), plain, "a terminal not known to show it");
+    assert_eq!(newlines(&help_on("xterm-kitty", 70, 40)), plain, "no room beside the lines");
+    assert_eq!(newlines(&help_on("xterm-kitty", 120, 3)), plain, "too few rows");
 }
 
 /// Through a pipe, on a terminal that shows images, `--help` is the text alone: what reads it isn't
