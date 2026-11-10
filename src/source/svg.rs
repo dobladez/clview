@@ -35,6 +35,10 @@ use crate::args::{OptionSpec, Parsed};
 #[cfg(feature = "svg-html")]
 mod html;
 
+/// The worker that lays a drawing's labels out, in a process of its own.
+#[cfg(feature = "svg-html")]
+pub(super) use html::LABELS;
+
 /// SVG drawings, rendered by resvg.
 pub(super) struct Svg;
 
@@ -381,11 +385,25 @@ fn within(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 struct Drawn {
     tree: usvg::Tree,
     size: (f32, f32),
-    warnings: Vec<String>,
-    /// Its HTML labels, recorded, each with where it goes on the drawing and its opacity.
+    notes: Notes,
+    /// Its HTML labels, found, and laid out by its first render that isn't a list's tile's.
     #[cfg(feature = "svg-html")]
-    labels: Option<(Vec<(Transform, f32)>, html::Painted)>,
+    labels: Option<Labelled>,
 }
+
+/// A drawing's HTML labels: found and written out, then laid out and recorded in a worker of
+/// their own, once, each with where it goes on the drawing and its opacity.
+#[cfg(feature = "svg-html")]
+struct Labelled {
+    found: Found,
+    prepared: OnceLock<Option<Prepared>>,
+    /// Why the worker went while painting them, once it has: they aren't drawn again.
+    failed: OnceLock<String>,
+}
+
+/// A drawing's labels laid out, each with where it goes on the drawing and its opacity.
+#[cfg(feature = "svg-html")]
+type Prepared = (Vec<(Transform, f32)>, html::Painted);
 
 /// [`parse`], a parser's panic made an error: the drawing to render, its labels prepared.
 fn guarded_parse(bytes: &[u8]) -> Result<Drawn, String> {
@@ -393,7 +411,7 @@ fn guarded_parse(bytes: &[u8]) -> Result<Drawn, String> {
 }
 
 /// [`guarded_parse`], for a drawing being opened, which keeps only its size: its labels aren't
-/// prepared.
+/// kept.
 fn guarded_open(bytes: &[u8]) -> Result<Drawn, String> {
     std::panic::catch_unwind(|| parse(bytes, false)).unwrap_or_else(|_| Err("the SVG parser failed on this drawing".into()))
 }
@@ -401,7 +419,7 @@ fn guarded_open(bytes: &[u8]) -> Result<Drawn, String> {
 /// The drawing in `bytes`, an SVG or an svgz, at its size: its own, or its `viewBox`'s. One that
 /// says neither (no `viewBox`, and a `width` or a `height` missing or a percentage) is as large
 /// as what it draws reaches from its origin, as usvg sizes it, and 100 × 100 if it draws nothing.
-/// With `labels`, its HTML labels are laid out and recorded too.
+/// With `labels`, its HTML labels are kept, to be laid out by its first render that draws them.
 fn parse(bytes: &[u8], labels: bool) -> Result<Drawn, String> {
     let notes = Notes::default();
     let (tree, found) = parse_at(bytes, 0, &notes)?;
@@ -410,22 +428,22 @@ fn parse(bytes: &[u8], labels: bool) -> Result<Drawn, String> {
         return Err(format!("the drawing has no size to show ({} × {})", size.0, size.1));
     }
     #[cfg(feature = "svg-html")]
-    let labels = (labels && !found.labels.is_empty()).then(|| prepared(found, &notes)).flatten();
+    let labels = (labels && !found.labels.is_empty()).then(|| Labelled { found, prepared: OnceLock::new(), failed: OnceLock::new() });
     #[cfg(not(feature = "svg-html"))]
     let (Found {}, _) = (found, labels);
     Ok(Drawn {
         tree,
         size,
-        warnings: notes.warnings(),
+        notes,
         #[cfg(feature = "svg-html")]
         labels,
     })
 }
 
-/// The labels `found`, laid out and recorded, with where each goes; or none, with why told to
-/// `notes`.
+/// The labels `found`, laid out and recorded in a worker of their own, with where each goes; or
+/// none, with why told to `notes`.
 #[cfg(feature = "svg-html")]
-fn prepared(found: Found, notes: &Notes) -> Option<(Vec<(Transform, f32)>, html::Painted)> {
+fn prepared(found: &Found, notes: &Notes) -> Option<Prepared> {
     let leave_out = |why: &str| {
         for _ in &found.labels {
             notes.left_out_label(why);
@@ -440,11 +458,7 @@ fn prepared(found: Found, notes: &Notes) -> Option<(Vec<(Transform, f32)>, html:
             notes.linked(painted.links.iter().map(String::as_str));
             for index in 0..found.labels.len() {
                 if painted.region(index).is_none() {
-                    notes.left_out_label(&format!(
-                        "laid out past {} pixels a side, or an element of it past {}",
-                        html::MAX_LAYOUT_SIDE,
-                        html::MAX_ELEMENT_SIDE
-                    ));
+                    notes.left_out_label(&format!("laid out past {} pixels a side", html::MAX_LAYOUT_SIDE));
                 }
             }
             Some((found.labels.iter().map(|l| (l.place, l.opacity)).collect(), painted))
@@ -610,11 +624,13 @@ const MAX_LABEL_MARKUP: usize = 8 << 20;
 #[cfg(feature = "svg-html")]
 const MAX_LABEL_TEXT: usize = 1 << 20;
 
-/// The deepest a label's elements nest, from its `<foreignObject>` down: the painter recurses
-/// once a level, and 64 of the costliest (nested grids) hold with a margin of 3.75 on its
-/// thread's 8 MiB in a debug build (ADR-0024).
+/// The deepest a label's elements nest, from its `<foreignObject>` down, as they are written out:
+/// the writer recurses once a level, on a render thread, and the drawing's own bound on its
+/// depth ([`MAX_DEPTH`]) doesn't reach every element a label holds, since its scan skips some by
+/// name (`<metadata>`, `<defs>`). As deep as the drawing may nest: the worker lays them out on a
+/// stack of 64 MiB, which holds 1,024 nested grids in a debug build (ADR-0025).
 #[cfg(feature = "svg-html")]
-const MAX_LABEL_DEPTH: usize = 64;
+const MAX_LABEL_DEPTH: usize = 1_024;
 
 /// The XLink namespace, of SVG 1.1's `xlink:href`.
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
@@ -1774,7 +1790,9 @@ impl Notes {
         self.text.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(why);
     }
 
-    fn warnings(&self) -> Vec<String> {
+    /// What the reader should know, in words; with `labels`, of the HTML labels too, which a
+    /// list's tile doesn't draw.
+    fn warnings(&self, labels: bool) -> Vec<String> {
         let count = |n: &AtomicUsize| n.load(Ordering::Relaxed);
         let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one} was") } else { format!("{n} {many} were") };
         let mut out = Vec::new();
@@ -1800,10 +1818,10 @@ impl Notes {
             )),
         }
         match count(&self.undrawn) {
-            0 => {}
+            n if n == 0 || !labels => {}
             n => out.push(format!("{} not drawn", plural(n, "HTML label (<foreignObject>)", "HTML labels (<foreignObject>)"))),
         }
-        for (why, n) in self.left_out_labels.lock().unwrap_or_else(PoisonError::into_inner).iter() {
+        for (why, n) in self.left_out_labels.lock().unwrap_or_else(PoisonError::into_inner).iter().filter(|_| labels) {
             out.push(format!("{} left out, {why}", plural(*n, "HTML label (<foreignObject>)", "HTML labels (<foreignObject>)")));
         }
         if count(&self.fallbacks) > MAX_FALLBACKS {
@@ -1916,18 +1934,17 @@ impl Drawn {
         let transform = Transform::from_scale(w / width, h / height);
         #[allow(unused_mut, reason = "its labels add to it, in a build that draws them")]
         let mut cost = Estimate::of(&self.tree, transform, canvas)?;
+        // A list's tile is drawn without its labels: no worker is started for it.
         #[cfg(feature = "svg-html")]
-        let parts = self.label_parts(transform, canvas);
+        let labels = if request.tile { None } else { self.prepared() };
         #[cfg(feature = "svg-html")]
-        if let Some((_, painted)) = &self.labels {
-            // Each label's part painted, then drawn over the page; its commands held as they are
-            // replayed; and as work, the pixels they paint there, and the part's.
-            for (index, (_, to, size)) in parts.iter().enumerate().filter_map(|(i, p)| Some((i, (*p)?))) {
-                let part = Dims { w: u64::from(size.0), h: u64::from(size.1) };
-                let (commands, pixels) = painted.cost(index, to, size);
-                cost.peak = cost.peak.saturating_add(part.bytes().saturating_mul(2)).saturating_add(commands.saturating_mul(html::COMMAND_BYTES));
-                cost.work = cost.work.saturating_add(pixels).saturating_add(part.px());
-            }
+        let parts = labels.map(|labels| label_parts(labels, transform, canvas)).unwrap_or_default();
+        // Each label's part painted, then drawn over the page; and as work, the part's pixels.
+        #[cfg(feature = "svg-html")]
+        for (_, _, size) in parts.iter().flatten() {
+            let part = Dims { w: u64::from(size.0), h: u64::from(size.1) };
+            cost.peak = cost.peak.saturating_add(part.bytes().saturating_mul(2));
+            cost.work = cost.work.saturating_add(part.px());
         }
         if cost.peak > MAX_RENDER {
             return Err(format!("drawing it at {} × {} would take more than {} MiB", canvas.w, canvas.h, MAX_RENDER >> 20));
@@ -1939,9 +1956,12 @@ impl Drawn {
         let mut pixmap = Pixmap::new(cw, ch).ok_or_else(|| format!("no canvas of {cw} × {ch} pixels"))?;
         resvg::render(&self.tree, transform, &mut pixmap.as_mut());
         #[cfg(feature = "svg-html")]
-        self.draw_labels(&mut pixmap, &parts);
+        if let Some(labels) = labels {
+            self.draw_labels(labels, &mut pixmap, &parts);
+        }
+        let warnings = self.notes.warnings(!request.tile);
         // tiny-skia's pixels are premultiplied RGBA, row by row, as a frame's are.
-        Ok(Frame { request, width: cw, height: ch, rgba: Pixels::new(pixmap.take()), error: None, warnings: self.warnings.clone(), again: false })
+        Ok(Frame { request, width: cw, height: ch, rgba: Pixels::new(pixmap.take()), error: None, warnings, again: false })
     }
 }
 
@@ -1952,47 +1972,73 @@ type Part = ((i32, i32), [f64; 6], (u32, u32));
 
 #[cfg(feature = "svg-html")]
 impl Drawn {
-    /// The part of a `canvas` drawn through `transform` each label lands on: `None` for a label
-    /// left out, or landing nowhere on it. Only that part is painted, so no label costs more
-    /// pixels than the page, however large it is shown.
-    fn label_parts(&self, transform: Transform, canvas: Dims) -> Vec<Option<Part>> {
-        let Some((placed, painted)) = &self.labels else { return Vec::new() };
-        placed
-            .iter()
-            .enumerate()
-            .map(|(index, (place, _))| {
-                let [x0, y0, x1, y1] = painted.region(index)?;
-                let to_page = transform.pre_concat(*place);
-                // Within f32: a region is at most some 25,000 pixels a side.
-                let mut corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| resvg::tiny_skia::Point::from_xy(x as f32, y as f32));
-                to_page.map_points(&mut corners);
-                let (lx, ly) = corners.iter().fold((f32::INFINITY, f32::INFINITY), |(x, y), p| (x.min(p.x), y.min(p.y)));
-                let (hx, hy) = corners.iter().fold((f32::NEG_INFINITY, f32::NEG_INFINITY), |(x, y), p| (x.max(p.x), y.max(p.y)));
-                // At most MAX_SIDE, so exact as f32.
-                let (lx, ly, hx, hy) = (lx.floor().max(0.0), ly.floor().max(0.0), hx.ceil().min(canvas.w as f32), hy.ceil().min(canvas.h as f32));
-                if !(lx.is_finite() && ly.is_finite() && hx > lx && hy > ly) {
-                    return None;
-                }
-                let to = to_page.post_translate(-lx, -ly);
-                // Within the canvas, at most MAX_SIDE: exact as i32 and u32.
-                Some(((lx as i32, ly as i32), [to.sx, to.ky, to.kx, to.sy, to.tx, to.ty].map(f64::from), ((hx - lx) as u32, (hy - ly) as u32)))
-            })
-            .collect()
+    /// Its labels laid out, by the first render that asks, in a worker of their own; `None` when
+    /// it has none, they were left out, or their worker went.
+    fn prepared(&self) -> Option<&Prepared> {
+        let labelled = self.labels.as_ref()?;
+        if labelled.failed.get().is_some() {
+            return None;
+        }
+        labelled.prepared.get_or_init(|| prepared(&labelled.found, &self.notes)).as_ref()
     }
 
-    /// Its labels, each replayed into its part of the page and drawn over `pixmap` at its
-    /// opacity: over the whole drawing, not among its shapes. One whose replay fails is left off.
-    fn draw_labels(&self, pixmap: &mut Pixmap, parts: &[Option<Part>]) {
+    /// Its `labels`, each replayed into its part of the page and drawn over `pixmap` at its
+    /// opacity: over the whole drawing, not among its shapes. If their worker goes, none of them
+    /// is drawn, now or again, and why is told.
+    fn draw_labels(&self, labels: &Prepared, pixmap: &mut Pixmap, parts: &[Option<Part>]) {
         use resvg::tiny_skia::{IntSize, PixmapPaint};
-        let Some((placed, painted)) = &self.labels else { return };
+        let (placed, painted) = labels;
         for (index, part) in parts.iter().enumerate() {
             let (Some(((x, y), to, size)), Some((_, opacity))) = (part, placed.get(index)) else { continue };
-            let Some(rgba) = painted.paint(index, *to, *size) else { continue };
+            let rgba = match painted.paint(index, *to, *size) {
+                Ok(Some(rgba)) => rgba,
+                Ok(None) => continue,
+                Err(why) => {
+                    if let Some(labelled) = &self.labels {
+                        labelled.failed.get_or_init(|| {
+                            for _ in placed {
+                                self.notes.left_out_label(&why);
+                            }
+                            why
+                        });
+                    }
+                    return;
+                }
+            };
             let Some(drawn) = IntSize::from_wh(size.0, size.1).and_then(|size| Pixmap::from_vec(rgba, size)) else { continue };
             let paint = PixmapPaint { opacity: *opacity, ..PixmapPaint::default() };
             pixmap.draw_pixmap(*x, *y, drawn.as_ref(), &paint, Transform::identity(), None);
         }
     }
+}
+
+/// The part of a `canvas` drawn through `transform` each of `labels` lands on: `None` for a label
+/// left out, or landing nowhere on it. Only that part is painted, so no label costs more pixels
+/// than the page, however large it is shown.
+#[cfg(feature = "svg-html")]
+fn label_parts(labels: &Prepared, transform: Transform, canvas: Dims) -> Vec<Option<Part>> {
+    let (placed, painted) = labels;
+    placed
+        .iter()
+        .enumerate()
+        .map(|(index, (place, _))| {
+            let [x0, y0, x1, y1] = painted.region(index)?;
+            let to_page = transform.pre_concat(*place);
+            // Within f32: a region is at most some 25,000 pixels a side.
+            let mut corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| resvg::tiny_skia::Point::from_xy(x as f32, y as f32));
+            to_page.map_points(&mut corners);
+            let (lx, ly) = corners.iter().fold((f32::INFINITY, f32::INFINITY), |(x, y), p| (x.min(p.x), y.min(p.y)));
+            let (hx, hy) = corners.iter().fold((f32::NEG_INFINITY, f32::NEG_INFINITY), |(x, y), p| (x.max(p.x), y.max(p.y)));
+            // At most MAX_SIDE, so exact as f32.
+            let (lx, ly, hx, hy) = (lx.floor().max(0.0), ly.floor().max(0.0), hx.ceil().min(canvas.w as f32), hy.ceil().min(canvas.h as f32));
+            if !(lx.is_finite() && ly.is_finite() && hx > lx && hy > ly) {
+                return None;
+            }
+            let to = to_page.post_translate(-lx, -ly);
+            // Within the canvas, at most MAX_SIDE: exact as i32 and u32.
+            Some(((lx as i32, ly as i32), [to.sx, to.ky, to.kx, to.sy, to.tx, to.ty].map(f64::from), ((hx - lx) as u32, (hy - ly) as u32)))
+        })
+        .collect()
 }
 
 /// `size` at `scale`, rounded, at least one pixel.
@@ -2332,7 +2378,7 @@ mod tests {
         let used = "<use xlink:href='#g'/>".repeat(500);
         let text = svg(10, 10, &format!("<switch>{not_taken}<rect width='1' height='1'/></switch>{group}{used}"));
         let started = std::time::Instant::now();
-        let warnings = guarded_parse(text.as_bytes()).unwrap().warnings;
+        let warnings = guarded_parse(text.as_bytes()).unwrap().notes.warnings(true);
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
         assert_eq!(warnings, ["500000 HTML labels (<foreignObject>) were not drawn"]);
     }
@@ -2410,6 +2456,43 @@ mod tests {
         let frame = render(&open(svg(40, 20, wide).as_bytes()).unwrap(), 160.0);
         assert_eq!((frame.width, frame.error.as_deref()), (6400, None));
         assert_eq!([pixel(&frame, 6300, 100), pixel(&frame, 6000, 100)], [[0, 0, 255, 255], [0, 0, 0, 0]]);
+    }
+
+    /// A list's tile is drawn without its labels (its fallbacks still cut), warns of nothing about
+    /// them, and starts no worker; the same drawing rendered as a page draws them, in a worker of
+    /// its own.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_tile_draws_no_labels_and_starts_no_worker() {
+        let fallback = "<rect width='40' height='10' fill='green'/>";
+        let label = r#"<foreignObject width="40" height="10"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;background:blue"/></foreignObject>"#;
+        let drawing = open(svg(40, 20, &format!("<rect width='40' height='20' fill='red'/><switch>{label}{fallback}</switch>")).as_bytes()).unwrap();
+        let mut renderer = Renderer { document: drawing.0.clone(), parsed: Cache::new() };
+        let mut rendered = |tile: bool| renderer.render(Request { page: 0, scale: 1.0, tag: 7, tile, ..Default::default() });
+        let tile = rendered(true);
+        assert_eq!((pixel(&tile, 5, 5), pixel(&tile, 5, 15), tile.warnings.as_slice()), ([255, 0, 0, 255], [255, 0, 0, 255], &[][..]));
+        // Its labels found, but not laid out: no worker.
+        let prepared = |renderer: &Renderer| renderer.parsed.get().unwrap().as_ref().unwrap().labels.as_ref().unwrap().prepared.get().is_some();
+        assert!(!prepared(&renderer), "a worker started for a tile");
+        let mut rendered = |tile: bool| renderer.render(Request { page: 0, scale: 1.0, tag: 7, tile, ..Default::default() });
+        let page = rendered(false);
+        assert_eq!((pixel(&page, 5, 5), pixel(&page, 5, 15)), ([0, 0, 255, 255], [255, 0, 0, 255]), "the label, and no fallback");
+        assert!(prepared(&renderer), "no worker started for a page");
+    }
+
+    /// A label's part of the page is in the page's estimate, painted and then drawn over the page:
+    /// a label as large as the page doubles what a 16,000 × 8,000 page holds, past 1 GiB.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_labels_part_of_the_page_is_in_its_estimate() {
+        let labelled =
+            open(svg(40, 20, r#"<foreignObject width="40" height="20"><div xmlns="http://www.w3.org/1999/xhtml"/></foreignObject>"#).as_bytes())
+                .unwrap();
+        let plain = open(svg(40, 20, "<rect width='40' height='20'/>").as_bytes()).unwrap();
+        assert_eq!(render(&plain, 400.0).error, None);
+        let error = render(&labelled, 400.0).error.unwrap_or_default();
+        assert!(error.contains("would take more than 1024 MiB"), "{error}");
+        assert_eq!(render(&labelled, 200.0).error, None);
     }
 
     /// A percentage of a drawing that says no size of its own is of the size usvg gives it from what

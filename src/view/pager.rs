@@ -2455,11 +2455,11 @@ impl Pager<'_> {
 
     /// Tell the pool which renders are still wanted, most urgent first (a page being copied, then
     /// the pages): it keeps those and cancels the rest. A page goes with the settings' values (on
-    /// the paper it is shown on), and is copied as it is shown.
+    /// the paper it is shown on), and is copied as it is shown: a list's tile as a tile.
     fn requeue(&self) {
-        let (values, dark) = (self.settings.values.get(), self.dark);
-        let copy = self.copier.request(self.level.id).map(|copy| Request { values, dark, ..copy });
-        let pages = self.wanted.iter().map(|w| request(w.view.page, &w.layout, w.tag, values, dark));
+        let (values, dark, tile) = (self.settings.values.get(), self.dark, !self.level.items.is_empty());
+        let copy = self.copier.request(self.level.id).map(|copy| Request { values, dark, tile, ..copy });
+        let pages = self.wanted.iter().map(|w| Request { tile, ..request(w.view.page, &w.layout, w.tag, values, dark) });
         self.level.pool.set_queue(copy.into_iter().chain(pages).collect());
     }
 }

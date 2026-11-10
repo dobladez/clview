@@ -46,7 +46,8 @@ flate2 = { version = "1.1", optional = true }
 imagesize = { version = "0.15", optional = true }
 # An SVG's HTML labels (`<foreignObject>`: tldraw, draw.io, Mermaid), laid out and painted by
 # Blitz (Stylo's styles, Taffy's layout, Parley's text) through anyrender into vello_cpu, in Rust:
-# `source/svg/html.rs`, ADR-0024. Pinned, as the limits there were measured with them. Without
+# `source/svg/html.rs`, ADR-0024, in a worker process of clv's own (ADR-0025). Pinned, for their
+# API: blitz-paint 0.3.0-beta.4's shapes are what the memory test's drawing grows by. Without
 # Blitz's default features, which bring its own SVG (usvg, without this backend's bounds); with
 # WOFF fonts and the system's. No JavaScript, no network.
 blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["woff", "system-fonts"], optional = true }
@@ -57,11 +58,8 @@ anyrender = { version = "=0.14.0", optional = true }
 anyrender_vello_cpu = { version = "=0.18.0", optional = true }
 # The transforms anyrender takes; Blitz builds it already.
 kurbo = { version = "0.13", optional = true }
-# The fills, colours and fonts anyrender's painting takes, which a recorder of it names (it
-# counts what Blitz paints); anyrender builds it already, at the version it pins.
-peniko = { version = "=0.6.1", optional = true }
-# Stylo's computed values, which the paint estimate reads as blitz-paint 0.3.0-beta.4 paints them
-# (ADR-0024); Blitz builds it already, and doesn't re-export it.
+# Stylo, to read a drawing's stylesheets as Blitz will and write them out again without their
+# `@import`s, so no stylesheet is ever fetched; Blitz builds it already, and doesn't re-export it.
 stylo = { version = "=0.22.0", optional = true }
 # SVG's lengths, transforms, viewBoxes and colours, to place a label as usvg places what it draws;
 # usvg builds it already.
@@ -114,7 +112,6 @@ svg-html = [
     "dep:anyrender",
     "dep:anyrender_vello_cpu",
     "dep:kurbo",
-    "dep:peniko",
     "dep:stylo",
     "dep:svgtypes",
 ]
@@ -134,7 +131,12 @@ sheet = ["dep:gridcraft-engine", "dep:zip", "dep:serde_json", "pdf"]
 [target.'cfg(unix)'.dependencies]
 # The terminal's size and raw mode (`termios`), and the user and process ids for the temporary
 # files (`process`): safe calls, so no `unsafe` libc.
-rustix = { version = "1", features = ["process", "termios"] }
+# The CPU time a worker process has used (`time`), to cap what it may use next (`process`).
+rustix = { version = "1", features = ["process", "termios", "time"] }
+# The allocator of the whole process, which counts what it holds: a worker process sets it a
+# limit, past which an allocation fails and the worker aborts (`source/worker.rs`, ADR-0025);
+# the viewer's has none.
+cap = "0.1.2"
 # The system's clipboard, for the pager's `c` on a terminal on this machine that has no clipboard
 # of its own for pictures (Ghostty, WezTerm): the macOS pasteboard, X11 (XWayland too). Only
 # `image-data`: not Wayland's data-control protocol. ADR-0009 has why.

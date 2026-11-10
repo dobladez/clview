@@ -1567,7 +1567,7 @@ fn page_layout(source: &dyn Source, page: usize, fit: Fit, place: Area, output: 
 /// The render of `page` at `layout`'s scale, with the settings at `values` and dark paper `dark`,
 /// tagged so its result can be told from others.
 fn request(page: usize, layout: &Layout, tag: u64, values: Values, dark: [u8; 3]) -> Request {
-    Request { page, scale: layout.scale, tag, values, dark }
+    Request { page, scale: layout.scale, tag, values, dark, tile: false }
 }
 
 /// A rendered page as this terminal is sent it, a PNG or text, or why there is none. Errors name

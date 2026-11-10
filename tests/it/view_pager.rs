@@ -1121,6 +1121,70 @@ fn in_a_list_c_copies_the_tile_chosen_and_a_folder_has_none() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The processes descended from `pid` whose command line holds `what`, by `ps`.
+#[cfg(feature = "svg-html")]
+fn descendants_running(pid: u32, what: &str) -> Vec<u32> {
+    let ps = Command::new("ps").args(["-axo", "pid=,ppid=,command="]).output().unwrap();
+    let rows: Vec<(u32, u32, String)> = String::from_utf8_lossy(&ps.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let (pid, ppid) = (words.next()?.parse().ok()?, words.next()?.parse().ok()?);
+            Some((pid, ppid, words.collect::<Vec<_>>().join(" ")))
+        })
+        .collect();
+    let mut family = vec![pid];
+    let mut found = Vec::new();
+    while let Some(parent) = family.pop() {
+        for (pid, _, command) in rows.iter().filter(|(_, ppid, _)| *ppid == parent) {
+            family.push(*pid);
+            if command.contains(what) {
+                found.push(*pid);
+            }
+        }
+    }
+    found
+}
+
+/// A list's tiles start no worker for a drawing's HTML labels, and warn of nothing about them;
+/// opening a drawing from the list draws its labels in a worker of its own, which goes when the
+/// reader comes back to the list.
+#[cfg(feature = "svg-html")]
+#[test]
+fn a_lists_tiles_start_no_worker_for_a_drawings_labels_and_opening_one_does() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-labels-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["a.svg", "b.svg"] {
+        let drawing = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><foreignObject width="40" height="20">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;background:blue"/></foreignObject></svg>"#;
+        std::fs::write(dir.join(name), drawing).unwrap();
+    }
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 48);
+    view.wait_until("the list", |t| bar(t).contains(" a.svg ") && drawn(t, "1/2"));
+    view.wait_until("both tiles", |t| transmitted(t) == 2);
+    let pid = view.child.id();
+    let workers = || descendants_running(pid, "--worker svg-html");
+    assert!(workers().is_empty(), "a worker for a tile: {:?}", workers());
+    assert!(!view.text().contains("HTML label"), "{}", view.text());
+    view.press("\r");
+    view.wait_until("a opened", |t| bar(t).contains(" a.svg ") && drawn(t, "page 1/1"));
+    assert_eq!(workers().len(), 1, "the drawing's worker");
+    let before = view.text().len();
+    view.press("\x1b");
+    view.wait_until("back to the list", |t| t.get(before..).is_some_and(|t| drawn(t, "1/2")));
+    let deadline = Instant::now() + PATIENCE;
+    while !workers().is_empty() {
+        assert!(Instant::now() < deadline, "the worker outlived the drawing's level");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// `clv --help` on a `cols` × `rows` pseudo-terminal of type `term`, as it arrives there with the
 /// newlines put back: the pseudo-terminal writes each as `\r\n`.
 fn help_on(term: &str, cols: u16, rows: u16) -> String {

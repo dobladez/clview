@@ -819,3 +819,10 @@ fn a_file_redirected_in_among_others_is_read_whole() {
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(images(&out.stdout).len(), 2);
 }
+
+/// Only the worker module names the allocator that caps a worker's heap (`cap`): the viewer's own
+/// code allocates through it without knowing.
+#[test]
+fn nothing_but_the_worker_names_cap() {
+    crate::fixtures::named_only_in(&["src/source/worker.rs", "tests/it/view.rs"], &[], &["cap::"]);
+}

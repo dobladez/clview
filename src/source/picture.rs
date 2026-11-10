@@ -122,12 +122,13 @@ struct Promise {
 }
 
 impl Promise {
-    /// The picture, as a PNG.
-    fn draw(&self) -> Result<Vec<u8>, String> {
+    /// The picture, as a PNG; as a list's `tile` where the page is one, so that its backend leaves
+    /// out what a tile shouldn't cost (an SVG's HTML labels).
+    fn draw(&self, tile: bool) -> Result<Vec<u8>, String> {
         caught(|| {
             let source = opened(&self.path)?;
             let mut renderer = source.renderer()?;
-            let request = Request { page: 0, scale: self.scale, tag: 0, ..Default::default() };
+            let request = Request { page: 0, scale: self.scale, tag: 0, tile, ..Default::default() };
             let frame = guarded(request, || renderer.render(request));
             if let Some(error) = frame.error {
                 return Err(error);
@@ -154,6 +155,9 @@ pub(super) struct Promised {
 struct Held {
     /// Each drawn, by its key, and its size in bytes, the one drawn longest ago first.
     drawn: VecDeque<(String, usize)>,
+    /// Those of `drawn` drawn as a list's tile, without what a tile leaves out: drawn again for
+    /// a page.
+    as_tiles: HashSet<String>,
     bytes: usize,
     /// Those that could not be drawn, not tried again.
     failed: HashSet<String>,
@@ -171,15 +175,17 @@ impl Promised {
         self.by_key.is_empty()
     }
 
-    /// Those of `on_page` (keys of what a document holds) not drawn yet, drawn, or why not. Nothing is
-    /// locked meanwhile: other pages go on rendering, and another thread may draw one of these too.
-    pub(super) fn draw<'k>(&self, on_page: &[&'k str]) -> Vec<(&'k str, Result<Vec<u8>, String>)> {
+    /// Those of `on_page` (keys of what a document holds) not drawn yet, drawn, or why not; for a
+    /// list's `tile`, as tiles, and one drawn as a tile is drawn again for a page. Nothing is locked
+    /// meanwhile: other pages go on rendering, and another thread may draw one of these too.
+    pub(super) fn draw<'k>(&self, on_page: &[&'k str], tile: bool) -> Vec<(&'k str, Result<Vec<u8>, String>)> {
         let wanted: Vec<(&str, &Promise)> = {
             let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-            let done = |key: &str| held.failed.contains(key) || held.drawn.iter().any(|(drawn, _)| drawn == key);
+            let drawn = |key: &str| held.drawn.iter().any(|(drawn, _)| drawn == key) && (tile || !held.as_tiles.contains(key));
+            let done = |key: &str| held.failed.contains(key) || drawn(key);
             on_page.iter().filter(|key| !done(key)).filter_map(|key| Some((*key, self.by_key.get(*key)?))).collect()
         };
-        wanted.into_iter().map(|(key, promise)| (key, promise.draw())).collect()
+        wanted.into_iter().map(|(key, promise)| (key, promise.draw(tile))).collect()
     }
 
     /// What the document should now hold, by key, for `drawn` ([`Promised::draw`]) on a page showing
@@ -187,16 +193,28 @@ impl Promised {
     /// document's lock for writing from before this until what it returns is in the document. So a page
     /// that finds a picture drawn and goes to render finds it held, not its stand-in, since it must
     /// wait for that lock to read the document.
-    pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str]) -> Vec<(String, Png)> {
+    pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str], tile: bool) -> Vec<(String, Png)> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let mut changes = Vec::new();
         for (key, picture) in drawn {
             match picture {
-                // Another thread drew it meanwhile, for a page of its own.
-                Ok(_) if held.drawn.iter().any(|(drawn, _)| drawn == key) => {}
                 Ok(picture) => {
+                    if let Some(at) = held.drawn.iter().position(|(drawn, _)| drawn == key) {
+                        // Another thread drew it meanwhile, for a page of its own; unless as a
+                        // tile, and this is a page's, which takes its place.
+                        if tile || !held.as_tiles.contains(key) {
+                            continue;
+                        }
+                        if let Some((_, size)) = held.drawn.remove(at) {
+                            held.bytes = held.bytes.saturating_sub(size);
+                        }
+                    }
                     held.bytes = held.bytes.saturating_add(picture.len());
                     held.drawn.push_back((key.to_owned(), picture.len()));
+                    match tile {
+                        true => held.as_tiles.insert(key.to_owned()),
+                        false => held.as_tiles.remove(key),
+                    };
                     changes.push((key.to_owned(), Arc::new(picture)));
                 }
                 Err(_) => {
@@ -207,6 +225,7 @@ impl Promised {
         while held.bytes > self.max_held {
             let Some(oldest) = held.drawn.iter().position(|(key, _)| !on_page.contains(&key.as_str())) else { break };
             let Some((key, size)) = held.drawn.remove(oldest) else { break };
+            held.as_tiles.remove(&key);
             held.bytes = held.bytes.saturating_sub(size);
             if let Some(promise) = self.by_key.get(&key) {
                 changes.push((key, promise.stand_in.clone()));
@@ -464,7 +483,13 @@ mod tests {
     /// them could not be drawn.
     #[cfg(feature = "image")]
     fn drawn(promised: &Promised, on_page: &[&str]) -> (Vec<(String, Png)>, bool) {
-        let changes = promised.hold(promised.draw(on_page), on_page);
+        drawn_as(promised, on_page, false)
+    }
+
+    /// [`drawn`], for a page that is a list's tile where `tile`.
+    #[cfg(feature = "image")]
+    fn drawn_as(promised: &Promised, on_page: &[&str], tile: bool) -> (Vec<(String, Png)>, bool) {
+        let changes = promised.hold(promised.draw(on_page, tile), on_page, tile);
         (changes, promised.failed(on_page))
     }
 
@@ -495,6 +520,23 @@ mod tests {
         assert_eq!(size_of(&changes[0].1), (2, 2), "the picture itself");
         assert!(drawn(&promised, &["a"]).0.is_empty(), "already drawn");
         assert_eq!(drawn(&promised, &["b"]).0.len(), 1);
+    }
+
+    /// A picture drawn for a list's tile is drawn again for a page, which may show more of it (an
+    /// SVG's HTML labels), and takes its place; drawn for a page, it serves a tile as it is.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_picture_drawn_as_a_tile_is_drawn_again_for_a_page() {
+        let promised = promised(&["a", "b"], &picture(), MAX_HELD);
+        assert_eq!(drawn_as(&promised, &["a"], true).0.len(), 1);
+        assert!(drawn_as(&promised, &["a"], true).0.is_empty(), "a tile's, drawn once");
+        let (changes, _) = drawn_as(&promised, &["a"], false);
+        assert_eq!(changes.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(), ["a"], "drawn again for a page");
+        assert!(drawn_as(&promised, &["a"], true).0.is_empty(), "a page's serves a tile");
+        assert!(drawn_as(&promised, &["a"], false).0.is_empty());
+        assert_eq!(drawn_as(&promised, &["b"], false).0.len(), 1);
+        assert!(drawn_as(&promised, &["b"], true).0.is_empty());
+        assert_eq!(promised.held.lock().unwrap().bytes, picture().len() * 2, "the tile's picture let go of");
     }
 
     /// Past what it holds, it lets go of what was drawn longest ago, back to its stand-in, but not of

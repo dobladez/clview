@@ -4,23 +4,28 @@
 //! one document, records each label's painting once, and replays a label into the part of a page
 //! it lands on, at whatever scale that page is drawn.
 //!
-//! Its costs are bounded as ADR-0024 measured them: `data:` URLs only, each font and picture sized
-//! from its header before Blitz has it; the painting estimated, after layout, before it is done
-//! ([`paint_work`]); what is recorded counted as it is painted ([`Recorder`]).
+//! All of that runs in a worker process of its own, a drawing's ([`LABELS`]): Blitz's costs
+//! can't be bounded before they are spent, so the worker's CPU time and heap are, as they are
+//! spent, and past them it is killed and the drawing's labels left out (ADR-0025). The viewer's
+//! side ([`Painted`]) asks it to lay the labels out ([`PREPARE`]), and for each part of a page a
+//! label lands on, its pixels ([`RENDER`]). What a label fetches is still bounded before Blitz
+//! has it: `data:` URLs only, each font and picture sized from its header.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use anyrender::recording::RenderCommand;
-use anyrender::{PaintScene, Scene, render_to_buffer};
+use anyrender::{PaintScene as _, Scene, render_to_buffer};
 use anyrender_vello_cpu::VelloCpuImageRenderer;
 use base64::Engine as _;
 use blitz_dom::{BaseDocument, DocumentConfig, FontContext, NodeId};
 use blitz_html::HtmlDocument;
 use blitz_traits::net::{Bytes, NetHandler, NetProvider, Request};
 use blitz_traits::shell::{ColorScheme, Viewport};
-use kurbo::{Affine, Rect, Shape as _};
+use kurbo::{Affine, Rect};
 
+use super::super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
 use super::Label;
 
 /// Who lays the labels out, credited with the backend's own.
@@ -43,36 +48,94 @@ const MAX_PICTURES: u64 = 256 << 20;
 /// The most `data:` URLs answered for a drawing.
 const MAX_REQUESTS: usize = 1_024;
 
-/// The most work painting the labels may take, as [`paint_work`] estimates it: about 0.1 s of
-/// painting with nothing kept (ADR-0024).
-const MAX_PAINT_WORK: u64 = 20_000_000;
-
-/// The most commands recorded for all of a drawing's labels: 200,000 replay in about 1.5 s
-/// (ADR-0024).
-const MAX_COMMANDS: usize = 200_000;
-
-/// What a recorded command holds while it is replayed, at most: some 1 KB measured (ADR-0024).
-pub(super) const COMMAND_BYTES: u64 = 2 << 10;
-
-/// The stack of the thread that lays the labels out and records them: Blitz recurses once a level
-/// of nesting, and 64 nested grids, `svg.rs`'s limit, hold on it in a debug build (ADR-0024).
-const STACK: usize = 8 << 20;
-
 /// Between the labels in their document, in CSS pixels, so that painting one culls its neighbours.
 const GAP: f32 = 8.0;
 
 /// The widest row of the labels' document, in CSS pixels.
 const ROW: f32 = 1_048_576.0;
 
-/// The most links a drawing's labels tell of: what isn't a `data:` URL, not fetched.
+/// The most links a drawing's labels count: what isn't a `data:` URL, not fetched.
 const MAX_LINKS: usize = 1_024;
 
-/// A drawing's labels, laid out and recorded: what each paints, to replay for each page.
-pub(super) struct Painted {
-    /// Each label's recording, or `None` for one left out (laid out past [`MAX_LAYOUT_SIDE`]).
+// The worker's requests and answers.
+
+/// The labels to lay out and record: the drawing's stylesheets, and each label's size, overflow and
+/// markup. Answered by [`PREPARED`].
+const PREPARE: u8 = 1;
+
+/// A label's part of a page: the label, the transform from its box's CSS pixels to the part, and
+/// the part's size. Answered by [`PIXELS`] or [`NOTHING`].
+const RENDER: u8 = 2;
+
+/// Each label's region, or none for one left out, and the links the labels asked for (what isn't
+/// a `data:` URL, not fetched): each at most 256 bytes, at most [`MAX_LINKS`] of them, to be
+/// counted with the drawing's own, never shown.
+const PREPARED: u8 = 1;
+
+/// A part's pixels: premultiplied RGBA, row by row, exactly its size.
+const PIXELS: u8 = 2;
+
+/// No pixels: the label was left out.
+const NOTHING: u8 = 3;
+
+/// Why the worker answered [`FAILED`]: a request it couldn't read.
+const MALFORMED: u8 = 2;
+
+/// The CPU seconds laying a drawing's labels out and recording them may take, and a render:
+/// five times the slowest measured within the limits before them, and about what a page's own
+/// render is held to (ADR-0025).
+const PREPARE_CPU: u64 = 10;
+const RENDER_CPU: u64 = 5;
+
+/// The longest [`PREPARE`]: the drawing's stylesheets, at most its file expanded, and the labels'
+/// markup, at most 8 MiB.
+const MAX_PREPARE: usize = 256 << 20;
+
+/// The longest [`RENDER`].
+const MAX_RENDER: usize = 64;
+
+/// The longest [`PREPARED`]: 1,024 labels' regions, and 1,024 links of 256 bytes.
+const MAX_PREPARED: usize = 1 << 20;
+
+/// The longest link a worker tells of, in bytes: hashed and counted, never shown.
+const LINK_BYTES: usize = 256;
+
+/// The worker that lays a drawing's labels out and paints them: `clv --worker svg-html`.
+pub(crate) struct Labels;
+
+pub(crate) static LABELS: Labels = Labels;
+
+impl Worker for Labels {
+    fn name(&self) -> &'static str {
+        "svg-html"
+    }
+
+    fn takes(&self, kind: u8) -> Option<(u64, usize)> {
+        match kind {
+            PREPARE => Some((PREPARE_CPU, MAX_PREPARE)),
+            RENDER => Some((RENDER_CPU, MAX_RENDER)),
+            _ => None,
+        }
+    }
+
+    fn session(&self) -> Box<dyn Session> {
+        Box::new(Kept::default())
+    }
+}
+
+/// A label as the worker is given it: its box's size in CSS pixels, whether what it holds is drawn
+/// past it, and its markup.
+struct Given {
+    width: f32,
+    height: f32,
+    visible: bool,
+    markup: String,
+}
+
+/// What the worker keeps between requests: each label's recording, once laid out.
+#[derive(Default)]
+struct Kept {
     labels: Vec<Option<Recorded>>,
-    /// What the labels asked for that isn't a `data:` URL.
-    pub(super) links: Vec<String>,
 }
 
 /// One label's painting, recorded at one CSS pixel to the pixel, from its box's top left.
@@ -83,30 +146,217 @@ struct Recorded {
     region: Rect,
 }
 
-/// The system's fonts, found once a run: some 30 ms for macOS's. Each drawing has a copy, to which
-/// the fonts it embeds are added, so they stay its own.
-fn system_fonts() -> FontContext {
-    static FONTS: OnceLock<Mutex<FontContext>> = OnceLock::new();
-    FONTS.get_or_init(|| Mutex::new(FontContext::default())).lock().unwrap_or_else(PoisonError::into_inner).clone()
+impl Session for Kept {
+    fn answer(&mut self, kind: u8, payload: Vec<u8>) -> (u8, Vec<u8>) {
+        match kind {
+            PREPARE => {
+                let Some((css, labels)) = given(&payload) else { return (FAILED, vec![MALFORMED]) };
+                drop(payload);
+                let (recorded, links) = recorded(&css, &labels);
+                let mut out = Vec::new();
+                out.extend_from_slice(&u32::try_from(recorded.len()).unwrap_or(u32::MAX).to_le_bytes());
+                for label in &recorded {
+                    let region = label.as_ref().map(|l| l.region);
+                    out.push(u8::from(region.is_some()));
+                    for v in region.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]) {
+                        out.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                out.extend_from_slice(&u32::try_from(links.len()).unwrap_or(u32::MAX).to_le_bytes());
+                for link in &links {
+                    if put_string(&mut out, link).is_err() {
+                        return (FAILED, vec![MALFORMED]);
+                    }
+                }
+                self.labels = recorded;
+                (PREPARED, out)
+            }
+            RENDER => {
+                let mut read = Reading(&payload);
+                let (Some(index), Some(to), Some(w), Some(h)) = (read.u32(), read.f64s::<6>(), read.u32(), read.u32()) else {
+                    return (FAILED, vec![MALFORMED]);
+                };
+                let label = usize::try_from(index).ok().and_then(|i| self.labels.get(i)).and_then(Option::as_ref);
+                match label.and_then(|label| painted(label, to, (w, h))) {
+                    Some(rgba) => (PIXELS, rgba),
+                    None => (NOTHING, Vec::new()),
+                }
+            }
+            _ => (FAILED, vec![MALFORMED]),
+        }
+    }
 }
 
-/// The `labels`, under the drawing's stylesheets `css`, laid out and recorded, on a thread of
-/// their own with an 8 MiB stack; or why they all are left out (a limit passed, Blitz failed, no
-/// thread to run it on).
-pub(super) fn prepare(css: &str, labels: &[Label]) -> Result<Painted, String> {
-    std::thread::scope(|scope| {
-        let thread = std::thread::Builder::new()
-            .name("labels".into())
-            .stack_size(STACK)
-            .spawn_scoped(scope, || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| recorded(css, labels))))
-            .map_err(|e| format!("no thread to lay them out on ({e})"))?;
-        match thread.join() {
-            Ok(Ok(done)) => done,
-            // Its panic is printed by the viewer's hook.
-            Ok(Err(_)) | Err(_) => Err("Blitz failed on them".into()),
+/// What a request's payload says, read from its start: each read `None` past its end.
+struct Reading<'a>(&'a [u8]);
+
+impl<'a> Reading<'a> {
+    fn bytes(&mut self, n: usize) -> Option<&'a [u8]> {
+        let (taken, rest) = self.0.split_at_checked(n)?;
+        self.0 = rest;
+        Some(taken)
+    }
+
+    fn array<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.bytes(N).and_then(|b| <[u8; N]>::try_from(b).ok())
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        self.array().map(u32::from_le_bytes)
+    }
+
+    fn f32(&mut self) -> Option<f32> {
+        self.array().map(f32::from_le_bytes)
+    }
+
+    fn f64s<const N: usize>(&mut self) -> Option<[f64; N]> {
+        let mut out = [0.0; N];
+        for v in &mut out {
+            *v = self.array().map(f64::from_le_bytes)?;
         }
-    })
+        Some(out)
+    }
+
+    /// A string: its length (four bytes), then its UTF-8.
+    fn string(&mut self) -> Option<String> {
+        let n = usize::try_from(self.u32()?).ok()?;
+        String::from_utf8(self.bytes(n)?.to_vec()).ok()
+    }
 }
+
+/// A string written as [`Reading::string`] reads it.
+fn put_string(out: &mut Vec<u8>, s: &str) -> Result<(), String> {
+    let n = u32::try_from(s.len()).map_err(|_| "their stylesheets are too long".to_string())?;
+    out.extend_from_slice(&n.to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+    Ok(())
+}
+
+/// A [`PREPARE`]'s payload, read: the stylesheets, and the labels. `None` for one that isn't one.
+fn given(payload: &[u8]) -> Option<(String, Vec<Given>)> {
+    let mut read = Reading(payload);
+    let css = read.string()?;
+    let n = read.u32()?;
+    let mut labels = Vec::new();
+    for _ in 0..n {
+        let (width, height) = (read.f32()?, read.f32()?);
+        let visible = read.array::<1>()? != [0];
+        let markup = read.string()?;
+        if !(width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0) {
+            return None;
+        }
+        labels.push(Given { width, height, visible, markup });
+    }
+    read.0.is_empty().then_some((css, labels))
+}
+
+// The viewer's side.
+
+/// A drawing's labels, laid out and recorded in its worker, which replays them for each page.
+pub(super) struct Painted {
+    link: Mutex<Link>,
+    /// What each label paints over, in its box's CSS pixels: `None` for one left out (laid out
+    /// past [`MAX_LAYOUT_SIDE`]).
+    regions: Vec<Option<[f64; 4]>>,
+    /// The links the labels asked for that aren't `data:` URLs, not followed: to count with the
+    /// drawing's own, never to show.
+    pub(super) links: Vec<String>,
+}
+
+/// How long the viewer waits for an answer of `cpu` seconds' work.
+fn wall(cpu: u64) -> Duration {
+    Duration::from_secs(cpu.saturating_mul(u64::from(WALL)))
+}
+
+/// Why the labels are left out, in the viewer's words, as the worker went: `died`.
+fn said(died: &Died) -> String {
+    match died {
+        Died::TooMany => "too many drawings' labels at once".into(),
+        Died::Unstarted(why) => format!("no process to lay them out in ({why})"),
+        Died::TimedOut | Died::Cpu => "Blitz took too long on them".into(),
+        Died::Memory => "Blitz took too much memory on them".into(),
+        Died::Version => "clv was replaced while it ran: open the drawing again".into(),
+        Died::Ended(_) | Died::Malformed => "Blitz failed on them".into(),
+    }
+}
+
+/// The `labels`, under the drawing's stylesheets `css`, laid out and recorded in a worker of
+/// their own; or why they all are left out.
+pub(super) fn prepare(css: &str, labels: &[Label]) -> Result<Painted, String> {
+    let mut payload = Vec::new();
+    put_string(&mut payload, css)?;
+    payload.extend_from_slice(&u32::try_from(labels.len()).map_err(|_| "too many of them".to_string())?.to_le_bytes());
+    for label in labels {
+        payload.extend_from_slice(&label.width.to_le_bytes());
+        payload.extend_from_slice(&label.height.to_le_bytes());
+        payload.push(u8::from(label.visible));
+        put_string(&mut payload, &label.markup)?;
+    }
+    let mut link = worker::spawn(&LABELS).map_err(|d| said(&d))?;
+    let (kind, answer) = link.request(PREPARE, payload, wall(PREPARE_CPU), MAX_PREPARED).map_err(|d| said(&d))?;
+    let mut read = Reading(&answer);
+    if kind != PREPARED || read.u32().and_then(|n| usize::try_from(n).ok()) != Some(labels.len()) {
+        return Err(said(&link.refuse()));
+    }
+    let mut regions = Vec::with_capacity(labels.len());
+    for _ in labels {
+        let (Some(present), Some(region)) = (read.array::<1>(), read.f64s::<4>()) else { return Err(said(&link.refuse())) };
+        let [x0, y0, x1, y1] = region;
+        // A region is its box, and what overflows it within OVERFLOW: a few tens of thousands of pixels.
+        let within = region.iter().all(|v| v.is_finite() && v.abs() <= 1e6) && x0 <= x1 && y0 <= y1;
+        match present {
+            [0] => regions.push(None),
+            [1] if within => regions.push(Some(region)),
+            _ => return Err(said(&link.refuse())),
+        }
+    }
+    let Some(count) = read.u32().and_then(|n| usize::try_from(n).ok()).filter(|n| *n <= MAX_LINKS) else { return Err(said(&link.refuse())) };
+    let mut links = Vec::with_capacity(count);
+    for _ in 0..count {
+        match read.string() {
+            Some(url) if url.len() <= LINK_BYTES => links.push(url),
+            _ => return Err(said(&link.refuse())),
+        }
+    }
+    if !read.0.is_empty() {
+        return Err(said(&link.refuse()));
+    }
+    Ok(Painted { link: Mutex::new(link), regions, links })
+}
+
+impl Painted {
+    /// What label `index` paints over, in its box's CSS pixels from its top left: `None` when it
+    /// was left out.
+    pub(super) fn region(&self, index: usize) -> Option<[f64; 4]> {
+        self.regions.get(index).copied().flatten()
+    }
+
+    /// Label `index` replayed through `to` into `size` pixels: premultiplied RGBA, row by row;
+    /// `None` when it was left out. An error when the worker is gone, now or before: why.
+    pub(super) fn paint(&self, index: usize, to: [f64; 6], size: (u32, u32)) -> Result<Option<Vec<u8>>, String> {
+        if self.region(index).is_none() || size.0 == 0 || size.1 == 0 || to.iter().any(|v| !v.is_finite()) {
+            return Ok(None);
+        }
+        let bytes = u64::from(size.0).saturating_mul(u64::from(size.1)).saturating_mul(4);
+        let Ok(bytes) = usize::try_from(bytes) else { return Ok(None) };
+        let mut payload = Vec::with_capacity(MAX_RENDER);
+        payload.extend_from_slice(&u32::try_from(index).unwrap_or(u32::MAX).to_le_bytes());
+        for v in to {
+            payload.extend_from_slice(&v.to_le_bytes());
+        }
+        payload.extend_from_slice(&size.0.to_le_bytes());
+        payload.extend_from_slice(&size.1.to_le_bytes());
+        let mut link = self.link.lock().unwrap_or_else(PoisonError::into_inner);
+        match link.request(RENDER, payload, wall(RENDER_CPU), bytes) {
+            Ok((PIXELS, rgba)) if rgba.len() == bytes => Ok(Some(rgba)),
+            Ok((NOTHING, none)) if none.is_empty() => Ok(None),
+            Ok(_) => Err(said(&link.refuse())),
+            Err(died) => Err(said(&died)),
+        }
+    }
+}
+
+// The worker's side.
 
 /// Where a label's slot is in the labels' document, its top left in CSS pixels.
 type At = (f32, f32);
@@ -114,12 +364,12 @@ type At = (f32, f32);
 /// Where each label is in the labels' document: rows about as wide as all of them would be square,
 /// so the document's coordinates stay small; and the document's size. A label larger than
 /// [`MAX_LAYOUT_SIDE`] has no place.
-fn packed(labels: &[Label]) -> (Vec<Option<At>>, (f32, f32)) {
-    let slot = |l: &Label| {
+fn packed(labels: &[Given]) -> (Vec<Option<At>>, (f32, f32)) {
+    let slot = |l: &Given| {
         let margin = if l.visible { OVERFLOW } else { 0.0 };
         (l.width + 2.0 * margin, l.height + 2.0 * margin)
     };
-    let fits = |l: &Label| l.width <= MAX_LAYOUT_SIDE && l.height <= MAX_LAYOUT_SIDE;
+    let fits = |l: &Given| l.width <= MAX_LAYOUT_SIDE && l.height <= MAX_LAYOUT_SIDE;
     let area: f64 = labels.iter().filter(|l| fits(l)).map(|l| f64::from(slot(l).0 + GAP) * f64::from(slot(l).1 + GAP)).sum();
     let widest = labels.iter().filter(|l| fits(l)).map(|l| slot(l).0 + GAP).fold(0.0f32, f32::max);
     // Within f32: at most 1,024 labels of at most 24,576 pixels a side.
@@ -147,7 +397,7 @@ fn packed(labels: &[Label]) -> (Vec<Option<At>>, (f32, f32)) {
 /// `at`, placed by a transform (Blitz culls by a box that counts an element's position twice:
 /// placed by `left` and `top`, a slot wouldn't cull its neighbours), its box inside the slot, the
 /// containing block of what it holds.
-fn document(css: &str, labels: &[Label], at: &[Option<At>]) -> String {
+fn document(css: &str, labels: &[Given], at: &[Option<At>]) -> String {
     let mut out = String::from("<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><style><![CDATA[");
     out.push_str(&css.replace("]]>", "]]]]><![CDATA[>"));
     out.push_str(
@@ -198,8 +448,9 @@ fn without_imports(css: &str) -> String {
     out
 }
 
-/// The `labels` laid out in one document and each recorded, or why none can be.
-fn recorded(css: &str, labels: &[Label]) -> Result<Painted, String> {
+/// The `labels` laid out in one document and each recorded (`None` for one left out), and the
+/// links they asked for.
+fn recorded(css: &str, labels: &[Given]) -> (Vec<Option<Recorded>>, Vec<String>) {
     let (at, size) = packed(labels);
     let markup = document(&without_imports(css), labels, &at);
     let net = Arc::new(DataOnly::default());
@@ -207,7 +458,7 @@ fn recorded(css: &str, labels: &[Label]) -> Result<Painted, String> {
         // Within u32: the labels' document is at most some 800,000 pixels a side.
         viewport: Some(Viewport::new(size.0.ceil().max(1.0) as u32, size.1.ceil().max(1.0) as u32, 1.0, ColorScheme::Light)),
         net_provider: Some(net.clone()),
-        font_ctx: Some(system_fonts()),
+        font_ctx: Some(FontContext::default()),
         // A base a relative link resolves against (Blitz's own, a `data:` URL, can't be one, and
         // it panics), to a file not read: told of, as any other link.
         base_url: Some("file:///".into()),
@@ -221,44 +472,39 @@ fn recorded(css: &str, labels: &[Label]) -> Result<Painted, String> {
     doc.resolve(0.0);
     doc.handle_messages();
     doc.resolve(0.0);
-    let passes = u64::try_from(at.iter().flatten().count()).unwrap_or(u64::MAX);
-    let work = paint_work(&doc, passes);
-    if work.steps > MAX_PAINT_WORK {
-        return Err(format!("painting them would take too long ({} million steps)", work.steps / 1_000_000));
-    }
-    let mut oversized = work.oversized.into_iter();
     let boxes = boxes(&doc);
-    let (mut budget, mut past) = (MAX_COMMANDS, 0u64);
     let mut recorded = Vec::with_capacity(labels.len());
     let mut slots = boxes.into_iter();
     for (label, at) in labels.iter().zip(&at) {
         // A label with no place has no slot: the next slot is the next placed label's.
-        let Some((x, y)) = at else {
-            recorded.push(None);
-            continue;
-        };
-        let (Some(region), false) = (slots.next(), oversized.next().unwrap_or(true)) else {
+        let (Some((x, y)), Some(region)) = (at, at.and_then(|_| slots.next())) else {
             recorded.push(None);
             continue;
         };
         let margin = f64::from(if label.visible { OVERFLOW } else { 0.0 });
         let (sw, sh) = (f64::from(label.width) + 2.0 * margin, f64::from(label.height) + 2.0 * margin);
         doc.set_viewport_scroll(blitz_dom::Point { x: f64::from(*x), y: f64::from(*y) });
-        let mut recorder = Recorder { scene: Scene::new(), budget: &mut budget, past: &mut past };
+        let mut scene = Scene::new();
         // Within u32: a slot is at most 24,576 pixels a side.
-        blitz_paint::paint_scene(&mut recorder, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
-        let scene = recorder.scene;
-        if past > 0 {
-            return Err(format!("painting them would take more than {MAX_COMMANDS} steps"));
-        }
+        blitz_paint::paint_scene(&mut scene, &mut doc, 1.0, sw.ceil() as u32, sh.ceil() as u32, 0, 0);
         // From the slot's top left to the box's.
         let region = (region + kurbo::Vec2::new(-margin, -margin)).intersect(Rect::new(-margin, -margin, sw - margin, sh - margin));
         let scene = Scene { tolerance: scene.tolerance, commands: scene.commands.into_iter().map(|c| moved(c, -margin)).collect() };
         recorded.push(Some(Recorded { scene, region }));
     }
     drop(doc);
-    let links = net.links.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    Ok(Painted { labels: recorded, links })
+    let links = std::mem::take(&mut *net.links.lock().unwrap_or_else(PoisonError::into_inner));
+    (recorded, links)
+}
+
+/// `label` replayed through `to` into `size` pixels: premultiplied RGBA, row by row.
+fn painted(label: &Recorded, to: [f64; 6], size: (u32, u32)) -> Option<Vec<u8>> {
+    if size.0 == 0 || size.1 == 0 || to.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let rgba = render_to_buffer::<VelloCpuImageRenderer, _>(|scene| scene.append_scene(label.scene.clone(), Affine::new(to)), size.0, size.1);
+    let expected = u64::from(size.0).saturating_mul(u64::from(size.1)).saturating_mul(4);
+    (u64::try_from(rgba.len()).ok() == Some(expected)).then_some(rgba)
 }
 
 /// `command` moved by `by` each way.
@@ -325,406 +571,6 @@ fn boxes(doc: &BaseDocument) -> Vec<Rect> {
     out
 }
 
-impl Painted {
-    /// What label `index` paints over, in its box's CSS pixels from its top left: `None` when it
-    /// was left out.
-    pub(super) fn region(&self, index: usize) -> Option<[f64; 4]> {
-        let r = self.labels.get(index)?.as_ref()?.region;
-        Some([r.x0, r.y0, r.x1, r.y1])
-    }
-
-    /// What replaying label `index` through `to` (from its box's pixels to a part of a page
-    /// `size` pixels) costs: its commands, and the pixels they paint there (each command's box
-    /// within the part, as the drawing's estimate counts a shape's), so a page can be refused before
-    /// it is drawn.
-    pub(super) fn cost(&self, index: usize, to: [f64; 6], size: (u32, u32)) -> (u64, u64) {
-        let Some(Some(label)) = self.labels.get(index) else { return (0, 0) };
-        let (to, part) = (Affine::new(to), Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1)));
-        let area = |r: Rect| {
-            let r = r.intersect(part);
-            // `as` saturates, and makes NaN 0.
-            (r.width().max(0.0) * r.height().max(0.0)).ceil() as u64
-        };
-        let mut pixels = 0u64;
-        for command in &label.scene.commands {
-            let painted = match command {
-                RenderCommand::PushLayer(c) => area((to * c.transform).transform_rect_bbox(c.clip.bounding_box())),
-                RenderCommand::PushClipLayer(c) => area((to * c.transform).transform_rect_bbox(c.clip.bounding_box())),
-                RenderCommand::Stroke(c) => {
-                    area((to * c.transform).transform_rect_bbox(c.shape.bounding_box().inflate(c.style.width, c.style.width)))
-                }
-                RenderCommand::Fill(c) => area((to * c.transform).transform_rect_bbox(c.shape.bounding_box())),
-                RenderCommand::BoxShadow(c) => {
-                    let spread = c.std_dev * 3.0;
-                    area((to * c.transform).transform_rect_bbox(c.rect.inflate(spread, spread)))
-                }
-                RenderCommand::GlyphRun(c) => {
-                    let size = f64::from(c.font_size);
-                    let empty = Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-                    let run = c.glyphs.iter().fold(empty, |r, g| r.union_pt(kurbo::Point::new(f64::from(g.x), f64::from(g.y))));
-                    let run = if run.x0 <= run.x1 { run.inflate(size, size) } else { Rect::ZERO };
-                    let glyphs = c.glyph_transform.unwrap_or(Affine::IDENTITY);
-                    area((to * c.transform).transform_rect_bbox(glyphs.transform_rect_bbox(run)))
-                }
-                RenderCommand::PopLayer => 0,
-            };
-            pixels = pixels.saturating_add(painted);
-        }
-        (u64::try_from(label.scene.commands.len()).unwrap_or(u64::MAX), pixels)
-    }
-
-    /// Label `index` replayed through `to` into `size` pixels: premultiplied RGBA, row by row.
-    /// `None` when it was left out, or its replay failed.
-    pub(super) fn paint(&self, index: usize, to: [f64; 6], size: (u32, u32)) -> Option<Vec<u8>> {
-        let label = self.labels.get(index)?.as_ref()?;
-        if size.0 == 0 || size.1 == 0 || to.iter().any(|v| !v.is_finite()) {
-            return None;
-        }
-        // vello_cpu isn't built never to panic: a panic costs this label only.
-        let rgba = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_to_buffer::<VelloCpuImageRenderer, _>(|scene| scene.append_scene(label.scene.clone(), Affine::new(to)), size.0, size.1)
-        }))
-        .ok()?;
-        let expected = u64::from(size.0).saturating_mul(u64::from(size.1)).saturating_mul(4);
-        (u64::try_from(rgba.len()).ok() == Some(expected)).then_some(rgba)
-    }
-}
-
-/// An anyrender `Scene` that keeps a command only while `budget` has room: past it, it counts what
-/// Blitz paints and keeps nothing, so a recording holds at most the budget's commands. A fill of a
-/// colour with nothing of it (a root's `transparent` background) draws nothing, and isn't kept.
-struct Recorder<'b> {
-    scene: Scene,
-    budget: &'b mut usize,
-    /// Commands painted past the budget, kept nowhere.
-    past: &'b mut u64,
-}
-
-impl Recorder<'_> {
-    /// Whether one more command may be kept.
-    fn take(&mut self) -> bool {
-        match self.budget.checked_sub(1) {
-            Some(left) => {
-                *self.budget = left;
-                true
-            }
-            None => {
-                *self.past = self.past.saturating_add(1);
-                false
-            }
-        }
-    }
-}
-
-impl anyrender::RenderContext for Recorder<'_> {}
-
-impl PaintScene for Recorder<'_> {
-    fn reset(&mut self) {
-        self.scene.reset();
-    }
-
-    fn push_layer(
-        &mut self,
-        fill: peniko::Fill,
-        blend: impl Into<peniko::BlendMode>,
-        alpha: f32,
-        transform: Affine,
-        clip: &impl kurbo::Shape,
-        filter: Option<Arc<anyrender::Filter>>,
-        backdrop_filter: Option<Arc<anyrender::Filter>>,
-    ) {
-        if self.take() {
-            self.scene.push_layer(fill, blend, alpha, transform, clip, filter, backdrop_filter);
-        }
-    }
-
-    fn push_clip_layer(&mut self, fill: peniko::Fill, transform: Affine, clip: &impl kurbo::Shape) {
-        if self.take() {
-            self.scene.push_clip_layer(fill, transform, clip);
-        }
-    }
-
-    fn pop_layer(&mut self) {
-        if self.take() {
-            self.scene.pop_layer();
-        }
-    }
-
-    fn stroke<'a>(
-        &mut self,
-        style: &kurbo::Stroke,
-        transform: Affine,
-        brush: impl Into<anyrender::PaintRef<'a>>,
-        brush_transform: Option<Affine>,
-        shape: &impl kurbo::Shape,
-    ) {
-        if self.take() {
-            self.scene.stroke(style, transform, brush, brush_transform, shape);
-        }
-    }
-
-    fn fill<'a>(
-        &mut self,
-        style: peniko::Fill,
-        transform: Affine,
-        brush: impl Into<anyrender::PaintRef<'a>>,
-        brush_transform: Option<Affine>,
-        shape: &impl kurbo::Shape,
-    ) {
-        let brush = brush.into();
-        if matches!(brush, anyrender::Paint::Solid(colour) if colour.components[3] == 0.0) {
-            return;
-        }
-        if self.take() {
-            self.scene.fill(style, transform, brush, brush_transform, shape);
-        }
-    }
-
-    fn draw_glyphs<'a, 's: 'a>(
-        &'s mut self,
-        font: &'a peniko::FontData,
-        font_size: f32,
-        hint: bool,
-        normalized_coords: &'a [anyrender::NormalizedCoord],
-        embolden: kurbo::Vec2,
-        style: impl Into<peniko::StyleRef<'a>>,
-        brush: impl Into<anyrender::PaintRef<'a>>,
-        brush_alpha: f32,
-        transform: Affine,
-        glyph_transform: Option<Affine>,
-        glyphs: impl Iterator<Item = anyrender::Glyph> + Clone,
-    ) {
-        if self.take() {
-            self.scene.draw_glyphs(font, font_size, hint, normalized_coords, embolden, style, brush, brush_alpha, transform, glyph_transform, glyphs);
-        }
-    }
-
-    fn draw_box_shadow(&mut self, transform: Affine, rect: Rect, brush: peniko::Color, radius: f64, std_dev: f64) {
-        if self.take() {
-            self.scene.draw_box_shadow(transform, rect, brush, radius, std_dev);
-        }
-    }
-}
-
-// The paint estimate. It follows blitz-paint 0.3.0-beta.4's painting, which the version guard
-// pins: `box_shadow.rs`, and `background.rs`'s `compute_layer_size`,
-// `raster_axis_tiling` and `gradient_axis_tiling` (ADR-0024).
-
-/// Commands an inset or outset shadow paints at most: an inset one pushes two layers, fills,
-/// shadows and pops.
-const PER_SHADOW: u64 = 6;
-
-/// Commands a gradient layer paints at most: blitz-paint paints none past 500 tiles.
-const PER_GRADIENT: u64 = 500;
-
-/// A dot of a dotted border, or a dash of a dashed one, in steps: blitz-paint builds an edge's
-/// dots into one path, some 170 bytes a dot (ADR-0024), held as a command is.
-const DOT_STEPS: u64 = 20;
-
-/// A pixel of a dotted, dashed or wavy text decoration, in steps: a wave is a path of a segment
-/// a pixel or two.
-const DECORATION_STEPS: u64 = 4;
-
-/// A gradient's stops, as many as hold what a command does (some 1 KB, 20 bytes a stop).
-const STOPS_A_STEP: u64 = 32;
-
-/// Commands a layer paints around its tiles: its clip layer, pushed and popped (a mask's two).
-const PER_LAYER: u64 = 4;
-
-/// The largest side of any element, or line of text, of a label: a label's own side and what it
-/// draws past it each way. blitz-paint builds some paths at their box's size (a dotted border's
-/// dots, before anything counts them), so a box past it leaves its label out.
-pub(super) const MAX_ELEMENT_SIDE: f32 = MAX_LAYOUT_SIDE + 2.0 * OVERFLOW;
-
-/// What painting the labels' document takes, before it is done.
-struct Work {
-    /// In commands, where CSS lists, tiling or a box's size multiply them.
-    steps: u64,
-    /// For each slot, in order, whether an element of it is past [`MAX_ELEMENT_SIDE`].
-    oversized: Vec<bool>,
-}
-
-/// What painting `doc` takes, its labels painted in `passes` (one each), where CSS lists, tiling or
-/// a box's size multiply the commands: each element's shadows; each background and mask layer's
-/// tiles, a gradient's stops too; each dotted or dashed border edge's dots or dashes; each line of
-/// text a dotted, dashed or wavy decoration may draw along. The document's own `html` and `body`
-/// (and their `::before` and `::after`) are painted with every label, so they count once a pass.
-/// What else an element paints is a few commands, or one a line of its text, bounded by the labels'
-/// elements and text.
-fn paint_work(doc: &BaseDocument, passes: u64) -> Work {
-    use style::properties::generated::longhands::background_attachment::single_value::computed_value::T as Attachment;
-    use style::properties::generated::longhands::text_decoration_style::computed_value::T as DecorationStyle;
-    use style::values::computed::{BorderStyle, TextDecorationLine};
-    use style::values::generics::image::GenericImage;
-    let viewport = doc.viewport().window_size;
-    let (mut steps, mut oversized, mut decorated, mut lines) = (0u64, Vec::new(), 0u64, 0u64);
-    // Each node, whether it is painted with every label, and its slot.
-    let mut walk = vec![(doc.root_element().id, true, None::<usize>)];
-    while let Some((id, shared, slot)) = walk.pop() {
-        let Some(node) = doc.get_node(id) else { continue };
-        let body = node.element_data().is_some_and(|e| &*e.name.local == "body") && shared;
-        for child in node.children.iter().copied() {
-            let element = doc.get_node(child).is_some_and(|c| c.element_data().is_some());
-            let slot = match (body, element) {
-                (true, true) => {
-                    oversized.push(false);
-                    Some(oversized.len().saturating_sub(1))
-                }
-                _ => slot,
-            };
-            walk.push((child, shared && slot.is_none(), slot));
-        }
-        walk.extend([node.before(), node.after()].into_iter().flatten().map(|p| (p, shared, slot)));
-        let (Some(element), Some(style)) = (node.element_data(), node.primary_styles()) else { continue };
-        let layout = node.final_layout();
-        let (width, height) = (f64::from(layout.size.width), f64::from(layout.size.height));
-        let text = element.inline_layout_data.as_ref().map(|t| &t.layout);
-        let wide = text.is_some_and(|t| t.full_width() > MAX_ELEMENT_SIDE);
-        if (layout.size.width > MAX_ELEMENT_SIDE || layout.size.height > MAX_ELEMENT_SIDE || wide)
-            && let Some(flag) = slot.and_then(|s| oversized.get_mut(s))
-        {
-            *flag = true;
-        }
-        let mut own = 0u64;
-        let shadows = u64::try_from(style.get_effects().box_shadow.0.len()).unwrap_or(u64::MAX);
-        own = own.saturating_add(PER_SHADOW.saturating_mul(shadows));
-        let background = style.get_background();
-        for (index, image) in background.background_image.0.iter().enumerate() {
-            if matches!(image, GenericImage::None) {
-                continue;
-            }
-            // A fixed layer is placed in the area painted: the slot, at most the viewport.
-            let fixed = matches!(cyclic(&background.background_attachment.0, index), Some(Attachment::Fixed));
-            let area = if fixed { (width.max(f64::from(viewport.0)), height.max(f64::from(viewport.1))) } else { (width, height) };
-            let data = element.background_images.get(index).and_then(Option::as_ref);
-            let tiles = layer_tiles(image, data, cyclic(&background.background_repeat.0, index), cyclic(&background.background_size.0, index), area);
-            own = own.saturating_add(PER_LAYER).saturating_add(tiles);
-        }
-        let svg = style.get_svg();
-        for (index, image) in svg.mask_image.0.iter().enumerate() {
-            if matches!(image, GenericImage::None) {
-                continue;
-            }
-            let data = element.mask_images.get(index).and_then(Option::as_ref);
-            let tiles = layer_tiles(image, data, cyclic(&svg.mask_repeat.0, index), cyclic(&svg.mask_size.0, index), (width, height));
-            own = own.saturating_add(PER_LAYER).saturating_add(tiles);
-        }
-        // A dotted edge is a dot each twice its width along it (the whole perimeter, where its
-        // corners are rounded), a dashed one fewer: counted as the perimeter over the width.
-        let border = style.get_border();
-        let edges = [
-            (border.border_top_style, layout.border.top),
-            (border.border_bottom_style, layout.border.bottom),
-            (border.border_left_style, layout.border.left),
-            (border.border_right_style, layout.border.right),
-        ];
-        for (style, thickness) in edges {
-            if matches!(style, BorderStyle::Dotted | BorderStyle::Dashed) && thickness > 0.0 {
-                // `as` saturates, and makes NaN 0.
-                let dots = ((width + height) / f64::from(thickness)).ceil() as u64;
-                own = own.saturating_add(DOT_STEPS.saturating_mul(dots)).saturating_add(1);
-            }
-        }
-        let text_style = style.get_text();
-        let lines_drawn = TextDecorationLine::UNDERLINE | TextDecorationLine::OVERLINE | TextDecorationLine::LINE_THROUGH;
-        if text_style.text_decoration_line.intersects(lines_drawn)
-            && !matches!(text_style.text_decoration_style, DecorationStyle::Solid | DecorationStyle::Double)
-        {
-            decorated = decorated.saturating_add(1);
-        }
-        if let Some(text) = text {
-            // A line's dots, dashes or waves: at most one a pixel of it, each at least a pixel thick.
-            for line in text.lines() {
-                // `as` saturates, and makes NaN 0.
-                lines = lines.saturating_add(line.metrics().advance.ceil() as u64).saturating_add(1);
-            }
-        }
-        steps = steps.saturating_add(if shared { own.saturating_mul(passes) } else { own });
-    }
-    // Each decorating box may draw its three lines along every line of text: a high count, and one
-    // that is none where no decoration is dotted, dashed or wavy.
-    steps = steps.saturating_add(decorated.saturating_mul(3).saturating_mul(DECORATION_STEPS).saturating_mul(lines));
-    Work { steps, oversized }
-}
-
-/// `values[index]`, the list repeated as CSS repeats a layer's shorter lists.
-fn cyclic<T>(values: &[T], index: usize) -> Option<&T> {
-    values.get(index.checked_rem(values.len())?)
-}
-
-/// The tiles one image layer paints over `area`, as blitz-paint tiles it: a gradient at most
-/// [`PER_GRADIENT`]; a picture once, but once a tile on an axis it spaces (`space`).
-fn layer_tiles(
-    image: &style::values::computed::Image,
-    data: Option<&blitz_dom::node::ImageResourceData>,
-    repeat: Option<&style::values::computed::BackgroundRepeat>,
-    size: Option<&style::values::computed::background::BackgroundSize>,
-    area: (f64, f64),
-) -> u64 {
-    use style::values::generics::image::GenericImage;
-    use style::values::specified::background::BackgroundRepeatKeyword::Space;
-    match image {
-        // Each of its tiles a fill holding all its stops.
-        GenericImage::Gradient(gradient) => PER_GRADIENT.saturating_mul(1u64.saturating_add(stops(gradient) / STOPS_A_STEP)),
-        GenericImage::Url(_) => {
-            let Some(blitz_dom::node::ImageData::Raster(raster)) = data.map(|d| &d.image) else { return 0 };
-            let (Some(repeat), Some(size)) = (repeat, size) else { return 1 };
-            let tile = layer_size(size, area, (f64::from(raster.width), f64::from(raster.height)));
-            let count = |keyword, length: f64, tile: f64| if keyword == Space { space_count(length, tile) } else { 1 };
-            count(repeat.0, area.0, tile.0).saturating_mul(count(repeat.1, area.1, tile.1))
-        }
-        _ => 0,
-    }
-}
-
-/// A gradient's stops (and hints).
-fn stops(gradient: &style::values::computed::Gradient) -> u64 {
-    use style::values::generics::image::GenericGradient;
-    let items = match gradient {
-        GenericGradient::Linear { items, .. } | GenericGradient::Radial { items, .. } => items.len(),
-        GenericGradient::Conic { items, .. } => items.len(),
-    };
-    u64::try_from(items).unwrap_or(u64::MAX)
-}
-
-/// How many tiles of `tile` fit in `length` spaced, at least one: blitz-paint's
-/// `compute_space_count_and_stride`, whose `as u32` saturates.
-fn space_count(length: f64, tile: f64) -> u64 {
-    let count = (length - length % tile) / tile;
-    // `as` saturates, and makes NaN 0.
-    u64::from(count as u32).max(1)
-}
-
-/// A picture layer's size in `area`, `image` its natural size: blitz-paint's
-/// `compute_layer_size`, as it sizes a picture.
-fn layer_size(size: &style::values::computed::background::BackgroundSize, area: (f64, f64), image: (f64, f64)) -> (f64, f64) {
-    use style::values::computed::Length;
-    use style::values::computed::background::BackgroundSize;
-    use style::values::generics::length::GenericLengthPercentageOrAuto as Lpa;
-    let ((cw, ch), (iw, ih)) = (area, image);
-    match size {
-        BackgroundSize::ExplicitSize { width, height } => {
-            // An area's sides are within f32: a slot's, or the labels' document's.
-            let width = width.map(|w| w.0.resolve(Length::new(cw as f32)));
-            let height = height.map(|h| h.0.resolve(Length::new(ch as f32)));
-            match (width, height) {
-                (Lpa::LengthPercentage(w), Lpa::LengthPercentage(h)) => (f64::from(w.px()), f64::from(h.px())),
-                (Lpa::LengthPercentage(w), Lpa::Auto) => (f64::from(w.px()), ih / iw * f64::from(w.px())),
-                (Lpa::Auto, Lpa::LengthPercentage(h)) => (iw / ih * f64::from(h.px()), f64::from(h.px())),
-                (Lpa::Auto, Lpa::Auto) => (iw, ih),
-            }
-        }
-        BackgroundSize::Cover => {
-            let ratio = (cw / iw).max(ch / ih);
-            (iw * ratio, ih * ratio)
-        }
-        BackgroundSize::Contain => {
-            let ratio = (cw / iw).min(ch / ih);
-            (iw * ratio, ih * ratio)
-        }
-    }
-}
-
 // What the labels may fetch: `data:` URLs, a font or a picture each, sized from its header.
 
 /// Fetches nothing but `data:` URLs (no network, no files), and of them only fonts and
@@ -752,7 +598,9 @@ impl DataOnly {
         let Some(data) = url.strip_prefix("data:") else {
             let mut links = self.links.lock().unwrap_or_else(PoisonError::into_inner);
             if links.len() < MAX_LINKS {
-                links.push(url.chars().take(256).collect());
+                // Its first LINK_BYTES, whole characters.
+                let end = url.char_indices().map(|(i, c)| i + c.len_utf8()).take_while(|end| *end <= LINK_BYTES).last().unwrap_or(0);
+                links.push(url.get(..end).unwrap_or_default().to_owned());
             }
             return None;
         };
@@ -811,18 +659,33 @@ fn percent_decoded(s: &str) -> Vec<u8> {
 
 /// What the font in `bytes` unpacks to, as its header says, or `None` when it isn't a font Blitz
 /// reads: a WOFF the larger of its `totalSfntSize` and its tables' sizes, which its decoder (wuff)
-/// sizes its output by; a TrueType or OpenType font (or collection) its bytes.
+/// sizes its output by, and larger than any where its tables would take the decoder past that; a
+/// TrueType or OpenType font (or collection) its bytes.
 fn font_size(bytes: &[u8]) -> Option<u64> {
     let u32_at = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(|b| u64::from(u32::from_be_bytes(b)));
     let u16_at = |at: usize| bytes.get(at..at.checked_add(2)?).and_then(|b| <[u8; 2]>::try_from(b).ok()).map(|b| u64::from(u16::from_be_bytes(b)));
     let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     match bytes.get(..4)? {
         b"wOFF" => {
-            let mut sum = 0u64;
-            for table in 0..u16_at(12)? {
-                // Each entry 20 bytes from 44, its `origLength` at 12.
-                let at = usize::try_from(table.saturating_mul(20).saturating_add(44 + 12)).ok()?;
-                sum = sum.saturating_add(u32_at(at)?);
+            // Each table's entry, 20 bytes from 44: its offset, its length stored and unpacked. Its
+            // decoder copies a table stored no smaller than it unpacks as it is stored, so one
+            // stored larger, or out of the file, or over another, is refused (as larger than any).
+            let tables = u16_at(12)?;
+            let mut ranges = Vec::new();
+            let (mut sum, directory) = (0u64, 44u64.saturating_add(tables.saturating_mul(20)));
+            for table in 0..tables {
+                let at = usize::try_from(table.saturating_mul(20).saturating_add(44)).ok()?;
+                let (offset, stored, unpacked) = (u32_at(at.checked_add(4)?)?, u32_at(at.checked_add(8)?)?, u32_at(at.checked_add(12)?)?);
+                let end = offset.saturating_add(stored);
+                if stored > unpacked || offset < directory || end > length {
+                    return Some(u64::MAX);
+                }
+                ranges.push((offset, end));
+                sum = sum.saturating_add(unpacked);
+            }
+            ranges.sort_unstable();
+            if ranges.windows(2).any(|w| matches!(w, [a, b] if b.0 < a.1)) {
+                return Some(u64::MAX);
             }
             Some(u32_at(16)?.max(sum))
         }
@@ -888,6 +751,7 @@ mod tests {
         out.extend([0u8; 24]);
         out.extend(b"glyf");
         out.extend([64u32, 4, size, 0].iter().flat_map(|v| v.to_be_bytes()));
+        out.extend([0u8; 4]);
         out
     }
 
@@ -926,6 +790,33 @@ mod tests {
         assert_eq!(font_size(b"wOFF"), None, "cut short");
     }
 
+    /// A WOFF table its decoder would copy past what it sized its output by is refused: one stored
+    /// larger than it unpacks, out of the file, or over another.
+    #[test]
+    fn a_woffs_inconsistent_tables_are_refused() {
+        let tables = |entries: &[[u32; 3]], length: usize| {
+            let mut out = b"wOFF".to_vec();
+            out.extend(0x0001_0000u32.to_be_bytes());
+            out.extend(u32::try_from(length).unwrap().to_be_bytes());
+            out.extend(u16::try_from(entries.len()).unwrap().to_be_bytes());
+            out.extend(0u16.to_be_bytes());
+            out.extend(64u32.to_be_bytes());
+            out.extend([0u8; 24]);
+            for [offset, stored, unpacked] in entries {
+                out.extend(b"glyf");
+                out.extend([*offset, *stored, *unpacked, 0].iter().flat_map(|v| v.to_be_bytes()));
+            }
+            out.resize(length, 0);
+            out
+        };
+        let directory = 44 + 2 * 20;
+        assert_eq!(font_size(&tables(&[[directory, 8, 16], [directory + 8, 8, 16]], 100)), Some(64));
+        assert_eq!(font_size(&tables(&[[directory, 16, 8]], 100)), Some(u64::MAX), "stored larger");
+        assert_eq!(font_size(&tables(&[[directory, 8, 16], [directory + 4, 8, 16]], 100)), Some(u64::MAX), "overlapping");
+        assert_eq!(font_size(&tables(&[[directory, 8, 16], [96, 8, 16]], 100)), Some(u64::MAX), "past the file");
+        assert_eq!(font_size(&tables(&[[8, 8, 16], [directory, 8, 16]], 100)), Some(u64::MAX), "in the header");
+    }
+
     /// A picture is sized from its header before it is decoded: past 64 MiB decoded it is
     /// refused, and past 256 MiB of a drawing's in all. Only PNG, JPEG, GIF and WebP are fetched:
     /// an SVG, a stylesheet, a document arrive empty.
@@ -957,14 +848,5 @@ mod tests {
         assert!(net.answer("https://example.com/font.woff2").is_none());
         assert!(net.answer("file:///etc/passwd").is_none());
         assert_eq!(*net.links.lock().unwrap(), ["https://example.com/font.woff2", "file:///etc/passwd"]);
-    }
-
-    /// Tiles spaced are counted as blitz-paint counts them, a tile of no size once.
-    #[test]
-    fn spaced_tiles_are_counted_as_blitz_paints_them() {
-        assert_eq!(
-            [space_count(10.0, 1.0), space_count(10.0, 3.0), space_count(10.0, 0.0), space_count(1e30, 1e-30)],
-            [10, 3, 1, u64::from(u32::MAX)]
-        );
     }
 }

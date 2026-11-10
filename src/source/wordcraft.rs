@@ -643,8 +643,9 @@ struct Laid {
 }
 
 impl Laid {
-    /// `page`'s pictures drawn, for it to render, and what the reader should know of them.
-    fn drawn_pictures(&self, page: &Page, first: bool) -> Vec<String> {
+    /// `page`'s pictures drawn, for it to render (as a list's `tile`, or a page), and what the
+    /// reader should know of them.
+    fn drawn_pictures(&self, page: &Page, first: bool, tile: bool) -> Vec<String> {
         let mut notes = Vec::new();
         if first && self.pictures.left_out() > 0 {
             notes.push(format!("{} pictures it refers to are left out: missing, or not what {} shows", self.pictures.left_out(), crate::NAME));
@@ -659,10 +660,10 @@ impl Laid {
         let on_page: Vec<&str> = on_page.iter().map(String::as_str).collect();
         // Nothing locked while they are drawn, which may take a while; then, under one lock, held and
         // in the document at once, or another page could find one drawn and render its stand-in.
-        let drawn = self.pictures.draw(&on_page);
+        let drawn = self.pictures.draw(&on_page, tile);
         if !drawn.is_empty() {
             let mut document = self.document.write().unwrap_or_else(PoisonError::into_inner);
-            let changes = self.pictures.hold(drawn, &on_page);
+            let changes = self.pictures.hold(drawn, &on_page, tile);
             document.media.extend(changes);
         }
         if self.pictures.failed(&on_page) {
@@ -826,7 +827,7 @@ impl Document {
         if w > side || h > side || w.saturating_mul(h) > MAX_PIXELS {
             return Err(format!("{w} × {h} pixels is too large to render"));
         }
-        let warnings = laid.drawn_pictures(page, request.page == 0);
+        let warnings = laid.drawn_pictures(page, request.page == 0, request.tile);
         let mut options = RenderOptions::default();
         // A printed page: headers and footers dimmed only while the body is being edited.
         options.display.dim_header = false;
@@ -1498,7 +1499,7 @@ mod tests {
                 Self::Dark(dark) => (DARK, dark),
             };
             assert!(values.set(PAPER.name, Value::Named(value)));
-            Request { page, scale, tag: 0, values, dark }
+            Request { page, scale, tag: 0, values, dark, tile: false }
         }
     }
 
@@ -2325,6 +2326,32 @@ mod tests {
                 done[page] = true;
             }
         }
+    }
+
+    /// A document's page that is a list's tile draws the pictures it refers to as tiles too: a
+    /// drawing's HTML labels aren't drawn for it, so it starts no worker; opened, the page draws them.
+    #[cfg(feature = "svg-html")]
+    #[test]
+    fn a_tiles_pictures_are_drawn_as_tiles() {
+        let dir = std::env::temp_dir().join(format!("clview-word-tile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drawing = "<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' fill='red'/>\
+            <foreignObject width='60' height='30'><div xmlns='http://www.w3.org/1999/xhtml' style='width:100%;height:100%;background:blue'/></foreignObject></svg>";
+        std::fs::write(dir.join("labelled.svg"), drawing).unwrap();
+        let path = dir.join("a.md");
+        std::fs::write(&path, "![a drawing](labelled.svg)").unwrap();
+        let shows = |frame: &Frame, colour: [u8; 3]| frame.rgba.as_chunks::<4>().0.iter().any(|p| p[..3] == colour && p[3] == 255);
+        let page = |tile: bool| {
+            let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+            let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages") };
+            let frame = source.renderer().unwrap().render(Request { page: 0, scale: 1.0, tile, ..Request::default() });
+            assert_eq!(frame.error, None);
+            frame
+        };
+        let tile = page(true);
+        assert!(shows(&tile, [255, 0, 0]) && !shows(&tile, [0, 0, 255]), "a tile draws the drawing without its label");
+        let opened = page(false);
+        assert!(shows(&opened, [255, 0, 0]) && shows(&opened, [0, 0, 255]), "a page draws its label");
     }
 
     #[test]

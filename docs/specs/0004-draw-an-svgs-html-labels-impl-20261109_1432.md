@@ -238,3 +238,73 @@ were held, uncommitted; the two that hold in either design are fixed:
   document alone, but clv adds the drawing's elements (ADR-0003's scan), so clv left all 1,024
   labels out. Rules of some 750 bytes, 4,202 under 3 MiB, are 34.4 million as clv counts them:
   0.41 s and 120 MB as one document, 235 s and 414 MB as one a label.
+
+## Task 5: Blitz in a worker
+
+- **Built on the stopped session's work**, left uncommitted on 791d63f and never put through a
+  gate: `worker.rs` and its tests, `WORKERS`, `--worker`, `Request::tile`, the split of `html.rs`
+  into the worker's side (`Labels`, `Kept`) and the viewer's (`Painted`), `svg.rs`'s `Labelled`
+  (labels found at parse, laid out by the first render that isn't a tile's, `failed` once the
+  worker goes). Reviewed as new code; what changed:
+  - **A dead worker gave up its place too late:** `Link` held its `Alive` until dropped, so a
+    drawing whose worker was killed still counted among the six until the drawing was let go.
+    `end` drops it now.
+  - **Links back as strings, not a count.** The drawing's own scan counts a stylesheet's
+    `url(https://…)` too, and `Notes::linked` dedupes by hash: a bare count from the worker said
+    "2 links" for one (`a_stylesheets_data_urls_are_links_only_where_labels_are_not_drawn`). The
+    worker tells each link, cut to 256 bytes on a character boundary (`LINK_BYTES`), at most 1,024;
+    the viewer refuses more or longer, hashes them and shows none. `MAX_PREPARED` is 1 MiB for
+    them. The spec's "counted, not named" is so in effect: nothing of them is shown.
+  - **Codex P2, a document's pictures:** `picture::Promise::draw` made a default `Request`, so a
+    Markdown or HTML tile referring to a labelled drawing started a worker. `tile` goes from
+    `drawn_pictures`'s request through `Promised::draw` and `hold`; a picture drawn as a tile is
+    remembered as one (`Held::as_tiles`) and drawn again, taking its place, when a page wants it,
+    since the document keeps its pictures across tile and page renders.
+  - **No global counter of workers for the tests:** a first tile test compared
+    `worker::spawned()` before and after, and the other tests' workers, started beside it, made
+    it flaky. It inspects the renderer's `Labelled::prepared` instead; the pager test counts
+    `clv --worker` processes descended from its own `clv` (`ps -axo pid,ppid,command`).
+  - **The estimate's parts term** got a test of its own (`a_labels_part_of_the_page_is_in_its_
+    estimate`): a label the page's size at 16,000 × 8,000 doubles 512 MB past 1 GiB.
+- **The nesting limit's premise, corrected:** the drawing's scan skips children by local name,
+  in any namespace, so an XHTML `<metadata>` inside a label hides its depth from the scan as the
+  spec says; but plain nesting is counted, root to leaf, and a label can nest at most 1,021 divs
+  (the root, the `<foreignObject>` and its div are three levels) before the *drawing* is refused.
+  The writer's 1,024 is reached only under a skipped name: `labels_past_their_limits_are_left_
+  out_and_said` tests 1,021 drawn and 20,000 under `<metadata>` left out, with the writer's
+  warning and no crash.
+- **The `content` bomb is 99,000 elements**, not the spec's 100,000, which are past
+  `MAX_LABEL_ELEMENTS` before the worker (the wrappers count too). The spec's line says so now.
+- **How the worker's death reads:** `SIGXCPU` is "took too long", `SIGABRT` "took too much
+  memory". A stack overflow in the worker aborts too, so it would read as memory; none can be made
+  from input (the writer's 1,024 levels, the worker's 64 MiB stack).
+- **The hang** (`text-decoration-inset: -1e20px`) dies by the heap cap, in under a second: the
+  loop grows its path as it goes. Its warning is the memory one; the test takes either.
+- **Tests, each seen failing with its fix reverted** (the files copied aside, `cmp` after):
+  the worker's `end` without its kill (`a_worker_that_doesnt_answer…` and
+  `a_worker_that_stops_reading…`: "reaped"; the second asserted nothing of the kill before, and
+  does now); `why` mapping no signal (`how_a_worker_ended_is_told`: `Ended("signal 24")`);
+  `Alive::take` without its bound (`past_the_most_workers…`: the seventh started); `limit_cpu`
+  returning early (`a_worker_is_stopped_past_its_cpu_time`: still spinning after 20 s);
+  `read_frame` without its length check (`a_worker_answers_its_requests_in_turn`: longer than it
+  takes; `an_answer_that_isnt_one…`: `yes` not killed); the WOFF table checks off
+  (`a_woffs_inconsistent_tables_are_refused`: 64 for larger than any); `Held::as_tiles` ignored
+  (`a_picture_drawn_as_a_tile…`: not drawn again); the parts term zeroed
+  (`a_labels_part_of_the_page…`: the page rendered); `drawn_pictures` given `false`
+  (`a_tiles_pictures_are_drawn_as_tiles`: the tile's label drawn); `request.tile` ignored
+  (`a_tile_draws_no_labels…`: blue at the tile's label);
+  the pager's `tile` always false (`a_lists_tiles_start_no_worker…`: two workers for the tiles);
+  the labels' links not told (`the_links_a_labels_worker…`: none said); `MAX_LABEL_DEPTH` unbounded
+  (`labels_past_their_limits…`: the 20,000-deep label drawn, no warning: the printer's 8 MiB
+  main thread holds that recursion, a render thread's 2 MiB wouldn't); a `cap::` written in
+  another file (`nothing_but_the_worker_names_cap`); the heap cap at 8 GiB
+  (`past_its_cpu_time_or_its_heap…`: the 2,000,000-pixel border drawn, no warning; the hang still
+  died, in under two seconds); the worker's stack at 128 KiB (`the_deepest_label…`: left out,
+  "took too much memory", the overflow's abort); `PREPARE_CPU` 0 (`what_an_estimate_refused…`:
+  left out, "took too long"); `MAX_WORKERS` 0 (`each_drawing_printed_from_a_directory…`: no label
+  drawn).
+- **Within the caps, measured in the tests' debug build:** 10,000 elements clipped by a 1,000-point
+  polygon lay out and record in some 40 ms of the viewer's wait; the whole SVG integration suite,
+  33 tests with the hang, two bombs and 1,000 nested grids, runs in 2 s in parallel.
+- **Not done here, for task 6:** the ADR's measurements on a release build, usage and
+  architecture, CHANGELOG.

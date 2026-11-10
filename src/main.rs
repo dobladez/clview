@@ -75,6 +75,9 @@ fn main() -> ExitCode {
         #[cfg(unix)]
         None | Some("--help" | "-h") => view::print_help(source::BACKENDS),
         Some("--version" | "-V") => stdout_line(format_args!("{NAME} {}", env!("CLV_VERSION"))),
+        // clv run again as a worker process by itself: not for the reader, so not in `--help`.
+        #[cfg(unix)]
+        Some("--worker") => source::serve(args.get(1).map_or("", String::as_str), source::WORKERS).map_err(CliError::Message),
         #[cfg(unix)]
         _ => view::run(&args, source::BACKENDS),
         #[cfg(not(unix))]

@@ -313,9 +313,13 @@ fn labels_past_their_limits_are_left_out_and_said() {
         assert!(warnings.contains(&expected), "{expected}: {warnings:?}");
     };
     let deep = |n: usize| label("", &format!("{}x{}", "<div>".repeat(n), "</div>".repeat(n)));
-    // The label's own div is its first level.
-    said(&format!("{}{}{}", deep(63), deep(64), deep(63)), "nested more than 64 deep", 1);
-    assert!(!warned("svg-limits", &deep(63)).iter().any(|w| w.contains("left out")));
+    // As deep as the drawing's own limit allows (the root, the `<foreignObject>` and the label's
+    // div are three levels), drawn; deeper, the drawing is refused before any label is written.
+    assert!(!warned("svg-limits", &deep(1021)).iter().any(|w| w.contains("left out")));
+    // Under a `<metadata>`, which the drawing's own scan skips by name, so its 1,024 levels don't
+    // refuse the drawing: the writer stops at its own limit, far above where it would overflow.
+    let hidden = label("", &format!("<metadata>{}x{}</metadata>", "<div>".repeat(20_000), "</div>".repeat(20_000)));
+    said(&hidden, "nested more than 1024 deep", 1);
     said(&label("", "x").repeat(1026), "past 1024 of them", 2);
     said(&format!("{}{}", label("", &"y".repeat((1 << 20) + 1)), label("", "z")), "past 1 MiB of text", 2);
     said(&label("", &"<i/>".repeat(100_000)), "past 100000 elements", 1);
@@ -479,57 +483,61 @@ fn a_fonts_hints_are_under_the_drawings_rules() {
     assert_eq!(sized("big", ""), [true, false]);
 }
 
-/// What painting a drawing's labels would take is estimated after they are laid out, before they
-/// are painted, where CSS multiplies it: shadows, layers, and a picture's tiles spaced. Past 20
-/// million steps, they are all left out, and said; at it, they are painted (and here left out
-/// past the 200,000 commands recorded, which the estimate counts high to reach).
+/// What a drawing's labels cost in Blitz is bounded as it is spent, in their worker process: past
+/// its CPU time or its heap, the worker is killed and all the labels left out, with why, the
+/// drawing drawn without them. A `text-decoration-inset` of `-1e20px` loops for ever in
+/// blitz-paint 0.3.0-beta.4, its step lost to the float, growing a path as it goes: whichever cap
+/// it reaches first ends it. A box 2,000,000 pixels wide with a dotted border has its dots built
+/// into one path before anything is drawn (some 1.7 GB); a `content` of 64 KiB on 99,000
+/// elements is copied into a text node for each (some 6 GB). Within the caps, they are drawn.
 #[cfg(feature = "svg-html")]
 #[test]
-fn painting_too_long_is_refused_before_it_starts() {
-    let too_long = "painting them would take too long";
-    let shadows = |n: usize| {
-        let list: Vec<String> = (0..n).map(|i| format!("{}px 0 1px #000", i % 5)).collect();
-        let css = format!(".c{{display:inline-block;width:2px;height:2px;box-shadow:{}}}", list.join(","));
-        let boxes = "<i class='c'></i>".repeat(1000);
-        warned("svg-paint", &format!("<style>{css}</style>{}", fo("width='200' height='200'", &format!("<div>{boxes}</div>"))))
+fn past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out() {
+    let capped = |warnings: &[String]| warnings.iter().any(|w| w.starts_with("1 HTML label (<foreignObject>) was left out, Blitz took too"));
+    let inset = |reach: &str| {
+        let html = format!("<div style='text-decoration:underline wavy red;text-decoration-inset:{reach}'>text</div>");
+        warned("svg-capped", &fo("width='20' height='20'", &html))
     };
-    // Six steps a shadow: 1,000 boxes of 3,333 shadows are 19,998,000.
-    assert!(!shadows(3333).iter().any(|w| w.contains(too_long)), "{:?}", shadows(3333));
-    assert!(shadows(3334).iter().any(|w| w.contains(too_long)), "{:?}", shadows(3334));
-    let layers = |n: usize| {
-        let list: Vec<String> = (0..n).map(|i| format!("linear-gradient(#{:03x},#fff)", i % 4096)).collect();
-        warned("svg-paint", &fo("width='20' height='20'", &format!("<div style='width:1px;height:1px;background-image:{}'/>", list.join(","))))
+    assert!(!inset("2px").iter().any(|w| w.contains("left out")), "{:?}", inset("2px"));
+    let hung = inset("-1e20px");
+    assert!(capped(&hung), "{hung:?}");
+    let dotted = |w: u32| fo("width='400' height='100'", &format!("<div style='width:{w}px;height:20px;border:1px dotted red'/>"));
+    let bomb = warned("svg-capped", &dotted(2_000_000));
+    assert!(bomb.iter().any(|w| w.ends_with("Blitz took too much memory on them")), "{bomb:?}");
+    assert!(!warned("svg-capped", &dotted(20_000)).iter().any(|w| w.contains("left out")));
+    let written = |chars: usize, elements: usize| {
+        let css = format!("i::before{{content:'{}'}}", "x".repeat(chars));
+        warned(
+            "svg-capped",
+            &format!("<style>{css}</style>{}", fo("width='1000' height='1000'", &format!("<div>{}</div>", "<i></i>".repeat(elements)))),
+        )
     };
-    // 504 steps a gradient layer: 39,682 are 19,999,728.
-    assert!(!layers(39_682).iter().any(|w| w.contains(too_long)));
-    assert!(layers(39_683).iter().any(|w| w.contains(too_long)));
-    let spaced = |side: u32| {
-        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-        let css = format!(".s{{width:{side}px;height:{side}px;background:url(data:image/png;base64,{png}) 0 0/1px 1px space}}");
-        warned("svg-paint", &format!("<style>{css}</style>{}", fo(&format!("width='{side}' height='{side}'"), "<div class='s'/>")))
+    let copied = written(64 << 10, 99_000);
+    assert!(copied.iter().any(|w| w.ends_with("Blitz took too much memory on them")), "{copied:?}");
+    assert!(!written(1, 600).iter().any(|w| w.contains("left out")));
+}
+
+/// Painting that an estimate refused, and the caps allow: it is done, within them, or left out
+/// with why. 10,000 elements each clipped by a polygon of 1,000 points (a path made anew for
+/// each); a wavy underline under 3,000 pixels of the document's own `body`, painted with each of
+/// 1,000 labels.
+#[cfg(feature = "svg-html")]
+#[test]
+fn what_an_estimate_refused_is_painted_within_the_caps() {
+    let within = |warnings: Vec<String>| {
+        let left_out = warnings.iter().filter(|w| w.contains("left out")).count();
+        assert!(left_out == 0 || warnings.iter().any(|w| w.contains("Blitz took too")), "{warnings:?}");
+        left_out
     };
-    // The document's own html and body are painted with each label: 4,000 shadows on either, six
-    // steps each, are 24,000 steps a label, 24 million for 1,000 labels. (usvg's stylesheet parser
-    // takes time as the square of a declaration's length: a longer list is a slow test.)
-    let shared = |rule: &str, labels: usize| {
-        let list: Vec<String> = (0..4_000).map(|i| format!("{}px 0 1px #000", i % 5)).collect();
-        let css = format!("{rule}{{content:'';display:block;box-shadow:{}}}", list.join(","));
-        warned("svg-paint", &format!("<style>{css}</style>{}", fo("width='1' height='1'", "<div/>").repeat(labels)))
-    };
-    assert!(!shared("html", 1).iter().any(|w| w.contains(too_long)));
-    assert!(shared("html", 1000).iter().any(|w| w.contains(too_long)));
-    assert!(shared("body::before", 1000).iter().any(|w| w.contains(too_long)));
-    // A dot of a dotted border is 20 steps: 12 boxes of 10,000 pixels a side are 960,000 dots.
-    let dotted = |boxes: usize| {
-        let html =
-            "<i style='position:absolute;left:0;top:0;width:10000px;height:10000px;border:1px dotted red;box-sizing:border-box'></i>".repeat(boxes);
-        warned("svg-paint", &fo("width='10000' height='10000'", &format!("<div style='position:relative'>{html}</div>")))
-    };
-    assert!(!dotted(12).iter().any(|w| w.contains(too_long)), "{:?}", dotted(12));
-    assert!(dotted(13).iter().any(|w| w.contains(too_long)));
-    // A tile a pixel, and four steps around the layer: 4,472 pixels a side are 19,998,788.
-    assert!(!spaced(4472).iter().any(|w| w.contains(too_long)));
-    assert!(spaced(4473).iter().any(|w| w.contains(too_long)));
+    let polygon: Vec<String> = (0..1000).map(|i| format!("{}px {}px", i % 7, i % 5)).collect();
+    let css = format!(".c{{display:inline-block;width:1px;height:1px;clip-path:polygon({})}}", polygon.join(","));
+    let clipped = format!("<style>{css}</style>{}", fo("width='100' height='100'", &format!("<div>{}</div>", "<i class='c'></i>".repeat(10_000))));
+    let started = std::time::Instant::now();
+    assert_eq!(within(warned("svg-within", &clipped)), 0, "{:?}", started.elapsed());
+    let css = "body::before{content:'mmmmmmmmmmmmmmmmmmmm';display:block;white-space:nowrap;font-size:200px;text-decoration:underline wavy red}";
+    let shared = format!("<style>{css}</style>{}", fo("width='1' height='1'", "<div/>").repeat(1000));
+    let started = std::time::Instant::now();
+    assert_eq!(within(warned("svg-within", &shared)), 0, "{:?}", started.elapsed());
 }
 
 /// A label loads no stylesheet and no document: a `<link>`'s is not fetched, whatever its bytes
@@ -551,9 +559,8 @@ fn a_label_loads_no_stylesheet_or_document() {
     assert_eq!(page("svg-loads", 40, 20, &own, &[]).0.get_pixel(100, 100).0, RED);
 }
 
-/// Each stage of what labels cost has its limit, past which they are left out, and said: their
-/// commands recorded, a label's size laid out, and their elements matched against the drawing's
-/// rules.
+/// Each stage of what labels cost before their worker has its limit, past which they are left out,
+/// and said: a label's size laid out, and their elements matched against the drawing's rules.
 #[cfg(feature = "svg-html")]
 #[test]
 fn labels_past_what_they_may_cost_are_left_out_and_said() {
@@ -564,26 +571,11 @@ fn labels_past_what_they_may_cost_are_left_out_and_said() {
             format!("{n} HTML labels (<foreignObject>) were left out, {why}")
         }
     };
-    // 51,000 boxes, each its background, its border and two shadows: 204,000 commands.
-    let css = ".c{display:inline-block;width:2px;height:2px;background:#00f;border:1px solid #000;box-shadow:1px 0 #f00,0 1px #0f0}";
-    let boxes = "<i class='c'></i>".repeat(51_000);
-    let commands = warned(
-        "svg-cost",
-        &format!("<style>{css}</style>{}", fo("width='1000' height='1000'", &format!("<div style='display:flex;flex-wrap:wrap'>{boxes}</div>"))),
-    );
-    assert!(commands.contains(&one(1, "painting them would take more than 200000 steps")), "{commands:?}");
     let wide = format!("{}{}", fo("width='16385' height='10'", "<div/>"), fo("width='16384' height='10'", "<div/>"));
-    let past = "laid out past 16384 pixels a side, or an element of it past 24576";
-    assert!(warned("svg-cost", &wide).contains(&one(1, past)));
-    // An element of a label as wide as a label may draw, a dotted border round it: its dots are
-    // made at its size. Past it, its label is left out; within it, drawn.
-    let dotted = |w: u32| fo("width='400' height='100'", &format!("<div style='width:{w}px;height:20px;border:1px dotted red'/>"));
-    // Its dots are past the paint work's limit too, which leaves it out first.
-    assert!(warned("svg-cost", &dotted(1_000_000)).iter().any(|w| w.starts_with("1 HTML label (<foreignObject>) was left out")));
-    assert!(!warned("svg-cost", &dotted(20_000)).iter().any(|w| w.contains("left out")));
-    // Past it without any dots, its label is left out all the same.
+    assert!(warned("svg-cost", &wide).contains(&one(1, "laid out past 16384 pixels a side")));
+    // An element wider than any label may be is drawn all the same, now that nothing estimates it.
     let wide_box = fo("width='400' height='100'", "<div style='width:30000px;height:20px;background:red'/>");
-    assert!(warned("svg-cost", &wide_box).contains(&one(1, past)));
+    assert!(!warned("svg-cost", &wide_box).iter().any(|w| w.contains("left out")));
     // 1,200 rules, and 50 labels in 900 groups: each label's copies are 900 elements.
     let rules: String = (0..1200).map(|i| format!(".r{i}{{color:red}}")).collect();
     let labels = fo("width='1' height='1'", "<div/>").repeat(50);
@@ -591,30 +583,48 @@ fn labels_past_what_they_may_cost_are_left_out_and_said() {
     assert!(warned("svg-cost", &nested).contains(&one(50, "its stylesheets' rules are too many for its labels' elements")));
 }
 
-/// What a page's labels paint is in the page's estimate, with the drawing's: 13,000 boxes over a
-/// label as large as the page are 4,160 million pixels, and the page fails with why, as a drawing
-/// does. A label reads nothing but `data:` URLs: what else it asks for is told, as the drawing's
-/// own links are.
+/// A label reads nothing but `data:` URLs: what else it asks for is told, as the drawing's own
+/// links are, counted by its worker.
 #[cfg(feature = "svg-html")]
 #[test]
-fn what_a_pages_labels_paint_is_in_its_estimate_and_their_links_are_said() {
-    let stacked = "<i style='position:absolute;left:0;top:0;width:100%;height:100%;background:rgba(0,0,255,0.01)'></i>".repeat(13_000);
-    let drawing = svg(40, 20, &fo("width='40' height='20'", &format!("<div style='position:relative;height:100%'>{stacked}</div>")));
-    let out = view(&written("svg-estimate", "stacked.svg", drawing), &["--protocol", "kitty"]);
-    assert!(!out.status.success() && text(&out.stderr).contains("would take too long"), "{}", text(&out.stderr));
+fn the_links_a_labels_worker_doesnt_follow_are_said() {
     let linking = fo("width='20' height='20'", "<div><img src='https://example.com/a.png'/><img src='other.png'/></div>");
-    assert_eq!(warned("svg-estimate", &linking), ["2 links to other files or the network were not followed"]);
+    assert_eq!(warned("svg-links", &linking), ["2 links to other files or the network were not followed"]);
 }
 
 /// A label nested as deeply as labels may be, in nested grids (Blitz's costliest nesting), is laid
-/// out and drawn on its thread's stack, in a debug build too (ADR-0024).
+/// out and drawn on its worker's stack, in a debug build too (ADR-0025).
 #[cfg(feature = "svg-html")]
 #[test]
-fn the_deepest_label_is_drawn_on_its_threads_stack() {
-    let grids = format!("{}<div style='width:20px;height:20px;background:blue'/>{}", "<div style='display:grid'>".repeat(62), "</div>".repeat(62));
+fn the_deepest_label_is_drawn_on_its_workers_stack() {
+    let grids =
+        format!("{}<div style='width:20px;height:20px;background:blue'/>{}", "<div style='display:grid'>".repeat(1000), "</div>".repeat(1000));
     let (picture, warnings) = page("svg-deepest", 40, 20, &fo("width='20' height='20'", &format!("<div>{grids}</div>")), &[]);
     assert!(warnings.iter().all(|w| !w.contains("left out")), "{warnings:?}");
     assert_eq!(picture.get_pixel(100, 100).0, BLUE);
+}
+
+/// Each drawing of a directory printed draws its labels, in a worker of its own, one after another.
+#[cfg(feature = "svg-html")]
+#[test]
+fn each_drawing_printed_from_a_directory_draws_its_labels() {
+    let dir = tmp("svg-many", "drawings");
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in 0..12 {
+        let drawing = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20">{}</svg>"#,
+            fo("width='40' height='20'", &filled("blue"))
+        );
+        std::fs::write(dir.join(format!("{n:02}.svg")), drawing).unwrap();
+    }
+    let out = view(&dir, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let pictures = images(&out.stdout);
+    assert_eq!(pictures.len(), 12);
+    for drawn in pictures {
+        let picture = image::load_from_memory(&drawn.png).unwrap().into_rgba8();
+        assert_eq!(picture.get_pixel(picture.width() / 2, picture.height() / 2).0, BLUE);
+    }
 }
 
 /// A stylesheet's font faces and pictures by `data:` URL are no links not followed where labels
@@ -655,26 +665,11 @@ fn the_render_estimate_is_for_the_resvg_this_builds() {
 }
 
 /// What draws an SVG's HTML labels: Blitz, and what it lays out and paints with.
-const HTML_LIBRARIES: [&str; 8] = ["blitz", "anyrender", "kurbo", "stylo", "parley", "taffy", "wuff", "peniko"];
+const HTML_LIBRARIES: [&str; 7] = ["blitz", "anyrender", "kurbo", "stylo", "parley", "taffy", "wuff"];
 
 /// Only the labels' painter and these tests name Blitz and what it paints with: the SVG backend
 /// would read the same with another HTML engine.
 #[test]
 fn nothing_but_svg_html_names_blitz() {
     crate::fixtures::named_only_in(&["src/source/svg/html.rs", "tests/it/resvg.rs"], &[], &HTML_LIBRARIES);
-}
-
-/// The limits on what a drawing's labels cost were measured with these versions (ADR-0024):
-/// moving any of them means measuring again, then this.
-#[test]
-fn the_label_limits_are_for_the_blitz_this_builds() {
-    let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap();
-    let blitz = ["blitz-dom", "blitz-html", "blitz-paint", "blitz-traits"].map(|library| (library, "0.3.0-beta.4"));
-    for (library, expected) in
-        blitz.into_iter().chain([("anyrender", "0.14.0"), ("anyrender_vello_cpu", "0.18.0"), ("stylo", "0.22.0"), ("peniko", "0.6.1")])
-    {
-        let at = lock.find(&format!("[[package]]\nname = \"{library}\"\n")).unwrap_or_else(|| panic!("{library} isn't locked"));
-        let version = lock[at..].lines().nth(2).unwrap();
-        assert_eq!(version, format!("version = \"{expected}\""), "{library} moved: measure the labels' limits again");
-    }
 }

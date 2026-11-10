@@ -25,6 +25,7 @@ mod threads;
 mod tree;
 #[cfg(feature = "word")]
 mod wordcraft;
+mod worker;
 #[cfg(feature = "zip")]
 mod zip;
 
@@ -39,6 +40,7 @@ pub(crate) use dir::Directory;
 pub(crate) use folder::{Badge, Folder};
 pub(crate) use joined::{Joined, Part};
 pub(crate) use later::{Handle, Later, Openers};
+pub(crate) use worker::{Worker, serve};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
@@ -60,6 +62,13 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &image::Images,
     #[cfg(feature = "zip")]
     &zip::Zip,
+];
+
+/// The worker processes this build has, by name: the work a backend does in a process of its own
+/// ([`Worker`]), clv run again as `clv --worker <name>`.
+pub(crate) const WORKERS: &[&'static dyn Worker] = &[
+    #[cfg(feature = "svg-html")]
+    &svg::LABELS,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -552,6 +561,9 @@ pub(crate) struct Request {
     pub(crate) values: Values,
     /// The colour of dark paper here: the terminal's own background where it is dark.
     pub(crate) dark: [u8; 3],
+    /// For a list's tile, or its copy: drawn as a tile, which may leave out what costs more than a
+    /// list's tiles should (an SVG's HTML labels). Only the pager sets it.
+    pub(crate) tile: bool,
 }
 
 /// Premultiplied RGBA, row by row, top to bottom: a backend's own buffer, read as bytes, so its
@@ -723,6 +735,7 @@ pub(crate) mod tests {
             }
             if !path.ends_with("main.rs") {
                 assert!(!text.contains("source::BACKENDS"), "{} names the backends built: main's to hand over", path.display());
+                assert!(!text.contains("source::WORKERS"), "{} names the workers built: main's to hand over", path.display());
             }
         }
     }

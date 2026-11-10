@@ -244,6 +244,10 @@ The counts are task 1's, measured
   list's tile.
 - `src/view/pager.rs` — `tile` set on the requests of a list's level (its tiles, and a tile's
   copy); names no backend.
+- `src/source/picture.rs`, `src/source/wordcraft.rs` — a document's page that is a tile draws
+  the pictures it refers to as tiles (`Promise::draw` takes `tile` from `drawn_pictures`'s
+  request), so a Markdown or HTML tile referring to a labelled drawing starts no worker; a
+  picture drawn as a tile is drawn again, and replaced, when a page wants it.
 - `src/main.rs` — `--worker <name>` before `view::run`, handed to `source::serve` with `WORKERS`.
 - `src/source/svg.rs` — finds the labels and places them, as task 2 built it; `prepared` hands
   them to `html::prepare` and tells the warnings; `Drawn::render` counts each label's part of the
@@ -388,16 +392,24 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `docs/adr/0024-…`. *Verify:* `cargo test -j 2 --test docs`,
   and the manual checks in Done.
 
-- [ ] **Blitz in a worker, the estimate deleted** — `source/worker.rs` (spawn, frames, caps,
+- [x] **Blitz in a worker, the estimate deleted** — `source/worker.rs` (spawn, frames, caps,
   kill, count; serve, the heap limit, `RLIMIT_CPU` armed a request; the `Worker` trait; the
   allocator), `WORKERS` and `--worker`; `html.rs` split into the worker (`Labels`) and `Painted`
   over the pipe, pixels back; the deletions (`paint_work` and its helpers, `Recorder`, the 8 MiB
   thread, `catch_unwind`, `cost`, `system_fonts`, `peniko`, the version guard); the nesting limit
   at 1,024, in the writer; the WOFF table check in `font_size`; the page's estimate counting parts only; the
-  in-process seam for the unit tests; `cap` and `rustix`'s `time` in `Cargo.toml`. *Files:*
+  in-process seam for the unit tests; `cap` and `rustix`'s `time` in `Cargo.toml`; `tile`
+  carried to the pictures a document's page refers to (`picture.rs`'s `Promise::draw`, from
+  `wordcraft.rs`'s `drawn_pictures`), a picture drawn for a tile drawn again for a page, so a
+  Markdown or HTML tile that refers to a labelled drawing starts no worker either. *Files:*
   `src/source/worker.rs`, `src/source.rs`, `src/main.rs`, `src/view/pager.rs`, `src/source/svg.rs`,
-  `src/source/svg/html.rs`, `Cargo.toml`, `tests/it/resvg.rs`. *Verify:* `cargo test -j 2 --test it
-  resvg` with `--features svg-html` and with `--no-default-features --features pdf,svg`;
+  `src/source/svg/html.rs`, `src/source/picture.rs`, `src/source/wordcraft.rs`, `Cargo.toml`,
+  `tests/it/resvg.rs`, `tests/it/view_pager.rs`, `tests/it/view.rs`. *Verify:* `cargo test -j 2
+  --test it resvg` with `--features svg-html` and with `--no-default-features --features pdf,svg`;
+  a Markdown page referring to a labelled drawing rendered as a tile shows the drawing without
+  its label, and as a page with it (`a_tiles_pictures_are_drawn_as_tiles`), and a picture drawn
+  as a tile is drawn again for a page (`a_picture_drawn_as_a_tile_is_drawn_again_for_a_page`);
+  `cap` named in `worker.rs` alone (`nothing_but_the_worker_names_cap`);
   `worker.rs`'s tests with `--no-default-features`: a `sleep` killed on the wall clock and
   reaped, `sh -c 'exit 3'` and `sh -c 'kill -SEGV $$'` told apart, `yes` refused past the length
   cap, an unknown kind refused, a `Pixels` of the wrong length refused, the seventh worker
@@ -409,7 +421,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   grows without the recorder, so the heap's comes first: a regression for either cap), with its
   warning (`2px` drawn); a label 20,000 levels deep under an XHTML `<metadata>` left out with its
   warning, no crash; a 2,000,000-pixel dotted border, and a 64 KiB `content`
-  on 100,000 elements, each aborted at the heap cap with its warning; a WOFF whose table is
+  on 99,000 elements (100,000 are past their limit before the worker), each aborted at the heap
+  cap with its warning; a WOFF whose table is
   stored larger than it unpacks refused alone, the label drawn without it
   (`a_woffs_inconsistent_tables_are_refused`); 10,000 elements clipped by a 1,000-point polygon,
   and a `body::before` wavy underline under 1,000 labels, each drawn or left out within the wall
@@ -514,3 +527,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-09 — No labels in a list's tiles, owner's decision: a tile's render (`Request::tile`, set
   by the pager) starts no worker and warns of no labels, its fallbacks still cut; a drawing opened
   or printed draws them. Six workers stay, a backstop no longer reached.
+- 2026-11-09 — Task 5, the worker ([notes](0004-draw-an-svgs-html-labels-impl-20261109_1432.md#task-5-blitz-in-a-worker)):
+  built; Codex's P2 folded in, `tile` carried to a document's pictures; the labels' links told
+  as strings, hashed with the drawing's, since a count said one link twice; the `content` bomb at
+  99,000 elements (100,000 are past their limit before the worker); the writer's 1,024 levels
+  reachable only under a name the scan skips, plain nesting being the drawing's to refuse first.
