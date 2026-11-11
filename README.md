@@ -1,12 +1,12 @@
 # clview
 
-I hate leaving the terminal, so `clv` shows PDFs, images, Word documents, spreadsheets, drawings,
-Markdown and HTML inside it.
-
+I hate leaving the terminal, so `clv` was born: it shows images, Markdown, PDFs, Word documents,
+spreadsheets, SVGs, and HTML right in your kitty-compatible terminal.
 
 [demo](https://github.com/user-attachments/assets/4f8b4590-9c21-498c-b72c-ad7c5dcf1371)
 
-🤖 DISCLAIMER: entirely coded using Claude Code, and a bit of Codex (from my kitty terminal, of course)
+🤖 Disclaimer: clview is almost entirely coded with AI tools: mostly Claude Code, some Codex, OpenCode,
+Pi and others, always from my kitty terminal, of course.
 
 `clv` draws using the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 when available: kitty, Ghostty and WezTerm, locally or over SSH, and inside tmux or Zellij too. It
@@ -59,6 +59,8 @@ See [`docs/usage.md`](docs/usage.md) for all options and more details.
 | Zip archives (and what is a zip inside: jar, cbz, epub…), as directories | the [`zip`](https://crates.io/crates/zip) crate |
 | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories; and a file compressed alone (`paper.pdf.gz`) | [flate2](https://crates.io/crates/flate2), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2), and a tar reader of clv's own |
 
+Missing a format you use? [Open an issue](https://github.com/dobladez/clview/issues) saying which.
+
 ## Installing
 
 With [Homebrew](https://brew.sh), on macOS or Linux:
@@ -83,20 +85,21 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 ## Plans
 
-- Add proper support for ebooks (epub, etc.)
+- Add support for TXT! yes, plain text not yet supported :-) ironic
+- Search!
 - Add a config file for customization and remembering settings
 - Remember positions of previously opened files
+- Add proper support for ebooks (epub, etc.)
 - Let go of a list's files once the reader has moved on: a PDF opened holds its whole file until
   the list is left.
 - Hold the grid's count to a row until a Markdown or HTML document's new layout lands: after `3.`
   the old pages are drawn three to a row, shrunk, until the columns are ready.
-- More than one PDF backend to choose from.
 - AVIF, colour profiles, and an animation's frames as its pages.
 - More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
   its pages; an epub's pictures, and a document's in an archive.
 - Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
-- HTML documents through Blitz, which draws an SVG's HTML labels, weighed against wordcraft's
-  importer: Blitz lays out one long page, where documents are pages the window's size.
+- Maybe: HTML documents through Blitz, which draws an SVG's HTML labels, weighed against
+  wordcraft's importer: Blitz lays out one long page, where documents are pages the window's size.
 - Bound what an SVG's stylesheets take to parse, a [known issue](docs/usage.md#known-issues): one
   long declaration in a `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open,
   labels or not, which the drawing's limits don't count. A cap on a `<style>`'s size before it is
@@ -114,6 +117,11 @@ made in [`docs/adr/`](docs/adr/README.md).
 `clv` began as the `view` subcommand in pdfcraft's command line, in
 [pull request #2920](https://github.com/storytold/pdfcraft/pull/2920). I immediately realized I
 wanted to support all other types of docs and it had to be a separate tool.
+
+Prior to `clv` I was using `icat` for images, `tdf` for PDFs, `mdv` or `mdcat` for Markdown, and didn't
+have anything for most other doc types. So I imagined a "display anything" command, and here we are.
+
+Find me on X: [@dobladez](https://x.com/dobladez).
 
 ## License
 
