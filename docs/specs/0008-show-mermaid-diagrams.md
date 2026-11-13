@@ -1,6 +1,6 @@
 # Spec-0008: Show Mermaid diagrams
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-13
 - **Related:** [Spec-0009](0009-draw-fenced-blocks-as-pictures.md) (a document's fenced blocks drawn as pictures), which builds on this and on
   its cache of what diagrams were turned into;
@@ -273,3 +273,4 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 - 2026-11-13 — Ready: the spike's findings (ADR-0030), merman approved by the owner; the numbers
   marked *(spike)* filled in, merman's limits and labels' config added, ELK's routing and diagrams
   past merman's limits out of scope (spec-update).
+- 2026-11-13 — Implementing ([notes](0008-show-mermaid-diagrams-impl-20261113_1933.md)).

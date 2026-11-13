@@ -43,7 +43,7 @@ fails while it disagrees with them.
 | 0005 | [Pages to a row on their own keys, and a document's margins](0005-set-pages-to-a-row-and-margins.md) | Done |
 | 0006 | [Search a PDF's text](0006-search-a-pdfs-text.md) | Done |
 | 0007 | [Search Markdown, HTML and Word documents](0007-search-markdown-html-and-word-documents.md) | Done |
-| 0008 | [Show Mermaid diagrams](0008-show-mermaid-diagrams.md) | Ready |
+| 0008 | [Show Mermaid diagrams](0008-show-mermaid-diagrams.md) | Implementing |
 | 0009 | [Draw a document's fenced blocks as pictures](0009-draw-fenced-blocks-as-pictures.md) | Ready |
 
 ## Lifecycle
