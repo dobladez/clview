@@ -1,6 +1,6 @@
 # Spec-0006: Search a PDF's text
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-13
 - **Related:** [README's Plans](../../README.md#plans) ("Search!": PDFs and spreadsheets here,
   Markdown, HTML and Word in [Spec-0007](0007-search-markdown-html-and-word-documents.md));
@@ -269,3 +269,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-13 — After a second review: `Enter` searches (measured), the contract in chunks and
   rectangles asked for, tasks reordered, a tint changed is a page rendered again, the worker for its
   heap, the caps fixed.
+- 2026-11-13 — Implementing ([notes](0006-search-a-pdfs-text-impl-20261113_1121.md)).
