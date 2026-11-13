@@ -410,7 +410,7 @@ PDF over 512 MiB isn't read at all, and `/` says so. The process ends with the s
 
 A document's text is read from the layout its pages are drawn from, a paragraph at a time, on a
 thread of its own: what a document costs to lay out is bounded when it opens, and its text costs
-little beside that. A paragraph of more than 1 MiB of text is left unread, and with it every page
+little beside that ([ADR-0030](adr/0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md)). A paragraph of more than 1 MiB of text is left unread, and with it every page
 it is on, the status line saying so (`· read 120 of 500 pages`) and why.
 
 What is searched in a document is its body, each paragraph's own text: a table's cells too, a

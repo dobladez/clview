@@ -161,3 +161,28 @@ surprises, and what a later reader would want.
 - **Verify.** `cargo test -j 2 --test it view_pager` passes, with the five gates (463 unit tests,
   214 in `tests/it`) and each backend alone and `pdf,svg`. The manual check (kitty, a Markdown
   file, `/word⏎ n`, then `]` and `+`) is the owner's: the task's box stays open until it is done.
+
+## The Done checklist
+
+- **The quality gates** pass at the last code commit (`8389dc3`): the five, and each backend alone
+  and `pdf,svg`; `--test docs` again after the docs below.
+- **Tests added, each seen failing** (the tasks above say how): in `texts.rs`,
+  `the_search_ending_does_what_the_reader_set_last` (and the three moved, still failing without
+  their fixes); in `search.rs`, `a_chunk_across_a_page_break_is_searched_on_either_page_alone`,
+  `what_is_left_unread_is_counted_in_pages_whatever_the_chunks`,
+  `chunks_follow_the_pages_given_and_where_they_start` (rewritten),
+  `a_search_outlives_a_relayout_of_the_same_text`, `a_search_of_another_text_laid_out_starts_over`;
+  in `wordcraft.rs`, the five of task 2; in `tests/it/wordcraft.rs`, the three of task 2; in
+  `tests/it/view_pager.rs`, `a_search_outlives_a_relayout_and_starts_over_on_another_text`.
+- **Manual** (kitty and tmux): the owner's, open, with the two tasks' own.
+- **The docs.** `CHANGELOG.md`'s search entry names documents and a search outliving a relayout;
+  usage's [Searching a document's text](../usage.md#searching-a-documents-text) says what is
+  searched in a document and how, and the Limits row; architecture's
+  [A document's text](../architecture.md#a-documents-text-wordcraftrs), the contract's
+  `chunks_on`, the queue and a search across a relayout;
+  [ADR-0030](../adr/0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md) for the text
+  read from the pool's layout, on a thread, through a `Weak` (the choice is task 2's; written after
+  it, in its own commit); README's Plans bullet is out.
+- **Found on the way:** `main` gained two commits after this branch was made (`c980915`, a tint
+  test in `view_pager.rs` waiting for page 1 after `Esc`, and `071da53`, CI), which a merge will
+  have to meet; this branch makes some of `view_pager.rs`'s helpers `pub(crate)`.

@@ -41,6 +41,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0027 | [A PDF's text read in a worker process, for its heap cap](0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md) | Accepted |
 | 0028 | [A search's matches tinted into the page's pixels, the page rendered again when its tint changes](0028-matches-tinted-into-the-pages-pixels.md) | Accepted |
 | 0029 | [The pager keeps 256 MiB of pages in the terminal](0029-the-pager-keeps-256-mib-of-pages-in-the-terminal.md) | Accepted |
+| 0030 | [A document's text read from the pool's layout, on a thread](0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md) | Accepted |
 
 ## When to write one
 

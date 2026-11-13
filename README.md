@@ -86,8 +86,6 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 ## Plans
 
 - Add support for TXT! yes, plain text not yet supported :-) ironic
-- Search Markdown, HTML and Word documents, as a PDF's text is searched now
-  ([Spec-0007](docs/specs/0007-search-markdown-html-and-word-documents.md), a draft).
 - Markdown's fenced code highlighted by its language.
 - Mermaid diagrams, their files and a Markdown `mermaid` block drawn as its diagram
   ([Spec-0008](docs/specs/0008-show-mermaid-diagrams.md), a draft, then [Spec-0009](docs/specs/0009-draw-fenced-blocks-as-pictures.md)).

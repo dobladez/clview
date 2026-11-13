@@ -1063,7 +1063,8 @@ it, through a `Weak`, so a search after the first render costs no second layout 
 still lets go of what the old one held once no search holds it either. A list's tile renders
 through its own (`renderer()`) and never searches. No worker process: what a document costs to lay
 out is bounded before it is ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)),
-and a paragraph's text and selection cost little beside that.
+and a paragraph's text and selection cost little beside that
+([ADR-0030](adr/0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md)).
 
 A chunk's text is the paragraph's `text` read piece by piece (`pieces`): an inline object (`OBJ`)
 as its `plain_text()`, so a field as its result; a soft hyphen as nothing and a non-breaking one as

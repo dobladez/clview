@@ -150,11 +150,11 @@ change, so a search outlives one.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them.
 - [ ] Manual: in kitty, a Markdown file and a Word document with a table, `/word⏎`, `n` through
   the matches, `]` and a resize keeping the match, `d` on the Markdown; inside tmux the same.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)); README's
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)); README's
   Plans bullet "Search Markdown, HTML and Word documents" comes out.
 
 ## Changelog
