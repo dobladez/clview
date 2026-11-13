@@ -12,8 +12,8 @@ keep it short.
 | After touching `cfg` attributes | Each backend alone, also there |
 | One test, while working | `cargo test -j 2 --test it <name>`, or `--bin clv <name>` for a unit test |
 | The docs' links and the specs' Index | `cargo test -j 2 --test docs` |
-| The queue | `cargo run -q --no-default-features --example spec_list [bucket]` |
-| Rewrite the Index | `cargo run -q --no-default-features --example spec_list -- --index` |
+| The queue | `cargo specs [bucket]`, an alias of `cargo run -q --no-default-features --example spec_list` |
+| Rewrite the Index | `cargo specs --index` |
 
 Keep `-j 2`: the PDF backend is a large build.
 

@@ -1,0 +1,4 @@
+# Shorthands for this repository's own tools.
+[alias]
+# The change specs' queue (docs/specs/README.md): `cargo specs`, `cargo specs ready`, `cargo specs --index`.
+specs = "run -q --no-default-features --example spec_list --"

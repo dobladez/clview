@@ -26,6 +26,8 @@ invoked however the agent offers them (`/spec-new` in Claude Code, `$spec-new` i
 `spec-list` runs `cargo run -q --no-default-features --example spec_list`
 ([`examples/spec_list.rs`](../../examples/spec_list.rs)), which takes a bucket
 (`implementing`, `ready`, `draft`, `shelved`, `done`), or `--index` to rewrite the Index below.
+`cargo specs` is the same, an alias in [`.cargo/config.toml`](../../.cargo/config.toml):
+`cargo specs ready`, `cargo specs --index`.
 
 ## Index
 
