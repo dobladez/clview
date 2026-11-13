@@ -717,6 +717,13 @@ pub(crate) trait Texts {
     /// aren't in the pages' order (a table's cells, side by side on a page and one after another
     /// in the text), the range may take in chunks with no text on that page.
     fn chunks_on(&self, page: usize) -> Range<usize>;
+    /// What the text was read from, as a number the same for the same text and, near enough,
+    /// never for another: a search of a document laid out again keeps what it read only if the new
+    /// text's is the same. `None` where the source can't say, the default: a PDF's, which is never
+    /// laid out again, and whose search would start over.
+    fn fingerprint(&self) -> Option<u64> {
+        None
+    }
     /// Replace what is wanted, the most urgent first. One still waited for is listed again every
     /// time; one given isn't given again while it stays listed.
     fn set_queue(&self, wanted: Vec<Want>);

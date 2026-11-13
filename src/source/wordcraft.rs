@@ -429,8 +429,10 @@ fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, Strin
     let font = font_given(options.value(FONT.option.name));
     let margin = margin_given(options.value(MARGIN.option.name));
     let at = At { width, font, margin };
-    let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room));
-    let (stored, laid) = match input.reopenable()? {
+    let read_as = |bytes: &[u8], beside: Option<&Path>| {
+        (caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room)), fingerprint_of(bytes))
+    };
+    let (stored, (laid, fingerprint)) = match input.reopenable()? {
         Reopenable::Disk(file) => {
             let bytes = read(file).map_err(error)?;
             (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
@@ -449,7 +451,17 @@ fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, Strin
     // reads it again.
     let laid = laid.map_err(error)?;
     let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, kind));
-    Ok(Paged(Arc::new(Document::new(stored, kind, password, path, sizes, (at, room), paras))))
+    let mut document = Document::new(stored, kind, password, path, sizes, (at, room), paras);
+    document.fingerprint = fingerprint;
+    Ok(Paged(Arc::new(document)))
+}
+
+/// A hash of a document's bytes, the same for the same bytes in this build ([`Texts::fingerprint`]).
+fn fingerprint_of(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The largest file this reads: 256 MiB.
@@ -585,6 +597,9 @@ struct Document {
     /// how many it has: a search's chunks ([`Paragraphs`]).
     on: Vec<Range<usize>>,
     count: usize,
+    /// A hash of the bytes it was laid out from, here and in a relayout: what its text was read from
+    /// ([`Texts::fingerprint`]).
+    fingerprint: u64,
     /// The layout a pool renders with and a search reads, while either holds it: laid out once for
     /// both, and let go of with the last ([`Document::shared`]).
     shared: Mutex<Weak<Cache>>,
@@ -884,6 +899,11 @@ impl Texts for Paragraphs {
         self.document.on.get(page).cloned().unwrap_or_default()
     }
 
+    /// The bytes it was laid out from, hashed: a file changed on disk since is another text.
+    fn fingerprint(&self) -> Option<u64> {
+        Some(self.document.fingerprint)
+    }
+
     fn set_queue(&self, wanted: Vec<Want>) {
         self.queue.set_queue(wanted);
     }
@@ -902,21 +922,35 @@ struct Reader {
 }
 
 /// Each piece of a paragraph's text as it is searched, with the bytes of [`Paragraph::text`] it
-/// stands for: a character as it is, an inline object as its text (a field as its result) or
-/// nothing, a soft hyphen as nothing, a non-breaking one as a hyphen, a column break as a space.
-fn pieces(para: &Paragraph) -> impl Iterator<Item = (&str, usize, usize)> {
+/// stands for: a character as it is, an inline object as its text ([`object_text`]) or nothing, a
+/// soft hyphen as nothing, a non-breaking one as a hyphen, a column break as a space.
+fn pieces(para: &Paragraph) -> impl Iterator<Item = (Cow<'_, str>, usize, usize)> {
     let mut objects = para.objects.iter();
     para.text.char_indices().map(move |(at, c)| {
         let end = at.saturating_add(c.len_utf8());
         let piece = match c {
-            OBJ => objects.next().map_or("", InlineObject::plain_text),
-            SOFT_HYPHEN => "",
-            NB_HYPHEN => "-",
-            COLUMN_BREAK => " ",
-            _ => para.text.get(at..end).unwrap_or(""),
+            OBJ => objects.next().map_or(Cow::Borrowed(""), object_text),
+            SOFT_HYPHEN => Cow::Borrowed(""),
+            NB_HYPHEN => Cow::Borrowed("-"),
+            COLUMN_BREAK => Cow::Borrowed(" "),
+            _ => Cow::Borrowed(para.text.get(at..end).unwrap_or("")),
         };
         (piece, at, end)
     })
+}
+
+/// An inline object's text as it is searched: its `plain_text()`, but a field as the page shows
+/// it. A field whose text the layout computes from where it lands (`PAGE`, `NUMPAGES`, `SECTION`,
+/// …), or from what it was given when its saved result is empty (`FILENAME`, `TITLE`), is nothing:
+/// a search never finds text the page doesn't show. The rest show their saved result, but `ASK`
+/// and `SET`, which show nothing.
+fn object_text(object: &InlineObject) -> Cow<'_, str> {
+    let InlineObject::Field { instr, result, .. } = object else { return Cow::Borrowed(object.plain_text()) };
+    let shown = caught(|| Ok(wordcraft_layout::fields::field_text_on(instr, result, &wordcraft_layout::FieldCtx::default(), 1)));
+    match shown {
+        Ok((shown, false)) if !result.is_empty() => Cow::Owned(shown),
+        _ => Cow::Borrowed(""),
+    }
 }
 
 /// The bytes of `para`'s text that the characters `from..to` of its text as searched ([`pieces`])
@@ -967,7 +1001,7 @@ impl Answer for Reader {
                 if long {
                     break;
                 }
-                text.push_str(piece);
+                text.push_str(&piece);
             }
         } else {
             let page = self.page_of(chunk).saturating_add(1);
@@ -1021,6 +1055,7 @@ impl Document {
             paragraphs,
             on,
             count,
+            fingerprint: 0,
             shared: Mutex::new(Weak::new()),
             #[cfg(test)]
             layouts: std::sync::atomic::AtomicUsize::new(0),
@@ -1087,7 +1122,9 @@ impl Document {
         let Self { stored, kind, password, path, .. } = self;
         let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
         let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, *kind));
-        Ok(Paged(Arc::new(Document::new(stored, *kind, password, path, sizes, (at, room), paras))))
+        let mut document = Document::new(stored, *kind, password, path, sizes, (at, room), paras);
+        document.fingerprint = fingerprint_of(&bytes);
+        Ok(Paged(Arc::new(document)))
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
@@ -2708,8 +2745,16 @@ mod tests {
     #[test]
     fn a_fields_result_is_its_text() {
         let body = r#"<w:p><w:r><w:t xml:space="preserve">By </w:t></w:r><w:fldSimple w:instr=" AUTHOR "><w:r><w:t>Ada Lovelace</w:t></w:r></w:fldSimple><w:r><w:t>.</w:t></w:r></w:p>"#;
-        let paged = paged("field.docx", &docx(body, ""));
-        assert_eq!(all_text(&paged), ["By Ada Lovelace."]);
+        // A page number saved as 99 shows the page it lands on, as the layout computes it, and is
+        // left out; so is the count of pages.
+        let page = |instr: &str, saved: &str| {
+            format!(
+                r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" {instr} "><w:r><w:t>{saved}</w:t></w:r></w:fldSimple><w:r><w:t>.</w:t></w:r></w:p>"#
+            )
+        };
+        let body = format!("{body}{}{}", page("PAGE", "99"), page("NUMPAGES", "98"));
+        let paged = paged("field.docx", &docx(&body, ""));
+        assert_eq!(all_text(&paged), ["By Ada Lovelace.", "Page .", "Page ."]);
         let texts = paged.texts().unwrap();
         let rects = placed(&*texts, 0, 3, 7);
         assert!(matches!(rects[..], [(0, [x0, _, x1, _])] if x1 > x0), "the field's result is placed: {rects:?}");

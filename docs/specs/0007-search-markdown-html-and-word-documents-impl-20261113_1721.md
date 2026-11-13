@@ -226,3 +226,38 @@ Three findings, two on task 1 and one on task 2.
   rendered, its tint coming with the next, and the test took the first placed. It now waits for a
   page placed since with the reader's colour (`placed_tinted`), after `G` too.
 - **Gates.** The five pass; `tests/it` twice more in full, under the same load.
+
+## After the branch's first review (Codex, round 2, 2026-11-13)
+
+Three findings, each with a test seen failing before its fix.
+
+- **A relayout lost an Enter still choosing.** Enter on a scrolled tall page waits for the page's
+  rectangles (`deferred`, no match yet); `relaid` carried neither. The step is now kept
+  (`Search::relanding`) and taken again at the next poll from the top of the screen as it is in
+  the new layout, as a step the same way and as far, then waits for the new layout's rectangles as
+  any does. A key first drops it, as it drops a waiting step. Where the search starts over, an
+  Enter that was choosing becomes a waiting Enter (`waiting`), which goes once a match is found.
+  Test: `an_enter_waiting_when_laid_out_again_goes_in_the_new_layout`, seen failing (no move,
+  `/ab 3`).
+- **The same number of paragraphs was taken for the same text.** Decided: the contract gains
+  `Texts::fingerprint() -> Option<u64>`, `None` by default, which a PDF keeps (never laid out
+  again: its search would start over). wordcraft's is a hash of the bytes it read to open the file
+  or to lay it out again (`fingerprint_of`, std's `DefaultHasher`, whose keys are fixed). The search
+  is kept only for an equal `Some` and as many chunks. Comparing each chunk's new text as it
+  arrives was the other way: it would keep a search the moment its text is read again, but read
+  it all again for every relayout and hold the old text meanwhile; a hash at the backend costs a
+  pass over bytes it reads anyway. Left: the pool reads the file again on its first render, so a
+  file changed between the relayout's read and that render isn't seen; the same window has the
+  pages' sizes disagreeing with the render today. Tests: `a_search_of_another_text_laid_out_starts_over`
+  (as many chunks, another fingerprint; and none) and the pager's rewrite with the same paragraph
+  count (`/with 30`), seen failing with the count alone deciding, and with wordcraft's fingerprint
+  the same for any bytes.
+- **A computed field searched as its saved result.** wordcraft's layout shapes a field's text
+  (`field_text_on`, public in `wordcraft_layout::fields`) and keeps glyphs, not that text, so the
+  laid-out text can't be read back. `object_text` asks `field_text_on` with an empty context: a
+  field it says depends on where it lands (`PAGE`, `NUMPAGES`, `SECTIONPAGES`, `SECTION`, a known
+  `PAGEREF`) is left out, and so is one with nothing saved (what `TITLE` or `FILENAME` show then
+  comes from the document, not known here); the rest are what it returns (the saved result, or
+  nothing for `ASK` and `SET`). Usage says so. Test: `a_fields_result_is_its_text` with a `PAGE`
+  saved as 99 and a `NUMPAGES` as 98, seen failing (`Page 99.`). The author field's rectangles are
+  still placed, in the same test.

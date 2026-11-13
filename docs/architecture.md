@@ -955,11 +955,16 @@ match that runs from the bottom of one page onto the top of the next, scrolled p
 **A document laid out again** (`Pager::replace`) keeps its search: the level is replaced whole,
 and the search is taken from the old one (`Nav::take_search`, with whether the reader's match is on
 screen) and handed the new source's `Texts` (`Search::relaid`). While the new text comes in as many
-chunks it is taken for the same text: the chunks read, the matches and the one the reader is on are
-kept, every rectangle is dropped and asked for again of the new layout, and the old `Texts` goes
-with what was still asked of it; the view goes back to the reader's match once its place is known
-if it was on screen. A text in another number of chunks (the file changed on disk) starts the
-search over, the query and whether it is typed kept.
+chunks, and the source says it was read from the same (`Texts::fingerprint`: a Word or Markdown
+document's is a hash of the bytes read to open it or lay it out again, `fingerprint_of`; a PDF's is `None`,
+never laid out again), it is taken for the same text: the chunks read, the matches and the one the
+reader is on are kept, every rectangle is dropped and asked for again of the new layout, and the
+old `Texts` goes with what was still asked of it; the view goes back to the reader's match once its
+place is known if it was on screen, and a step that was waiting to know where the top of a tall
+page fell (`Search::deferred`) is taken again from the top of the screen in the new layout
+(`Search::relanding`). Otherwise (the file changed on disk, in as many paragraphs or not) the
+search starts over, the query and whether it is typed kept, and an `Enter` that was waiting goes
+once a match is found.
 
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
@@ -1078,7 +1083,10 @@ and a paragraph's text and selection cost little beside that
 ([ADR-0030](adr/0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md)).
 
 A chunk's text is the paragraph's `text` read piece by piece (`pieces`): an inline object (`OBJ`)
-as its `plain_text()`, so a field as its result; a soft hyphen as nothing and a non-breaking one as
+as its `plain_text()`, but a field as the page shows it (`object_text`, through wordcraft's own
+`fields::field_text_on`): one the layout computes from where it lands (`PAGE`, `NUMPAGES`,
+`SECTION`) or from what it was given when it saved nothing is left out, so the search never finds
+text the page doesn't show; a soft hyphen as nothing and a non-breaking one as
 `-`, so a word reads as typed; a column break as a space. A paragraph past 1 MiB of it
 (`MAX_PARAGRAPH`) is answered as unread, with its first page. A range's rectangles are wordcraft's
 selection of it (`DocLayout::selection_rects`): the range's characters mapped back to bytes of the

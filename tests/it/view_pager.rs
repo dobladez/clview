@@ -3106,11 +3106,17 @@ fn a_search_outlives_a_relayout_and_starts_over_on_another_text() {
     view.wait_until("laid out again while typed", |t| last_bar(t).contains(" /wit 60 ") && last_bar(t).contains(" 1 per row "));
     view.press("h\r");
     view.wait_until("kept", |t| last_bar(t).contains(" /with ") && last_bar(t).contains("/60 "));
-    // Another text on disk: its search starts over, the query kept, its matches counted anew.
+    // Another text on disk, in as many paragraphs: its search starts over, the query kept, its
+    // matches counted anew, the old text's never kept for its count of paragraphs.
+    let half: String = (1..=60).map(|n| format!("Paragraph {n}, {} other words.\n\n", if n % 2 == 0 { "with" } else { "sans" })).collect();
+    std::fs::write(&path, format!("# Long\n\n{half}")).unwrap();
+    view.press("40]");
+    view.wait_until("started over, as many paragraphs", |t| bar(t).contains("· width 40 ·") && last_bar(t).contains(" /with 30 "));
+    // And in more.
     let more: String = (1..=80).map(|n| format!("Paragraph {n}, with other words.\n\n")).collect();
     std::fs::write(&path, format!("# Longer\n\n{more}")).unwrap();
-    view.press("40]");
-    view.wait_until("started over", |t| bar(t).contains("· width 40 ·") && last_bar(t).contains(" /with 80 "));
+    view.press("0]");
+    view.wait_until("started over", |t| last_bar(t).contains(" 1 per row ") && last_bar(t).contains(" /with 80 "));
     view.press("q");
     assert!(view.finish().success());
 }

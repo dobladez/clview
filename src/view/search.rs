@@ -416,6 +416,11 @@ pub(super) struct Search {
     /// one a key just interrupted, for that key to go on with if it is a step the same way.
     deferred: Option<Landing>,
     interrupted: Option<Landing>,
+    /// A step that was waiting so when the document was laid out again: to be taken again from the
+    /// top of the screen as it is in the new layout, at the next [`Search::poll`].
+    relanding: Option<Landing>,
+    /// What the text was read from, as the source says ([`Texts::fingerprint`]).
+    fingerprint: Option<u64>,
     /// The reader's match was just gone to, and the view hasn't been taken there yet; and whether
     /// that was so when the key now being answered was pressed ([`Search::heard`]).
     going: bool,
@@ -460,6 +465,7 @@ impl Search {
     pub(super) fn new(texts: Box<dyn Texts>, pages: &[usize], count: usize) -> Self {
         // Of a text in more chunks than a search takes, the first are read, and the rest left unread.
         let total = texts.chunks().min(MAX_CHUNKS);
+        let texts_fingerprint = texts.fingerprint();
         // What the source says, put right where it is wrong: each page's chunks start and end no
         // earlier than an earlier page's, and within those searched.
         let (mut on, mut past) = (Vec::with_capacity(count), Vec::with_capacity(count));
@@ -526,6 +532,8 @@ impl Search {
             waiting: false,
             revealing: false,
             deferred: None,
+            relanding: None,
+            fingerprint: texts_fingerprint,
             interrupted: None,
             going: false,
             stepping: false,
@@ -543,21 +551,27 @@ impl Search {
     }
 
     /// This search, of a document laid out again, on its new text `texts`, the document's `count`
-    /// pages of which `pages` are shown. While the new text comes in as many chunks, it is the same
-    /// text: the query, whether it is typed, the chunks read, the matches and the one the reader is
-    /// on are kept, and only where the matches are is asked for again, of the new layout; what was
-    /// asked of the old is let go of with it. The view goes back to the reader's match once its new
-    /// place is known if it was on screen (`follow`). Otherwise the text is another (the file
-    /// changed): the search starts over, the query kept.
+    /// pages of which `pages` are shown. Where the source says the new text was read from the same
+    /// as the old ([`Texts::fingerprint`]), in as many chunks, the query, whether it is typed, the
+    /// chunks read, the matches and the one the reader is on are kept, and only where the matches
+    /// are is asked for again, of the new layout; what was asked of the old is let go of with it.
+    /// The view goes back to the reader's match once its new place is known if it was on screen
+    /// (`follow`), and a step that was waiting to know where the screen's top fell goes from the
+    /// top of the screen in the new layout. Otherwise the text may be another (the file changed):
+    /// the search starts over, the query kept, and an Enter that was waiting goes once a match is
+    /// found.
     pub(super) fn relaid(self, texts: Box<dyn Texts>, pages: &[usize], count: usize, follow: bool) -> Self {
         let mut new = Self::new(texts, pages, count);
         new.typing = self.typing;
         new.query = self.query;
         new.needle = self.needle;
         new.waiting = self.waiting;
-        if new.chunks.len() != self.chunks.len() {
+        let same = new.fingerprint.is_some() && new.fingerprint == self.fingerprint && new.chunks.len() == self.chunks.len();
+        if !same {
+            new.waiting |= self.deferred.is_some_and(|landing| !landing.wraps);
             return new;
         }
+        new.relanding = self.deferred;
         for (chunk, was) in self.chunks.into_iter().enumerate() {
             let Some(slot @ Chunk::Unread) = new.chunks.get_mut(chunk) else { continue };
             let read = match was {
@@ -611,6 +625,7 @@ impl Search {
         // A step still waiting on where the screen's top falls is this key's to go on with, if it is
         // a step the same way ([`Search::step`]); otherwise it is dropped.
         self.interrupted = self.deferred.take();
+        self.relanding = None;
         // Whether the key before this one went to a match the view hasn't been taken to yet: keys
         // read together, or faster than the match's place is known.
         self.stepping = std::mem::take(&mut self.going);
@@ -847,6 +862,9 @@ impl Search {
         // A step, or Enter, that waited to know where the top of the screen fell among a tall
         // page's matches: by the screen as it was then, wherever the view is now. Nothing was
         // scrolled to meanwhile, so the view is scrolled once, to the match it lands on.
+        if let Some(Landing { forward, steps, wraps, .. }) = self.relanding.take() {
+            self.deferred = Some(Landing::from(screen, forward, steps, wraps));
+        }
         if let Some(landing) = self.deferred.take() {
             polled.go = self.land(landing).or(polled.go);
         }
@@ -1183,6 +1201,8 @@ pub(super) mod tests {
     pub(in crate::view) struct Fake {
         pub(in crate::view) chunks: Vec<String>,
         pub(in crate::view) on: Option<Vec<Range<usize>>>,
+        /// What it says its text was read from ([`Texts::fingerprint`]).
+        pub(in crate::view) fingerprint: Option<u64>,
         pub(in crate::view) broken: Vec<usize>,
         pub(in crate::view) state: RefCell<State>,
     }
@@ -1219,6 +1239,9 @@ pub(super) mod tests {
         }
         fn chunks_on(&self, page: usize) -> Range<usize> {
             self.on.as_ref().map_or(page..page + 1, |on| on.get(page).cloned().unwrap_or_default())
+        }
+        fn fingerprint(&self) -> Option<u64> {
+            self.fingerprint
         }
         fn set_queue(&self, wanted: Vec<Want>) {
             let mut state = self.state.borrow_mut();
@@ -1951,7 +1974,7 @@ pub(super) mod tests {
     #[test]
     fn a_search_outlives_a_relayout_of_the_same_text() {
         let chunks = ["one x", "two x", "three x", "four x"].map(String::from).to_vec();
-        let old = Rc::new(Fake { chunks: chunks.clone(), ..Fake::default() });
+        let old = Rc::new(Fake { chunks: chunks.clone(), fingerprint: Some(7), ..Fake::default() });
         let mut search = search(&old);
         type_in(&mut search, "x");
         settle(&mut search, &at(&[0]));
@@ -1960,7 +1983,7 @@ pub(super) mod tests {
         settle(&mut search, &at(&[1]));
         assert_eq!(search.status(), "/x 2/4");
         // Two paragraphs a page now: the reader's match on the first.
-        let new = Rc::new(Fake { chunks: chunks.clone(), on: Some(vec![0..2, 2..4]), ..Fake::default() });
+        let new = Rc::new(Fake { chunks: chunks.clone(), on: Some(vec![0..2, 2..4]), fingerprint: Some(7), ..Fake::default() });
         let mut search = search.relaid(Box::new(new.clone()), &[0, 1], 2, true);
         assert_eq!(search.status(), "/x 2/4");
         let polled = settle(&mut search, &at(&[1]));
@@ -1969,24 +1992,60 @@ pub(super) mod tests {
         assert_eq!(search.step(true, 1, &at(&[0])).map(|go| go.page), Some(1));
         assert_eq!(search.status(), "/x 3/4");
         // Not followed when it was off screen.
-        let again = Rc::new(Fake { chunks: chunks.clone(), ..Fake::default() });
+        let again = Rc::new(Fake { chunks: chunks.clone(), fingerprint: Some(7), ..Fake::default() });
         let mut search = search.relaid(Box::new(again), &[0, 1, 2, 3], 4, false);
         assert!(settle(&mut search, &at(&[0])).iter().all(|polled| polled.go.is_none()));
         assert_eq!(search.status(), "/x 3/4");
         // Being typed.
         search.edit();
         search.typed('y');
-        let typed = Rc::new(Fake { chunks, ..Fake::default() });
+        let typed = Rc::new(Fake { chunks, fingerprint: Some(7), ..Fake::default() });
         let search = search.relaid(Box::new(typed), &[0, 1, 2, 3], 4, true);
         assert!(search.typing() && search.query() == "xy");
     }
 
+    /// An Enter waiting to know where the top of a tall page falls among its matches when the
+    /// document is laid out again isn't lost: it goes, from the screen as it is in the new layout,
+    /// once the new layout says where the matches are.
+    #[test]
+    fn an_enter_waiting_when_laid_out_again_goes_in_the_new_layout() {
+        // Three matches, 10, 50 and 90 down; the part from 70 down is shown.
+        let text = format!("{0}ab{1}ab{1}ab", "x".repeat(10), "x".repeat(38));
+        let fake = Rc::new(Fake { chunks: vec![text.clone()], fingerprint: Some(7), ..Fake::default() });
+        let mut search = search(&fake);
+        let low = Screen { top: 0, pages: &[0], near: &[], visible: Some((0.7, 1.0)) };
+        settle(&mut search, &low);
+        type_in(&mut search, "ab");
+        fake.state.borrow_mut().placing = Some(0);
+        assert_eq!(search.enter(&low), None);
+        search.poll(&low, &square);
+        // Laid out again before any rectangle came.
+        let new = Rc::new(Fake { chunks: vec![text], fingerprint: Some(7), ..Fake::default() });
+        let mut search = search.relaid(Box::new(new), &[0], 1, false);
+        let gone: Vec<Go> = settle(&mut search, &low).into_iter().filter_map(|polled| polled.go).collect();
+        assert_eq!((gone, search.status()), (vec![Go { page: 0, span: Some((0.9, 1.0)) }], "/ab 3/3".into()));
+    }
+
     /// Another text (the file changed on disk) starts the search over, the query kept, its matches
-    /// counted in the new text.
+    /// counted in the new text: one in as many chunks but read from something else, and one that
+    /// can't say what it was read from, too.
     #[test]
     fn a_search_of_another_text_laid_out_starts_over() {
-        let old = Fake::of(&["x", "x"]);
+        let old = Rc::new(Fake { chunks: vec!["x".into(), "x".into()], fingerprint: Some(7), ..Fake::default() });
         let mut search = search(&old);
+        type_in(&mut search, "x");
+        settle(&mut search, &at(&[0]));
+        search.enter(&at(&[0]));
+        let edited = Rc::new(Fake { chunks: vec!["x x".into(), "y".into()], fingerprint: Some(8), ..Fake::default() });
+        let mut search = search.relaid(Box::new(edited), &[0, 1], 2, true);
+        settle(&mut search, &at(&[0]));
+        assert_eq!(search.status(), "/x 2", "the old text's matches kept");
+        let unsaid = Rc::new(Fake { chunks: vec!["x x".into(), "y".into()], ..Fake::default() });
+        let mut search = search.relaid(Box::new(unsaid), &[0, 1], 2, true);
+        settle(&mut search, &at(&[0]));
+        assert_eq!(search.status(), "/x 2");
+        let old = Fake::of(&["x", "x"]);
+        let mut search = self::search(&old);
         type_in(&mut search, "x");
         settle(&mut search, &at(&[0]));
         search.enter(&at(&[0]));
