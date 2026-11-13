@@ -83,10 +83,12 @@ const BEHIND: usize = 1;
 /// Pages kept in the terminal, ready to show at once: the most recently shown stay. More when a
 /// screen shows many pages, so the screens around it stay too.
 const MAX_SENT: usize = 12;
-/// The most bytes of pixels kept in the terminal. kitty keeps 320 MB of images per screen, and
-/// past that drops nearly every image not on screen at once; inside tmux, other panes' images
-/// count against the same 320 MB.
-const BUDGET: u64 = 192 << 20;
+/// The most bytes of pixels kept in the terminal. kitty keeps 320 MiB of images per screen, and
+/// past that drops nearly every image not on screen at once. This leaves 64 MiB of it, a page of
+/// the largest size, for what isn't counted here: inside tmux, other panes' images count against
+/// the same 320 MiB
+/// ([ADR-0029](../../docs/adr/0029-the-pager-keeps-256-mib-of-pages-in-the-terminal.md)).
+const BUDGET: u64 = 256 << 20;
 /// The least the budget comes down to when the terminal drops images all the same.
 const MIN_BUDGET: u64 = 32 << 20;
 /// Failures remembered, so a page that fails isn't rendered again and again.
@@ -4220,6 +4222,7 @@ mod tests {
     /// room; and otherwise goes first. With no copy on screen it is sent as any page is.
     #[test]
     fn a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits_or_goes_first() {
+        // The rule, whatever the pager's own budget is: here 192 MiB.
         const BUDGET: u64 = 192 << 20;
         let mib = |n: u64| n << 20;
         // Two pages of 61 MiB on screen, 122 held, each to be sent again: the first beside all of it

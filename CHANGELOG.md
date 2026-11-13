@@ -17,6 +17,11 @@ works today. A version's section becomes the notes of its
   is left unread, the status line saying which. `/` only said that it filters lists. A picture, a
   drawing or a document says it has no text to search.
 
+### Changed
+
+- The pager keeps up to 256 MiB of pages ready in the terminal, where it kept 192 MiB: in a large
+  window, four of the largest pages where there were three.
+
 ## 0.4.0 (2026-11-10)
 
 ### Added

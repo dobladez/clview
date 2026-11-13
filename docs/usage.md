@@ -367,7 +367,7 @@ ink. A page is sent to the terminal again with its tint, so for a moment after a
 as it was; `n`, `N` and `p` move the orange, and clearing the search sends the pages as they were.
 Nothing is tinted while you type. At most 256 matches are tinted on the pages on screen and
 those kept ready around them. Where the pages on screen take most of what the terminal is given
-to keep (three or more large pages to a row in a very large window), there is no room for a page
+to keep (four or more large pages to a row in a very large window), there is no room for a page
 beside itself as it was: it goes blank for a moment, then comes back with its tint. `c` copies the
 page untinted, as it was rendered. In
 [text cells](#text-cells) the tint shows as far as the cells' colours carry it, and without
@@ -871,7 +871,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
 | What a search keeps of a file's text, and its matches | 64 MiB; 100,000 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
 | The matches tinted at a time, on the pages on screen and those kept ready around them | 256, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
-| The pages on screen and a page sent again with its tint, together | 192 MiB of pixels, what the terminal is given to keep | the page waits for another's old copy to go; where none will, it is blank until its tinted copy arrives |
+| The pages on screen and a page sent again with its tint, together | 256 MiB of pixels, what the terminal is given to keep | the page waits for another's old copy to go; where none will, it is blank until its tinted copy arrives |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 
 ## Known issues

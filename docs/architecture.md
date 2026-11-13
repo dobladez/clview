@@ -8,7 +8,7 @@ evidence, are in [`docs/adr/`](adr/README.md).
 
 The numbers were measured on the macOS laptop it was developed on (kitty 0.45, tmux 3.5a), by
 black-box observation. The same probes, run again against kitty 0.49.2, found the same behaviour:
-temporary files read and deleted, directly and through tmux, the same answers, the 320 MB quota and
+temporary files read and deleted, directly and through tmux, the same answers, the 320 MiB quota and
 the cell size.
 
 ## The crate
@@ -747,15 +747,18 @@ screens and the one before. Each page is sent as soon as it is ready, so turning
 placement. The pages on screen stay up until the next ones are ready, so the screen never goes
 blank in between.
 
-The terminal keeps at most 12 pages, and 192 MiB of pixels (`MAX_SENT`, `BUDGET`). When a screen
+The terminal keeps at most 12 pages, and 256 MiB of pixels (`MAX_SENT`, `BUDGET`). When a screen
 shows more than 3 pages, the count goes up to the screen and the screens worked on around it:
 with 12, the pages of the screens ahead pushed each other out as they arrived, and turning to
 them rendered them again. Rendering ahead stops at the first page that wouldn't fit, and the
 least recently shown pages not on screen are deleted (`a=d,d=I`) to make room. A page sent again
 with another tint, a search's matches, takes the place of the one before it, which is deleted once
-the new one is placed ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). The byte budget matters. kitty keeps 320 MB of images per
+the new one is placed ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). The byte budget matters. kitty keeps 320 MiB of images per
 screen (the protocol's example quota), and past it, it deletes nearly every image without a
-placement at once, not just the oldest. Measured in a hidden kitty with raw images:
+placement at once, not just the oldest. The budget leaves 64 MiB of that, a page of the largest
+size, for what the pager doesn't count: inside tmux, other panes' images are on the same screen
+([ADR-0029](adr/0029-the-pager-keeps-256-mib-of-pages-in-the-terminal.md) has the quota measured
+to the image, and why 256). Measured in a hidden kitty with raw images:
 
 | Images sent | What kitty kept |
 |---|---|
@@ -967,8 +970,8 @@ a placement takes an old copy away. Where nothing on its way out leaves the room
 copies are deleted first (`Replace::Instead`, `superseded`) and it is asked for as a page never
 sent: its place is empty until it arrives, rather than showing matches that are no longer the
 search's ([ADR-0028](adr/0028-matches-tinted-into-the-pages-pixels.md)). So a page never waits
-for room nothing will make. Three pages of 51 MiB side by side leave no room for a fourth image
-under 192 MiB: each goes first. A page that left the screen in this draw is never deleted this
+for room nothing will make. Four pages of 56 MiB side by side leave no room for a fifth image
+under 256 MiB: each goes first. A page that left the screen in this draw is never deleted this
 way; it is looked at again when it is shown.
 So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
 counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before

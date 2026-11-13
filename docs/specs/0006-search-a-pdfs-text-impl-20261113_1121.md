@@ -436,3 +436,13 @@ Two findings, each reproduced by a test before its fix, and two decisions of the
   `a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits_or_goes_first`. The first of
   these tests waited for the last page sent to be the tinted one, which the pages around the
   screen, sent after it, sometimes weren't: it now looks among the pages sent since.
+
+## A larger image budget, at the owner's request (2026-11-13)
+
+Not this spec's, but it moves its numbers: `BUDGET` is 256 MiB, from 192
+([ADR-0029](../adr/0029-the-pager-keeps-256-mib-of-pages-in-the-terminal.md): kitty's quota
+measured again, 320 MiB to the image, so 64 MiB are left). The two budget tests were sized again
+for it: three pages of 56 MiB to a row in a 470 × 105 window (a fourth image fits, a fifth
+doesn't: the second page sent again waits for the first's old copy), and four to a row in a
+620 × 105 one (no fifth fits, and nothing is on its way out: each goes first). Seen failing with
+the budget back at 192, and with each piece of the rule reverted as before.

@@ -1620,47 +1620,50 @@ fn most_held(text: &str) -> u64 {
 }
 
 /// The terminal never holds more than its budget of pages while they are sent again with their
-/// tints. Two pages side by side of some 13 megapixels, 52 MiB each: the two as they were and the
-/// two tinted are 208 MiB, past the 192 MiB the pager keeps to. With the keys up in the pages'
-/// place when the tints come, nothing places the new pages over the old, which were both kept;
-/// an old copy nobody sees goes as its replacement is sent. And with the pages on screen, the
-/// second is sent again only once the first has taken its old copy's place.
+/// tints. Three pages side by side of some 15 megapixels, 56 MiB each: the three as they were and
+/// the three tinted are 337 MiB, past the 256 MiB the pager keeps to. With the keys up in the
+/// pages' place when the tints come, nothing places the new pages over the old, which were all
+/// kept; an old copy nobody sees goes as its replacement is sent. And with the pages on screen,
+/// where a fourth image fits and a fifth doesn't, the second page sent again waits until the
+/// first has taken its old copy's place.
 #[test]
 fn pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps() {
     if !pty_works() {
         return;
     }
-    const BUDGET: u64 = 192 << 20;
-    let pdf = fixture("tint-budget", 2);
+    const BUDGET: u64 = 256 << 20;
+    let pdf = fixture("tint-budget", 3);
     let terminal = Terminal { cell: Some((22, 42)), ..PLAIN };
-    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 300, 100);
-    view.wait_until("both pages", |t| last_bar(t).contains(" pages 1–2/2 ") && transmitted(t) == 2 && pngs(t).len() == 2);
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty", "--per-row", "3"], 470, 105);
+    view.wait_until("the three pages", |t| last_bar(t).contains(" pages 1–3/3 ") && transmitted(t) == 3 && pngs(t).len() == 3);
     let page: u64 = pngs(&view.text()).iter().map(|(_, page)| u64::from(page.width()) * u64::from(page.height()) * 4).min().unwrap();
-    assert!(page * 4 > BUDGET && page * 3 <= BUDGET, "a page of {} MiB says nothing of a budget of 192", page >> 20);
+    assert!(page * 5 > BUDGET && page * 4 <= BUDGET, "pages of {} MiB: not three that a fourth fits beside and a fifth doesn't", page >> 20);
     // The search kept, then the keys, read together: the tints come while the keys are up.
     view.press("/test\r?");
-    view.wait_until("both sent again, tinted", |t| pngs(t).len() == 4);
+    view.wait_until("all three sent again, tinted", |t| pngs(t).len() == 6);
     std::thread::sleep(Duration::from_millis(300));
     assert!(most_held(&view.text()) <= BUDGET, "{} MiB held with the keys up", most_held(&view.text()) >> 20);
     // Any key: the pages again. `n`: the reader's match goes from the first page to the second, and
     // both are sent again, each over its old copy, on screen this time.
     view.press("x");
-    view.wait_until("the pages back", |t| last_bar(t).contains(" /test 1/2 "));
+    view.wait_until("the pages back", |t| last_bar(t).contains(" /test 1/3 "));
     let from = view.text().len();
     view.press("n");
-    view.wait_until("the second page's match", |t| last_bar(t).contains(" /test 2/2 ") && pngs(t).len() == 6);
+    view.wait_until("the second page's match", |t| last_bar(t).contains(" /test 2/3 ") && pngs(t).len() == 8);
     std::thread::sleep(Duration::from_millis(500));
     let text = view.text();
     assert!(most_held(&text) <= BUDGET, "{} MiB held with the pages on screen", most_held(&text) >> 20);
     // The second waited for the room the first's old copy left, and neither was blank meanwhile:
     // the first page, which had the reader's match, goes once its new copy is sent, and only then
-    // the second, once its own is.
+    // the second, once its own is. The third keeps the copy it has.
     let pages = pngs(&text);
-    let was: Vec<(u32, bool)> = pages.iter().skip(2).take(2).map(|(id, page)| (*id, page.pixels().any(|pixel| pixel.0 == OWN_TINT))).collect();
-    let (first, second) = (was.iter().find(|(_, own)| *own).unwrap().0, was.iter().find(|(_, own)| !own).unwrap().0);
+    let was: Vec<(u32, bool)> = pages.iter().skip(3).take(3).map(|(id, page)| (*id, page.pixels().any(|pixel| pixel.0 == OWN_TINT))).collect();
+    let first = was.iter().find(|(_, own)| *own).unwrap().0;
     let order: Vec<(bool, u32)> = sent_and_deleted(&text).into_iter().filter(|(at, ..)| *at >= from).map(|(_, sent, id)| (sent, id)).collect();
-    let expected = [(true, pages[4].0), (false, first), (true, pages[5].0), (false, second)];
-    assert_eq!(order, expected, "sent (true) and deleted (false): a page that only had to wait was taken away first");
+    let said = "sent (true) and deleted (false): a page that only had to wait was taken away first";
+    assert_eq!(order.get(..3), Some(&[(true, pages[6].0), (false, first), (true, pages[7].0)][..]), "{said}: {order:?}");
+    let last = order.get(3).copied().filter(|(sent, id)| !sent && was.iter().any(|(old, own)| old == id && !own));
+    assert!(last.is_some() && order.len() == 4, "{said}: {order:?}");
     // And both ended tinted as the status line says: the second page's match the reader's.
     let last: Vec<bool> = pngs(&text).iter().rev().take(2).map(|(_, page)| page.pixels().any(|pixel| pixel.0 == OWN_TINT)).collect();
     assert_eq!(last.iter().filter(|own| **own).count(), 1, "one of the two pages last sent has the reader's match");
@@ -1669,9 +1672,9 @@ fn pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps() {
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
-/// Three pages to a row of some 51 MiB each: the screen alone is 153 MiB of the 192 the pager
+/// Four pages to a row of some 56 MiB each: the screen alone is 225 MiB of the 256 the pager
 /// keeps to, so no page fits beside its own old copy, and no other copy is on its way out to wait
-/// for. Each goes first, then comes back with its tint: never a fourth image in the terminal, and
+/// for. Each goes first, then comes back with its tint: never a fifth image in the terminal, and
 /// never a page left showing matches that aren't the search's. The pager isn't left waiting, nor
 /// asking again and again.
 #[test]
@@ -1679,14 +1682,14 @@ fn where_the_screen_leaves_no_room_a_page_goes_before_its_tinted_copy_comes() {
     if !pty_works() {
         return;
     }
-    const BUDGET: u64 = 192 << 20;
-    let pdf = fixture("tint-full", 4);
+    const BUDGET: u64 = 256 << 20;
+    let pdf = fixture("tint-full", 5);
     let terminal = Terminal { cell: Some((22, 42)), ..PLAIN };
-    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty", "--per-row", "3"], 450, 100);
-    view.wait_until("three pages", |t| last_bar(t).contains(" pages 1–3/4 ") && !last_bar(t).contains('…') && pngs(t).len() >= 3);
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty", "--per-row", "4"], 620, 105);
+    view.wait_until("four pages", |t| last_bar(t).contains(" pages 1–4/5 ") && !last_bar(t).contains('…') && pngs(t).len() >= 4);
     let page: u64 = pngs(&view.text()).iter().map(|(_, page)| u64::from(page.width()) * u64::from(page.height()) * 4).min().unwrap();
-    assert!(page * 3 <= BUDGET && page * 4 > BUDGET, "pages of {} MiB: not three that leave no room for a fourth", page >> 20);
-    let shown: Vec<u32> = ids_after(&view.text(), PLACED).into_iter().rev().take(3).collect();
+    assert!(page * 4 <= BUDGET && page * 5 > BUDGET, "pages of {} MiB: not four that leave no room for a fifth", page >> 20);
+    let shown: Vec<u32> = ids_after(&view.text(), PLACED).into_iter().rev().take(4).collect();
     let before = pngs(&view.text()).len();
     // Until nothing more is written, and then a while: nothing is asked for again and again.
     let quiet = |view: &Session| loop {
@@ -1697,9 +1700,9 @@ fn where_the_screen_leaves_no_room_a_page_goes_before_its_tinted_copy_comes() {
         }
     };
     let has = |page: &::image::RgbImage, colour: [u8; 3]| page.pixels().any(|pixel| pixel.0 == colour);
-    // The search kept: the three pages again, the first with the reader's match, the others with theirs.
+    // The search kept: the four pages again, the first with the reader's match, the others with theirs.
     view.press("/test\r");
-    view.wait_until("the three pages tinted", |t| last_bar(t).contains(" /test 1/4 ") && !last_bar(t).contains('…') && pngs(t).len() == before + 3);
+    view.wait_until("the four pages tinted", |t| last_bar(t).contains(" /test 1/5 ") && !last_bar(t).contains('…') && pngs(t).len() == before + 4);
     quiet(&view);
     let text = view.text();
     assert!(most_held(&text) <= BUDGET, "{} MiB held", most_held(&text) >> 20);
@@ -1708,25 +1711,25 @@ fn where_the_screen_leaves_no_room_a_page_goes_before_its_tinted_copy_comes() {
     let pages = pngs(&text);
     let tinted: Vec<(bool, bool)> = pages.iter().skip(before).map(|(_, page)| (has(page, OWN_TINT), has(page, TINT))).collect();
     assert_eq!(tinted.iter().filter(|(own, _)| *own).count(), 1, "one page has the reader's match: {tinted:?}");
-    assert_eq!(tinted.iter().filter(|(own, other)| !own && *other).count(), 2, "the other two have theirs: {tinted:?}");
-    assert_eq!(pages.len(), before + 3, "pages sent again and again");
+    assert_eq!(tinted.iter().filter(|(own, other)| !own && *other).count(), 3, "the other three have theirs: {tinted:?}");
+    assert_eq!(pages.len(), before + 4, "pages sent again and again");
     // The next match: the page that lost the reader's match and the one that gained it, and no other.
     view.press("n");
-    view.wait_until("the next match", |t| last_bar(t).contains(" /test 2/4 ") && !last_bar(t).contains('…') && pngs(t).len() == before + 5);
+    view.wait_until("the next match", |t| last_bar(t).contains(" /test 2/5 ") && !last_bar(t).contains('…') && pngs(t).len() == before + 6);
     quiet(&view);
     let text = view.text();
     assert!(most_held(&text) <= BUDGET, "{} MiB held", most_held(&text) >> 20);
     let pages = pngs(&text);
-    assert_eq!(pages.len(), before + 5, "pages sent again and again");
+    assert_eq!(pages.len(), before + 6, "pages sent again and again");
     assert_eq!(pages.iter().rev().take(2).filter(|(_, page)| has(page, OWN_TINT)).count(), 1, "one of the two has the reader's match");
     assert!(!last_bar(&text).contains('…'), "{}", last_bar(&text));
     // The last page alone on its screen, with room beside it: its match is tinted.
     view.press("G");
-    view.wait_until("the last page", |t| last_bar(t).contains(" page 4/4 "));
+    view.wait_until("the last page", |t| last_bar(t).contains(" page 5/5 "));
     view.press("n");
-    view.wait_until("its match", |t| last_bar(t).contains(" /test 4/4 "));
+    view.wait_until("its match", |t| last_bar(t).contains(" /test 5/5 "));
     // Among the pages sent since: the screens around are sent again too, after it.
-    view.wait_until("tinted", |t| pngs(t).iter().skip(before + 5).any(|(_, page)| has(page, OWN_TINT)));
+    view.wait_until("tinted", |t| pngs(t).iter().skip(before + 6).any(|(_, page)| has(page, OWN_TINT)));
     quiet(&view);
     assert!(most_held(&view.text()) <= BUDGET, "{} MiB held", most_held(&view.text()) >> 20);
     view.press("\x1bq");

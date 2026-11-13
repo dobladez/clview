@@ -11,7 +11,7 @@ terminal through the kitty graphics protocol, placed by cell; inside tmux, an im
 Unicode placeholder cells; and where the terminal has no protocol, text cells sampled from the
 pixels ([Getting pages to the terminal](../architecture.md#getting-pages-to-the-terminal),
 [Text cells](../architecture.md#text-cells-cellsrs)). What the pager keeps of a page is in the
-terminal, not in clv: at most 12 pages and 192 MiB of pixels
+terminal, not in clv: at most 12 pages and 256 MiB of pixels
 ([What is kept in the terminal](../architecture.md#what-is-kept-in-the-terminal-pagerrs)). A PDF's
 paper is white; Markdown's may be the terminal's dark.
 
@@ -120,8 +120,10 @@ temporary files, more inside tmux, a key at a time.
   A page with matches is copied (`to_vec`) once to be tinted. Text cells without colours don't
   show the tint; the status line still says which match the reader is on. Where the pages on
   screen take most of what the terminal keeps, each is blank from the key until its tinted copy
-  arrives, the time of a render and a send: three pages to a row of 51 MiB each (a 450 × 100
-  window of 22 × 42 pixel cells) are 153 of the 192 MiB, and a fourth image doesn't fit.
+  arrives, the time of a render and a send: four pages to a row of 56 MiB each (a 620 × 105
+  window of 22 × 42 pixel cells) are 225 of the 256 MiB
+  ([ADR-0029](0029-the-pager-keeps-256-mib-of-pages-in-the-terminal.md)), and a fifth image
+  doesn't fit.
 - **Follow-ups:** the colours are a choice to look at on real terminals, light and dark;
   [Spec-0007](../specs/0007-search-markdown-html-and-word-documents.md) brings dark paper.
 - **Revisit when:** the latency from a key to the tinted screen is under some 50 ms everywhere
