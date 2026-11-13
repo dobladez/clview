@@ -18,6 +18,7 @@ clv --per-row 4 report.pdf # four pages to a row
 clv --no-pager report.pdf  # print every page and exit, like cat
 clv photo.jpg              # an image, printed at the cursor
 clv diagram.svg            # a drawing, as large as the window and sharp at that size
+clv flow.mmd               # a Mermaid diagram, drawn as Mermaid draws it (.mermaid too)
 clv letter.docx            # a Word document's pages, laid out as Word prints them (odt, rtf too)
 clv notes.md               # Markdown, laid out into pages (HTML too)
 clv budget.xlsx            # a workbook's sheets, printed as its app prints them (xls, ods, csv too)
@@ -53,6 +54,7 @@ See [`docs/usage.md`](docs/usage.md) for all options and more details.
 | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft) |
 | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide) |
 | SVG drawings and svgz | [resvg](https://github.com/linebender/resvg), and [Blitz](https://github.com/DioxusLabs/blitz) for their HTML labels |
+| Mermaid diagrams (.mmd, .mermaid) | [merman](https://github.com/Latias94/merman), a Mermaid in Rust, into SVG that clv then shows |
 | Word documents (docx, doc), OpenDocument text (odt) and RTF | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, with fonts of its own under the SIL Open Font License |
 | Markdown and HTML, with the pictures they refer to on disk | [wordcraft](https://github.com/storytold/wordcraft) again, and [pulldown-cmark](https://crates.io/crates/pulldown-cmark) for Markdown |
 | Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |

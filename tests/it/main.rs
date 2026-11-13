@@ -4,6 +4,7 @@
 
 mod fixtures;
 mod gridcraft;
+mod mermaid;
 mod pdfcraft;
 mod pdfcraft_pin;
 mod resvg;

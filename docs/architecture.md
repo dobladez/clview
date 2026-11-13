@@ -134,12 +134,13 @@ PDF one, since a PDF's header may come anywhere in its first 1024 bytes:
 | Asked | File | Feature | How it tells its files | Why asked there |
 |---|---|---|---|---|
 | 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Those bytes may hold a PDF's header, in a drawing's text |
-| 2 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
-| 3 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | As for SVG (an RTF's text), and before zip, since a docx is a zip |
-| 4 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
-| 5 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
-| 6 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
-| 7 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word and spreadsheet backends don't take |
+| 2 | `mermaid.rs` | `mermaid`, which brings `svg` | Its name alone: `.mermaid` and text; `.mmd` and text whose first line past a BOM, blank lines, `%%` comments and front matter, within the first 1024 bytes, starts with a kind of diagram merman draws (the first word of each label in `merman::diagram_header_facts()`, in its case, followed by a space, a `-` or the line's end), or is an `%%{init` directive, since MultiMarkdown is `.mmd` too | As for SVG: a diagram's text may hold a PDF's header |
+| 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
+| 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | As for SVG (an RTF's text), and before zip, since a docx is a zip |
+| 5 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
+| 6 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
+| 7 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
+| 8 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word and spreadsheet backends don't take |
 
 `source/head.rs` reads what a zip's first files say, for the Word and spreadsheet backends.
 
@@ -262,6 +263,35 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   (`without_imports`). The labels' nesting is held to 1,024 levels by the writer (`written`),
   since the drawing's scan skips some elements by name. A document's page that is a tile draws
   the pictures it refers to as tiles too (`picture::Promise::draw`), drawn again for a page.
+- **A Mermaid diagram** is turned into SVG by merman when it opens, and opened as that SVG by the
+  backend that opens it, found the way any file's backend is, not by name, as a spreadsheet's PDF is
+  ([ADR-0030](adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)). It is read through
+  `Input::at_most`, which stops past `MAX_SOURCE` (1 MiB, merman's own limit), so a named pipe is
+  never read whole, and refused if it isn't UTF-8. merman works in a worker process,
+  `clv --worker mermaid` (`mermaid::DIAGRAMS`, in `source::WORKERS`): one `DRAW` request a diagram,
+  its text shared (`Link::request_shared`), answered `DRAWN` with the SVG (at most `MAX_SVG`, 64 MiB)
+  or `REFUSED` with merman's reason (at most 256 bytes, cut at a character). The worker makes
+  merman's `Renderer` once, for its first diagram (some 40 ms), with a site config that sets
+  `htmlLabels` false, flowcharts' too, and `maxEdges` 500, and lists both among Mermaid's `secure`
+  keys, so a diagram's `%%{init}%%` can't change them; within merman's `Constrained` resource
+  profile, and an `OperationControl` deadline of 1.5 s. It arms `RLIMIT_CPU` at 2 s a diagram and
+  caps its heap at 512 MiB; the viewer waits three times the CPU, 6 s. The worker is the backend's
+  (`mermaid::Service`, a static behind a mutex): a diagram takes the lock as its turn, so diagrams
+  opened at once (a pool's threads, the openers of a list's tiles) wait; it starts a worker when
+  there is none, and a thread of its own (`Service::idle`) kills that worker 2 s after its last
+  answer, since `Link` has no timer. A worker that dies (killed past a cap, ended, or answering what
+  wasn't asked) fails the diagram it was on, and the next starts another; at three in a row, none
+  is started for 60 s, and a diagram wanting one fails. What the worker answered is kept in a cache
+  (`mermaid::Cache`), by the diagram's bytes, found by a hash and taken by comparing them: the SVG,
+  or merman's refusal or the worker's death, but not a want of a worker (`TooMany`, the pause,
+  which may pass). It holds 4,096 diagrams and 64 MiB of them and their SVG, letting go of those
+  used longest ago first. So a diagram is turned into SVG once however often it is opened: a list's
+  tile, a document's picture, sized then drawn, and read again on every relayout. The SVG is held
+  in an `Input` whose `Again` copies it from the cache's `Arc` for the SVG backend's renders, which
+  read it again. Before it is kept, `on_white` puts a white `<rect>` over its viewBox (its viewport
+  without one) as the first child of its `<svg>`, finding that start tag's `>` outside quotes within
+  4 KiB and reading only the tag's `viewBox`, since merman's SVG has no background and an SVG is shown
+  on the terminal's ([ADR-0030](adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)).
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
   export needs patches. It is read and laid out to open, and keeps only where its bytes are, its
   pages' sizes and which body paragraphs each page has; its renderer or pool reads and lays it out

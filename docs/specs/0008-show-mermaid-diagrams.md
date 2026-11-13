@@ -62,12 +62,15 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   can't turn it back on: labels are SVG `<text>`, and a list's tile, which starts no HTML labels'
   worker ([ADR-0026](../adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)),
   shows the diagram's words. A user journey keeps `<foreignObject>` for its sections and tasks, as
-  mermaid.js draws them: those are the `svg-html` worker's, and its tile shows them not, which usage
-  says.
+  mermaid.js draws them, and a kanban board for its cards, as merman draws them: those are the
+  `svg-html` worker's, and their tiles show them not, which usage says.
 - **A document's picture:** `draws_pictures` is true, so `![a flow](flow.mmd)` in Markdown or HTML
   draws it ([ADR-0013](../adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
-- **Theme:** Mermaid 12's default, as merman draws it, on white, as a drawing is; on dark paper a
-  picture's thin near-black ink comes with white behind it, as any picture's does
+- **Theme:** Mermaid 12's default, as merman draws it, on white, as mermaid-cli's `-b white` draws
+  it: an SVG drawing is transparent, but a diagram's ink is made for white, so `mermaid.rs` puts a
+  white `<rect>` over merman's viewBox as the first child of its `<svg>` (`c` copies it on white
+  too); on dark paper a picture's thin near-black ink comes with white behind it, as any picture's
+  does
   ([ADR-0015](../adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 - **Turned into SVG once:** a document opens its pictures to size them and again to draw them, and is
   read again for every render, every relayout and every picture let go of and drawn again
@@ -238,11 +241,14 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   CONTRIBUTING, CI, and ADR-0030 Accepted and listed. *Verify:* `cargo test -j 2 --test it mermaid`:
   `flow.mmd` drawn (ink where its nodes are) and `sequence.mermaid`; `notes.mmd` and a `.mmd` whose
   diagram starts past 1024 bytes left unopened; `-` and `/dev/stdin` refused; `broken.mmd`'s message,
-  printable and short; a diagram past 1 MiB, one not UTF-8, one past 500 edges (merman's message),
-  one past the CPU cap and one past the heap cap each failing, and the next drawn; the costliest
-  diagrams merman accepts (ADR-0030's `gen within` and `gen worst`) drawn under the caps; three killed
-  in a row pausing the worker; unit tests in `mermaid.rs` for the cache (bounded, a failure kept,
-  `TooMany` not) and the idle timer (the worker gone 2 s after its answer); nothing else naming
+  printable and short; `flow.mmd` on white, opaque over its viewBox; a diagram past 1 MiB, one not
+  UTF-8, one past 500 edges (merman's message); the costliest diagrams merman accepts (ADR-0030's
+  `gen within` and `gen worst`) drawn under the caps, and one past merman's limits refused with its
+  message; unit tests in `mermaid.rs` with a fake worker that dies (that diagram alone fails, its
+  failure kept, the next starts another, three in a row pause the service for 60 s), for the cache
+  (bounded, a failure kept, `TooMany` not), the idle timer (the worker gone 2 s after its answer)
+  and the white rect (sized to the viewBox); `worker.rs`'s own tests for the kernel's and the
+  allocator's kills, since nothing merman accepts reaches the caps; nothing else naming
   merman; `the_extensions_a_backend_lists_are_the_names_it_opens_by`; each feature alone. Manual: in
   kitty, `clv tests/data/flow.mmd`.
 - [ ] **A diagram in a list and in a document** — `deferred` and `draws_pictures`, and what they
@@ -274,3 +280,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   marked *(spike)* filled in, merman's limits and labels' config added, ELK's routing and diagrams
   past merman's limits out of scope (spec-update).
 - 2026-11-13 — Implementing ([notes](0008-show-mermaid-diagrams-impl-20261113_1933.md)).
+- 2026-11-13 — Task 2's Verify revised with the owner: the worker's kills tested with a fake
+  worker, since nothing merman accepts reaches the caps (0.32 s and 232 MiB at worst, the notes
+  say); a diagram on white, over its viewBox (the Theme line said both "on white" and "as a drawing
+  is", which is transparent); a kanban board's cards are HTML labels too.

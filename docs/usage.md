@@ -449,6 +449,7 @@ that only another backend takes is refused, since it would do nothing for the fi
 | Files | Known by | Their options |
 |---|---|---|
 | [SVG drawings](#svg-drawings), and svgz, gzipped | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz by what it unpacks to; a `.svg` or `.svgz` name when the first 1024 bytes end before the root element. Other XML is not one | none |
+| [Mermaid diagrams](#mermaid-diagrams) | Their name: `.mermaid`, and that it is text; `.mmd`, and that its first line past blank lines, `%%` comments and front matter, within its first 1024 bytes, names a kind of diagram merman draws (`flowchart`, `graph`, `sequenceDiagram`, `stateDiagram-v2`…) or is an `%%{init: …}%%` directive, since MultiMarkdown names its files `.mmd` too, which clv doesn't open. Not through a pipe, as a diagram has no signature | none |
 | [Word documents, OpenDocument text, RTF, Markdown and HTML](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too; HTML by how it starts (a doctype or an `<html>` element), whatever its name, or a name (`.html`, `.htm`, `.xhtml`) and that it is text; Markdown by its name only (`.md`, `.markdown`, `.mdown`, `.mkd`), and that it is text | `--password PW`: the password of a protected Word document |
 | [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
 | [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
@@ -553,6 +554,39 @@ its time on a render thread, while the keys work. Its HTML labels are the except
 worker is bounded as it spends, and killed past its time or its memory
 ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
 One cost the limits don't count is a [known issue](#known-issues): a stylesheet's parse.
+
+### Mermaid diagrams
+
+A Mermaid diagram is one page: [merman](https://github.com/Latias94/merman), a Mermaid in Rust,
+turns it into SVG, as Mermaid 12 draws it in its default theme, and it is shown as an
+[SVG drawing](#svg-drawings) is, sharp at any size, `c` and text cells included, but on white: a
+drawing shows the terminal's background where it is transparent, and Mermaid's ink is made for
+white, as `mmdc -b white` draws it. merman draws every kind of diagram it parses: flowcharts,
+sequence, class, state and entity-relationship diagrams, gantt charts, pies, mindmaps, timelines,
+user journeys, git graphs, requirement, C4, quadrant, XY, sankey, packet, block, architecture,
+kanban, radar and treemap diagrams, and the other kinds Mermaid has in beta. A diagram's own
+`%%{init: …}%%` directive and front matter apply (its theme, its colours), but for Mermaid's secure
+settings, which it can't change: its labels are drawn as SVG text, never HTML, and its edges are
+held to Mermaid's 500.
+
+Where it differs from mermaid.js:
+
+- Edges bend as merman's Cytoscape layout bends them, where Mermaid 12 routes them through ELK.
+- merman sizes a label's box by its metrics for Mermaid's font, and the label is drawn in the
+  system's fonts (Arial on most): a label may run a little past its box, as a long sequence note does
+  in mermaid.js too.
+- Math (KaTeX) and icons from the web (`fa:` icons, `icon` shapes) are left as merman leaves them:
+  nothing is fetched. `click` does nothing.
+- A user journey's sections and tasks, and a kanban board's cards, are HTML labels, as merman draws
+  them: drawn as a drawing's are, but not in a list's tile, which shows the diagram without them.
+
+merman runs in a process of its own: a worker clv starts (`clv --worker mermaid`) when a diagram is
+first opened, which draws the diagrams opened after it in turn and goes 2 seconds after its last.
+A diagram past merman's own limits ([limits](#limits)) is refused with merman's message, in
+milliseconds; past the worker's CPU time or memory, the worker is killed and that diagram fails,
+saying which, and the next starts another. After three killed in a row, no diagram is drawn for a
+minute. What a diagram is drawn to is kept while clv runs, so a diagram opened again is not drawn
+again.
 
 ### Documents
 
@@ -880,7 +914,13 @@ limit, it does as the last column says. How large a page is drawn is under
 | An HTML label's size | 16,384 pixels a side | that label is left out, with a warning |
 | What an HTML label fetches | `data:` URLs, 1,024 of them; a font unpacking to 32 MiB, 64 MiB of them, a WOFF whose tables don't fit its file refused; a picture decoding to 64 MiB, 256 MiB of them | refused: the label is drawn without it |
 | The worker that lays a drawing's HTML labels out and paints them, a process of its own: its CPU time laying them out, then each render's; its memory | 10 s, then 5 s a render, or three times that on the clock; 1 GiB | the worker is killed, and all of the drawing's labels are left out, with a warning, until it is opened again |
-| Drawings whose HTML labels are shown at once, each with its worker, and a search's process with them | 6 | the next drawing's labels are left out, with a warning; a search's text is left unread, and the status line says so |
+| Drawings whose HTML labels are shown at once, each with its worker, a search's process and Mermaid's worker with them | 6 | the next drawing's labels are left out, with a warning; a search's text is left unread, and the status line says so; a diagram fails, saying so |
+| A Mermaid diagram | 1 MiB, and UTF-8 | refused |
+| A Mermaid diagram, as merman reads it | 500 edges; 16,000 items (nodes, messages, members…); 1 MiB of text in them; 128 levels deep; what its layout may work through; 1.5 s of merman's work | refused, with merman's message |
+| The worker that turns Mermaid diagrams into SVG, a process of its own: its CPU time on a diagram; its memory | 2 s, or three times that on the clock; 512 MiB | the worker is killed and that diagram fails, saying which; the next diagram starts another |
+| Mermaid's workers killed in a row | 3 | no diagram is drawn for 60 s: each fails, saying so |
+| The SVG a diagram is drawn to | 24 MiB, merman's own; then an SVG's, above: a diagram near 500 edges with arrowheads (32 nodes each linked to every other) comes to more than an SVG's 128 MiB once its arrowheads are repeated | the diagram fails, with why |
+| Diagrams kept, drawn or failed, while clv runs | 4,096, and 64 MiB of them and their SVG | those used longest ago are let go of, and drawn again if opened again |
 | A PDF's pages | 100,000 | refused, saying how many it has; a page tree may name one page over and over, so a file of a few megabytes can have millions, and each costs some 2 KB to open |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |

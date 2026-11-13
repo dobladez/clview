@@ -10,3 +10,7 @@ black and (128, 64, 32), written as a PPM by hand. Nothing here comes from elsew
 | `three-by-two.avif` | `avifenc -y 444 -q 100` (libavif 1.3.0) from the same picture as a PNG: YUV with libavif's default matrix coefficients, 6 (BT.601) |
 
 | `blitz-table.html` | Written by hand: a red inline-block square and text directly in a `display: table` box, which Blitz 0.3.0-beta.4 draws nothing of, and three controls it draws (the same in a `table-cell` child, in a `table-cell` box alone, in a `block` box). The canary `blitz_still_drops_inline_content_in_a_table` in `src/source/svg/html.rs` renders it; the Blitz issue clv's owner reported used it |
+| `flow.mmd` | Written by hand: a Mermaid flowchart of two nodes, left to right, styled red and blue, for the Mermaid backend's tests (`tests/it/mermaid.rs`) to find its ink |
+| `sequence.mermaid` | Written by hand: a Mermaid sequence diagram of two participants and two messages, named `.mermaid` |
+| `notes.mmd` | Written by hand: MultiMarkdown, metadata then a heading and a list, which names its files `.mmd` as Mermaid does, and which the Mermaid backend leaves unopened |
+| `broken.mmd` | Written by hand: a flowchart's header, then brackets that never close, which merman refuses with its parse error |

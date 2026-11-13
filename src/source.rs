@@ -12,6 +12,8 @@ mod head;
 mod image;
 mod joined;
 mod later;
+#[cfg(feature = "mermaid")]
+mod mermaid;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
 #[cfg(feature = "word")]
@@ -46,12 +48,14 @@ pub(crate) use worker::{Worker, serve};
 
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
-/// 1024 bytes, which a drawing's text may hold. Tar next, for the same reason: a tar's first file
-/// starts 512 bytes in. Then documents, for the same reason (an RTF's text), and spreadsheets,
+/// 1024 bytes, which a drawing's text may hold. Mermaid diagrams next, for the same reason, and
+/// tar, for the same reason: a tar's first file starts 512 bytes in. Then documents, for the same reason (an RTF's text), and spreadsheets,
 /// both before zip, since a docx and an xlsx are zips.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
+    #[cfg(feature = "mermaid")]
+    &mermaid::Mermaid,
     #[cfg(feature = "tar")]
     &tar::Tar,
     #[cfg(feature = "word")]
@@ -73,6 +77,8 @@ pub(crate) const WORKERS: &[&'static dyn Worker] = &[
     &svg::LABELS,
     #[cfg(feature = "pdf")]
     &pdfcraft::TEXT,
+    #[cfg(feature = "mermaid")]
+    &mermaid::DIAGRAMS,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -408,6 +414,23 @@ impl Input {
             }
             Rest::Held(again) => again().map_err(|e| format!("{}: {e}", self.path)),
         }
+    }
+
+    /// The whole file, if it is no more than `most` bytes, else `None`: reading stops past them, so
+    /// a pipe or a device is never read whole. A file held in another is read within the holder's
+    /// limits.
+    #[cfg_attr(not(any(feature = "mermaid", test)), expect(dead_code, reason = "only diagrams are read so"))]
+    pub(crate) fn at_most(self, most: u64) -> Result<Option<Vec<u8>>, String> {
+        let bytes = match self.rest {
+            Rest::File(rest) => {
+                let mut bytes = self.head;
+                let left = most.saturating_add(1).saturating_sub(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                rest.take(left).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", self.path))?;
+                bytes
+            }
+            Rest::Held(again) => again().map_err(|e| format!("{}: {e}", self.path))?,
+        };
+        Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
     }
 
     /// The file for a backend that reads it again when it renders, and so keeps only what it
@@ -889,6 +912,32 @@ pub(crate) mod tests {
         assert!(Input::open(path).is_err_and(|e| e.starts_with(path)));
     }
 
+    /// A file read to a cap is read whole within it, and found larger past it, without reading on:
+    /// on disk, through a pipe, held in another.
+    #[test]
+    fn a_file_is_read_whole_only_within_a_cap() {
+        let path = std::env::temp_dir().join(format!("clview-at-most-{}", std::process::id()));
+        std::fs::write(&path, vec![b'x'; 3000]).unwrap();
+        let path = path.to_str().unwrap();
+        assert_eq!(Input::open(path).unwrap().at_most(3000).unwrap().map(|b| b.len()), Some(3000));
+        assert_eq!(Input::open(path).unwrap().at_most(2999).unwrap().map(|b| b.len()), None);
+        assert_eq!(Input::open(path).unwrap().at_most(10).unwrap().map(|b| b.len()), None, "within the head");
+        std::fs::remove_file(path).unwrap();
+        // `yes` writes without end: only a little past the cap is read.
+        let mut yes = std::process::Command::new("yes").stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let stdout = yes.stdout.take().unwrap();
+        let mut head = Vec::new();
+        let mut rest = File::from(std::os::fd::OwnedFd::from(stdout));
+        Read::by_ref(&mut rest).take(HEAD).read_to_end(&mut head).unwrap();
+        let piped = Input { path: "yes".into(), head, rest: Rest::File(rest) };
+        assert_eq!(piped.at_most(1 << 20).unwrap().map(|b| b.len()), None);
+        yes.kill().unwrap();
+        yes.wait().unwrap();
+        let again: Again = Arc::new(|| Ok(vec![b'x'; 100]));
+        assert_eq!(Input::held("a.zip/b".into(), Vec::new(), again.clone()).at_most(100).unwrap().map(|b| b.len()), Some(100));
+        assert_eq!(Input::held("a.zip/b".into(), Vec::new(), again).at_most(99).unwrap().map(|b| b.len()), None);
+    }
+
     #[test]
     fn a_file_held_in_another_is_read_from_it_again_each_time() {
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -918,13 +967,13 @@ pub(crate) mod tests {
     /// bytes leave it unsaid, in any case, and no other name does, of those listed by any backend
     /// and others files are often named with. Tried on the first bytes of each kind of file that
     /// goes by its name: none (a TGA, an SVG whose root element comes later), text (a CSV), a zip
-    /// of nothing it knows, a compound file.
+    /// of nothing it knows, a compound file, a Mermaid diagram.
     #[test]
     fn the_extensions_a_backend_lists_are_the_names_it_opens_by() {
         let header = [&b"PK\x03\x04\x14\0"[..], &[0; 12], &4u32.to_le_bytes(), &4u32.to_le_bytes(), &9u16.to_le_bytes(), &[0, 0]].concat();
         let zip = [&header[..], b"notes.txt", b"text"].concat();
         let compound = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0];
-        let heads: [&[u8]; 4] = [b"", b"date,item\n2026-03-01,widget\n", &zip, &compound];
+        let heads: [&[u8]; 5] = [b"", b"date,item\n2026-03-01,widget\n", &zip, &compound, b"%% a flow\nflowchart LR\n  a --> b\n"];
         let extensions = |backend: &dyn Backend| -> Vec<&str> { backend.formats().iter().flat_map(|f| f.extensions.iter().copied()).collect() };
         let listed: Vec<&str> = BACKENDS.iter().flat_map(|b| extensions(*b)).collect();
         let others = [

@@ -1,6 +1,6 @@
 # ADR-0030: Mermaid diagrams through merman, in a worker process capped at 2 s and 512 MiB
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-13
 
 ## Context
@@ -32,7 +32,8 @@ without its words.
    too, and lists it in Mermaid's `secure` keys with Mermaid's own (`secure`, `securityLevel`,
    `startOnLoad`, `maxTextSize`, `suppressErrorRendering`, `maxEdges`), so a diagram's
    `%%{init}%%` can't turn it back on. So a tile shows a diagram's words. A user journey keeps
-   `<foreignObject>` for its sections and tasks, as mermaid.js draws them.
+   `<foreignObject>` for its sections and tasks, as mermaid.js draws them, and a kanban board for
+   its cards.
 3. **merman's own limits are the first:** its `Constrained` resource profile (1 MiB of source,
    16,000 model items, 1 MiB of model text, 128 levels deep) and Mermaid's 500 edges, which refuse
    every hostile diagram below but the largest within them in milliseconds, with a message.
@@ -40,7 +41,13 @@ without its words.
    (6 s), and 512 MiB of heap: about ten times the CPU and twice the heap of the costliest diagram
    merman accepts. merman's `OperationControl` is given a deadline of 1.5 s, so it stops with its own
    message before the kernel kills it.
-5. **The numbers [Spec-0008](../specs/0008-show-mermaid-diagrams.md) left to this:**
+5. **On white:** merman's SVG has no background, as mermaid.js's has none, and clv shows an SVG on
+   the terminal's background; Mermaid's default ink (#333 edges, lifelines and edge labels) is made
+   for white, and nearly vanishes on a dark terminal. So clv puts a white `<rect>` over the
+   diagram's viewBox as the first child of its `<svg>`, as mermaid-cli's `-b white` gives it: the
+   `<svg>` start tag alone is read for it, within 4 KiB, the document never parsed again. The
+   owner's choice, on 2026-11-13, over a diagram as transparent as a drawing.
+6. **The numbers [Spec-0008](../specs/0008-show-mermaid-diagrams.md) left to this:**
    - a diagram read at most 1 MiB, merman's own limit;
    - its SVG answer at most 64 MiB (the largest seen, 22 MB, from a 1 MB label);
    - the cache at 64 MiB of SVG and 4,096 diagrams (a typical diagram's SVG is 5 to 65 KB);
@@ -124,6 +131,23 @@ under one limit:
 | 499 edges among subgraphs 100 deep | refused, its layout work, 0.15 s | 110 MB | |
 | A mindmap 120 deep; 10,000 points of a chart; 15,000 long labels | refused: 128 levels, 16,000 items, 1 MiB of text | | |
 
+**Through clv's own worker** (2026-11-13, at the commit that adds merman, debug build, its
+dependencies optimised as `Cargo.toml` says): [`worker.sh`](0030-measure/worker.sh)` <clv> <dir>/*.mmd`
+gives each diagram to `clv --worker mermaid` as one request, its caps armed. The `gen within` set:
+at most 0.23 s of CPU (300 classes of 50 members, 0.21 s) and 232 MiB at peak (15,000 nodes, 247 MiB
+resident); `gen worst`'s 15,000 labelled nodes and the 100-deep subgraphs refused by merman (its
+model text, its layout's work). Twenty-four more hostile diagrams, made for the kinds the first sets
+left out (a packet of 10⁹ bits, a block of 10⁸ spaces or columns, architecture, sankey, mindmap,
+state and timeline diagrams at 15,000 items, a wrapping width of 1, spacing of 10¹⁵, class and ER
+diagrams at the limits), were each drawn under 0.32 s and 170 MiB or refused by merman's resource
+limits in milliseconds (`max_layout_work_units`, `max_model_items`, `max_svg_bytes`, which is 24 MiB
+in its `Constrained` profile, a block's 200,000 spaces, a packet's 10,000 rows). So no diagram found
+reaches the caps: they stand behind merman's limits, and clv's tests kill the worker with fakes
+(`src/source/mermaid.rs`), the kernel's and the allocator's kills being `worker.rs`'s own tests. A
+diagram merman draws may still be refused by the SVG backend's limits: 32 nodes each linked to every
+other (496 edges, 1.2 MB of SVG) comes to more than its 128 MiB once its arrowheads are repeated; 24
+(276 edges) is drawn.
+
 ## Alternatives considered
 
 - **mermaid-rs-renderer**: fast and small, but it measures text with the system's fonts and writes
@@ -155,7 +179,8 @@ under one limit:
     edges.
   - Labels measured by merman's metrics, drawn in the system's font: a long label may run past its
     box, as in mermaid.js.
-  - A user journey's labels are `<foreignObject>`, so its tile in a list shows them not.
+  - A user journey's labels and a kanban board's cards are `<foreignObject>`, so their tiles in a
+    list show them not.
 - **Follow-ups:** [Spec-0008](../specs/0008-show-mermaid-diagrams.md) lifted to Ready with these
   numbers; merman's pin moved as clv's other pinned crates are, its caps measured again with
   [`0030-measure/`](0030-measure/).

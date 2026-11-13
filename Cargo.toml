@@ -70,6 +70,12 @@ stylo = { version = "=0.22.0", optional = true }
 # SVG's lengths, transforms, viewBoxes and colours, to place a label as usvg places what it draws;
 # usvg builds it already.
 svgtypes = { version = "0.16", optional = true }
+# Mermaid diagrams, turned into SVG in Rust by merman (its parser, its Cytoscape layout and its
+# SVG), in a worker process of clv's own: `source/mermaid.rs`, ADR-0030. Without its default
+# features: not ELK's layout (EPL-2.0), nor what reads the system's fonts or the clock, nor its
+# PNG, PDF, ASCII or math. Pinned, for its limits and its layout's cost, which the worker's caps
+# rest on: measured again with docs/adr/0030-measure/ when it moves.
+merman = { version = "=0.10.0", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"], optional = true }
 # Tar archives and compressed files, read in Rust: gzip through flate2 (zlib-rs), bzip2 through
 # libbz2-rs-sys, xz through lzma-rust2 (the decoders the zip backend already builds), with a tar
 # reader of `source/tar.rs`'s own. Not zstd (the zstd C library), as for zip.
@@ -91,13 +97,14 @@ wordcraft-render = { git = "https://github.com/storytold/wordcraft", rev = "bbe3
 # dependency like pdfcraft, pinned to one commit of its `main` (tests/it/gridcraft.rs checks it).
 # The engine because its print layout is there; it needs none of the crates gridcraft patches.
 gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "7bb397a3c1015e2a445edcd8feb01789850f4bdd", optional = true }
-# The parameters of a gridcraft command (fitting a CSV's columns), already in its tree.
+# The parameters of a gridcraft command (fitting a CSV's columns), and merman's site config, already
+# in both their trees.
 serde_json = { version = "1", optional = true }
 base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "svg", "svg-html", "zip", "tar", "word", "sheet"]
+default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
@@ -122,6 +129,9 @@ svg-html = [
     "dep:stylo",
     "dep:svgtypes",
 ]
+# Mermaid diagrams (`.mmd`, `.mermaid`): `source/mermaid.rs`, which turns them into SVG through
+# merman, in a worker process, for the SVG backend to show, so it brings that backend too.
+mermaid = ["dep:merman", "dep:serde_json", "svg"]
 # Zip archives (and what is a zip inside: jar, cbz, epub…), as directories: `source/zip.rs`.
 zip = ["dep:zip"]
 # Tar archives, plain or compressed (gzip, bzip2, xz), as directories, and a file compressed

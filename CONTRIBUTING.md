@@ -11,7 +11,7 @@ How to build, test and release clview, and the rules its code keeps. How it work
 cargo install --path .      # installs `clv`
 ```
 
-It takes Rust 1.95 or later, the `rust-version`. All eight features are on by default;
+It takes Rust 1.95 or later, the `rust-version`. All nine features are on by default;
 `cargo build --no-default-features --features image` builds the viewer with images alone, and
 `--no-default-features` alone without any backend.
 [Backends](docs/architecture.md#backends) lists the features.
@@ -38,6 +38,15 @@ takes a checkout at build time ([ADR-0018](docs/adr/0018-wordcraft-stays-before-
 The spreadsheet backend's gridcraft likewise, from `tests/it/gridcraft.rs` and
 `src/source/gridcraft.rs`; it reaches the PDF backend only by asking which backend opens the PDF
 it prints, never by name.
+
+The Mermaid backend's merman comes from crates.io, pinned to one version (`=`) in `Cargo.toml`,
+without its default features: not ELK's layout (EPL-2.0), nor what reads the system's fonts or
+the clock. Only `src/source/mermaid.rs` and `tests/it/mermaid.rs` name it, and it reaches the SVG
+backend only by asking which backend opens the SVG it draws, never by name. The caps of the worker
+it runs in rest on what its costliest diagrams cost at the pin
+([ADR-0030](docs/adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)): when it moves,
+measure them again with `docs/adr/0030-measure/` (`gen within`, `gen worst`, through `clv --worker
+mermaid`), and run `tests/it/mermaid.rs`, whose costliest diagrams must still be drawn under them.
 
 **Moving Blitz** (the SVG backend's HTML labels, `src/source/svg/html.rs`): every `=` pin in
 `Cargo.toml` moves together (`blitz-dom`, `blitz-html`, `blitz-paint`, `blitz-traits`, `anyrender`,
@@ -94,7 +103,8 @@ it prints, never by name.
   `Cargo.toml`; gridcraft only in `src/source/gridcraft.rs`, `tests/it/gridcraft.rs` (which checks
   it) and `Cargo.toml`; Blitz and what it paints an SVG's HTML labels with (blitz, anyrender,
   kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
-  checks it) and `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
+  checks it) and `Cargo.toml`; merman only in `src/source/mermaid.rs`, `tests/it/mermaid.rs` (which checks it)
+  and `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
   `src/source/worker.rs`, `tests/it/view.rs` (which checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend
@@ -188,6 +198,11 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   word hyphenated at a line's end, a table's cell, a field's result, a paragraph across a page
   break, one too long to search, and the tint on dark paper. What a document's text answers, and
   that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`.
+- **`tests/it/mermaid.rs`**: Mermaid diagrams through the viewer: which `.mmd` files it opens and
+  which it leaves to MultiMarkdown, what merman draws of one, its limits and messages, the costliest
+  diagrams merman accepts drawn under the worker's caps, and that nothing else names merman. The
+  worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
+  die) and the cache of what it answered are unit-tested in `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
   else names its decompressors.
