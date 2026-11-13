@@ -1,6 +1,6 @@
 # Spec-0007: Search Markdown, HTML and Word documents
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-13
 - **Related:** [Spec-0006](0006-search-a-pdfs-text.md) (the search this extends, and its
   contract) and [its implementation notes](0006-search-a-pdfs-text-impl-20261113_1121.md);
@@ -164,3 +164,4 @@ change, so a search outlives one.
 - 2026-11-13 — Ready: the rectangles from the pool's layout, shared; `chunks_on` for a paragraph
   across a page break; the text queue shared in `src/source/texts.rs`; the status line in pages;
   the paragraphs' text settled; three tasks (spec-update).
+- 2026-11-13 — Implementing ([notes](0007-search-markdown-html-and-word-documents-impl-20261113_1721.md)).
