@@ -87,6 +87,8 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 - Add support for TXT! yes, plain text not yet supported :-) ironic
 - Search!
+- `/` as a search in lists too, as in a file's pages (`n` and `N` among the names that match, the
+  list not narrowed), and the filter by name on a key of its own, so `/` means one thing everywhere.
 - Add a config file for customization and remembering settings
 - Remember positions of previously opened files
 - Add proper support for ebooks (epub, etc.)
