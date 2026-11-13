@@ -365,8 +365,11 @@ The matches on screen are tinted once `Enter` keeps the search, a yellow under t
 you are on an orange, on white paper as on dark: the paper takes the colour and the ink stays
 ink. A page is sent to the terminal again with its tint, so for a moment after a key it shows
 as it was; `n`, `N` and `p` move the orange, and clearing the search sends the pages as they were.
-Nothing is tinted while you type. At most 1,024 matches are tinted on the pages on screen and
-those kept ready around them. `c` copies the page untinted, as it was rendered. In
+Nothing is tinted while you type. At most 256 matches are tinted on the pages on screen and
+those kept ready around them. A page already on screen is never blanked to be sent again: where
+the pages on screen take most of what the terminal is given to keep (three or more large pages
+to a row in a very large window), a page stays as it is, untinted, until there is room, and the
+status line still says which match you are on. `c` copies the page untinted, as it was rendered. In
 [text cells](#text-cells) the tint shows as far as the cells' colours carry it, and without
 colours not at all: the status line still says which match you are on.
 
@@ -866,8 +869,9 @@ limit, it does as the last column says. How large a page is drawn is under
 | A PDF whose text is [searched](#searching-a-documents-text) | 512 MiB | its text isn't read, and `/` says so |
 | The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
-| What a search keeps of a file's text, and its matches | 64 MiB; 262,144 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
-| The matches tinted at a time, on the pages on screen and those kept ready around them | 1,024, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
+| What a search keeps of a file's text, and its matches | 64 MiB; 100,000 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
+| The matches tinted at a time, on the pages on screen and those kept ready around them | 256, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
+| The pages on screen and a page sent again with its tint, together | 192 MiB of pixels, what the terminal is given to keep | the page isn't sent again: it stays as it is, without its tint, until there is room |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 
 ## Known issues

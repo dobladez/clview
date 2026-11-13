@@ -25,11 +25,14 @@ paper is white; Markdown's may be the terminal's dark.
    asked of the render pool again, like a page never sent, and sent under a new image id; the one
    in the terminal stays on screen until the new one is placed, and is deleted then. A page whose
    tint didn't change is only placed. Nothing of a page's pixels is kept in clv for it. The two
-   copies count against the terminal's budget while both are held: a page is asked for again only
-   if it fits beside its old copy with what the screen holds, and otherwise waits for another
-   page's old copy to go. A copy nobody sees (off screen, or under the keys) goes as its
-   replacement is sent; and a page that doesn't fit beside itself, past half the budget, goes
-   first, its place empty until the new one comes: the one case where the screen isn't kept whole.
+   copies count against the terminal's budget while both are held, with every other page on
+   screen: a page is asked for again only if it fits beside all of that. A copy nobody sees (off
+   screen, or under the keys) goes as its replacement is sent.
+   **A page on screen is never taken away for its replacement to come.** One whose replacement
+   doesn't fit is left as it is, untinted or with the tint it had, until there is room: another
+   page's old copy gone, a page turned, the budget back. The owner's choice: no blank where a
+   page was, ever, over a tint on every page. The status line still says which match the reader
+   is on.
 3. **A render under way keeps going when the tint changes,** and gets the tint of the moment it
    arrives: a page is the same pixels whatever its tint. So keys read together, or a key held,
    cost at most one render and one send a page, for where they end.
@@ -109,7 +112,11 @@ temporary files, more inside tmux, a key at a time.
   (the one that lost the reader's colour, the one that gained it): 25 to 60 ms and a PNG each
   where there are no temporary files. For a moment after a key the page shows the tint before.
   A page with matches is copied (`to_vec`) once to be tinted. Text cells without colours don't
-  show the tint; the status line still says which match the reader is on.
+  show the tint; the status line still says which match the reader is on. Where the pages on
+  screen take most of what the terminal keeps, none is tinted: three pages to a row of 51 MiB
+  each (a 450 × 100 window of 22 × 42 pixel cells) are 153 of the 192 MiB, and a fourth image
+  doesn't fit. Deleting a page first to send it again was tried and dropped, for the blank it
+  leaves until the new one arrives.
 - **Follow-ups:** the colours are a choice to look at on real terminals, light and dark;
   [Spec-0007](../specs/0007-search-markdown-html-and-word-documents.md) brings dark paper.
 - **Revisit when:** the latency from a key to the tinted screen is under some 50 ms everywhere

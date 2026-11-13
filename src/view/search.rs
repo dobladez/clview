@@ -25,12 +25,16 @@ const MAX_TEXT: usize = 64 << 20;
 /// The most a chunk's text may be, in bytes: a longer one is left unread.
 const MAX_CHUNK: usize = 1 << 20;
 /// The most chunks searched: the rest of a text in more are left unread.
-const MAX_CHUNKS: usize = 1 << 18;
+const MAX_CHUNKS: usize = 100_000;
 /// The most matches kept and counted, the first in the document's order.
 pub(super) const MAX_MATCHES: usize = 10_000;
-/// The most matches whose rectangles are asked for at a time, and the most rectangles one keeps.
-const MAX_PLACED: usize = 1_024;
+/// The most matches whose rectangles are asked for at a time to tint them, on the pages on screen
+/// and those near it, and the most rectangles one keeps. Where the view goes doesn't depend on it.
+const MAX_PLACED: usize = 256;
 const MAX_LINES: usize = 64;
+/// The most matches whose rectangles are asked for at a time to find where the top of the screen
+/// falls among a tall page's matches: the next in order, until it is known.
+const MAX_PROBED: usize = 256;
 /// The bytes of text folded, and the bytes matched, in one [`Search::poll`] or after one key: a few
 /// milliseconds' work.
 const SLICE: usize = 4 << 20;
@@ -171,6 +175,27 @@ struct Queued {
     centre: usize,
     reading: bool,
     placed: Vec<Want>,
+}
+
+/// A step from the top of the screen ([`Search::land`]): which way, how many matches, whether it
+/// says so when it goes round an end (Enter doesn't); the screen's top page and the part of it
+/// that was shown when the key was pressed; and how many of that page's matches are known so far
+/// to end above that part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Landing {
+    forward: bool,
+    steps: isize,
+    wraps: bool,
+    top: usize,
+    visible: Option<(f32, f32)>,
+    checked: usize,
+}
+
+impl Landing {
+    /// `steps` matches `forward` or back from the top of `screen`, as it is now.
+    fn from(screen: &Screen<'_>, forward: bool, steps: isize, wraps: bool) -> Self {
+        Self { forward, steps, wraps, top: screen.top, visible: screen.visible, checked: 0 }
+    }
 }
 
 /// What of the screen a search goes by: the document's page at its top left, the pages on it, and
@@ -350,10 +375,12 @@ pub(super) struct Search {
     waiting: bool,
     /// The match the reader is on is to be scrolled to, once its rectangles are known.
     revealing: bool,
-    /// Enter's match is to be chosen again once the top page's matches' rectangles are known: it
-    /// was chosen by page, and the page is taller than the window. The page, and the part of it
-    /// that was shown when Enter was pressed, which the choice goes by.
-    picking: Option<(usize, Option<(f32, f32)>)>,
+    /// A step from the top of the screen (Enter's, or `n` or `N` with the reader's match off
+    /// screen) that waits to know where that top falls among a tall page's matches: the step, the
+    /// page, and the part of it that was shown when the key was pressed, which it goes by. And the
+    /// one a key just interrupted, for that key to go on with if it is a step the same way.
+    deferred: Option<Landing>,
+    interrupted: Option<Landing>,
     /// The reader's match was just gone to, and the view hasn't been taken there yet; and whether
     /// that was so when the key now being answered was pressed ([`Search::heard`]).
     going: bool,
@@ -443,7 +470,8 @@ impl Search {
             at: None,
             waiting: false,
             revealing: false,
-            picking: None,
+            deferred: None,
+            interrupted: None,
             going: false,
             stepping: false,
             wrapped: false,
@@ -474,7 +502,9 @@ impl Search {
     pub(super) fn heard(&mut self) {
         self.wrapped = false;
         self.revealing = false;
-        self.picking = None;
+        // A step still waiting on where the screen's top falls is this key's to go on with, if it is
+        // a step the same way ([`Search::step`]); otherwise it is dropped.
+        self.interrupted = self.deferred.take();
         // Whether the key before this one went to a match the view hasn't been taken to yet: keys
         // read together, or faster than the match's place is known.
         self.stepping = std::mem::take(&mut self.going);
@@ -539,65 +569,105 @@ impl Search {
         self.typing = false;
         self.wrapped = false;
         self.dirty = true;
-        let found = self.first_from(screen);
-        self.at = found;
-        self.waiting = found.is_none() && self.busy();
-        // On a page taller than the window, which of its matches is the first on screen is known
-        // once their rectangles are: chosen again then ([`Search::poll`]).
-        self.picking = if self.waiting { None } else { self.seen(found, screen) };
-        found.map(|hit| self.go_to(hit))
+        self.at = None;
+        self.deferred = None;
+        self.waiting = self.count == 0 && self.busy();
+        // Past the end, round to the first of all, without a word.
+        if self.count == 0 { None } else { self.land(Landing::from(screen, true, 1, false)) }
     }
 
-    /// The first match known at or after the top of the `screen`, or past the end, the first of all.
-    fn first_from(&self, screen: &Screen<'_>) -> Option<(usize, u32)> {
-        self.nth(self.before(screen)).or_else(|| self.nth(0))
+    /// How many matches are in the chunks before the one page `top` starts with.
+    fn earlier(&self, top: usize) -> usize {
+        let top = self.starts.get(top).copied().unwrap_or(0);
+        self.hits.range(..top).map(|(_, hits)| hits.len()).fold(0usize, usize::saturating_add)
     }
 
-    /// How many matches come before the top of the `screen`: those of the chunks before the one its
-    /// top page starts with, and on a page taller than the window, those of that page that end
-    /// above the part on screen, as far as their rectangles are known: the first not known to, and
-    /// those after it, count as on it.
-    fn before(&self, screen: &Screen<'_>) -> usize {
-        let top = self.starts.get(screen.top).copied().unwrap_or(0);
-        let earlier = self.hits.range(..top).map(|(_, hits)| hits.len()).fold(0usize, usize::saturating_add);
-        let Some((from, _)) = screen.visible else { return earlier };
-        let keys = chunks_of(&self.starts, screen.top).flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
-        let above = |key: &(usize, u32)| {
-            self.placed.get(key).and_then(|placed| placed.span).is_some_and(|(page, _, bottom)| page == screen.top && bottom <= from)
-        };
-        earlier.saturating_add(keys.take_while(above).count())
+    /// The matches of page `top`'s chunks, in order.
+    fn on_page(&self, top: usize) -> impl Iterator<Item = (usize, u32)> + '_ {
+        chunks_of(&self.starts, top).flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)))
+    }
+
+    /// How many of page `top`'s matches, in order, end above the part of it shown (`visible`), the
+    /// first `checked` of them known to already; and whether that is settled. It isn't while the
+    /// next match's rectangles haven't come, or weren't asked for: a place not known is never taken
+    /// for on screen, nor for above it. A match the source could give no rectangle for is where the
+    /// count stops, as one on screen is. On a page all on screen, none is above.
+    fn above(&self, top: usize, visible: Option<(f32, f32)>, checked: usize) -> (usize, bool) {
+        let Some((from, _)) = visible else { return (0, true) };
+        let mut above = checked;
+        for key in self.on_page(top).skip(checked) {
+            match self.placed.get(&key) {
+                Some(Placed { rects: Some(_), span, .. }) => {
+                    if !span.is_some_and(|(page, _, bottom)| page == top && bottom <= from) {
+                        return (above, true);
+                    }
+                    above = above.saturating_add(1);
+                }
+                _ => return (above, false),
+            }
+        }
+        (above, true)
     }
 
     /// Whether the match `at` is on the `screen`: its page is, and on a top page taller than the
-    /// window, some of the match is in the part on screen, where its rectangles say where it is.
+    /// window, some of the match is in the part shown, by its rectangles. While those are still to
+    /// come it isn't taken for on screen; if the source had none to give, its page is all there is
+    /// to go by.
     fn on_screen(&self, at: (usize, u32), screen: &Screen<'_>) -> bool {
-        match (self.placed.get(&at).and_then(|placed| placed.span), screen.visible) {
+        let placed = self.placed.get(&at);
+        match (placed.and_then(|placed| placed.span), screen.visible) {
             (Some((page, top, bottom)), Some((from, to))) if page == screen.top => bottom > from && top < to,
+            (None, Some(_)) if self.page_of(at.0) == screen.top && placed.is_none_or(|placed| placed.rects.is_none()) => false,
             _ => screen.pages.contains(&self.page_at(at)),
         }
     }
 
     /// `n` (`forward`) or `N`, `count` matches on: from the match the reader is on while it is on
     /// screen, otherwise from the top of the screen; past the last, round to the first, and the
-    /// other way, which the status line then says. `None` with no match to go to.
+    /// other way, which the status line then says. `None` with no match to go to, or while where
+    /// the top of the screen falls among a tall page's matches is still to be known: the view goes
+    /// then ([`Search::poll`]).
     pub(super) fn step(&mut self, forward: bool, count: usize, screen: &Screen<'_>) -> Option<Go> {
         self.wrapped = false;
         let total = isize::try_from(self.count).ok().filter(|total| *total > 0)?;
         let steps = isize::try_from(count.max(1)).unwrap_or(isize::MAX);
+        // A step still waiting to know where the screen's top falls, and this one the same way: one
+        // step of both, from where that one started.
+        if let Some(landing) = self.interrupted.take().filter(|landing| landing.wraps && landing.forward == forward) {
+            return self.land(Landing { steps: landing.steps.saturating_add(steps), ..landing });
+        }
         // The match the key before went to is where this one goes on from, on screen yet or not:
         // the view is on its way there.
         let on = self.at.filter(|at| self.stepping || self.on_screen(*at, screen)).and_then(|at| self.ordinal(at));
-        let from = match on {
-            Some(ordinal) => isize::try_from(ordinal).unwrap_or(0),
-            None => {
-                // From the top of the screen: the first match at or after it is one step on, and
-                // the last before it one step back.
-                let before = isize::try_from(self.before(screen)).unwrap_or(0);
-                if forward { before.saturating_sub(1) } else { before }
-            }
+        let Some(from) = on.map(|ordinal| isize::try_from(ordinal).unwrap_or(0)) else {
+            return self.land(Landing::from(screen, forward, steps, true));
         };
         let to = if forward { from.saturating_add(steps) } else { from.saturating_sub(steps) };
         self.wrapped = to < 0 || to >= total;
+        let hit = self.nth(usize::try_from(to.rem_euclid(total)).unwrap_or(0))?;
+        self.at = Some(hit);
+        self.waiting = false;
+        self.dirty = true;
+        Some(self.go_to(hit))
+    }
+
+    /// Go `landing`'s steps from the top of the screen it was pressed on: the first match at or
+    /// after it is one step on, and the last before it one step back. Now, if where the top falls
+    /// among the page's matches is known; otherwise once it is ([`Search::poll`]), the rectangles
+    /// it takes asked for in order meanwhile ([`Search::queue`]), whatever is tinted.
+    fn land(&mut self, landing: Landing) -> Option<Go> {
+        let top = landing.top;
+        let (above, known) = self.above(top, landing.visible, landing.checked);
+        if !known {
+            self.deferred = Some(Landing { checked: above, ..landing });
+            self.dirty = true;
+            return None;
+        }
+        let total = isize::try_from(self.count).ok().filter(|total| *total > 0)?;
+        let before = isize::try_from(self.earlier(top).saturating_add(above)).unwrap_or(0);
+        let from = if landing.forward { before.saturating_sub(1) } else { before };
+        let to = if landing.forward { from.saturating_add(landing.steps) } else { from.saturating_sub(landing.steps) };
+        self.wrapped = landing.wraps && (to < 0 || to >= total);
         let hit = self.nth(usize::try_from(to.rem_euclid(total)).unwrap_or(0))?;
         self.at = Some(hit);
         self.waiting = false;
@@ -611,15 +681,6 @@ impl Search {
         self.revealing = true;
         self.going = true;
         Go { page: self.page_at(hit), span: None }
-    }
-
-    /// The top page of the `screen` and the part of it shown, for Enter to choose by again once
-    /// the page's matches' rectangles are known ([`Search::poll`]): where the page is taller than
-    /// the window and the match chosen for now, `hit`, is on it. `None` where there is nothing
-    /// more to learn: the page is all on screen, or the match on another.
-    fn seen(&self, hit: Option<(usize, u32)>, screen: &Screen<'_>) -> Option<(usize, Option<(f32, f32)>)> {
-        let on_top = hit.is_some_and(|hit| self.page_of(hit.0) == screen.top);
-        (screen.visible.is_some() && on_top).then_some((screen.top, screen.visible))
     }
 
     /// Take what the source has read, match what is still to match, and ask the source for what is
@@ -639,21 +700,21 @@ impl Search {
         self.count_on(SLICE);
         if self.waiting {
             // As Enter would have gone, had this been read by then.
-            match self.first_from(screen) {
-                Some(hit) => {
-                    self.at = Some(hit);
+            match self.count {
+                0 => self.waiting = self.busy(),
+                _ => {
                     self.waiting = false;
-                    self.dirty = true;
-                    self.picking = self.seen(Some(hit), screen);
-                    polled.go = Some(self.go_to(hit));
+                    polled.go = self.land(Landing::from(screen, true, 1, false));
                 }
-                None => self.waiting = self.busy(),
             }
         }
-        // Not while Enter's choice is still to be made again: the view is scrolled once, to the
-        // match chosen for good, never first to the one chosen meanwhile.
+        // A step, or Enter, that waited to know where the top of the screen fell among a tall
+        // page's matches: by the screen as it was then, wherever the view is now. Nothing was
+        // scrolled to meanwhile, so the view is scrolled once, to the match it lands on.
+        if let Some(landing) = self.deferred.take() {
+            polled.go = self.land(landing).or(polled.go);
+        }
         if self.revealing
-            && self.picking.is_none()
             && let Some(at) = self.at
             && let Some((page, span)) = self.span(at)
         {
@@ -663,31 +724,6 @@ impl Search {
         }
         self.queue(screen);
         polled.tinted = self.retint(screen);
-        // Enter chose among the top page's matches before it knew where they are: now that it
-        // does, the first at or after the top of what was shown when Enter was pressed, wherever
-        // the view is now; and the view is scrolled to it.
-        if let Some((top, visible)) = self.picking.filter(|_| !self.waiting)
-            && self.tints.get(&top).is_none_or(|(_, settled)| *settled)
-        {
-            self.picking = None;
-            let seen = Screen { top, visible, ..*screen };
-            if let Some(hit) = self.first_from(&seen).filter(|hit| Some(*hit) != self.at) {
-                self.at = Some(hit);
-                self.dirty = true;
-                self.queue(screen);
-                polled.tinted |= self.retint(screen);
-            }
-            if self.revealing
-                && let Some(at) = self.at
-            {
-                polled.go = Some(match self.span(at) {
-                    Some((page, span)) => Go { page, span: Some(span) },
-                    None => Go { page: self.page_at(at), span: None },
-                });
-                self.revealing = self.span(at).is_none();
-                self.going = self.revealing;
-            }
-        }
         let status = self.status();
         polled.changed = status != self.status;
         self.status = status;
@@ -899,6 +935,11 @@ impl Search {
                 let chunks = self.shown.iter().flat_map(|page| chunks_of(&self.starts, *page));
                 let hits = chunks.flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
                 keys.extend(hits.take(MAX_PLACED));
+                // And, apart from what is tinted, the matches a step is waiting to know the place of:
+                // the next of its page, in order, past those it knows end above the screen.
+                if let Some(landing) = &self.deferred {
+                    keys.extend(self.on_page(landing.top).skip(landing.checked).take(MAX_PROBED));
+                }
             }
             // Made again from the matches there are now: the original's characters each covers, a
             // chunk's in one pass. A range asked for before, by this match or by another query's,
@@ -1404,10 +1445,10 @@ pub(super) mod tests {
         assert_eq!(both.step(true, 1, &at(&[0])), Some(Go { page: 0, span: None }), "round to the one match");
     }
 
-    /// Enter on a page taller than the window, scrolled down it, chooses its match again once the
-    /// page's matches' rectangles have come, and scrolls only then, once, to the one chosen: by the
-    /// screen as it was when Enter was pressed. The first match of the page, chosen meanwhile, is
-    /// asked for first; its rectangles coming before the others' scroll nothing.
+    /// Enter on a page taller than the window, scrolled down it, chooses its match once it knows
+    /// where the top of the screen falls among the page's matches, and scrolls only then, once: by
+    /// the screen as it was when Enter was pressed. Until then no match is the reader's, and the
+    /// first matches' rectangles coming before the others' scroll nothing.
     #[test]
     fn enter_on_a_scrolled_page_scrolls_once_its_choice_is_settled() {
         // Three matches, 10, 50 and 90 of the page's 100 units down; the part from 70 down is shown.
@@ -1418,11 +1459,11 @@ pub(super) mod tests {
         settle(&mut search, &low);
         type_in(&mut search, "ab");
         fake.state.borrow_mut().placing = Some(0);
-        assert_eq!(search.enter(&low), Some(Go { page: 0, span: None }), "by page, for now");
-        assert_eq!((search.poll(&low, &square).go, search.status()), (None, "/ab 1/3".into()));
-        // The reader's match's rectangles come, alone: nothing to scroll to yet.
+        assert_eq!(search.enter(&low), None, "not before it knows which match is the first on screen");
+        assert_eq!((search.poll(&low, &square).go, search.status()), (None, "/ab 3".into()));
+        // The first match's rectangles come, alone: it ends above the screen, and nothing is scrolled to.
         fake.state.borrow_mut().placing = Some(1);
-        assert_eq!(search.poll(&low, &square).go, None, "scrolled to a match not chosen for good");
+        assert_eq!((search.poll(&low, &square).go, search.status()), (None, "/ab 3".into()), "scrolled to a match not chosen");
         // The rest come. Wherever the pager's view is by then, the choice is by the screen Enter saw.
         fake.state.borrow_mut().placing = None;
         let moved = Screen { visible: Some((0.0, 0.2)), ..low };
@@ -1437,6 +1478,83 @@ pub(super) mod tests {
         search.enter(&high);
         let gone: Vec<Go> = settle(&mut search, &high).into_iter().filter_map(|polled| polled.go).collect();
         assert_eq!((gone, search.status()), (vec![Go { page: 0, span: Some((0.1, 0.2)) }], "/ab 1/3".into()));
+    }
+
+    /// Polled, on a page 20,000 units high, until nothing more is owed: every place the view went.
+    fn settle_tall(search: &mut Search, screen: &Screen<'_>) -> Vec<Go> {
+        let tall = |_page: usize| Some((20_000.0, 20_000.0));
+        let mut gone = Vec::new();
+        for _ in 0..400 {
+            let polled = search.poll(screen, &tall);
+            let idle = polled == Polled::default() && !search.expecting();
+            gone.extend(polled.go);
+            if idle {
+                return gone;
+            }
+        }
+        panic!("never settled: {}", search.status());
+    }
+
+    /// Which match is the first on screen doesn't depend on how many are tinted at a time: with
+    /// 1,026 matches down a tall page, 1,025 of them above the part shown and the last in it, Enter
+    /// goes to the last, and scrolls nowhere else on the way; and `n`, from a match scrolled away
+    /// from, likewise. A match whose place isn't known yet is never taken for on screen.
+    #[test]
+    fn the_first_match_on_screen_is_found_past_more_matches_than_are_tinted() {
+        // A match every ten units, each ten high: the last, 10,250 down, tops the part shown.
+        let fake = Fake::of(&[&"abxxxxxxxx".repeat(1026)]);
+        let low = Screen { top: 0, pages: &[0], near: &[], visible: Some((0.5125, 0.52)) };
+        let last = Go { page: 0, span: Some((0.5125, 0.513)) };
+        let mut search = search(&fake);
+        settle_tall(&mut search, &low);
+        type_in(&mut search, "ab");
+        search.enter(&low);
+        let gone: Vec<Go> = settle_tall(&mut search, &low).into_iter().filter(|go| go.span.is_some()).collect();
+        assert_eq!((search.status(), gone), ("/ab 1026/1026".into(), vec![last]));
+        // `N` from it, on screen: the one before, at once.
+        search.heard();
+        assert_eq!(search.step(false, 1, &low).map(|go| go.page), Some(0));
+        assert_eq!(search.status(), "/ab 1025/1026");
+        // From the first match, scrolled away from to the bottom: `n` goes from the top of what is
+        // shown, to the last, not from a match it can't see nor to one it doesn't know the place of.
+        let top = Screen { visible: Some((0.0, 0.01)), ..low };
+        let mut search = self::search(&fake);
+        settle_tall(&mut search, &top);
+        type_in(&mut search, "ab");
+        search.enter(&top);
+        settle_tall(&mut search, &top);
+        assert_eq!(search.status(), "/ab 1/1026");
+        search.heard();
+        search.step(true, 1, &low);
+        let gone: Vec<Go> = settle_tall(&mut search, &low).into_iter().filter(|go| go.span.is_some()).collect();
+        assert_eq!((search.status(), gone), ("/ab 1026/1026".into(), vec![last]));
+        // And `N` from the same place: the last above it, the 1,025th, well past those tinted.
+        let mut search = self::search(&fake);
+        settle_tall(&mut search, &top);
+        type_in(&mut search, "ab");
+        search.enter(&top);
+        settle_tall(&mut search, &top);
+        search.heard();
+        search.step(false, 1, &low);
+        settle_tall(&mut search, &low);
+        assert_eq!(search.status(), "/ab 1025/1026");
+        // A match gone to whose place hasn't come, and another key since: it isn't taken for on
+        // screen, and `n` goes from the top of what is shown, where the first match is.
+        let mut search = self::search(&fake);
+        settle_tall(&mut search, &top);
+        type_in(&mut search, "ab");
+        search.enter(&top);
+        settle_tall(&mut search, &top);
+        fake.state.borrow_mut().placing = Some(0);
+        search.heard();
+        search.step(true, 300, &top);
+        assert_eq!(search.status(), "/ab 301/1026", "past those whose places are known already");
+        search.heard();
+        search.heard();
+        search.step(true, 1, &top);
+        fake.state.borrow_mut().placing = None;
+        settle_tall(&mut search, &top);
+        assert_eq!(search.status(), "/ab 1/1026");
     }
 
     /// What the source gives is checked: a chunk that isn't one of its own or comes twice, text past

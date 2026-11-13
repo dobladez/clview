@@ -365,3 +365,45 @@ Four findings, each reproduced by a test before its fix. `p` behaves as `N` thro
   end-to-end test); `replacing` never waiting, never going first, and `outdated` keeping the old
   copy (`a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits`). One change proved
   nothing and was replaced: the queue gone through from its start only when the thread sleeps.
+
+## After the fourth review, and the owner's decisions (2026-11-13)
+
+Two findings, each reproduced by a test before its fix, and two decisions of the owner's.
+
+- **The admission left out the rest of the screen** (the third review's fix counted pages as the
+  loop came to them). Reproduced as Codex had it: three Letter pages to a row in a 450 × 100
+  window of 22 × 42 pixel cells, 51 MiB each, `/test`: 203 MiB held, and the third page waiting
+  for room that nothing would make. The count now starts with every copy the terminal holds of
+  every page on screen, which nothing makes room among.
+- **No blank, ever (the owner's decision).** The third review's last rule is gone: no page on
+  screen is deleted for its replacement to come. A replacement that doesn't fit beside all the
+  screen holds isn't asked for; the page stays as it is, untinted or with the tint it had; nothing
+  is pending for it, the other pages go on, and every draw looks again (the pager draws again by
+  itself when a placement takes an old copy away). In Codex's case no page is tinted at all: three
+  of 51 MiB are 153 of the 192 MiB, and a fourth image never fits. The status line counts and
+  steps as ever. ADR-0028 has the rule and why; usage says it, and has a row in Limits.
+- **Where the view goes no longer depends on how many matches are tinted.** Reproduced: 1,026
+  matches down a tall page, the last alone in the part shown; `Enter` settled on the 1,025th, the
+  first whose rectangles weren't asked for, which was taken for on screen. A place not known is
+  now never taken for on screen, nor for above it. A step from the top of the screen
+  (`Search::land`: `Enter`, or `n`, `N`, `p` with the reader's match off screen) that can't tell
+  yet where that top falls among the page's matches waits (`deferred`), asks for the next matches'
+  rectangles in order, 256 at a time past those it knows end above, and goes when it knows; a
+  match the source can give no rectangle for is where it stops, as one on screen is, so a source
+  that can't place anything still steps. This took the place of the third review's `picking`:
+  `Enter` chooses no match for the time being, so the status line no longer says `1/3` before
+  `3/3`, and there is nothing to scroll to by mistake. A key drops a step that waits, unless it is
+  a step the same way, which is added to it.
+- **Caps lowered (the owner's decision):** 100,000 chunks (pages) searched, from 262,144; 256
+  matches tinted at a time, from 1,024, which a dense screen doesn't reach and navigation no
+  longer leans on. The 10,000 matches kept stay: they bound the memory and the work of a common
+  letter in a long book, and nothing here argued for another number.
+- **Seen failing:** the two reproductions before their fixes
+  (`where_the_screen_leaves_no_room_pages_keep_their_image_untinted`,
+  `the_first_match_on_screen_is_found_past_more_matches_than_are_tinted`); and by changing the line
+  and copying the file back: the screen not counted first, and a page that doesn't fit deleted
+  (the first, by the bytes held and by the delete of a page on screen); `replacing` always sending
+  (`a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits`); a place not known taken for
+  on screen, the matches a step waits for not asked for, the reader's match with no place yet taken
+  for on screen, a waiting step forgetting what it knows (the second); the choice made by the
+  screen as it is now (`enter_on_a_scrolled_page_scrolls_once_its_choice_is_settled`).

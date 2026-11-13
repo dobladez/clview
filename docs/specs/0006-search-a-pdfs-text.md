@@ -282,3 +282,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-13 — At the owner's request: with a search kept, `p` goes to the match before, as `N`
   does, since `n` goes to the next; after the search is cleared it turns back a page again.
 - 2026-11-13 — Four findings of Codex's third review fixed (the notes say which).
+- 2026-11-13 — Two findings of Codex's fourth review fixed, and two decisions of the owner's: a page
+  on screen is never blanked to be sent again with its tint, and 100,000 pages and 256 tinted matches
+  are the caps (the notes say more).

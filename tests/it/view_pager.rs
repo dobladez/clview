@@ -1653,6 +1653,54 @@ fn pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps() {
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
+/// Three pages to a row of some 51 MiB each: the screen alone is 153 MiB of the 192 the pager
+/// keeps to, so no page fits beside its own old copy, and none is sent again for its tint. They
+/// stay on screen as they are, never blank; the search still counts and steps; the pager isn't
+/// left asking for anything; and paging to where there is room, the tint is there.
+#[test]
+fn where_the_screen_leaves_no_room_pages_keep_their_image_untinted() {
+    if !pty_works() {
+        return;
+    }
+    const BUDGET: u64 = 192 << 20;
+    let pdf = fixture("tint-full", 4);
+    let terminal = Terminal { cell: Some((22, 42)), ..PLAIN };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty", "--per-row", "3"], 450, 100);
+    view.wait_until("three pages", |t| last_bar(t).contains(" pages 1–3/4 ") && !last_bar(t).contains('…') && pngs(t).len() >= 3);
+    let page: u64 = pngs(&view.text()).iter().map(|(_, page)| u64::from(page.width()) * u64::from(page.height()) * 4).min().unwrap();
+    assert!(page * 3 <= BUDGET && page * 4 > BUDGET, "pages of {} MiB: not three that leave no room for a fourth", page >> 20);
+    let shown: Vec<u32> = ids_after(&view.text(), PLACED).into_iter().rev().take(3).collect();
+    view.press("/test\r");
+    view.wait_until("the search kept", |t| last_bar(t).contains(" /test 1/4 "));
+    view.press("n");
+    view.wait_until("the next match", |t| last_bar(t).contains(" /test 2/4 "));
+    // Until nothing more is written, and then a while: nothing is asked for again and again.
+    let quiet = |view: &Session| loop {
+        let before = view.text().len();
+        std::thread::sleep(Duration::from_millis(400));
+        if view.text().len() == before {
+            break;
+        }
+    };
+    quiet(&view);
+    let text = view.text();
+    assert!(most_held(&text) <= BUDGET, "{} MiB held", most_held(&text) >> 20);
+    let deleted = ids_after(&text, DELETED);
+    assert!(shown.iter().all(|id| !deleted.contains(id)), "a page on screen was deleted: blank until its replacement");
+    assert!(!last_bar(&text).contains('…'), "{}", last_bar(&text));
+    // The last page alone on its screen, with room beside it: its match is tinted.
+    view.press("G");
+    view.wait_until("the last page", |t| last_bar(t).contains(" page 4/4 "));
+    view.press("n");
+    view.wait_until("its match", |t| last_bar(t).contains(" /test 4/4 "));
+    view.wait_until("tinted", |t| pngs(t).last().is_some_and(|(_, page)| page.pixels().any(|pixel| pixel.0 == OWN_TINT)));
+    quiet(&view);
+    assert!(most_held(&view.text()) <= BUDGET, "{} MiB held", most_held(&view.text()) >> 20);
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
 /// With a search kept and its matches tinted on screen, `c` copies the page as rendered: black on
 /// white, none of the tint's colours.
 #[test]

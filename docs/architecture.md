@@ -881,9 +881,9 @@ text back to the original's characters, one entry (a byte of the folded text, a 
 original) wherever the two stop running one for one, so that a page of ordinary prose has one entry:
 the source is asked for rectangles by the original's characters. At most 1 MiB a chunk
 (`MAX_CHUNK`), 64 MiB in all, maps included (`MAX_TEXT`: what each holds, shrunk to what it came
-to, so a megabyte of whitespace costs the one space it folds to), and 262,144 chunks (`MAX_CHUNKS`); past
+to, so a megabyte of whitespace costs the one space it folds to), and 100,000 chunks (`MAX_CHUNKS`); past
 them the chunk, or the rest, is left unread, and the status line says so: of a text in more
-chunks, the first 262,144 are read as any are, and the pages past them counted as unread. With
+chunks, the first 100,000 are read as any are, and the pages past them counted as unread. With
 `--pages`, only the chunks of the pages given are read.
 
 **Matching** is `str::match_indices` on the folded text with the query folded the same way: left
@@ -904,11 +904,15 @@ is on while it is on screen, and otherwise from the top of the screen. The scree
 chunk its first page starts with, and on a page taller than the window (`Screen::visible`, the part
 of it the pager shows, from `Nav::part_shown`), the top of that part: a match is on screen there
 when some of it is in that part, and before the screen's top when it ends above it
-(`Search::on_screen`, `Search::before`), by the match's rectangles, where they are known. `Enter`
-chooses before they are (none is asked for while the query is typed), so on such a page it chooses
-again once the top page's have come (`Search::picking`), by the part of the page that was shown
-when it was pressed, unless a key was pressed since; and the view isn't scrolled to the match
-chosen meanwhile, whose rectangles come first, but once, to the one chosen for good. A match a key
+(`Search::on_screen`, `Search::above`), by the match's rectangles. A place not known yet is never
+taken for on screen, nor for above it: a step from the top of the screen (`Search::land`: `Enter`'s,
+which never knows, no rectangle being asked for while the query is typed; `n`, `N` or `p` with the
+reader's match off screen) that can't tell yet where that top falls among the page's matches waits
+(`Search::deferred`), and goes when it can, by the part of the page that was shown when the key was
+pressed. Until then no match is gone to, so the view is scrolled once. What it waits for is asked
+for in order, 256 matches at a time past those known to end above (`MAX_PROBED`), apart from what
+is tinted, so the choice is the same however many matches the page has. A key meanwhile drops it,
+unless it is a step the same way, which goes on with it. A match a key
 has just gone to is where the next key goes on from, on screen yet or not (`Search::going`, which
 `Search::heard` hands to the next key as `stepping`): keys read together, or faster than the
 match's place is known, follow one another as keys read apart do. The view
@@ -918,7 +922,8 @@ down the screen, unless it was wholly on screen already or a key was pressed sin
 
 **What is asked of the source** (`Search::queue`): where the matches on the screen's pages and
 the pages rendered around them are,
-the reader's first, at most 1,024 of them and none while the query is typed; then the chunks still
+the reader's first, at most 256 of them (`MAX_PLACED`), and those a step is waiting for, and none
+while the query is typed; then the chunks still
 unread, outward from the one the top of the screen starts with. The queue is set again only when
 that changes (the reader moved, the matches or the one the reader is on changed), not as chunks
 arrive: a `Texts` gives a thing once while it stays listed. What changed is told by the ranges
@@ -952,11 +957,16 @@ terminal, and on screen, until `Pager::place` has placed the one with the tint o
 until that one has come, the last sent), and is deleted then (`outdated`). Only a copy placed on
 screen is kept that way: one nobody sees (off screen, or with the keys up in the pages' place, or
 while the screen before stays up) is deleted as its replacement is sent (`unseen`). The two copies
-of a page on screen count against `BUDGET` for as long as both are held: `Pager::draw` asks for a
-page again only if it fits beside its old copy with what the screen holds already (`replacing`),
-and otherwise leaves it until another page's old copy has gone, drawing again then; a page that
-doesn't fit beside itself, past half the budget (which a terminal that dropped images halves, down
-to 32 MiB), has its old copy deleted first, and its place is empty until the new one comes.
+of a page on screen count against `BUDGET` for as long as both are held, with every other page on
+screen, since nothing makes room among those: `Pager::draw` asks for a page again only if it fits
+beside all the screen holds (`replacing`). One that doesn't is left as it is, with the tint it has
+or none: a page on screen is never taken away for its replacement to come, so the screen never
+shows a blank where a page was
+([ADR-0028](adr/0028-matches-tinted-into-the-pages-pixels.md)). Nothing is asked for it meanwhile,
+the other pages go on, and it is looked at again at every draw: once another page's old copy has
+gone (the pager draws again then), or after a page is turned. Three pages of 51 MiB side by side
+leave no room for a fourth image under 192 MiB, and stay untinted; the status line still says
+which match the reader is on.
 So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
 counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before
 the tint. The pager's loop polls every `POLL` while the source owes a match's rectangles
