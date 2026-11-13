@@ -82,7 +82,7 @@ and propose where they go; don't leave them in the notes or the conversation.
 | What turned up | Where it goes |
 |---|---|
 | Something clv does that no doc says | `docs/usage.md`, or `docs/architecture.md` if only the code would notice |
-| A future feature | README's Plans, or `spec-new-auto` for a `Draft` |
+| A future feature | README's Plans, a line, with its details in `docs/backlog.md`; or the backlog alone, not yet planned; or `spec-new-auto` for a `Draft` |
 | A choice between real alternatives, made | An ADR |
 | A rule the code should keep | `CONTRIBUTING.md`'s Rules |
 | A decision not yet made | The spec's Open questions, or README's Plans |

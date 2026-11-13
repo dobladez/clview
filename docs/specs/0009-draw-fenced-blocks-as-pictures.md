@@ -70,6 +70,15 @@ too, where pictures by path can't be reached.
   again) asks the listing backend again. Mermaid's cache answers without its worker
   ([Spec-0008](0008-show-mermaid-diagrams.md)); a backend that lists a fence keeps what it made the
   same way, as `Format::fences`'s comment says.
+- **On the document's paper:** a drawn block follows its document's `d`
+  ([ADR-0015](../adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). On light
+  paper, Mermaid's default theme on white, as a `.mmd` file is ([Spec-0008](0008-show-mermaid-diagrams.md));
+  on dark paper, drawn again in **Mermaid's own dark theme** on the paper's colour, the white left
+  out, never the light drawing's colours inverted. `d` draws the blocks again with the rest of the
+  page (a redraw, no relayout: a theme doesn't change a diagram's size, which the test checks). The
+  paper reaches the listing backend through the contract, with the request a block is drawn for,
+  never by the documents' backend's setting's name; Mermaid's cache keeps each theme's SVG apart.
+  A picture by path and a `.mmd` file shown alone stay as they are now (README's Plans).
 - **Search** ([Spec-0007](0007-search-markdown-html-and-word-documents.md)): a drawn block's text
   isn't searched; shown as code, it is, being the document's text then.
 
@@ -88,6 +97,9 @@ too, where pictures by path can't be reached.
 - **Searching a drawn block's text.**
 - **A block's picture in a list's tile drawn otherwise** than a picture by path: the same rules,
   `svg-html` labels left out of tiles included.
+- **`d` for drawings outside blocks**: SVG and Mermaid files shown alone, and a document's pictures
+  by path, following the paper; the `paper` setting moved into the contract for them
+  ([README's Plans](../../README.md#plans)).
 
 ## Approach
 
@@ -138,6 +150,9 @@ too, where pictures by path can't be reached.
 - Keys with a prefix made afresh each read.
 - The setting `fences`, `drawn|code`, `Relayout`, `--fences`, on `s`.
 - The listing backend's cache keeps re-reads cheap (Mermaid's, Spec-0008).
+- A block follows its document's paper: on dark, Mermaid's dark theme on the paper's colour, through
+  the request it is drawn for (`src/source.rs` says how a picture is told it is on dark paper, and
+  `picture.rs` keeps a block drawn for each paper apart); the paper's colour is `Request::dark`'s.
 
 ## Open questions
 
@@ -173,6 +188,15 @@ too, where pictures by path can't be reached.
   as code, then drawn again; `--fences code` starting so; `s` on a PDF saying so; in a list mixing
   them; `a_settings_keys_are_its_own_in_every_backend`. Manual: in kitty, `s` on a README with a
   diagram, and inside a private `tmux -L` server.
+- [ ] **Blocks on the document's paper** — the paper told to a block through the request it is drawn
+  for, Mermaid's dark theme, each theme cached apart. *Files:* `src/source.rs`,
+  `src/source/picture.rs`, `src/source/wordcraft.rs`, `src/source/mermaid.rs`, `tests/it/mermaid.rs`,
+  `tests/it/view_pager.rs`, usage, the ADR. *Verify:* `cargo test -j 2 --test it mermaid`: a block on
+  `--theme dark` drawn in the dark theme on the paper's colour, with no white behind it; on
+  `--theme light`, on white; the two of the same size; a picture by path unchanged on dark paper;
+  `cargo test -j 2 --test it view_pager`: `d` on a README with a diagram draws the block again, dark,
+  then light, without the diagram laid out again more than once a theme. Manual: in kitty with a dark
+  background, a README with diagrams, `d` back and forth.
 
 ## Done
 
@@ -187,3 +211,5 @@ too, where pictures by path can't be reached.
 
 - 2026-11-13 — Ready (spec-new), blocked by Spec-0008.
 - 2026-11-13 — Reconciled with Spec-0008's spike: ADR-0030 linked, merman's 1 MiB named (spec-update).
+- 2026-11-13 — The owner's: a drawn block follows its document's `d`, Mermaid's dark theme on dark
+  paper; a fourth task. `d` for drawings outside blocks left to README's Plans.

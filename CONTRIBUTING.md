@@ -117,7 +117,8 @@ Each fact has one home, and the other docs link to it. When a change needs docum
 
 | Doc | Reader | What goes there |
 |---|---|---|
-| `README.md` | Someone deciding to try it | What clv is, how to install it, what it shows and through what, plans. Never the only home of a behaviour |
+| `README.md` | Someone deciding to try it | What clv is, how to install it, what it shows and through what, plans, a line each. Never the only home of a behaviour |
+| `docs/backlog.md` | Someone choosing what to build next | The details behind the Plans, and ideas not yet planned. Never promised, never the home of a behaviour |
 | `CHANGELOG.md` | Someone deciding to update | A line under `## Unreleased`, in the commit that makes the change, for anything a user would notice. What changed, never how it works now: that is the manual's |
 | `docs/usage.md` | Someone using it | Anything a user would notice changing: options, keys, what each format shows, what terminals need, limits |
 | `docs/architecture.md` | Someone working on the code | Anything naming a function, an escape code or a thread, and the numbers a design rests on |

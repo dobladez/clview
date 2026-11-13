@@ -36,7 +36,7 @@ Skip any a project doesn't have.
 | How it works, for the code | `docs/architecture.md` |
 | Why one way and not another | `docs/adr/` |
 | What changed, by release | `CHANGELOG.md` |
-| What is planned | `README.md`'s Plans |
+| What is planned | `README.md`'s Plans, a line each; their details, and ideas not yet planned, in `docs/backlog.md` |
 | Rules, gates, tests, and where a fact goes | `CONTRIBUTING.md` |
 | For agents | `CLAUDE.md` |
 

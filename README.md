@@ -85,34 +85,24 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 ## Plans
 
-- Add support for TXT! yes, plain text not yet supported :-) ironic
-- Markdown's fenced code highlighted by its language.
+High level, roughly in order; the details of each, and ideas not yet planned, are in the
+[backlog](docs/backlog.md).
+
+- Plain text files (yes, not yet: ironic).
 - Mermaid diagrams, their files and a Markdown `mermaid` block drawn as its diagram
-  ([Spec-0008](docs/specs/0008-show-mermaid-diagrams.md), a draft, then [Spec-0009](docs/specs/0009-draw-fenced-blocks-as-pictures.md)).
-- More diagram languages, drawn from their files and their fenced blocks as Mermaid's will be:
-  Graphviz (`dot`), D2, math. Each a backend of its own, listing the fences it draws.
-- Org-mode, AsciiDoc and reStructuredText documents, their source blocks drawn as Markdown's fenced
-  blocks are.
-- `/` as a search in lists too, as in a file's pages (`n` and `N` among the names that match, the
-  list not narrowed), and the filter by name on a key of its own, so `/` means one thing everywhere.
-- Add a config file for customization and remembering settings
-- Remember positions of previously opened files
-- Add proper support for ebooks (epub, etc.)
-- Let go of a list's files once the reader has moved on: a PDF opened holds its whole file until
-  the list is left.
-- Hold the grid's count to a row until a Markdown or HTML document's new layout lands: after `3.`
-  the old pages are drawn three to a row, shrunk, until the columns are ready.
-- AVIF, colour profiles, and an animation's frames as its pages.
-- More archives: zstd, 7z; a comic book archive (cbz) as a book, its pictures
-  its pages; an epub's pictures, and a document's in an archive.
-- Sixel, which would bring Windows Terminal and the terminals that speak only sixel.
-- Maybe: HTML documents through Blitz, which draws an SVG's HTML labels, weighed against
-  wordcraft's importer: Blitz lays out one long page, where documents are pages the window's size.
-- Bound what an SVG's stylesheets take to parse, a [known issue](docs/usage.md#known-issues): one
-  long declaration in a `<style>` (a 600 KB `box-shadow` list) takes some 45 seconds to open,
-  labels or not, which the drawing's limits don't count. A cap on a `<style>`'s size before it is
-  parsed, or usvg and resvg in a worker process as the labels' Blitz is
-  ([ADR-0026](docs/adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+  ([Spec-0008](docs/specs/0008-show-mermaid-diagrams.md), then [Spec-0009](docs/specs/0009-draw-fenced-blocks-as-pictures.md)).
+- More diagram languages: Graphviz, D2, math.
+- Markdown's code blocks highlighted by their language.
+- `d` for drawings and a document's pictures too, not only Markdown and HTML.
+- More documents: Org-mode, AsciiDoc and reStructuredText; ebooks (epub) as books.
+- A config file: customization, settings and positions remembered.
+- `/` as a search in lists too.
+- More pictures: AVIF, colour profiles, animations.
+- More archives: zstd, 7z; comic book archives as books.
+- Sixel, for Windows Terminal and the terminals that speak only it.
+- Lighter on memory and steadier: a list letting go of its files, relayouts without a shrunk grid,
+  an SVG's stylesheets bounded.
+- Maybe: HTML documents through Blitz.
 
 ## Working on clview
 
