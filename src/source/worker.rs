@@ -6,10 +6,11 @@
 //! stderr null, and asks it one request at a time under one deadline, its sending and its answer
 //! both: at the deadline the worker is killed, which ends a write or a read blocked on it. It reads
 //! a frame only when an answer is awaited, so it holds at most one, and refuses one that isn't the
-//! answer. A worker that dies is never asked again.
+//! answer. A worker that dies is never asked again. Another thread may kill it meanwhile
+//! ([`Kill`]): whoever waits on its answer then has it gone.
 //!
-//! The worker's side ([`serve`]) sets its heap a limit ([`HEAP`]), past which an allocation fails
-//! and it aborts, and arms the kernel's limit on its CPU time before each request
+//! The worker's side ([`serve`]) sets its heap a limit, its kind's ([`Worker::heap`]), past which an
+//! allocation fails and it aborts, and arms the kernel's limit on its CPU time before each request
 //! (`RLIMIT_CPU`), past which it is killed. It answers requests in turn, on a thread with a stack
 //! of [`STACK`], until its stdin ends.
 //!
@@ -17,9 +18,13 @@
 //! payload's length (four) and its payload. The kinds are a [`Worker`]'s, but for [`HELLO`], which
 //! starts every worker and says which clv it is, and [`FAILED`].
 
-// Only the SVG backend's labels start a worker; a build without them still serves `--worker`,
-// and tests the viewer's side.
-#![cfg_attr(not(feature = "svg-html"), allow(dead_code, reason = "no worker is started in a build without svg-html"))]
+// Only the SVG backend's labels and the PDF backend's text start a worker, and each uses its part
+// of this (the labels no shared payload, nor a kill from another thread); a build without them
+// still serves `--worker`, and tests the viewer's side.
+#![cfg_attr(
+    not(all(feature = "svg-html", feature = "pdf")),
+    allow(dead_code, reason = "what is used of this depends on which of svg-html and pdf start a worker")
+)]
 
 use std::alloc::System;
 use std::io::{Read, Write};
@@ -30,14 +35,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The allocator of the whole process: the system's, counted. The viewer's has no limit; a
-/// worker's is [`MAX_HEAP`].
+/// worker's is its kind's ([`Worker::heap`]).
 #[global_allocator]
 static HEAP: cap::Cap<System> = cap::Cap::new(System, usize::MAX);
 
-/// The most a worker's heap holds: past it, the allocation fails and the worker aborts.
-const MAX_HEAP: usize = 1 << 30;
-
-/// The most workers alive at once, all the viewer's drawings together. Past it, one isn't started.
+/// The most workers alive at once, of every kind, for all the viewer shows together. Past it, one
+/// isn't started.
 const MAX_WORKERS: usize = 6;
 
 /// The stack of the thread a worker answers on: the work it does may recurse once a level of what
@@ -75,6 +78,9 @@ pub(crate) trait Worker: Sync {
     fn name(&self) -> &'static str;
     /// Whether it takes requests of `kind`: the CPU seconds one may take, and the longest it is.
     fn takes(&self, kind: u8) -> Option<(u64, usize)>;
+    /// The most its heap holds, what it is given included: past it, an allocation fails and the
+    /// worker aborts.
+    fn heap(&self) -> usize;
     /// A worker's answers to a viewer, in turn, and what it keeps between them.
     fn session(&self) -> Box<dyn Session>;
 }
@@ -130,11 +136,28 @@ impl Drop for Alive {
 /// A frame read: its kind, the request's number it answers, and its payload.
 type Frame = (u8, u32, Vec<u8>);
 
+/// A request's payload: the viewer's own, or one it shares with whoever else holds it (a file's
+/// bytes), written from where it is.
+enum Payload {
+    Owned(Vec<u8>),
+    Shared(Arc<Vec<u8>>),
+}
+
+impl Payload {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Shared(bytes) => bytes,
+        }
+    }
+}
+
 /// A worker, from the viewer's side: what it is asked, one request at a time.
 pub(crate) struct Link {
     shared: Arc<Shared>,
-    /// Frames to write, to the writer's thread, and what writing each came to.
-    to: SyncSender<Vec<u8>>,
+    /// Frames to write, each its header and its payload, to the writer's thread, and what writing
+    /// each came to.
+    to: SyncSender<([u8; 9], Payload)>,
     written: Receiver<std::io::Result<()>>,
     /// The longest frame to read next, to the reader's thread, and the frame it read.
     ask: SyncSender<usize>,
@@ -269,15 +292,18 @@ fn started(mut command: Command, alive: Alive) -> Result<Link, Died> {
 /// seen ending, and the rest of the frame only when an answer is awaited, within its length: so
 /// the viewer holds at most one answer, and what a worker writes unasked waits in the pipe.
 fn linked(process: Process, mut to: Box<dyn Write + Send>, mut from: Box<dyn Read + Send>, alive: Alive) -> Result<Link, Died> {
-    let (frames, take) = sync_channel::<Vec<u8>>(1);
+    let (frames, take) = sync_channel::<([u8; 9], Payload)>(1);
     let (wrote, written) = sync_channel(1);
     let (ask, asked) = sync_channel::<usize>(1);
     let (give, read) = sync_channel(1);
     let shared = Arc::new(Shared(Mutex::new(Inner { process, alive: Some(alive), dead: None })));
     let mut link = Link { shared: shared.clone(), to: frames, written, ask, read, number: 0 };
     let writer = std::thread::Builder::new().name("to worker".into()).spawn(move || {
-        while let Ok(frame) = take.recv() {
-            if wrote.send(to.write_all(&frame).and_then(|()| to.flush())).is_err() {
+        while let Ok((header, payload)) = take.recv() {
+            let written = to.write_all(&header).and_then(|()| to.write_all(payload.bytes())).and_then(|()| to.flush());
+            // Let go of before the answer is waited for: a file's bytes may be the last thing shared.
+            drop(payload);
+            if wrote.send(written).is_err() {
                 return;
             }
         }
@@ -325,22 +351,25 @@ impl Link {
     /// `longest` bytes: its kind and payload. The worker is killed, and never asked again, past
     /// the deadline, on an answer that isn't one (longer, or another request's), or when it is gone.
     pub(crate) fn request(&mut self, kind: u8, payload: Vec<u8>, wall: Duration, longest: usize) -> Result<(u8, Vec<u8>), Died> {
+        self.ask(kind, Payload::Owned(payload), wall, longest)
+    }
+
+    /// [`Link::request`], with a payload the viewer shares (a file's bytes), written to the worker
+    /// from where it is, never copied here.
+    pub(crate) fn request_shared(&mut self, kind: u8, payload: Arc<Vec<u8>>, wall: Duration, longest: usize) -> Result<(u8, Vec<u8>), Died> {
+        self.ask(kind, Payload::Shared(payload), wall, longest)
+    }
+
+    fn ask(&mut self, kind: u8, payload: Payload, wall: Duration, longest: usize) -> Result<(u8, Vec<u8>), Died> {
         if let Some(died) = self.shared.dead() {
             return Err(died);
         }
         let deadline = Instant::now().checked_add(wall);
         self.number = self.number.wrapping_add(1);
-        let mut frame = Vec::new();
-        if frame.try_reserve_exact(payload.len().saturating_add(9)).is_err() {
-            return Err(self.end(Died::Unstarted("no memory for the request".into())));
-        }
-        let Ok(length) = u32::try_from(payload.len()) else { return Err(self.end(Died::Malformed)) };
-        frame.push(kind);
-        frame.extend_from_slice(&self.number.to_le_bytes());
-        frame.extend_from_slice(&length.to_le_bytes());
-        frame.extend_from_slice(&payload);
-        drop(payload);
-        if self.to.send(frame).is_err() || self.ask.send(longest).is_err() {
+        let Ok(length) = u32::try_from(payload.bytes().len()) else { return Err(self.end(Died::Malformed)) };
+        let ([n0, n1, n2, n3], [l0, l1, l2, l3]) = (self.number.to_le_bytes(), length.to_le_bytes());
+        let header = [kind, n0, n1, n2, n3, l0, l1, l2, l3];
+        if self.to.send((header, payload)).is_err() || self.ask.send(longest).is_err() {
             return Err(self.ended());
         }
         let left = || deadline.map_or(Duration::MAX, |d| d.saturating_duration_since(Instant::now()));
@@ -374,6 +403,11 @@ impl Link {
         self.end(Died::Malformed)
     }
 
+    /// A way to kill the worker from another thread, while this one waits on its answer.
+    pub(crate) fn killer(&self) -> Kill {
+        Kill(self.shared.clone())
+    }
+
     /// Whether the worker's process has ended and been reaped.
     #[cfg(test)]
     fn reaped(&self) -> bool {
@@ -388,6 +422,17 @@ impl Drop for Link {
     /// The worker killed and reaped: nothing outlives the viewer's use of it.
     fn drop(&mut self) {
         self.shared.end(Died::Ended("let go of".into()));
+    }
+}
+
+/// A worker to kill from a thread that doesn't hold its [`Link`] ([`Link::killer`]): the reader left
+/// what it was working for, and nothing waits for it to answer first.
+pub(crate) struct Kill(Arc<Shared>);
+
+impl Kill {
+    /// The worker killed and reaped, now: a request waiting on its answer finds it gone, let go of.
+    pub(crate) fn kill(&self) {
+        self.0.end(Died::Ended("let go of".into()));
     }
 }
 
@@ -462,7 +507,7 @@ pub(crate) fn serve(name: &str, workers: &[&'static dyn Worker]) -> Result<(), S
         // Not the name: it is the command line's, and goes to stderr as it is.
         return Err("no such worker in this build".into());
     };
-    HEAP.set_limit(MAX_HEAP).map_err(|()| "its heap is already past its limit".to_string())?;
+    HEAP.set_limit(worker.heap()).map_err(|()| "its heap is already past its limit".to_string())?;
     let thread = std::thread::Builder::new()
         .name("worker".into())
         .stack_size(STACK)
@@ -564,6 +609,40 @@ mod tests {
         assert_eq!(ask(&mut link, 10, 64), Err(Died::Ended("exit 0".into())));
     }
 
+    /// A worker killed from another thread while a request waits on its answer: the request ends at
+    /// once, the worker reaped and gone for having been let go of, well before its deadline.
+    #[test]
+    fn a_worker_is_killed_from_another_thread_while_its_answer_is_awaited() {
+        let mut link = fake("exec sleep 60").unwrap();
+        let kill = link.killer();
+        let begun = Instant::now();
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            kill.kill();
+        });
+        assert_eq!(ask(&mut link, 30, 64), Err(Died::Ended("let go of".into())));
+        assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+        killer.join().unwrap();
+        assert!(link.reaped(), "reaped");
+        assert_eq!(ask(&mut link, 30, 64), Err(Died::Ended("let go of".into())), "never asked again");
+    }
+
+    /// A payload shared is written as one owned is: its header, then its bytes from where they are.
+    #[test]
+    fn a_shared_payload_is_written_as_an_owned_one_is() {
+        // `cat` writes each frame back as it came: a request's kind, number and payload are its answer's.
+        let mut link = fake("exec cat").unwrap();
+        let shared = Arc::new(b"wxyz!".to_vec());
+        assert_eq!(link.request_shared(7, shared.clone(), Duration::from_secs(10), 64), Ok((7, b"wxyz!".to_vec())));
+        assert_eq!(link.request(8, b"owned".to_vec(), Duration::from_secs(10), 64), Ok((8, b"owned".to_vec())));
+        assert_eq!(link.request_shared(9, Arc::new(Vec::new()), Duration::from_secs(10), 64), Ok((9, Vec::new())));
+        let begun = Instant::now();
+        while Arc::strong_count(&shared) > 1 {
+            assert!(begun.elapsed() < Duration::from_secs(5), "the link still holds the payload");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// How a worker ended is told: an exit, a crash, its CPU time, its heap.
     #[test]
     fn how_a_worker_ended_is_told() {
@@ -618,6 +697,9 @@ mod tests {
             fn takes(&self, kind: u8) -> Option<(u64, usize)> {
                 (kind == 1).then_some((1, 4))
             }
+            fn heap(&self) -> usize {
+                usize::MAX
+            }
             fn session(&self) -> Box<dyn Session> {
                 struct Count(u8);
                 impl Session for Count {
@@ -653,6 +735,9 @@ mod tests {
             }
             fn takes(&self, _kind: u8) -> Option<(u64, usize)> {
                 Some((1, 64))
+            }
+            fn heap(&self) -> usize {
+                usize::MAX
             }
             fn session(&self) -> Box<dyn Session> {
                 struct Spinning;

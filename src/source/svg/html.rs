@@ -87,6 +87,9 @@ const MALFORMED: u8 = 2;
 const PREPARE_CPU: u64 = 10;
 const RENDER_CPU: u64 = 5;
 
+/// The most the worker's heap holds: past it, an allocation fails and it aborts (ADR-0026).
+const MAX_HEAP: usize = 1 << 30;
+
 /// The longest [`PREPARE`]: the drawing's stylesheets, at most its file expanded, and the labels'
 /// markup, at most 8 MiB.
 const MAX_PREPARE: usize = 256 << 20;
@@ -116,6 +119,10 @@ impl Worker for Labels {
             RENDER => Some((RENDER_CPU, MAX_RENDER)),
             _ => None,
         }
+    }
+
+    fn heap(&self) -> usize {
+        MAX_HEAP
     }
 
     fn session(&self) -> Box<dyn Session> {

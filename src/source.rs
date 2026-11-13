@@ -69,6 +69,8 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
 pub(crate) const WORKERS: &[&'static dyn Worker] = &[
     #[cfg(feature = "svg-html")]
     &svg::LABELS,
+    #[cfg(feature = "pdf")]
+    &pdfcraft::TEXT,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -727,7 +729,7 @@ pub(crate) enum Want {
 }
 
 /// What a source gives of its text ([`Texts::try_recv`]), or why not, in words for the reader.
-#[cfg_attr(not(test), expect(dead_code, reason = "no backend gives its text yet"))]
+#[cfg_attr(not(any(feature = "pdf", test)), expect(dead_code, reason = "only PDFs give their text"))]
 pub(crate) enum Got {
     /// A chunk's text. Why not costs the search that chunk alone.
     Text(usize, Result<String, String>),

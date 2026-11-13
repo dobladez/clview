@@ -1122,8 +1122,7 @@ fn in_a_list_c_copies_the_tile_chosen_and_a_folder_has_none() {
 }
 
 /// The processes descended from `pid` whose command line holds `what`, by `ps`.
-#[cfg(feature = "svg-html")]
-fn descendants_running(pid: u32, what: &str) -> Vec<u32> {
+pub(crate) fn descendants_running(pid: u32, what: &str) -> Vec<u32> {
     let ps = Command::new("ps").args(["-axo", "pid=,ppid=,command="]).output().unwrap();
     let rows: Vec<(u32, u32, String)> = String::from_utf8_lossy(&ps.stdout)
         .lines()
@@ -1180,6 +1179,204 @@ fn a_lists_tiles_start_no_worker_for_a_drawings_labels_and_opening_one_does() {
         assert!(Instant::now() < deadline, "the worker outlived the drawing's level");
         std::thread::sleep(Duration::from_millis(20));
     }
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What the status line last said, each run of spaces made one: from the last time it was written,
+/// with the screen or by itself.
+fn last_bar(text: &str) -> String {
+    const START: &str = "\x1b[2K\x1b[7m";
+    let said = text.rfind(START).map_or("", |at| &text[at + START.len()..]);
+    bar(said.find("\x1b[0m").map_or("", |end| &said[..end]))
+}
+
+/// Wait until no worker reading a PDF's text is left among `view`'s processes.
+fn no_text_worker(view: &Session, why: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    while !descendants_running(view.child.id(), "--worker pdf-text").is_empty() {
+        assert!(Instant::now() < deadline, "{why}: a worker is still reading the text");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `/` in a PDF's pages searches its text, read in a worker process from then on: what is typed is
+/// counted while the view stays, Enter goes to the first match from the top of the screen, `n` and
+/// `N` go on and back round the ends, and Esc clears the search, after which `n` turns pages
+/// again. The worker is started by `/`, and goes with the search, and with the pager.
+#[test]
+fn slash_searches_a_pdfs_text_in_a_worker_that_goes_with_the_search() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("search", 5);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/5"));
+    let workers = |view: &Session| descendants_running(view.child.id(), "--worker pdf-text");
+    assert!(workers(&view).is_empty(), "a worker before any search");
+    view.press("/page 3");
+    view.wait_until("counted as typed", |t| last_bar(t).contains(" many.pdf /page 3 1 ⏎ search · esc cancel page 1/5 "));
+    assert_eq!(workers(&view).len(), 1, "the text's worker");
+    view.press("\r");
+    view.wait_until("the match's page", |t| last_bar(t).contains(" many.pdf /page 3 1/1 page 3/5 "));
+    // Every page says "Pager test, page N": in any case, five matches, from the top of the screen.
+    view.press("/\x7f\x7f\x7f\x7f\x7f\x7fPAGER TEST\r");
+    view.wait_until("the first from page 3", |t| last_bar(t).contains(" /PAGER TEST 3/5 page 3/5 "));
+    view.press("nn");
+    view.wait_until("two on", |t| last_bar(t).contains(" /PAGER TEST 5/5 page 5/5 "));
+    view.press("n");
+    view.wait_until("round to the first", |t| last_bar(t).contains(" /PAGER TEST 1/5 · search wrapped page 1/5 "));
+    view.press("N");
+    view.wait_until("and back", |t| last_bar(t).contains(" /PAGER TEST 5/5 · search wrapped page 5/5 "));
+    view.press("2N");
+    view.wait_until("two back", |t| last_bar(t).contains(" /PAGER TEST 3/5 page 3/5 "));
+    assert_eq!(workers(&view).len(), 1, "one worker for the whole search");
+    // Esc clears the search: the worker goes, the view stays, and `n` turns pages again.
+    view.press("\x1b");
+    view.wait_until("cleared", |t| !last_bar(t).contains("/PAGER") && last_bar(t).contains(" many.pdf page 3/5 "));
+    no_text_worker(&view, "the search was cleared");
+    view.press("n");
+    view.wait_until("the next page", |t| last_bar(t).contains(" many.pdf page 4/5 "));
+    // Nothing matches: said once all is read. And quitting with a search open leaves no worker.
+    view.press("/zebra");
+    view.wait_until("no match", |t| last_bar(t).contains(" /zebra no match ⏎ search · esc cancel page 4/5 "));
+    let pid = view.child.id();
+    view.press("\x03");
+    assert!(view.finish().success());
+    let deadline = Instant::now() + PATIENCE;
+    while !descendants_running(pid, "--worker pdf-text").is_empty() {
+        assert!(Instant::now() < deadline, "the worker outlived the pager");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// A US Letter document whose pages read `Kill test, page N`, but those of `heavy` (from 0), which
+/// hold four million glyphs each, ten to a string, every string placed by itself: more than the
+/// text's worker has the heap to read (such a page took 896 MiB to read, measured, against the
+/// worker's 768 MiB, the file included: ADR-0027).
+fn with_heavy_pages(test: &str, pages: usize, heavy: &[usize]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut glyphs = String::from("BT /F1 0.1 Tf\n");
+    for i in 0..400_000u32 {
+        glyphs.push_str(&format!("1 0 0 1 {:.2} {:.2} Tm (abcdefghij) Tj\n", 5.0 + f64::from(i % 1000) * 0.6, 780.0 - f64::from(i / 1000) * 0.12));
+    }
+    glyphs.push_str("ET");
+    // The catalog, the page tree, the font and the heavy pages' one content; then each page, and
+    // its own content if it is a light one.
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 5 + 2 * i)).collect();
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 612 792] >>", kids.join(" ")),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Length {} >>\nstream\n{glyphs}\nendstream", glyphs.len()),
+    ];
+    for i in 0..pages {
+        let content = format!("BT /F1 36 Tf 72 680 Td (Kill test, page {}) Tj ET", i + 1);
+        let contents = if heavy.contains(&i) { 4 } else { 6 + 2 * i };
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /Contents {contents} 0 R /Resources << /Font << /F1 3 0 R >> >> >>"));
+        objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    }
+    let pdf = dir.join("heavy.pdf");
+    std::fs::write(&pdf, crate::fixtures::pdf(&objects)).unwrap();
+    pdf
+}
+
+/// A page whose text takes more memory to read than its worker has kills the worker, and costs the
+/// search that page alone: the status line says which, and why, and another worker reads the pages
+/// after it. Past three workers killed, the rest is left unread, and the status line says how far
+/// the reading got; no worker is left. The keys answer throughout.
+#[test]
+fn a_page_past_the_workers_heap_costs_the_search_that_page_and_four_of_them_the_rest() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = with_heavy_pages("search-heavy-one", 3, &[1]);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--per-row", "1"], 160, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
+    view.press("/page\r");
+    view.wait_until("the pages around it read", |t| last_bar(t).contains(" /page 1/2 · page 2 unread "));
+    assert!(view.text().contains("page 2's text took too much memory to read"), "why, said once: {}", last_bar(&view.text()));
+    // The page is still shown, and turned to; only its text is unread.
+    view.press("n");
+    view.wait_until("the match after the page unread", |t| last_bar(t).contains(" /page 2/2 · page 2 unread ") && last_bar(t).contains(" page 3/3 "));
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+
+    // Pages 2, 4, 5 and 6: read outward from page 1, the fourth worker killed is one too many.
+    let pdf = with_heavy_pages("search-heavy-four", 8, &[1, 3, 4, 5]);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--per-row", "1"], 160, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/8"));
+    view.press("/page\r");
+    view.wait_until("the first page's match", |t| last_bar(t).contains(" /page 1/1… "));
+    // A key meanwhile is answered: the reading is nobody's wait.
+    view.press("\x1b[C");
+    view.wait_until("a page turned while the text is read", |t| last_bar(t).contains("… ") && last_bar(t).contains(" page 2/8 "));
+    view.wait_until("the rest left unread", |t| last_bar(t).contains(" /page 1/2 · read 2 of 8 pages "));
+    assert!(view.text().contains("reading its text failed too often: the rest is left unread"));
+    no_text_worker(&view, "the reading was given up");
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+
+    // Esc while the worker is on a heavy page, the first read: it is killed at once, not left to
+    // run into its cap, which takes it a second.
+    let pdf = with_heavy_pages("search-heavy-left", 2, &[0]);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--per-row", "1"], 160, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/2"));
+    view.press("/page");
+    let deadline = Instant::now() + PATIENCE;
+    while descendants_running(view.child.id(), "--worker pdf-text").is_empty() {
+        assert!(Instant::now() < deadline, "no worker for the search");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    view.press("\x1b");
+    let left = Instant::now();
+    while !descendants_running(view.child.id(), "--worker pdf-text").is_empty() {
+        assert!(left.elapsed() < Duration::from_millis(500), "the worker outlived the search it was reading for");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// A PDF opened from a list is searched as one opened alone, and its worker goes when the reader
+/// goes back to the list, where `/` filters. A picture has no text to search, and says so.
+#[cfg(feature = "image")]
+#[test]
+fn a_pdf_opened_from_a_list_is_searched_and_a_picture_has_no_text() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-search-list-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("First", 3)).unwrap();
+    save(&dir.join("b.png"), 40, 30);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2") && transmitted(t) == 2);
+    view.press("\r");
+    view.wait_until("a opened", |t| drawn(t, "page 1/3"));
+    view.press("/first, page 2\r");
+    view.wait_until("found", |t| last_bar(t).contains(" a.pdf /first, page 2 1/1 page 2/3 "));
+    assert_eq!(descendants_running(view.child.id(), "--worker pdf-text").len(), 1);
+    // Esc clears the search, then goes back to the list.
+    view.press("\x1b");
+    view.wait_until("cleared", |t| last_bar(t).contains(" a.pdf page 2/3 "));
+    no_text_worker(&view, "the search was cleared");
+    view.press("/page\r");
+    view.wait_until("searched again", |t| last_bar(t).contains(" a.pdf /page 2/3 page 2/3 "));
+    view.press("\x1b\x1b");
+    view.wait_until("back to the list", |t| last_bar(t).contains(" a.pdf 1/2 "));
+    no_text_worker(&view, "the reader went back to the list");
+    // In the list `/` filters; in the picture it says there is no text.
+    view.press("/b\r\r");
+    view.wait_until("b opened", |t| last_bar(t).contains(" b.png ") && last_bar(t).contains(" page 1/1 "));
+    view.press("/");
+    view.wait_until("no text", |t| last_bar(t).contains(" b.png no text to search page 1/1 "));
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(&dir).unwrap();

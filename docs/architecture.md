@@ -64,7 +64,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Texts`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
 | `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and painted by Blitz for `svg.rs`, in a worker process: the one file that names Blitz, both sides of that worker |
-| `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and heap capped by itself, killed past them, at most six alive ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)) |
+| `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and its heap capped by itself (`Worker::takes`, `Worker::heap`), killed past them, or from another thread while its answer is awaited (`Kill`); a payload its own or shared (`Link::request_shared`, a file's bytes written from where the viewer holds them); at most six alive, of every kind ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md), [ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
@@ -222,7 +222,8 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
 ### How each opens, and what it keeps
 
 - **A PDF** renders through pdfcraft, the way its app draws it, a git dependency pinned in
-  `Cargo.toml`.
+  `Cargo.toml`. Its text, for a search, is read by pdfcraft in a worker process
+  ([A PDF's text](#a-pdfs-text-pdfcraftrs)).
 - **A drawing** renders through resvg
   ([ADR-0002](adr/0002-render-svg-with-resvg.md)), within limits of clv's own on what it costs to
   parse and render, since resvg's are few. It parses once to open and keeps only where its bytes are; its
@@ -894,7 +895,7 @@ the chunks whose matches weren't kept are no longer known.
 **Where the reader is.** The match the reader is on is a chunk and a place in it, never a number
 among the matches, so text read later leaves it theirs and only its number changes. `Enter` goes to
 the first match at or after the chunk the top of the screen starts with, round to the first of all;
-with none known yet, the first to arrive is gone to, once. `n` and `N` go from the match the reader
+with none known yet, the view goes the same way once one is, by what is known then, once. `n` and `N` go from the match the reader
 is on while its page is on screen, and otherwise from the top of the screen. The view goes to the
 page the match's chunk starts on; the match's rectangles are asked for then, and when they arrive
 (`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way down the
@@ -909,6 +910,47 @@ arrive: a `Texts` gives a thing once while it stays listed.
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
 at most 64 for a match. What fails costs that chunk or that rectangle.
+
+**A chunk a source can't give** comes as its reason, in words for the reader (`Got::Text`'s
+`Err`): the chunk is left unread, the status line says so from then on (`· page 40 unread`, or
+`· read 120 of 500 pages` once more than one is), and the reason is its message once, with the
+search while it is typed. There is no other channel: a source that reads nothing more (its file
+too large, its reading given up) answers each chunk asked with why.
+
+### A PDF's text (`pdfcraft.rs`)
+
+`Pdf::texts` gives a `PagesText`: a chunk a page. A thread of its own (`Reader::run`) takes the
+most urgent thing wanted and not yet given, asks a worker process for it, and sends back what
+comes; nothing in the viewer's process reads a page's text
+([ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)). A spreadsheet's
+pages are a PDF's, so `gridcraft.rs`'s `Noted`, which wraps them to carry what gridcraft said,
+hands `texts` on to them, by the contract.
+
+**The worker** is `clv --worker pdf-text` (`pdfcraft::TEXT`, in `source::WORKERS`), started by the
+first thing asked. It is given the password (`PASSWORD`), then the PDF's bytes (`OPEN`), the copy
+the viewer shows, shared with the link's writer thread and written from where they are; it keeps
+the document parsed (`PageRenderer`). `READ` answers a page's text as it is searched
+(`searched`): the glyphs' text in pdfcraft's reading order, a space where `space_before` says and
+between one line and the next (`line_of`), with the character each glyph starts at kept beside
+the page's glyphs. `PLACE` answers the rectangles of a range of those characters: the glyphs the
+range is in, by a binary search of where they start, their boxes merged along each line
+(`PageText::line_rects`), in points from the page's top left. The last page read is kept for the
+ranges asked of it next, and read again if another page was read since.
+
+**The caps** are the worker's own (ADR-0027 has the measurements): 5 s of CPU a request
+(`OPEN_CPU`, `PAGE_CPU`, three times that on the viewer's clock), a heap of 768 MiB (`MAX_HEAP`:
+`MAX_PDF`, 512 MiB, and 256 MiB to work in), 1 MiB of text a page (`MAX_PAGE_TEXT`) and 64
+rectangles a range. A worker gone on a page (killed past a cap, or answering what wasn't asked)
+costs that page, whose text is answered as unread with why, and the next request starts another,
+given the PDF again. Past three gone (`MAX_KILLS`), or 120 s of requests for text (`DOCUMENT`),
+every chunk asked is answered as unread at once; rectangles are still answered after the 120 s
+by the worker then alive, never after the kills. A PDF over `MAX_PDF`, one pdfcraft can't parse,
+or no room for a worker (six alive) leaves all of it unread the same way.
+
+**Ending a search** drops the `PagesText`: it sets the thread to stop and kills the worker
+through its `Kill`, which the thread put in the shared state once the worker was greeted, so a
+request waiting on the worker ends at once and the pager's thread waits on neither. A worker
+being started at that moment is let go of when the thread sees the stop.
 
 ## The terminal's state
 

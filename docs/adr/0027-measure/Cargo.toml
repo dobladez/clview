@@ -1,0 +1,27 @@
+[package]
+name = "measure"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone, its own workspace: not part of clv's build. Measures what a PDF's text costs
+# pdfcraft to read, a page at a time, for ADR-0027: `cargo build --release` here, then
+# `target/release/measure`. pdfcraft at the commit clv pins, with the crates it patches.
+[workspace]
+
+[dependencies]
+pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+
+[patch.crates-io]
+hayro = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+vello_cpu = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+
+[profile.release]
+debug = false

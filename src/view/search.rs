@@ -377,18 +377,23 @@ impl Search {
     }
 
     /// Enter: the search is kept, and the view goes to the first match known at or after the top of
-    /// the screen, or past the end, to the first of all. With none known yet, the first to come is
-    /// gone to ([`Search::poll`]).
+    /// the screen, or past the end, to the first of all. With none known yet, the view goes the same
+    /// way once one is, by what is known then ([`Search::poll`]).
     pub(super) fn enter(&mut self, screen: &Screen<'_>) -> Option<Go> {
         self.typing = false;
         self.wrapped = false;
         self.dirty = true;
-        let top = self.starts.get(screen.top).copied().unwrap_or(0);
-        let first = |(chunk, hits): (&usize, &Vec<Hit>)| hits.first().map(|hit| (*chunk, hit.0));
-        let found = self.hits.range(top..).find_map(first).or_else(|| self.hits.iter().find_map(first));
+        let found = self.first_from(screen);
         self.at = found;
         self.waiting = found.is_none() && self.busy();
         found.map(|hit| self.go_to(hit))
+    }
+
+    /// The first match known at or after the top of the `screen`, or past the end, the first of all.
+    fn first_from(&self, screen: &Screen<'_>) -> Option<(usize, u32)> {
+        let top = self.starts.get(screen.top).copied().unwrap_or(0);
+        let first = |(chunk, hits): (&usize, &Vec<Hit>)| hits.first().map(|hit| (*chunk, hit.0));
+        self.hits.range(top..).find_map(first).or_else(|| self.hits.iter().find_map(first))
     }
 
     /// `n` (`forward`) or `N`, `count` matches on: from the match the reader is on while its page
@@ -442,8 +447,8 @@ impl Search {
         }
         self.count_on(SLICE);
         if self.waiting {
-            let first = self.hits.iter().find_map(|(chunk, hits)| hits.first().map(|hit| (*chunk, hit.0)));
-            match first {
+            // As Enter would have gone, had this been read by then.
+            match self.first_from(screen) {
                 Some(hit) => {
                     self.at = Some(hit);
                     self.waiting = false;
@@ -980,6 +985,15 @@ pub(super) mod tests {
             gone.push(search.poll(&at(&[3]), &square).go.filter(|go| go.page != 3));
         }
         assert_eq!((gone, search.status()), (vec![None; 4], "/page 4/5".into()));
+        // Several chunks read in one pass: the first match from the top of the screen, as Enter goes.
+        let fake = Fake::of(&["page one", "page two", "page three"]);
+        fake.allow(0);
+        let mut search = self::search(&fake);
+        type_in(&mut search, "page");
+        assert_eq!((search.enter(&at(&[1])), search.poll(&at(&[1]), &square).go), (None, None));
+        fake.allow(3);
+        assert_eq!(search.poll(&at(&[1]), &square).go, Some(Go { page: 1, span: None }));
+        assert_eq!(search.status(), "/page 2/3");
         // With no match at all, Enter waits no longer than the reading.
         let mut none = self::search(&Fake::of(&["a", "b"]));
         type_in(&mut none, "x");

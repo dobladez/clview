@@ -38,6 +38,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0024 | [Pages to a row of Markdown and HTML are columns, and the last key wins](0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md) | Accepted |
 | 0025 | [Draw an SVG's HTML labels with Blitz, one document a drawing, each stage bounded](0025-draw-an-svgs-html-labels-with-blitz-one-document-a-drawing.md) | Accepted; its estimate and its thread superseded by ADR-0026 |
 | 0026 | [An SVG's HTML labels in a worker process, capped on CPU time and heap](0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md) | Accepted |
+| 0027 | [A PDF's text read in a worker process, for its heap cap](0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md) | Accepted |
 
 ## When to write one
 

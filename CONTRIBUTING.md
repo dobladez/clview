@@ -23,7 +23,10 @@ The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to 
 `[patch.crates-io]` ones included (they are pdfcraft's patched hayro, lopdf and vello), then run the
 tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
 instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
-renderer would replace that file and the dependencies, and nothing else.
+renderer would replace that file and the dependencies, and nothing else. The caps of the worker
+that reads a PDF's text for a search rest on what pdfcraft's text costs at the pin
+([ADR-0027](docs/adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)): measure it
+again with `docs/adr/0027-measure/`, its `rev`s moved with these.
 
 The Word backend's wordcraft comes from git the same way, every `rev` of its crates at one commit;
 it needs no patches, since clv builds its readers, layout and renderer but not its engine, whose
@@ -158,20 +161,25 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. It plays one
   without the protocol as well, for text cells. A list's file opened on demand is sent at its true size,
   and one that turns out broken keeps its tile. `--help`'s icon is tested here too, since it depends
-  on stdout being a terminal.
+  on stdout being a terminal. A PDF's search too: its text read in a worker seen with `ps`, gone
+  with the search, the file and the pager, and a page past the worker's heap, written by the test,
+  costing the search that page.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
   pages printed from a shell, deleted once no pane holds them, `--help`'s icon, on a client whose
   terminfo entry says it is kitty, and text cells in a pane.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,
-  XFA forms, its warnings, its pinned dependency), and that nothing else names its library.
+  XFA forms, its warnings, its pinned dependency), and that nothing else names its library. What
+  its text's worker answers (a page's text as searched, a range's rectangles) is unit-tested in
+  `src/source/pdfcraft.rs`, the worker's code run on a thread.
 - **`tests/it/resvg.rs`**: the SVG backend through the viewer: what it draws, the limits a drawing is
   held to, its HTML labels and the worker process they are drawn in (killed past its CPU time or
   its heap, with the drawings that reach each), and that nothing else names its libraries or
   Blitz's. The worker's own tests, with `sleep`, `sh` and `yes` as workers, are unit tests in
   `src/source/worker.rs`; the pager's, that a list's tiles start none, in `tests/it/view_pager.rs`.
 - **`tests/it/wordcraft.rs`** and **`tests/it/gridcraft.rs`**: documents and workbooks as pages, a
-  protected one opened with its password, their pins, and that nothing else names their libraries.
+  protected one opened with its password, a workbook searched through its PDF, their pins, and that
+  nothing else names their libraries.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
   else names its decompressors.

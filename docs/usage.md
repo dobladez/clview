@@ -88,8 +88,10 @@ In a file's pages:
 | `b`, `PgUp` | up a screen; at the top of a page, back to the previous page (or pages) |
 | `j`, `↓`, `Enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
 | `k`, `↑` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
-| `n`, `→` | next page (or screen of pages) |
+| `n`, `→` | next page (or screen of pages); with a search kept, `n` goes to the next match |
 | `p`, `←` | previous page (or screen of pages) |
+| `/` | search the file's text ([Searching a document's text](#searching-a-documents-text)): type, then `Enter` |
+| `N` | with a search kept, the match before; a number, then `n` or `N`, goes that many matches on or back |
 | `g`, `Home` | first page |
 | `G`, `End` | last page |
 | a number, then `Enter` or `g` | that page |
@@ -103,8 +105,8 @@ In a file's pages:
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace`, `u` | back to the list, for a file opened from one |
-| `q`, `Esc`, `Ctrl-C` | quit |
+| `Esc`, `Backspace`, `u` | clear the search, if one is kept; otherwise back to the list, for a file opened from one |
+| `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
 
 A Markdown or HTML page is as tall as the window ([Documents](#documents)), so it has nothing to
 scroll: `j`, `k` and `Enter` turn its pages as `n` and `p` do.
@@ -179,10 +181,12 @@ then `? help`. The
 name is on the left, cut in its middle when it is too long (`IMG_2…41.jpg`, so names that differ
 at the end still differ), and a message (a page that failed, `fully zoomed in`) sits just left of the
 right side, cutting the name shorter while it is there. Until the first key, the message is a
-reminder of the main keys.
+reminder of the main keys. A [search](#searching-a-documents-text) is said there too, before any
+message: what is typed and its count, then the match you are on.
 
 While you type a number, the status line says only the number and the keys that take it on this
-file: `7: g page · . per row` on a PDF; on a Markdown or HTML file the settings with numbers too, by
+file: `7: g page · . per row` on a PDF, and `· n match` after them with a search kept; on a Markdown
+or HTML file the settings with numbers too, by
 name, `7: g page · . per row · + font · ] width · } margin`; in a list `7: Enter tile · . per row`.
 The name, where you are, the zoom and `? help` give it the room, and come back with the next key; a
 narrow window drops the last keys first.
@@ -339,7 +343,63 @@ the list filtered as you left it. With `--pages`, the filter narrows the tiles g
 Letters past ASCII (`café`) are typed as the terminal sends them, in UTF-8. Upper and lower case
 match letter by letter (`É` matches `é`), and that is all: `e` doesn't match `é`, nor does an `é`
 typed as one letter match a name that stores it as `e` and an accent, as macOS's HFS+ did. In a
-file's pages, `/` says `no text to search`: no kind of file gives its text to search yet.
+file's pages, `/` [searches its text](#searching-a-documents-text) instead.
+
+## Searching a document's text
+
+In a file's pages, `/` opens a prompt in the status line, as a list's filter does, and searches
+the file's text: a PDF's, and a spreadsheet's, which is shown as the PDF it prints to. Type what
+to find, at most 256 characters; `Backspace` takes one back, and every key that types a character
+is part of it, `q` and `n` too (`Ctrl-C` still quits; the arrows and the other keys do nothing
+meanwhile). A number typed before `/` is dropped. A picture, a drawing or a document has no text
+to search, and `/` says so.
+
+While you type, the status line counts the matches in the text read so far (`/word 17…`, and
+`/word 17` once all of it is read and matched), and the view stays where it is. `Enter` searches,
+as in `less`: the view goes to the first match at or after the page at the top of the screen, or
+past the end, to the first in the file, and the search is kept. If no text has been read yet, it
+goes there as soon as a match is. `Esc` while typing leaves no search, as `Enter` or `Backspace` do
+with nothing typed.
+
+With a search kept, `n` goes to the next match and `N` to the one before, round the ends of the
+file, where the status line says `search wrapped`; a number first goes that many on (`3n`). They
+go from the match you are on while its page is on screen, and once you have paged away, from the
+top of the screen. `→` and `←` still turn pages. A match on a page not shown brings that page on
+screen, and zoomed in to a page that scrolls, the match is scrolled into view, a third of the way
+down the window. The status line says which match you are on and how many there are (`/word
+3/17`, with `…` after while text is still being read), or `no match`; at most 10,000 are kept and
+counted, the first in the file, and more say `10000+`. `Esc`, `Backspace` or `u` clear the search
+before they go back to the list or quit, after which `n` turns pages again; a number being typed
+is cleared first, as ever. `/` again edits what was searched for. A search belongs to its file: it
+ends on going back to the list.
+
+Upper and lower case match letter by letter, as in a list's filter (`É` matches `é`, and `e`
+doesn't). A run of spaces, tabs or line ends matches a run of them, in what you type and in the
+text; whitespace alone matches nothing. Matches don't overlap, and none runs from one page onto
+the next: a phrase split by a page break isn't found.
+
+The text is read from `/` on, once, outward from the page on screen, in a process of its own, so
+the keys never wait on it: a book of 600 pages is read in about a second. That process is held to
+its time and memory, since a page can be made to cost a lot of either. A page that takes too much
+of one is left unread, and the status line says which and why (`/word 3/17 · page 40 unread`), the
+others searched as before; at a fourth such page, or past two minutes of reading, the rest is left
+unread and the status line says how far the reading got (`· read 120 of 500 pages`). A PDF over
+512 MiB isn't read at all, and `/` says so. The process ends with the search, and with `clv`. With
+`--pages`, only the pages given are searched.
+
+What is searched is the text pdfcraft reads on each page, in its reading order:
+
+- all of it, an invisible layer too (the text OCR puts under a scan), a form's values, and
+  comments drawn on the page; a scan without such a layer has no text, and the status line says
+  `no text in this file` once every page is read;
+- **a word hyphenated at a line's end is two words**, as the page draws them (`well-` and
+  `known`): search for either part;
+- **text a page clips away is still found**: a spreadsheet's string cut off by the cell after it
+  matches in the part you can't see. A number too wide for its column is searched as it prints
+  (`1E+14`), a formula by its value, and a hidden column or sheet not at all, since it isn't
+  printed.
+
+Printing (`--no-pager`, or a single page) has no search.
 
 ## Which files it shows
 
@@ -367,7 +427,7 @@ comments without an appearance of their own are drawn too, and a dynamic XFA for
 its template lays out into, not the placeholder page the file carries for viewers that can't. A
 page whose content runs past pdfcraft's safety budget is drawn without the rest of it, and a colour
 it can't compute (a colour space it can't read, a tint transform it can't evaluate) is painted in a
-fallback colour, each with a warning.
+fallback colour, each with a warning. `/` [searches a PDF's text](#searching-a-documents-text).
 
 ### Images
 
@@ -616,7 +676,8 @@ prints it: each visible sheet's pages, laid out by its print area, page setup, t
 headers and footers, gridlines and charts, in the order of its sheets; a hidden sheet prints
 none. Its formulas are recalculated first, as gridcraft's app does when it opens a workbook, so a
 formula saved without its value shows one. gridcraft prints the pages to a PDF, which the PDF
-backend shows like any other, fitted to the window. A CSV's columns are made as wide as what they
+backend shows like any other, fitted to the window, and `/`
+[searches](#searching-a-documents-text) as it does any other. A CSV's columns are made as wide as what they
 hold, as gridcraft's app makes them on importing one. A protected workbook opens with
 `--password`; without it, clv says it needs one.
 
@@ -780,11 +841,20 @@ limit, it does as the last column says. How large a page is drawn is under
 | An HTML label's size | 16,384 pixels a side | that label is left out, with a warning |
 | What an HTML label fetches | `data:` URLs, 1,024 of them; a font unpacking to 32 MiB, 64 MiB of them, a WOFF whose tables don't fit its file refused; a picture decoding to 64 MiB, 256 MiB of them | refused: the label is drawn without it |
 | The worker that lays a drawing's HTML labels out and paints them, a process of its own: its CPU time laying them out, then each render's; its memory | 10 s, then 5 s a render, or three times that on the clock; 1 GiB | the worker is killed, and all of the drawing's labels are left out, with a warning, until it is opened again |
-| Drawings whose HTML labels are shown at once, each with its worker | 6 | the next drawing's labels are left out, with a warning |
+| Drawings whose HTML labels are shown at once, each with its worker, and a search's process with them | 6 | the next drawing's labels are left out, with a warning; a search's text is left unread, and the status line says so |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A document's page | 64 million pixels | the page fails with why |
+| A spreadsheet's file | 64 MiB | refused |
+| An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |
+| A sheet's XML, as gridcraft reads it | a million elements (about 37,000 rows of twelve columns) | the sheet is cut short, with a warning |
+| A workbook's pages, as gridcraft prints them | 2,000, down a sheet's rows before across its columns | a very wide sheet loses its right-hand pages |
+| A PDF whose text is [searched](#searching-a-documents-text) | 512 MiB | its text isn't read, and `/` says so |
+| The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
+| A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
+| What a search keeps of a file's text, and its matches | 64 MiB; 10,000 matches | past 64 MiB, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
+| What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 
 ## Known issues
 
@@ -792,10 +862,6 @@ limit, it does as the last column says. How large a page is drawn is under
   declaration in a `<style>` (a `box-shadow` list of 600 KB) takes some 45 seconds to open, labels
   or not, and a stylesheet of 3 MiB some 8; the [limits](#limits) above count rules times elements,
   not that. The parse runs in `clv`'s own process, so it can't be stopped; `q` still quits.
-| A spreadsheet's file | 64 MiB | refused |
-| An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |
-| A sheet's XML, as gridcraft reads it | a million elements (about 37,000 rows of twelve columns) | the sheet is cut short, with a warning |
-| A workbook's pages, as gridcraft prints them | 2,000, down a sheet's rows before across its columns | a very wide sheet loses its right-hand pages |
 
 ## Errors
 

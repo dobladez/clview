@@ -1382,9 +1382,11 @@ impl Nav {
             Some(filter) if said.is_empty() => format!("/{}", filter.text),
             _ => said,
         };
-        // A search likewise while it is typed; one kept is always said, with its matches, before
-        // anything else there is to say.
+        // A search likewise while it is typed, but for why some of its text was left unread, which
+        // comes as it is typed; one kept is always said, with its matches, before anything else
+        // there is to say.
         let said = match self.search.as_ref().map(|search| (search.typing(), search.status())) {
+            Some((true, typed)) if !said.is_empty() => format!("{typed}  {said}"),
             Some((true, typed)) => {
                 let keys = format!("{typed}  {SEARCH_KEYS}");
                 let fits = chars(&keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
@@ -4509,6 +4511,10 @@ mod tests {
             let line = nav.status("a.pdf", cols, false);
             assert!(chars(&line) == usize::from(cols) && !line.chars().any(char::is_control), "{line:?}");
         }
+        // Why some text was left unread comes while the search is typed, and is said with it.
+        nav.message = Some("page 4's text took too long to read".into());
+        let line = nav.status("a.pdf", 140, false);
+        assert!(line.contains(" /Page]52;c;cHduZWQ= no match  page 4's text took too long to read  "), "{line:?}");
         // `?` lists the search's keys in a file's pages.
         let keys: Vec<String> = nav.help_lines().into_iter().map(|(keys, _)| keys).collect();
         assert!(keys.contains(&"/".to_owned()) && keys.contains(&"n N  3n".to_owned()), "{keys:?}");

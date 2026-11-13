@@ -229,7 +229,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `/page⏎ n n` lands on page 3, `N` back, `n` past the last says `search wrapped`; `3n`; text
   arriving out of order leaves the match you are on; `Esc` clears, then `n` turns a page; a source
   without text says `no text to search`.
-- [ ] **A PDF's text, read in a worker** — the `pdf-text` worker and `Pdf::texts`, the changes to
+- [x] **A PDF's text, read in a worker** — the `pdf-text` worker and `Pdf::texts`, the changes to
   `worker.rs`, `Noted` forwarding, the caps measured, the clipping spike, the ADR, and usage's
   section on searching. *Files:* `src/source.rs` (`WORKERS`), `src/source/pdfcraft.rs`,
   `src/source/gridcraft.rs`, `src/source/worker.rs`, `tests/it/view_pager.rs`,

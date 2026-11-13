@@ -81,3 +81,78 @@ surprises, and what a later reader would want.
   test `a_search_never_takes_the_reader_off_the_pages`); no scroll to the match; a kept search hidden
   by a message; `n` missing from the keys a number takes; a number before `/` kept; other keys
   moving while a search is typed.
+
+## Task 2: a PDF's text, read in a worker
+
+- **The worker's protocol** (`pdfcraft.rs`): `PASSWORD` (the password, apart, so that the PDF's bytes
+  are a payload of their own), `OPEN` (the bytes), `READ` (a page: its text), `PLACE` (a page and a
+  range of characters: its rectangles). The last page read is kept, with the character each glyph
+  starts at, so a range is a binary search; two pages' glyphs are never held together.
+- **The PDF is never copied in the viewer.** `Link::request` built a frame, a second copy of its
+  payload; a 500 MiB PDF would have been held three times while it was sent. `worker.rs` now writes a
+  frame as its header and its payload, and takes a payload shared (`Link::request_shared`, an
+  `Arc<Vec<u8>>`, the one the renderers read). Not in the spec's list for `worker.rs`; the rest is: a
+  heap cap for each kind (`Worker::heap`; the labels' 1 GiB moved to `svg/html.rs`, unchanged), the
+  kill handle (`Link::killer`, `Kill`), and its `cfg_attr`, which now allows unused parts unless both
+  `svg-html` and `pdf` are on, since each uses its part. `MAX_WORKERS` was already one count.
+- **The caps** are in [ADR-0027](../adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md),
+  with what they rest on: 512 MiB a PDF, a heap of that and 256 MiB, 5 s of CPU a request, 1 MiB of
+  text a page, 120 s of requests a document, three workers killed. Measured on 1,542 PDFs (64,940
+  pages) and the synthetic hostile pages, with a tool kept beside the ADR, `docs/adr/0027-measure/`,
+  as ADR-0025's is: the scratch benchmark, made to count the heap a page takes with an allocator of
+  its own, and its two Python generators ported into it (`measure gen off|grid`), since the repo is
+  Rust only. The scratch copies stay outside the repo.
+- **One real document changed the CPU cap.** The spec's figure was 25 ms a page at most; one book of
+  764 pages has pages of 14.0, 8.9, 3.9 and 1.7 s. At 2 s a page it would have lost three pages and
+  come within a slow machine of losing the rest (a fourth kill); at 5 s it loses two.
+- **"Past three kills"** is the fourth: three workers killed each cost their page, and the fourth
+  ends the reading.
+- **After the document's 120 s,** rectangles are still answered by the worker then alive (the
+  matches found are still to be gone to), and their time isn't the document's; after the kills, or
+  with no worker, nothing is.
+- **A page of a million glyphs is unread for its text's size** (1.1 MB, past 1 MiB), not its memory
+  (224 MiB): the worker answers that it is too long rather than send it.
+- **Spaces.** A space drawn in the PDF is a glyph of its own, with a box; the space a line's end
+  becomes is not, and a range that is only that has no rectangle.
+- **The clipping spike** (the spec's open question): a workbook with a string cut off by its
+  neighbour, a number too wide for its column, a hidden column and a formula, searched through its
+  PDF. The clipped part is found; the number is searched as it prints (`1E+14`, never `###`); the
+  hidden column isn't printed, so isn't found; a formula is found by its value. Dropping glyphs
+  outside their clip isn't the backend's to do: pdfcraft gives glyphs and boxes, no clips. So it is
+  a known difference in usage, and ADR-0027 names what pdfcraft could give as a follow-up. A
+  comment's text and a form field's value were checked too: both found.
+- **Changed in task 1's code, found by running the real thing:**
+  - `Enter` with no match known yet went to the first match of the file once one arrived; with a
+    whole short PDF read in one pass, that was page 1 from page 2. It now goes as `Enter` would
+    have, by what is known when the first match is: the first at or after the top of the screen
+    (`Search::first_from`).
+  - Why a page was left unread was the status line's message, which a search being typed hid. It is
+    now said with the search while it is typed (`/ · read 0 of 5 pages  this PDF is too large…`).
+- **Tests.** The pager's, on a pseudo-terminal with the real worker: a five-page PDF searched, its
+  worker seen with `ps` and gone with the search, the file and the pager; a PDF opened from a list;
+  a page of four million glyphs (written by the test, 15 MiB) costing that page, four of them the
+  rest, and `Esc` killing a worker busy on one at once. That test fits the real heap cap, as
+  ADR-0026's do: each kill takes a worker to 768 MiB for about a second, six times. `gridcraft.rs`'s: a
+  workbook without its styles part, so wrapped in `Noted`, searched. `pdfcraft.rs`'s unit tests run
+  the worker's session directly, and the reader's thread against the worker on a thread; they take
+  turns (`ONE_AT_A_TIME`), since the workers alive in a test binary are counted together.
+- **Files beyond the task's list:** `src/source/svg/html.rs` (its heap cap), `tests/it/pdfcraft.rs`
+  (the line of `WORKERS` allowed to name the backend), `src/view/search.rs` and `src/view/pager.rs`
+  (the two changes above), `CONTRIBUTING.md` (the pin, the tests), `docs/adr/README.md`,
+  `docs/adr/0027-measure/`.
+- **Found on the way, and put where it belongs:** four rows of usage's Limits (the spreadsheets')
+  sat under Known issues, after the table ended; they are back in the table.
+- **Verify.** `cargo test -j 2 --test it view_pager` and `-- gridcraft`; each backend alone,
+  `pdf,svg` and none, clippy and tests.
+- **Seen failing**, each by changing the line it covers and copying the file back (`cmp`):
+  `Kill::kill` doing nothing (`a_worker_is_killed_from_another_thread…`, which then waits out its 30 s);
+  a shared payload's bytes not written (`a_shared_payload_is_written…`); no space between lines
+  (`a_pages_text_is_its_words…`); a range's first glyph taken as the one before it
+  (`a_range_of_a_pages_text…`); a thing given again while listed
+  (`a_pdfs_text_comes_a_page_a_chunk…`); the document's time unbounded, and placing a match
+  spending it (`past_the_documents_time…`); `Pdf::texts` giving none (all four pager and workbook
+  tests); the search's end not killing the worker, a worker gone asked again, and kills never
+  ending the reading (`a_page_past_the_workers_heap…`, each at a different step); `Noted` giving no
+  text (`a_workbook_that_opened_with_warnings…`); a reason hidden while a search is typed
+  (`the_status_line_shows_the_search…`); a waiting `Enter` going to the first match of the file
+  (`text_read_later…`).

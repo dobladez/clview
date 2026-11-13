@@ -20,7 +20,7 @@ use gridcraft_engine::model::Workbook;
 use gridcraft_engine::{DocState, Session, Trust};
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
-use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source};
+use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source, Texts};
 use crate::args::{OptionSpec, Parsed};
 
 /// Spreadsheets, printed by gridcraft.
@@ -291,6 +291,11 @@ impl Source for Noted {
 
     fn pool(&self, threads: usize) -> Box<dyn Pool> {
         Box::new(NotedPool { pool: self.pages.pool(threads), notes: self.notes.clone() })
+    }
+
+    /// The printed pages' own: a workbook is searched as the PDF it prints to.
+    fn texts(&self) -> Option<Box<dyn Texts>> {
+        self.pages.texts()
     }
 }
 

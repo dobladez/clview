@@ -137,6 +137,31 @@ fn what_gridcraft_says_on_reading_comes_with_the_first_page() {
     assert_eq!(text(&out.stderr), "warning: page 1: no styles part\n");
 }
 
+/// A workbook is searched as the PDF it prints to, one that opened with something to say too,
+/// whose pages are wrapped to carry it: `/` finds a cell's value on each sheet's page, and `n`
+/// goes from one to the next.
+#[test]
+fn a_workbook_that_opened_with_warnings_is_searched_through_its_pdf() {
+    use crate::view_pager::{Session, bar, pty_works};
+    if !pty_works() {
+        return;
+    }
+    // Without its styles, which gridcraft says: A1 is 21 and B1, `A1*2`, prints as 42, on two sheets.
+    let path = write(tmp("sheet-search", "plain.xlsx"), &package(false));
+    let mut view = Session::start(&path, &["--protocol", "kitty"], 100, 60);
+    let last = |text: &str| bar(text.rfind("\x1b[?2026h").map_or(text, |at| &text[at..]));
+    view.wait_until("the first sheet, and what gridcraft said", |t| last(t).contains(" page 1: no styles part ") && last(t).contains(" page 1/2 "));
+    view.press("/42\r");
+    view.wait_until("the first match", |t| last(t).contains(" plain.xlsx /42 1/2 ") && last(t).contains(" page 1/2 "));
+    view.press("n");
+    view.wait_until("the second sheet's", |t| last(t).contains(" plain.xlsx /42 2/2 ") && last(t).contains(" page 2/2 "));
+    // A formula isn't text on the page: its value is.
+    view.press("\x1b/A1*2\r");
+    view.wait_until("no match", |t| last(t).contains(" plain.xlsx /A1*2 no match "));
+    view.press("\x1bq");
+    assert!(view.finish().success());
+}
+
 /// A workbook is known by what it holds, whatever its name; values separated by commas only by
 /// theirs, so the same text named `.txt` is not one.
 #[test]

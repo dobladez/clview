@@ -130,5 +130,5 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
 #[test]
 fn nothing_but_this_backend_names_pdfcraft() {
     let own = ["src/source/pdfcraft.rs", "tests/it/pdfcraft.rs", "tests/it/pdfcraft_pin.rs"];
-    crate::fixtures::named_only_in(&own, &["&pdfcraft::Pdfcraft,", "mod pdfcraft;", "mod pdfcraft_pin;"], &["pdfcraft"]);
+    crate::fixtures::named_only_in(&own, &["&pdfcraft::Pdfcraft,", "&pdfcraft::TEXT,", "mod pdfcraft;", "mod pdfcraft_pin;"], &["pdfcraft"]);
 }
