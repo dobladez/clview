@@ -98,7 +98,10 @@ memory with the glyphs kept, a few hundred bytes each, which only a heap cap bou
 be told from the file's size.
 
 **Through the worker,** in clv's build at this commit (its `dev` profile, which is optimized), in
-the pager on a pseudo-terminal, from the last key of `/a` to what the status line says:
+the pager on a pseudo-terminal (a throwaway script's: `forkpty`, 120 × 50 cells,
+`TERM=xterm-kitty`, no `TMUX`, running `clv <file> --protocol kitty --per-row 1 --pager`, which
+writes the keys and notes when the status line, the last `\x1b[2K\x1b[7m…\x1b[0m`, changes), from
+the last key of `/a` to what the status line says:
 
 | File | What happens | After |
 |---|---|---|

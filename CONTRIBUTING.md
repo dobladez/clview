@@ -163,9 +163,12 @@ on Linux and macOS, with Rust 1.95.0, the `rust-version`.
   and one that turns out broken keeps its tile. `--help`'s icon is tested here too, since it depends
   on stdout being a terminal. A PDF's search too: its text read in a worker seen with `ps`, gone
   with the search, the file and the pager, and a page past the worker's heap, written by the test,
-  costing the search that page.
+  costing the search that page; and its tint, read back from the PNGs sent: on the matches and
+  nowhere else, the page before deleted once the new one is placed, gone with `Esc`, absent from
+  a copy, and in text cells' colours.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
-  clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, and
+  clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, a page
+  tinted for a search reaching a client that attaches later, and
   pages printed from a shell, deleted once no pane holds them, `--help`'s icon, on a client whose
   terminfo entry says it is kitty, and text cells in a pane.
 - **`tests/it/pdfcraft.rs`** and **`tests/it/pdfcraft_pin.rs`**: the PDF backend's own (passwords,

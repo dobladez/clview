@@ -295,6 +295,30 @@ fn a_terminal_that_attaches_later_gets_the_pages_too() {
     server.tmux(&["send-keys", "-t", "view:0", "q"]);
 }
 
+/// Inside tmux, a page tinted for a search is another image, sent like any page: the pages on
+/// screen are no longer the ones they were, and a terminal that attaches later gets them tinted.
+#[test]
+fn inside_tmux_a_tinted_page_reaches_a_terminal_that_attaches_later() {
+    let Some((mut server, output)) = start("tinted") else { return };
+    all_arrive(&server, &output, "before the search");
+    let plain = server.on_screen();
+    // Every page says "… page N": the first is the reader's match, the one beside it another's.
+    server.tmux(&["send-keys", "-t", "view:0", "/page", "Enter"]);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while server.on_screen().is_empty() || !server.on_screen().is_disjoint(&plain) {
+        assert!(Instant::now() < deadline, "the pages on screen were never sent again, tinted");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    all_arrive(&server, &output, "tinted");
+    let second = server.client("attach-session -t view");
+    all_arrive(&server, &second, "in the second terminal");
+    // tmux hands its client's terminal what went through passthrough as it was written.
+    let pages = crate::view_pager::pngs(&String::from_utf8_lossy(&second.lock().unwrap()));
+    let has = |colour: [u8; 3]| pages.iter().any(|(_, page)| page.pixels().any(|pixel| pixel.0 == colour));
+    assert!(has([255, 170, 60]) && has([255, 236, 130]), "{} pages reached the second terminal, none tinted", pages.len());
+    server.tmux(&["send-keys", "-t", "view:0", "Escape", "q"]);
+}
+
 #[test]
 fn an_off_allow_passthrough_is_left_as_it_was() {
     if Command::new("tmux").arg("-V").stdin(Stdio::null()).output().is_err() {

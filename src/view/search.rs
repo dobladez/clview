@@ -8,8 +8,15 @@
 //! a match covers, since the source is asked where those are on its pages. Matching is
 //! `str::match_indices` on that: left to right, never overlapping, never from one chunk onto the
 //! next.
+//!
+//! The matches on a page are shown by tinting its pixels ([`tint`]) where the source says they
+//! are ([`Tint`]), the reader's more strongly: into the page as rendered, before it is encoded or
+//! made into text cells, so that one mechanism serves kitty, tmux and text cells alike
+//! ([ADR-0028](../../docs/adr/0028-matches-tinted-into-the-pages-pixels.md)).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use crate::source::{Got, Texts, Want};
 
@@ -159,11 +166,116 @@ struct Queued {
     placed: Vec<(usize, u32)>,
 }
 
-/// What of the screen a search goes by: the document's page at its top left, and the pages on it.
+/// What of the screen a search goes by: the document's page at its top left, the pages on it, and
+/// the pages `near` it, rendered ahead of the reader, whose matches are tinted as theirs are.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Screen<'a> {
     pub(super) top: usize,
     pub(super) pages: &'a [usize],
+    pub(super) near: &'a [usize],
+}
+
+/// A match's rectangle on a page, in the page's unit from its top left (left, top, right, bottom),
+/// and whether it is the match the reader is on.
+pub(super) type Mark = ([f32; 4], bool);
+
+/// A page's tint: where its matches are.
+#[derive(Debug, PartialEq)]
+pub(super) struct Tint {
+    /// Tells this tint from another of the same page: what a page was sent with. Never 0, which
+    /// is a page with no tint.
+    pub(super) key: u64,
+    pub(super) marks: Vec<Mark>,
+}
+
+impl Tint {
+    fn new(marks: Vec<Mark>) -> Self {
+        let mut hasher = std::hash::DefaultHasher::new();
+        for (rect, strong) in &marks {
+            rect.map(f32::to_bits).hash(&mut hasher);
+            strong.hash(&mut hasher);
+        }
+        Self { key: hasher.finish().max(1), marks }
+    }
+}
+
+/// What a match's pixels are tinted with, the others' first and then the reader's: a colour
+/// multiplied into the light ones, and one screened onto the dark ones. Paper turns the colour
+/// and ink stays ink, on white as on dark paper: a yellow for the matches, an orange for the
+/// reader's (ADR-0028).
+const LIGHT: [[u8; 3]; 2] = [[255, 236, 130], [255, 170, 60]];
+const DARK: [[u8; 3]; 2] = [[70, 58, 0], [120, 60, 0]];
+
+/// Tint `marks` into `rgba`, a page's pixels: premultiplied RGBA, `width` by `height`, at `scale`
+/// pixels to the page's unit across and down. Each pixel under a mark is tinted once, as the
+/// reader's if any mark over it is; what lies outside the pixels is left out, and pixels that
+/// aren't the size they say are left as they are.
+pub(super) fn tint(rgba: &mut [u8], width: u32, height: u32, scale: (f32, f32), marks: &[Mark]) {
+    let (Ok(wide), Ok(tall)) = (usize::try_from(width), usize::try_from(height)) else { return };
+    if wide == 0 || tall == 0 || wide.checked_mul(tall).and_then(|pixels| pixels.checked_mul(4)) != Some(rgba.len()) {
+        return;
+    }
+    // A mark's pixels, from the one it starts in to the one it ends in, within the page; `as`
+    // saturates, and a side that isn't a number is no mark.
+    let pixel = |at: f32, scale: f32, most: usize, up: bool| {
+        let at = at * scale;
+        at.is_finite().then(|| (if up { at.ceil() } else { at.floor() }.max(0.0) as usize).min(most))
+    };
+    let spans: Vec<(usize, usize, usize, usize, bool)> = marks
+        .iter()
+        .filter_map(|([x0, y0, x1, y1], strong)| {
+            let (left, right) = (pixel(*x0, scale.0, wide, false)?, pixel(*x1, scale.0, wide, true)?);
+            let (top, bottom) = (pixel(*y0, scale.1, tall, false)?, pixel(*y1, scale.1, tall, true)?);
+            (left < right && top < bottom).then_some((left, right, top, bottom, *strong))
+        })
+        .collect();
+    let Some(first) = spans.iter().map(|span| span.2).min() else { return };
+    let last = spans.iter().map(|span| span.3).max().unwrap_or(first);
+    // Which marks cover each pixel of a row: 1 for a match, 2 for the reader's.
+    let mut row_marks = vec![0u8; wide];
+    let rows = rgba.chunks_exact_mut(wide.saturating_mul(4)).enumerate().skip(first).take(last.saturating_sub(first));
+    for (y, row) in rows {
+        let mut any = false;
+        for (left, right, top, bottom, strong) in &spans {
+            if (*top..*bottom).contains(&y)
+                && let Some(covered) = row_marks.get_mut(*left..*right)
+            {
+                covered.iter_mut().for_each(|mark| *mark = (*mark).max(1 + u8::from(*strong)));
+                any = true;
+            }
+        }
+        if !any {
+            continue;
+        }
+        for (pixel, mark) in row.chunks_exact_mut(4).zip(row_marks.iter_mut()) {
+            if *mark != 0 {
+                tinted(pixel, *mark == 2);
+                *mark = 0;
+            }
+        }
+    }
+}
+
+/// One pixel tinted, premultiplied RGBA: by how light it is, between its colour multiplied by the
+/// tint for light pixels and screened by the tint for dark ones, so that a light page takes the
+/// colour and its dark ink stays dark, and the other way on dark paper. Its alpha stays.
+fn tinted(pixel: &mut [u8], strong: bool) {
+    let [red, green, blue, alpha] = pixel else { return };
+    let opacity = u32::from(*alpha);
+    if opacity == 0 {
+        return;
+    }
+    let (light, dark) = (LIGHT[usize::from(strong)], DARK[usize::from(strong)]);
+    // How light, 0 to 255, of the colour as shown: Rec. 709's weights, in 256ths.
+    let luma = (u32::from(*red) * 54 + u32::from(*green) * 183 + u32::from(*blue) * 19) / 256;
+    let luma = (luma * 255 / opacity).min(255);
+    for (channel, (light, dark)) in [red, green, blue].into_iter().zip(light.into_iter().zip(dark)) {
+        // Within its alpha, as a premultiplied channel is.
+        let value = u32::from(*channel).min(opacity);
+        let multiplied = value * u32::from(light) / 255;
+        let screened = opacity - (opacity - value) * (255 - u32::from(dark)) / 255;
+        *channel = u8::try_from((multiplied * luma + screened * (255 - luma)) / 255).unwrap_or(u8::MAX);
+    }
 }
 
 /// Where the view is to go: to a page of the document, and once the match's rectangles are known,
@@ -183,6 +295,8 @@ pub(super) struct Polled {
     pub(super) go: Option<Go>,
     /// Why some text was left unread, to tell the reader once, in the source's words.
     pub(super) said: Option<String>,
+    /// Whether a page's tint changed ([`Search::tint`]): its page is to be drawn again.
+    pub(super) tinted: bool,
 }
 
 /// A file's search: what is typed after `/`, then kept by Enter; the text read so far, the matches
@@ -229,6 +343,12 @@ pub(super) struct Search {
     /// Whether the matches, the one the reader is on or the typing changed since the queue was set.
     dirty: bool,
     shown: Vec<usize>,
+    /// Each page's tint, of the pages on screen and near it: the last one whose matches' rectangles
+    /// had all come, if it has any, and whether that is what the page holds now (`false` while
+    /// some are still asked for). A page not here has none.
+    tints: BTreeMap<usize, (Option<Rc<Tint>>, bool)>,
+    /// Whether what the tints are made from changed since they were.
+    marked: bool,
     /// What the queue was last set for: the chunk read outward from, whether reading had stopped,
     /// and the matches whose rectangles are wanted.
     queued: Option<Queued>,
@@ -301,6 +421,8 @@ impl Search {
             placed: BTreeMap::new(),
             dirty: true,
             shown: Vec::new(),
+            tints: BTreeMap::new(),
+            marked: false,
             queued: None,
             status: String::new(),
             #[cfg(test)]
@@ -466,10 +588,49 @@ impl Search {
             polled.go = Some(Go { page, span: Some(span) });
         }
         self.queue(screen);
+        polled.tinted = self.retint(screen);
         let status = self.status();
         polled.changed = status != self.status;
         self.status = status;
         polled
+    }
+
+    /// Page `page`'s tint, and whether it is the one the page holds now: while some of its matches'
+    /// rectangles are still asked for, the last one there was, which a page already shown keeps
+    /// until the new one is known. None while the query is typed.
+    pub(super) fn tint(&self, page: usize) -> (Option<Rc<Tint>>, bool) {
+        self.tints.get(&page).cloned().unwrap_or((None, true))
+    }
+
+    /// Make the tints of the screen's pages and those near it again, if what they are made from
+    /// changed: for each page, its matches' rectangles once all those asked for have come, the
+    /// reader's match marked. Whether any tint changed.
+    fn retint(&mut self, screen: &Screen<'_>) -> bool {
+        if !std::mem::take(&mut self.marked) {
+            return false;
+        }
+        let mut tints = BTreeMap::new();
+        // While the query is typed no match's rectangles are asked for or kept, so no page has a tint.
+        for page in screen.pages.iter().chain(screen.near) {
+            let mut asked = chunks_of(&self.starts, *page).flat_map(|chunk| self.placed.range((chunk, 0)..=(chunk, u32::MAX)));
+            if asked.any(|(_, placed)| placed.rects.is_none()) {
+                // Until they have all come, the page keeps what it had.
+                tints.insert(*page, (self.tints.get(page).and_then(|(tint, _)| tint.clone()), false));
+                continue;
+            }
+            let on_page = |(key, placed): (&(usize, u32), &Placed)| {
+                let strong = Some(*key) == self.at;
+                let rects = placed.rects.iter().flatten().filter(|(on, _)| on == page);
+                rects.map(move |(_, rect)| (*rect, strong)).collect::<Vec<Mark>>()
+            };
+            let marks: Vec<Mark> = self.placed.iter().flat_map(on_page).collect();
+            if !marks.is_empty() {
+                tints.insert(*page, (Some(Rc::new(Tint::new(marks))), true));
+            }
+        }
+        let changed = tints != self.tints;
+        self.tints = tints;
+        changed
     }
 
     /// Whether there is text still to read or to match: [`Search::poll`] has more to do.
@@ -480,6 +641,12 @@ impl Search {
     /// Whether text is still being read.
     fn reading(&self) -> bool {
         !self.full && self.unread > 0
+    }
+
+    /// Whether the source still owes something asked of it, text or where a match is: until it
+    /// has come, [`Search::poll`] is to be called again soon.
+    pub(super) fn expecting(&self) -> bool {
+        self.busy() || self.placed.values().any(|placed| placed.rects.is_none())
     }
 
     /// A chunk's text from the source, or why there is none: kept, folded, if it is one still
@@ -613,19 +780,21 @@ impl Search {
             (finite && rect[0] < rect[2] && rect[1] < rect[3]).then_some((page, rect))
         };
         placed.rects = Some(rects.unwrap_or_default().into_iter().take(MAX_LINES).filter_map(clipped).collect());
+        self.marked = true;
     }
 
     /// Tell the source what is wanted now, if that changed: where the matches on the screen's
     /// pages are, the reader's first, at most [`MAX_PLACED`] of them and none while the query is
     /// typed; then the text still unread, outward from the top of the screen.
     fn queue(&mut self, screen: &Screen<'_>) {
-        if self.dirty || self.shown != screen.pages {
+        if self.dirty || !self.shown.iter().eq(screen.pages.iter().chain(screen.near)) {
             self.dirty = false;
-            self.shown = screen.pages.to_vec();
+            self.marked = true;
+            self.shown = screen.pages.iter().chain(screen.near).copied().collect();
             let mut keys: BTreeSet<(usize, u32)> = BTreeSet::new();
             if !self.typing {
                 keys.extend(self.at);
-                let chunks = screen.pages.iter().flat_map(|page| chunks_of(&self.starts, *page));
+                let chunks = self.shown.iter().flat_map(|page| chunks_of(&self.starts, *page));
                 let hits = chunks.flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
                 keys.extend(hits.take(MAX_PLACED));
             }
@@ -809,7 +978,7 @@ pub(super) mod tests {
 
     /// The first page on screen, alone.
     fn at(page: &[usize]) -> Screen<'_> {
-        Screen { top: page[0], pages: page }
+        Screen { top: page[0], pages: page, near: &[] }
     }
 
     /// Polled until there is no more to read or to match.
@@ -897,7 +1066,7 @@ pub(super) mod tests {
         fake.allow(0);
         let mut search = search(&fake);
         type_in(&mut search, "page");
-        assert_eq!(search.poll(&at(&[2]), &square), Polled { changed: true, go: None, said: None });
+        assert_eq!(search.poll(&at(&[2]), &square), Polled { changed: true, go: None, said: None, tinted: false });
         assert_eq!(search.status(), "/page 0…");
         // Outward from the page on screen.
         assert_eq!(fake.state.borrow().queue, [2, 1, 3, 0, 4].map(Want::Text));
@@ -1015,6 +1184,17 @@ pub(super) mod tests {
         let gone: Vec<Go> = polled.iter().filter_map(|polled| polled.go).collect();
         assert_eq!(gone, [Go { page: 1, span: Some((0.33, 0.43)) }], "once");
         assert_eq!(fake.state.borrow().queue, [Want::Rects { chunk: 1, from: 33, to: 39 }]);
+        assert!(!search.expecting(), "all it asked for has come");
+        // The next match's place is owed until it comes: the pager keeps asking meanwhile.
+        let fake = Fake::of(&["needle"]);
+        let mut search = self::search(&fake);
+        settle(&mut search, &at(&[0]));
+        type_in(&mut search, "needle");
+        search.enter(&at(&[0]));
+        search.poll(&at(&[0]), &square);
+        assert!(search.expecting() && !search.busy(), "asked, not yet come");
+        search.poll(&at(&[0]), &square);
+        assert!(!search.expecting());
         // Typing again asks for none.
         search.edit();
         settle(&mut search, &at(&[1]));
@@ -1152,6 +1332,169 @@ pub(super) mod tests {
         assert!(search.full && search.kept <= MAX_TEXT, "{}", search.kept);
         assert_eq!(search.status(), "/aaaa 10000+ · read 63 of 80 pages");
         assert!(fake.state.borrow().queue.iter().all(|want| !matches!(want, Want::Text(_))), "no more text asked for");
+    }
+
+    /// A page of `width` by `height` pixels, all of one opaque colour.
+    fn page(width: usize, height: usize, colour: [u8; 3]) -> Vec<u8> {
+        [colour[0], colour[1], colour[2], 255].repeat(width * height)
+    }
+
+    /// The pixel at `x`, `y` of a page `width` wide.
+    fn pixel(rgba: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
+        rgba[(y * width + x) * 4..][..4].try_into().unwrap()
+    }
+
+    /// A match's pixels are tinted where its rectangle is, at the page's scale, and nowhere else:
+    /// white paper takes the tint's colour and black ink stays dark; dark paper takes a darker one
+    /// and light ink stays light; the reader's match another colour than the others'.
+    #[test]
+    fn a_match_is_tinted_into_its_pixels_and_nowhere_else() {
+        // A page 20 units by 10, at 2 pixels a unit across and 3 down: marks at units 2 to 5 by 1 to 3.
+        let marks = [([2.0, 1.0, 5.0, 3.0], false), ([12.0, 6.0, 14.5, 7.2], true)];
+        let mut white = page(40, 30, [255, 255, 255]);
+        let ink = (5 * 40 + 6) * 4;
+        white[ink..ink + 3].copy_from_slice(&[0, 0, 0]);
+        let before = white.clone();
+        tint(&mut white, 40, 30, (2.0, 3.0), &marks);
+        for y in 0..30 {
+            for x in 0..40 {
+                let weak = (4..10).contains(&x) && (3..9).contains(&y);
+                let strong = (24..29).contains(&x) && (18..22).contains(&y);
+                let (was, is) = (pixel(&before, 40, x, y), pixel(&white, 40, x, y));
+                match (weak, strong, was) {
+                    (true, _, [255, 255, 255, 255]) => assert_eq!(is, [255, 236, 130, 255], "{x},{y}"),
+                    (_, true, _) => assert_eq!(is, [255, 170, 60, 255], "{x},{y}"),
+                    (true, _, _) => assert_eq!(is, [70, 58, 0, 255], "ink stays dark, {x},{y}"),
+                    _ => assert_eq!(is, was, "{x},{y}"),
+                }
+            }
+        }
+        // Dark paper, light ink.
+        let mut dark = page(40, 30, [30, 30, 30]);
+        dark[ink..ink + 3].copy_from_slice(&[230, 230, 230]);
+        tint(&mut dark, 40, 30, (2.0, 3.0), &marks);
+        let (paper, light, own) = (pixel(&dark, 40, 4, 3), pixel(&dark, 40, 6, 5), pixel(&dark, 40, 24, 18));
+        assert!(paper[0] > 60 && paper[0] > paper[2] + 30 && paper[0] < 130, "a dark yellow: {paper:?}");
+        let luma = |pixel: [u8; 4]| (u32::from(pixel[0]) * 54 + u32::from(pixel[1]) * 183 + u32::from(pixel[2]) * 19) / 256;
+        assert!(luma(light) >= 200 && luma(paper) <= 100, "light ink stays light on its paper: {light:?} {paper:?}");
+        assert!(own[0] > paper[0] + 20 && own[1] <= paper[1] + 10, "the reader's is told from the others: {own:?} {paper:?}");
+        assert_eq!(pixel(&dark, 40, 0, 0), [30, 30, 30, 255]);
+        // In between, a grey turns by degrees, never a jump from one blend to the other.
+        let mut greys: Vec<u8> = (0..=255u8).flat_map(|v| [v, v, v, 255]).collect();
+        tint(&mut greys, 256, 1, (1.0, 1.0), &[([0.0, 0.0, 256.0, 1.0], false)]);
+        let reds: Vec<u8> = greys.chunks(4).map(|pixel| pixel[0]).collect();
+        // (A level down here and there is the rounding.)
+        assert!(reds.windows(2).all(|pair| pair[1].abs_diff(pair[0]) <= 3) && reds[0] < 80 && reds[255] == 255, "{reds:?}");
+    }
+
+    /// Marks over one another tint a pixel once, as the reader's if either is; a transparent pixel
+    /// stays one, and a channel never passes its alpha; marks off the page, turned inside out or not
+    /// numbers are left out; and pixels that aren't the size they say are left as they are.
+    #[test]
+    fn a_pixel_is_tinted_once_within_its_alpha_and_bad_marks_are_left_out() {
+        let mut twice = page(10, 4, [255, 255, 255]);
+        tint(&mut twice, 10, 4, (1.0, 1.0), &[([0.0, 0.0, 6.0, 4.0], false), ([4.0, 0.0, 10.0, 4.0], false), ([5.0, 2.0, 7.0, 4.0], true)]);
+        assert_eq!(
+            (pixel(&twice, 10, 5, 0), pixel(&twice, 10, 5, 3), pixel(&twice, 10, 9, 0)),
+            ([255, 236, 130, 255], [255, 170, 60, 255], [255, 236, 130, 255])
+        );
+        let mut clear = [0, 0, 0, 0, 100, 100, 100, 128, 128, 128, 128, 128].to_vec();
+        tint(&mut clear, 3, 1, (1.0, 1.0), &[([0.0, 0.0, 3.0, 1.0], true)]);
+        assert_eq!(clear[..4], [0, 0, 0, 0]);
+        assert!(
+            clear.chunks(4).all(|pixel| pixel[..3].iter().all(|v| *v <= pixel[3])) && clear[7] == 128 && clear[8] == 128 && clear[10] < 128,
+            "{clear:?}"
+        );
+        let plain = page(10, 4, [255, 255, 255]);
+        let odd = [
+            ([f32::NAN, 0.0, 5.0, 4.0], false),
+            ([0.0, 0.0, f32::INFINITY, 4.0], true),
+            ([20.0, 0.0, 30.0, 4.0], false),
+            ([-9.0, -9.0, -1.0, -1.0], false),
+            ([5.0, 3.0, 2.0, 1.0], true),
+        ];
+        let mut marked = plain.clone();
+        tint(&mut marked, 10, 4, (1.0, 1.0), &odd);
+        assert_eq!(marked, plain);
+        for (width, height) in [(10, 5), (0, 4), (u32::MAX, u32::MAX), (9, 4)] {
+            tint(&mut marked, width, height, (1.0, 1.0), &[([0.0, 0.0, 10.0, 4.0], false)]);
+            assert_eq!(marked, plain, "{width} × {height}");
+        }
+        tint(&mut marked, 10, 4, (f32::NAN, 1.0), &[([0.0, 0.0, 10.0, 4.0], false)]);
+        assert_eq!(marked, plain);
+    }
+
+    /// A page's tint is its matches' rectangles, the reader's marked, once those asked for have all
+    /// come; until then it is what it was, and said not to be settled. Stepping moves the mark,
+    /// which is another tint; typing again leaves none; pages near the screen have theirs too.
+    #[test]
+    fn a_pages_tint_is_its_matches_once_their_rectangles_have_come() {
+        let fake = Fake::of(&["page page", "page", "none", "page"]);
+        let mut search = search(&fake);
+        let screen = Screen { top: 0, pages: &[0], near: &[1, 2] };
+        type_in(&mut search, "page");
+        settle(&mut search, &screen);
+        assert_eq!((search.tint(0), search.tint(1)), ((None, true), (None, true)), "none while it is typed");
+        search.enter(&screen);
+        assert!(search.poll(&screen, &square).tinted, "asked for");
+        assert_eq!((search.tint(0), search.tint(1), search.tint(2)), ((None, false), (None, false), (None, true)));
+        assert!(search.poll(&screen, &square).tinted, "and come");
+        let (first, settled) = search.tint(0);
+        let first = first.unwrap();
+        assert!(settled && first.key != 0);
+        assert_eq!(first.marks, [([0.0, 0.0, 4.0, 10.0], true), ([5.0, 5.0, 9.0, 15.0], false)]);
+        assert_eq!(search.tint(1).0.map(|tint| tint.marks.clone()), Some(vec![([0.0, 0.0, 4.0, 10.0], false)]), "a page near the screen");
+        assert_eq!((search.tint(2), search.tint(3)), ((None, true), (None, true)), "no match, and not near");
+        assert!(!search.poll(&screen, &square).tinted, "nothing new");
+        // The next match: the same rectangles, the other marked, another tint.
+        search.step(true, 1, &screen);
+        assert!(search.poll(&screen, &square).tinted);
+        let (second, _) = search.tint(0);
+        let second = second.unwrap();
+        assert_eq!(second.marks, [([0.0, 0.0, 4.0, 10.0], false), ([5.0, 5.0, 9.0, 15.0], true)]);
+        assert_ne!(second.key, first.key);
+        // Paged on: page 4 is on screen, its rectangles asked for, and page 1's tint let go of.
+        let on = Screen { top: 3, pages: &[3], near: &[2] };
+        assert!(search.poll(&on, &square).tinted);
+        assert_eq!((search.tint(3), search.tint(0)), ((None, false), (None, true)));
+        search.poll(&on, &square);
+        assert!(search.tint(3).0.is_some_and(|tint| tint.marks == [([0.0, 0.0, 4.0, 10.0], false)]));
+        // Typed on: no tint.
+        search.edit();
+        assert!(search.poll(&on, &square).tinted);
+        assert_eq!(search.tint(3), (None, true));
+    }
+
+    proptest::proptest! {
+        /// Whatever the page, the scale and the marks: no panic, alpha as it was, a channel within
+        /// its alpha where it was, and nothing changed outside the pixels a mark covers.
+        #[test]
+        fn a_tint_never_leaves_its_marks(
+            (width, height) in (1usize..24, 1usize..24),
+            seed in proptest::num::u8::ANY,
+            scale in (0.1f32..4.0, 0.1f32..4.0),
+            marks in proptest::collection::vec((proptest::array::uniform4(-8.0f32..40.0), proptest::bool::ANY), 0..6),
+            odd in proptest::collection::vec((proptest::array::uniform4(proptest::num::f32::ANY), proptest::bool::ANY), 0..3),
+        ) {
+            let before: Vec<u8> = (0..width * height).flat_map(|i| {
+                let alpha = seed.wrapping_mul(31).wrapping_add((i * 37) as u8);
+                let channel = |n: usize| ((i * n) as u8).min(alpha);
+                [channel(7), channel(11), channel(13), alpha]
+            }).collect();
+            let mut after = before.clone();
+            tint(&mut after, width as u32, height as u32, scale, &marks);
+            for (i, (was, is)) in before.chunks(4).zip(after.chunks(4)).enumerate() {
+                let (x, y) = ((i % width) as f32, (i / width) as f32);
+                let covered = marks.iter().any(|([x0, y0, x1, y1], _)| {
+                    (x0 * scale.0).floor() <= x && x < (x1 * scale.0).ceil() && (y0 * scale.1).floor() <= y && y < (y1 * scale.1).ceil()
+                });
+                proptest::prop_assert!(covered || was == is, "pixel {i}: {was:?} to {is:?}");
+                proptest::prop_assert_eq!(was[3], is[3]);
+                proptest::prop_assert!(is[..3].iter().all(|v| *v <= is[3]));
+            }
+            // Marks that aren't numbers, or are anywhere at all: no panic.
+            tint(&mut after, width as u32, height as u32, scale, &odd);
+        }
     }
 
     proptest::proptest! {

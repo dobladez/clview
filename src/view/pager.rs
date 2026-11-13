@@ -272,8 +272,8 @@ pub(super) fn run(
             wait
         } else if !pager.wanted.is_empty() && !pager.hidden {
             POLL
-        } else if pager.level.nav.search.as_ref().is_some_and(Search::busy) {
-            // A search's text being read, or matched: taken between keys.
+        } else if pager.level.nav.search.as_ref().is_some_and(Search::expecting) {
+            // A search's text being read or matched, or a match's place asked for: taken between keys.
             POLL
         } else {
             TICK
@@ -886,7 +886,7 @@ impl Nav {
             Key::Backspace if !empty => search.backspace(),
             Key::Enter if !empty => {
                 let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-                let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
+                let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[] };
                 let go = self.search.as_mut().and_then(|search| search.enter(&screen));
                 self.go_to_match(go);
             }
@@ -902,7 +902,7 @@ impl Nav {
         // At most `MAX_TYPED` digits: it fits.
         let count = std::mem::take(&mut self.typed).parse::<usize>().unwrap_or(1);
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[] };
         let go = self.search.as_mut().and_then(|search| search.step(forward, count, &screen));
         self.go_to_match(go);
     }
@@ -921,21 +921,29 @@ impl Nav {
     }
 
     /// Take what the search's source has read, and match it, a little at a time: whether the status
-    /// line or the view changed. `size_of` is a page's size, as the source says it.
-    fn search_on(&mut self, size_of: &dyn Fn(usize) -> Option<(f32, f32)>) -> bool {
+    /// line has news, and whether the pages do (the view went to a match, or a page's tint changed).
+    /// `size_of` is a page's size, as the source says it.
+    fn search_on(&mut self, size_of: &dyn Fn(usize) -> Option<(f32, f32)>) -> (bool, bool) {
         if self.search.is_none() {
-            return false;
+            return (false, false);
         }
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
-        let Some(polled) = self.search.as_mut().map(|search| search.poll(&screen, size_of)) else { return false };
+        let near = self.around(AHEAD, BEHIND);
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &near };
+        let Some(polled) = self.search.as_mut().map(|search| search.poll(&screen, size_of)) else { return (false, false) };
         let moved = polled.go.is_some();
         self.go_to_match(polled.go);
         let said = polled.said.is_some();
         if let Some(said) = polled.said {
             self.message = Some(said);
         }
-        polled.changed || moved || said
+        (polled.changed || said, moved || polled.tinted)
+    }
+
+    /// Page `page`'s tint, where a search kept has matches on it, and whether it is the one the page
+    /// holds now ([`Search::tint`]). None without a search.
+    fn tint(&self, page: usize) -> (Option<Rc<search::Tint>>, bool) {
+        self.search.as_ref().map_or((None, true), |search| search.tint(page))
     }
 
     /// What `key` does in a list: the arrows move from tile to tile, the screen following, and
@@ -1551,6 +1559,10 @@ struct Sent {
     warning: Option<String>,
     /// Its text, a line for each row of cells, when pages are drawn as text.
     text: Vec<Vec<u8>>,
+    /// The tint it was sent with, a search's matches ([`search::Tint::key`]): 0 for none. A page
+    /// whose tint is another by now is rendered and sent again, and this one deleted once that one
+    /// is placed.
+    tint: u64,
 }
 
 impl Sent {
@@ -1580,6 +1592,9 @@ struct Wanted {
     view: View,
     layout: Layout,
     tag: u64,
+    /// The tint its pixels get when they arrive: the page's as of the last draw, whatever it was
+    /// when the render was asked for.
+    tint: Option<Rc<search::Tint>>,
 }
 
 /// What the pager shows at a time, and where the reader is in it: a file's pages, or a list's
@@ -1781,19 +1796,24 @@ impl Pager<'_> {
             if self.failed.iter().any(|(f, _)| *f == v) || wanted.iter().any(|w: &Wanted| w.view == v) {
                 continue;
             }
-            if let Some(s) = self.sent.iter().find(|s| s.view == v) {
+            // In the terminal already, with the tint its matches give it now: nothing to do. While
+            // that tint isn't known yet (the matches' places still asked for), with any.
+            let (tint, settled) = self.level.nav.tint(v.page);
+            let key = tint.as_ref().map_or(0, |tint| tint.key);
+            if let Some(s) = self.sent.iter().find(|s| s.view == v && (s.tint == key || !settled)) {
                 near = near.saturating_add(s.bytes());
                 continue;
             }
             // Laid out each time, since a file's size may have come to be known meanwhile: then what
-            // was asked for it is no longer wanted.
+            // was asked for it is no longer wanted. A render under way is the same page whatever its
+            // tint: it carries on, and gets the tint of now when it arrives.
             let kept = self.wanted.iter().position(|w| w.view == v).map(|at| self.wanted.swap_remove(at));
             let next =
                 page_layout(&*source, v.page, v.fit, Area { cols: v.cols, rows: v.rows, cell, max_rows }, self.output).map(|layout| match kept {
-                    Some(w) if w.layout == layout => w,
+                    Some(w) if w.layout == layout => Wanted { tint: tint.clone(), ..w },
                     _ => {
                         self.tag = self.tag.wrapping_add(1);
-                        Wanted { view: v, layout, tag: self.tag }
+                        Wanted { view: v, layout, tag: self.tag, tint: tint.clone() }
                     }
                 });
             match next {
@@ -1854,13 +1874,11 @@ impl Pager<'_> {
     }
 
     /// Take the search on, if the file on screen has one ([`Nav::search_on`]): whether the status
-    /// line has news, and whether the view moved, to a match.
+    /// line has news, and whether the pages are to be drawn again: the view went to a match, or a
+    /// page's tint changed.
     fn search_on(&mut self) -> (bool, bool) {
         let source = self.level.source.clone();
-        let (at, scroll) = (self.level.nav.at, self.level.nav.scroll);
-        let changed = self.level.nav.search_on(&|page| source.size(page));
-        let moved = (at, scroll) != (self.level.nav.at, self.level.nav.scroll) || self.level.nav.reveal.is_some();
-        (changed, moved)
+        self.level.nav.search_on(&|page| source.size(page))
     }
 
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,
@@ -2412,7 +2430,8 @@ impl Pager<'_> {
         let scroll = self.level.nav.scroll;
         let mut placed = Vec::new();
         for ((slot, view), placement) in (0u16..).zip(&self.on_screen).zip(1u32..) {
-            let Some(s) = view.and_then(|v| self.sent.iter().find(|s| s.view == v)) else { continue };
+            // The last sent of a page sent twice: with the tint of now, over the one before.
+            let Some(s) = view.and_then(|v| self.sent.iter().rfind(|s| s.view == v)) else { continue };
             let visible = s.rows.min(area_rows);
             let left = left.saturating_add((slot % per_row).saturating_mul(across)).saturating_add(grid.cols.saturating_sub(s.cols) / 2);
             let top = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows.saturating_sub(visible) / 2);
@@ -2484,6 +2503,14 @@ impl Pager<'_> {
                 self.sent.push(s);
             }
         }
+        // A page placed in place of itself as it was sent before, with another tint: that one goes
+        // from the terminal now that this one shows.
+        for (id, _) in &placed {
+            let Some(view) = self.sent.iter().find(|s| s.id == *id).map(|s| s.view) else { continue };
+            for gone in superseded(&mut self.sent, view, Some(*id)) {
+                delete(out, gone, self.output);
+            }
+        }
         self.placed = placed;
     }
 
@@ -2513,9 +2540,21 @@ impl Pager<'_> {
                 on_screen = true;
                 continue;
             }
-            on_screen |= self.on_screen.contains(&Some(wanted.view));
+            let shown = self.on_screen.contains(&Some(wanted.view));
+            on_screen |= shown;
             let id = self.new_id();
             let (width, height) = (page.width, page.height);
+            // A search's matches, tinted into the pixels before they are encoded or made into cells.
+            let tint = wanted.tint.as_ref().map_or(0, |tint| tint.key);
+            let page = match (&wanted.tint, self.level.source.size(wanted.view.page)) {
+                (Some(tint), Some((w, h))) if page.error.is_none() && w > 0.0 && h > 0.0 => {
+                    let mut rgba = page.rgba.to_vec();
+                    // Pixels to the page's unit, each way: what it was rendered at, rounding included.
+                    search::tint(&mut rgba, width, height, (width as f32 / w, height as f32 / h), &tint.marks);
+                    Frame { rgba: crate::source::Pixels::new(rgba), ..page }
+                }
+                _ => page,
+            };
             match checked(&page).and_then(|warning| Ok((warning, self.payload(id, page, &wanted.layout)?))) {
                 Ok((warning, Some(payload))) => {
                     let mut out = Vec::new();
@@ -2523,6 +2562,14 @@ impl Pager<'_> {
                         Payload::Text(text) => text_bytes(text),
                         Payload::Png(_) | Payload::File(_) => u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4),
                     };
+                    // The page as it was sent before, with another tint, goes now unless it is on
+                    // screen, where it stays until this one is placed over it ([`Pager::place`]).
+                    if !shown {
+                        for gone in superseded(&mut self.sent, wanted.view, None) {
+                            delete(&mut out, gone, self.output);
+                            self.placed.retain(|(placed, _)| *placed != gone);
+                        }
+                    }
                     for gone in make_room(&mut self.sent, bytes, self.budget, self.kept, &self.on_screen) {
                         delete(&mut out, gone, self.output);
                         self.placed.retain(|(placed, _)| *placed != gone);
@@ -2544,7 +2591,7 @@ impl Pager<'_> {
                     }
                     self.wrote(1);
                     self.tty.write_all(&out)?;
-                    self.sent.push(Sent { view: wanted.view, id, cols, rows, width, height, warning, text });
+                    self.sent.push(Sent { view: wanted.view, id, cols, rows, width, height, warning, text, tint });
                 }
                 // The files' thread kept the page: the next draw asks for it again.
                 Ok((_, None)) => on_screen = true,
@@ -2647,6 +2694,14 @@ fn place(nav: &Nav, level: u64, drawn: Option<(View, u16)>, height_of: impl Fn(u
     let rows = drawn.filter(|(view, rows)| view.level == level && view.page == page && *rows > 0).map(|(_, rows)| rows);
     let y = rows.map_or(0.0, |rows| f32::from(nav.scroll.min(rows)) / f32::from(rows) * height_of(page));
     Some((page, y))
+}
+
+/// The pages of `view` in `sent` that another takes the place of, taken out, and their ids: every
+/// one but `kept`, the one now placed; or every one, for a page about to be sent again.
+fn superseded(sent: &mut Vec<Sent>, view: View, kept: Option<u32>) -> Vec<u32> {
+    let gone: Vec<u32> = sent.iter().filter(|s| s.view == view && Some(s.id) != kept).map(|s| s.id).collect();
+    sent.retain(|s| !gone.contains(&s.id));
+    gone
 }
 
 /// Room in the terminal for a page of `incoming` bytes: the least recently shown pages not
@@ -3972,7 +4027,7 @@ mod tests {
     /// Page `page` sent as image `id`, `mb` megabytes of pixels, with `warning`.
     fn sent(page: usize, id: u32, mb: u32, warning: Option<&str>) -> Sent {
         let view = View { level: 0, page, fit: Fit::Page, cols: 50, rows: 40, size: FALLBACK_SIZE };
-        Sent { view, id, cols: 50, rows: 40, width: 1024, height: mb * 256, warning: warning.map(String::from), text: Vec::new() }
+        Sent { view, id, cols: 50, rows: 40, width: 1024, height: mb * 256, warning: warning.map(String::from), text: Vec::new(), tint: 0 }
     }
 
     #[test]
@@ -3994,6 +4049,21 @@ mod tests {
         // Sizes that would overflow don't.
         let mut huge = vec![Sent { width: u32::MAX, height: u32::MAX, ..sent(0, 1, 1, None) }];
         assert_eq!(make_room(&mut huge, u64::MAX, BUDGET, MAX_SENT, &[None, None]), [1]);
+    }
+
+    /// A page sent again with another tint takes the place of the one sent before: once it is
+    /// placed, every other image of that page goes, and only of that page; about to be sent while
+    /// off screen, they all go.
+    #[test]
+    fn a_page_sent_again_takes_the_place_of_the_one_before() {
+        let tinted = |page: usize, id: u32, tint: u64| Sent { tint, ..sent(page, id, 1, None) };
+        let mut kept = vec![tinted(0, 1, 0), tinted(1, 2, 0), tinted(0, 3, 7), tinted(0, 4, 9)];
+        let view = kept[0].view;
+        assert_eq!(superseded(&mut kept, view, Some(4)), [1, 3]);
+        assert_eq!(kept.iter().map(|s| (s.id, s.tint)).collect::<Vec<_>>(), [(2, 0), (4, 9)]);
+        assert!(superseded(&mut kept, view, Some(4)).is_empty(), "nothing more to go");
+        assert_eq!(superseded(&mut kept, view, None), [4]);
+        assert_eq!(kept.iter().map(|s| s.id).collect::<Vec<_>>(), [2]);
     }
 
     #[test]
@@ -4022,7 +4092,7 @@ mod tests {
     #[test]
     fn source_rows_follow_the_scroll() {
         let view = View { level: 0, page: 0, fit: Fit::Width, cols: 50, rows: 40, size: FALLBACK_SIZE };
-        let shown = Sent { view, id: 1, cols: 50, rows: 100, width: 1000, height: 2000, warning: None, text: Vec::new() };
+        let shown = Sent { view, id: 1, cols: 50, rows: 100, width: 1000, height: 2000, warning: None, text: Vec::new(), tint: 0 };
         assert_eq!(source_rows(&shown, 0, 30), Rect { x: 0, y: 0, w: 1000, h: 600 });
         assert_eq!(source_rows(&shown, 70, 30), Rect { x: 0, y: 1400, w: 1000, h: 600 });
         // Never past the bottom, whatever it is asked.
@@ -4294,7 +4364,11 @@ mod tests {
                 step = Step::Continue;
             }
             // Until two passes in a row have no news: what one asks for, the next is given.
-            while nav.search_on(&search::tests::square) | nav.search_on(&search::tests::square) {}
+            let news = |nav: &mut Nav| {
+                let (said, drawn) = nav.search_on(&search::tests::square);
+                said || drawn
+            };
+            while news(nav) | news(nav) {}
             if first == Step::Continue {
                 first = step;
             }

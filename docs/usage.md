@@ -361,6 +361,15 @@ past the end, to the first in the file, and the search is kept. If no text has b
 goes there as soon as a match is. `Esc` while typing leaves no search, as `Enter` or `Backspace` do
 with nothing typed.
 
+The matches on screen are tinted once `Enter` keeps the search, a yellow under them and the one
+you are on an orange, on white paper as on dark: the paper takes the colour and the ink stays
+ink. A page is sent to the terminal again with its tint, so for a moment after a key it shows
+as it was; `n` and `N` move the orange, and clearing the search sends the pages as they were.
+Nothing is tinted while you type. At most 1,024 matches are tinted on the pages on screen and
+those kept ready around them. `c` copies the page untinted, as it was rendered. In
+[text cells](#text-cells) the tint shows as far as the cells' colours carry it, and without
+colours not at all: the status line still says which match you are on.
+
 With a search kept, `n` goes to the next match and `N` to the one before, round the ends of the
 file, where the status line says `search wrapped`; a number first goes that many on (`3n`). They
 go from the match you are on while its page is on screen, and once you have paged away, from the
@@ -740,6 +749,8 @@ What else to know:
   shape. A picture's natural size is about a column for each of its pixels across, as long as the
   window takes it, so a small one is larger on screen than it would be as an image.
 - **`c`** copies the page as it is, not as the cells show it.
+- **A search's matches** are tinted in the cells' colours, since the cells are sampled from the
+  tinted page ([Searching a document's text](#searching-a-documents-text)).
 - **`--compression`** only applies to what `c` copies.
 - **A terminal that takes no escape codes**, as `TERM` says (`dumb`, `vt…`, or none), isn't asked
   anything and doesn't get the pager: every page is printed, in characters alone unless `COLORTERM`
@@ -854,6 +865,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
 | What a search keeps of a file's text, and its matches | 64 MiB; 10,000 matches | past 64 MiB, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
+| The matches tinted at a time, on the pages on screen and those kept ready around them | 1,024, and 64 lines of one match | the rest aren't tinted; `n` and `N` still go to them |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 
 ## Known issues

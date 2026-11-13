@@ -4,6 +4,9 @@
 - **Date:** 2026-11-13
 - **Related:** [README's Plans](../../README.md#plans) ("Search!": PDFs and spreadsheets here,
   Markdown, HTML and Word in [Spec-0007](0007-search-markdown-html-and-word-documents.md));
+  [ADR-0027](../adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md) (the worker's
+  caps, measured) and [ADR-0028](../adr/0028-matches-tinted-into-the-pages-pixels.md) (the tint),
+  both made by this spec;
   [Filtering a list](../usage.md#filtering-a-list), whose prompt this mirrors;
   [Sources](../architecture.md#sources-srcsourcers),
   [Getting pages to the terminal](../architecture.md#getting-pages-to-the-terminal),
@@ -251,14 +254,14 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
   backend alone, `pdf,svg`, and none.
-- [ ] Tests added, each seen failing without the change: `search.rs`'s matching and property
+- [x] Tests added, each seen failing without the change: `search.rs`'s matching and property
   tests, the pager's prompt, `n`/`N` and clearing on a fake `Texts`, a PDF searched and its worker
   gone with the search, `Noted`'s forwarding, the tint's pixels and the images it leaves.
 - [ ] Manual: in kitty, a 500-page PDF: `/` and a word, the count growing as it is read, `Enter` on
   the first match within a second, the keys answering throughout; the same inside tmux and over SSH.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)): usage's
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)): usage's
   keys, a section on searching, the known difference on hyphens; architecture's contract, worker and
   tint; two ADRs; the changelog. README's "Search!" stays until Spec-0007 is Done.
 
@@ -270,3 +273,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   rectangles asked for, tasks reordered, a tint changed is a page rendered again, the worker for its
   heap, the caps fixed.
 - 2026-11-13 — Implementing ([notes](0006-search-a-pdfs-text-impl-20261113_1121.md)).
+- 2026-11-13 — The three tasks' code, tests and docs are committed. Task 3's box and the manual
+  item under Done stay open: looking at it in kitty and inside tmux is the owner's, and the tint's
+  colours are the first thing to look at (ADR-0028).

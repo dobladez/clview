@@ -751,7 +751,9 @@ The terminal keeps at most 12 pages, and 192 MiB of pixels (`MAX_SENT`, `BUDGET`
 shows more than 3 pages, the count goes up to the screen and the screens worked on around it:
 with 12, the pages of the screens ahead pushed each other out as they arrived, and turning to
 them rendered them again. Rendering ahead stops at the first page that wouldn't fit, and the
-least recently shown pages not on screen are deleted (`a=d,d=I`) to make room. The byte budget matters. kitty keeps 320 MB of images per
+least recently shown pages not on screen are deleted (`a=d,d=I`) to make room. A page sent again
+with another tint, a search's matches, takes the place of the one before it, which is deleted once
+the new one is placed ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). The byte budget matters. kitty keeps 320 MB of images per
 screen (the protocol's example quota), and past it, it deletes nearly every image without a
 placement at once, not just the oldest. Measured in a hidden kitty with raw images:
 
@@ -901,7 +903,8 @@ page the match's chunk starts on; the match's rectangles are asked for then, and
 (`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way down the
 screen, unless it was on screen already or a key was pressed since.
 
-**What is asked of the source** (`Search::queue`): where the matches on the screen's pages are,
+**What is asked of the source** (`Search::queue`): where the matches on the screen's pages and
+the pages rendered around them are,
 the reader's first, at most 1,024 of them and none while the query is typed; then the chunks still
 unread, outward from the one the top of the screen starts with. The queue is set again only when
 that changes (the reader moved, the matches or the one the reader is on changed), not as chunks
@@ -910,6 +913,26 @@ arrive: a `Texts` gives a thing once while it stays listed.
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
 at most 64 for a match. What fails costs that chunk or that rectangle.
+
+**The tint.** The matches on a page are tinted into its pixels
+([ADR-0028](adr/0028-matches-tinted-into-the-pages-pixels.md)). `Search::retint` makes each
+page's `Tint` for the pages on screen and those rendered around them (`Screen::near`): the
+rectangles of its matches, the reader's marked, with a key that is a hash of them. It makes one
+only once every rectangle asked for the page's chunks has come; until then `Search::tint` gives
+the last one and says it isn't settled, and none while the query is typed. In the pager, a page
+in the terminal carries the key it was sent with (`Sent::tint`, 0 for none), and `Pager::draw`
+takes a page as there only with the key of now, or with any while the tint isn't settled;
+otherwise it asks the pool for the page again, like one never sent. A render under way for the
+page carries on and takes the tint of the latest draw (`Wanted::tint`). `Pager::receive` copies
+the frame's pixels, tints them (`search::tint`: each pixel under a mark once, between a colour
+multiplied in and one screened on, by its luma), and only then encodes them, writes them to a
+temporary file or makes text cells of them. The page as it was sent before stays in the
+terminal, and on screen, until `Pager::place` has placed the new one, the last sent of that view,
+and is deleted then (`superseded`); a page not on screen is deleted as its replacement is sent.
+So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
+counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before
+the tint. The pager's loop polls every `POLL` while the source owes a match's rectangles
+(`Search::expecting`), so a tint follows its key by a render, not by the loop's idle tick.
 
 **A chunk a source can't give** comes as its reason, in words for the reader (`Got::Text`'s
 `Err`): the chunk is left unread, the status line says so from then on (`· page 40 unread`, or

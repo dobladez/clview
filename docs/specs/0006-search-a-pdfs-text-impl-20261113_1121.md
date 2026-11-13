@@ -156,3 +156,64 @@ surprises, and what a later reader would want.
   text (`a_workbook_that_opened_with_warnings…`); a reason hidden while a search is typed
   (`the_status_line_shows_the_search…`); a waiting `Enter` going to the first match of the file
   (`text_read_later…`).
+
+## Task 3: matches tinted
+
+- **What a page was sent with** is `Sent::tint`, the key of its `Tint`: a hash of its matches'
+  rectangles and of which is the reader's, 0 for none. The spec called it a generation; a hash needs
+  no counter, and a page whose matches come back to what they were is the same tint again.
+- **A render under way isn't asked for again when the tint changes.** A page's pixels are the same
+  whatever its tint, so `Wanted` keeps its tag and takes the tint of the latest draw
+  (`Wanted::tint`); the frame is tinted with that when it arrives. That is what makes keys read
+  together, or `n` held, tint once: no render is thrown away for a tint.
+- **A page's tint waits for all its rectangles** (`Search::retint`, `Search::tint`'s second value).
+  The worker answers a rectangle a request; without the wait, a page with thirty matches was sent
+  again thirty times. A page not yet in the terminal doesn't wait: it is rendered at once and takes
+  whatever tint is known when it arrives.
+- **The pages rendered ahead are tinted too** (`Screen::near`), so that turning to one is still only
+  a placement. The 1,024 matches placed at a time (task 1's cap) are now over those pages too, the
+  screen's first.
+- **The page before** stays in the terminal until the new one is placed, when it is on screen
+  (`Pager::place`, which now places the last sent of a view and deletes the others), and goes as
+  its replacement is sent when it isn't (`Pager::receive`). `superseded` is the one rule for both.
+- **The colours** (the spec's open question): for each pixel, between a colour multiplied in and
+  one screened on, by the pixel's luma; yellow for the matches, orange for the reader's.
+  [ADR-0028](../adr/0028-matches-tinted-into-the-pages-pixels.md) has the values, what they come to
+  on white and on dark paper, and what was weighed (one colour blended over, inverting). On white
+  the reader's match keeps 4.5 to 1 between ink and ground, the others 9.4; on dark paper the
+  reader's is the weakest, 3.3 to 1. No choice here was beyond doubt, so it is the first thing in
+  the manual check, and the numbers are in two constants (`LIGHT`, `DARK` in `search.rs`).
+- **Found by measuring:** after `Enter` the tinted page took 219 ms to show, 200 of them the
+  pager's idle tick: nothing told the loop that the source owed the matches' rectangles. It polls
+  every 10 ms while it does (`Search::expecting`), and the page shows in 35 ms. The scroll to a
+  match (task 1) waited on the same tick.
+- **Text cells** carry the tint in both glyph sets, `blocks` and `ascii`, wherever they have
+  colours, since the cells are sampled from the tinted pixels; `cells.rs` needed no change. With
+  `NO_COLOR` nothing shows, and the status line still says which match.
+- **`c`** was untinted by construction (a copy's frame is taken out of `receive` before the tint);
+  a test holds it there.
+- **Tests.** `search.rs`: the tint's pixels on white and on dark paper, once a pixel, within its
+  alpha, bad marks and bad sizes; a page's tint as its rectangles come, the reader's mark moving,
+  the pages near; a property test that a tint never leaves its marks. `pager.rs`: `superseded`.
+  `view_pager.rs`, on a terminal without temporary files, reading the PNGs sent: the tint on the
+  text's line and nowhere else, the two colours, `n` moving the reader's, the page before deleted,
+  seven `n` in one write sending at most seven pages (two, here), `Esc` sending the page as first
+  sent, and no more than a page each left; a copy untinted; text cells with colours and without.
+  `view_tmux.rs`: the pages on screen replaced by tinted ones, which a client attaching later gets.
+  `pngs` (the tests' reader of PNGs sent) now skips what tmux writes between an upload's chunks.
+- **Files beyond the task's list:** `CHANGELOG.md`, `CONTRIBUTING.md` (Tests), `docs/adr/README.md`.
+  `src/view/cells.rs` wasn't needed.
+- **Verify.** The commands pass. The manual check (kitty, then tmux, then `--protocol ascii`) is
+  the owner's and hasn't been done: the task's box stays open, and so does the spec.
+- **Seen failing**, each by changing the line it covers and copying the file back (`cmp`): marks
+  not scaled; a pixel tinted once for each mark over it; the reader's mark as the others'; the
+  multiplied colour alone; pixels of another size tinted (the four `search.rs` tint tests, each
+  where it should); a page with rectangles still to come said settled, the reader's match not
+  marked, the pages near the screen left out (`a_pages_tint_is_its_matches…`); `superseded`
+  keeping what it lists; a place owed not expected (`a_matchs_rectangles…`). In the pager: a page
+  never sent again for its tint, and its pixels not tinted (all three integration tests); the page
+  before not deleted once placed, and the oldest of a page placed (`a_searchs_matches_are_tinted…`,
+  the text cells' test); a tint's change drawing nothing (the tmux test); off screen, the page
+  before kept (`a_searchs_matches_are_tinted…`, by the images left); a copy tinted
+  (`c_copies_a_page_untinted…`). One change proved nothing and went: a filter that left tints out
+  while the query is typed, which no rectangle survives anyway.

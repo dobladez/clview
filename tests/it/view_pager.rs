@@ -1344,6 +1344,245 @@ fn a_page_past_the_workers_heap_costs_the_search_that_page_and_four_of_them_the_
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
+/// Every PNG transmitted whole in `text`, in order: its image id and its pixels. Its chunks may
+/// have other escape codes between them, as tmux writes its own between two passthroughs, but no
+/// other graphics command; one cut short is left out.
+pub(crate) fn pngs(text: &str) -> Vec<(u32, ::image::RgbImage)> {
+    use base64::Engine as _;
+    const START: &str = "\x1b_Ga=t,f=100,t=d,q=2,i=";
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(START) {
+        rest = &rest[at..];
+        let digits: String = rest[START.len()..].chars().take_while(char::is_ascii_digit).collect();
+        let (mut payload, mut whole, mut next) = (String::new(), false, rest);
+        while let Some(body) = next.find("\x1b_G").map(|at| &next[at + 3..]) {
+            let Some((control, data)) = body.find("\x1b\\").and_then(|end| body[..end].split_once(';')) else { break };
+            // The first chunk is this image's; the rest say whether more follow, and no action.
+            if !payload.is_empty() && control.split(',').any(|key| key.starts_with("a=")) {
+                break;
+            }
+            payload.push_str(data);
+            next = &body[control.len() + 1 + data.len() + 2..];
+            if control.ends_with("m=0") {
+                whole = true;
+                break;
+            }
+        }
+        rest = if whole { next } else { &rest[START.len()..] };
+        let png = base64::engine::general_purpose::STANDARD.decode(&payload).ok().filter(|_| whole);
+        if let (Ok(id), Some(Ok(page))) = (digits.parse(), png.map(|png| ::image::load_from_memory(&png))) {
+            found.push((id, page.to_rgb8()));
+        }
+    }
+    found
+}
+
+/// The ids after each `code` in `text`, in order: of the images placed first on screen, or deleted.
+fn ids_after(text: &str, code: &str) -> Vec<u32> {
+    let ids = text.match_indices(code).map(|(at, _)| text[at + code.len()..].chars().take_while(char::is_ascii_digit).collect::<String>());
+    ids.filter_map(|id| id.parse().ok()).collect()
+}
+
+/// The image now placed first on screen, and the images deleted so far.
+const PLACED: &str = "\x1b_Ga=p,q=1,i=";
+const DELETED: &str = "\x1b_Ga=d,d=I,q=2,i=";
+
+/// Wait until the page on screen is another image than `was`, and say which, with its pixels.
+fn next_image(view: &Session, what: &str, was: u32) -> (u32, ::image::RgbImage) {
+    view.wait_until(what, |t| {
+        let placed = ids_after(t, PLACED).last().copied();
+        placed.is_some_and(|id| id != was && pngs(t).iter().any(|(sent, _)| *sent == id))
+    });
+    let text = view.text();
+    let id = ids_after(&text, PLACED).last().copied().unwrap();
+    (id, pngs(&text).into_iter().rfind(|(sent, _)| *sent == id).unwrap().1)
+}
+
+/// The tint's colours on white paper: the matches', and the match the reader is on.
+const TINT: [u8; 3] = [255, 236, 130];
+const OWN_TINT: [u8; 3] = [255, 170, 60];
+
+/// The matches of a search kept are tinted into the page as it is sent, where they are and nowhere
+/// else, the reader's another colour; `n` moves that colour, the page sent again; `Esc` sends the
+/// page as it was. Each page sent again replaces the one before, which is deleted once the new one
+/// is placed; and keys read together tint once.
+#[test]
+fn a_searchs_matches_are_tinted_into_the_page_and_esc_takes_the_tint_off() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("tint", 5);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown, the next two sent ahead", |t| drawn(t, "page 1/5") && transmitted(t) == 3);
+    let first = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    let plain = pngs(&view.text()).into_iter().find(|(id, _)| *id == first).unwrap().1;
+    // "Pager test, page 1": an `e` in each word, three matches a page.
+    view.press("/e\r");
+    let (tinted_id, tinted) = next_image(&view, "the page tinted", first);
+    view.wait_until("the match", |t| last_bar(t).contains(" /e 1/15 "));
+    assert_eq!(tinted.dimensions(), plain.dimensions());
+    // The text is 36 pt high from 72 pt in, its baseline 112 pt down a page 612 pt wide: every pixel
+    // that changed is on that line, and within the words.
+    let scale = plain.width() as f32 / 612.0;
+    let on_the_line = |x: u32, y: u32| {
+        let (x, y) = (x as f32 / scale, y as f32 / scale);
+        (70.0..400.0).contains(&x) && (60.0..130.0).contains(&y)
+    };
+    let changed = |page: &::image::RgbImage| -> Vec<(u32, u32, [u8; 3])> {
+        let pixels = page.enumerate_pixels().zip(plain.pixels());
+        pixels.filter(|((_, _, is), was)| is != was).map(|((x, y, is), _)| (x, y, is.0)).collect()
+    };
+    let marked = changed(&tinted);
+    assert!(marked.len() > 100, "{} pixels tinted", marked.len());
+    assert!(marked.iter().all(|(x, y, _)| on_the_line(*x, *y)), "tinted off the text's line");
+    // White paper under a match takes the tint's colour: the first match the reader's, the others theirs.
+    let left_of = |colour: [u8; 3], page: &[(u32, u32, [u8; 3])]| page.iter().filter(|(_, _, is)| *is == colour).map(|(x, ..)| *x).min();
+    let (own, others) = (left_of(OWN_TINT, &marked).expect("the reader's match"), left_of(TINT, &marked).expect("the other matches"));
+    assert!(own < others, "the first match is the reader's: {own} {others}");
+    // Three letters tinted of eighteen characters: far less than the line.
+    let columns: std::collections::HashSet<u32> = marked.iter().map(|(x, ..)| *x).collect();
+    assert!((columns.len() as f32) < 120.0 * scale, "{} columns tinted", columns.len());
+    view.wait_until("the page before it deleted", |t| ids_after(t, DELETED).contains(&first));
+
+    // `n`: the page again, the reader's colour on the second match.
+    view.press("n");
+    let (second_id, second) = next_image(&view, "the page tinted again", tinted_id);
+    let again = changed(&second);
+    assert!(left_of(OWN_TINT, &again).unwrap() > own && left_of(TINT, &again).unwrap() == own, "the reader's colour moved on");
+    assert_eq!(again.len(), marked.len(), "the same pixels, tinted otherwise");
+    view.wait_until("the page before it deleted", |t| ids_after(t, DELETED).contains(&tinted_id));
+
+    // Eight `n` read together, to the third match of page 3: page 1 and page 3 are each sent once
+    // more, not once a key.
+    view.wait_until("idle", |t| last_bar(t).contains(" /e 2/15 "));
+    std::thread::sleep(Duration::from_millis(300));
+    let sent = transmitted(&view.text());
+    view.press("nnnnnnn");
+    view.wait_until("the ninth match", |t| last_bar(t).contains(" /e 9/15 ") && last_bar(t).contains(" page 3/5 "));
+    std::thread::sleep(Duration::from_millis(500));
+    let more = transmitted(&view.text()) - sent;
+    assert!((1..=7).contains(&more), "{more} pages sent for seven keys read together");
+
+    // Twenty more, then `Esc`: every page is sent again untinted, and none sent before it is left.
+    for _ in 0..20 {
+        view.press("n");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    view.wait_until("round the file", |t| last_bar(t).contains(" /e 14/15 "));
+    view.press("\x1bg");
+    view.wait_until("cleared, on page 1", |t| !last_bar(t).contains("/e") && last_bar(t).contains(" page 1/5 "));
+    let (last_id, last) = next_image(&view, "page 1 as it was", second_id);
+    assert!(last == plain, "page 1 after Esc isn't the page as first sent");
+    // Until nothing more is sent: at most a page each is left in the terminal, the others deleted.
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let before = view.text().len();
+        std::thread::sleep(Duration::from_millis(500));
+        if view.text().len() == before {
+            break;
+        }
+        assert!(Instant::now() < deadline, "still sending");
+    }
+    let text = view.text();
+    let (sent, deleted): (Vec<u32>, Vec<u32>) = (pngs(&text).into_iter().map(|(id, _)| id).collect(), ids_after(&text, DELETED));
+    let left: Vec<&u32> = sent.iter().filter(|id| !deleted.contains(id)).collect();
+    assert!(left.len() <= 5 && left.contains(&&last_id), "{} images left of {} sent: more than a page each", left.len(), sent.len());
+    assert!(sent.len() > 12, "the test sent {} pages: too few to say anything of the most kept", sent.len());
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// With a search kept and its matches tinted on screen, `c` copies the page as rendered: black on
+/// white, none of the tint's colours.
+#[test]
+fn c_copies_a_page_untinted_while_its_matches_are_tinted() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("tint-copy", 2);
+    let terminal = Terminal { clipboard: Some(true), ..PLAIN };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/2") && transmitted(t) == 2);
+    let first = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("/e\r");
+    let (_, tinted) = next_image(&view, "the page tinted", first);
+    assert!(tinted.pixels().any(|pixel| pixel.0 == OWN_TINT), "the page on screen is tinted");
+    view.press("c");
+    view.wait_until("page 1 copied", |t| t.contains("copied page 1, 1224 × 1584 pixels"));
+    let copy = ::image::load_from_memory(&copied_png(&view.text(), 1)).unwrap().to_rgb8();
+    assert_eq!(copy.dimensions(), (1224, 1584));
+    let coloured = copy.pixels().filter(|pixel| pixel.0[0] != pixel.0[1] || pixel.0[1] != pixel.0[2]).count();
+    assert_eq!(coloured, 0, "the copy carries the tint");
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// The colours `text` sets, as its escape codes say them (`38;5;231`, `48;2;255;236;130`).
+fn colours_set(text: &str) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    for code in text.split("\x1b[").skip(1) {
+        let Some(end) = code.find(|c: char| !(c.is_ascii_digit() || c == ';')) else { continue };
+        if !code[end..].starts_with('m') {
+            continue;
+        }
+        let params: Vec<&str> = code[..end].split(';').collect();
+        let mut at = 0;
+        while at < params.len() {
+            let long = match (params[at], params.get(at + 1)) {
+                ("38" | "48", Some(&"5")) => 3,
+                ("38" | "48", Some(&"2")) => 5,
+                _ => 1,
+            };
+            if long > 1 && at + long <= params.len() {
+                found.insert(params[at..at + long].join(";"));
+            }
+            at += long;
+        }
+    }
+    found
+}
+
+/// In text cells the tint shows as the cells' colours carry it: the rows of a page with matches are
+/// drawn again with colours the page hadn't, and `Esc` draws them as they were. Without colour the
+/// page doesn't change, and the status line still says where the match is.
+#[test]
+fn in_text_cells_a_match_shows_as_far_as_the_cells_colours_carry_it() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("tint-cells", 3);
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks"], 80, 40);
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3") && has_cells(t));
+    let plain = colours_set(&view.text());
+    let from = view.text().len();
+    view.press("/e\r");
+    view.wait_until("the match, tinted", |t| last_bar(t).contains(" /e 1/9 ") && colours_set(&t[from..]).difference(&plain).count() > 0);
+    let from = view.text().len();
+    view.press("\x1b");
+    view.wait_until("the page as it was", |t| !last_bar(t).contains("/e") && has_cells(&t[from..]));
+    std::thread::sleep(Duration::from_millis(300));
+    let after = colours_set(&view.text()[from..]);
+    assert!(after.is_subset(&plain), "colours left after Esc: {:?}", after.difference(&plain).collect::<Vec<_>>());
+    view.press("q");
+    assert!(view.finish().success());
+
+    // Letters alone, no colour: nothing to carry the tint, and the search works all the same.
+    let mut view = Session::start_command(TEXT_ONLY, &format!("NO_COLOR=1 exec '{BIN}' '{}' --protocol ascii", pdf.display()), 80, 40);
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3"));
+    assert!(colours_set(&view.text()).is_empty());
+    view.press("/e\r");
+    view.wait_until("the first match", |t| last_bar(t).contains(" /e 1/9 "));
+    view.press("nnn");
+    view.wait_until("the fourth match", |t| last_bar(t).contains(" /e 4/9 ") && last_bar(t).contains(" page 2/3 "));
+    assert!(colours_set(&view.text()).is_empty(), "{:?}", colours_set(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
 /// A PDF opened from a list is searched as one opened alone, and its worker goes when the reader
 /// goes back to the list, where `/` filters. A picture has no text to search, and says so.
 #[cfg(feature = "image")]

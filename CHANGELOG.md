@@ -11,7 +11,8 @@ works today. A version's section becomes the notes of its
 - `/` in a file's pages searches its text: a PDF's, and a spreadsheet's, through the PDF it prints
   to. The status line counts the matches as you type (`/word 17…`), `Enter` goes to the first from
   the top of the screen and keeps the search, `n` and `N` go to the next match and the one before
-  (`3n` three on), and `Esc` clears it. The text is read when `/` is pressed, in a process of its
+  (`3n` three on), and `Esc` clears it. The matches on screen are tinted, the one you are on in
+  another colour. The text is read when `/` is pressed, in a process of its
   own held to its time and memory, so the keys never wait on it and a page made to cost too much
   is left unread, the status line saying which. `/` only said that it filters lists. A picture, a
   drawing or a document says it has no text to search.
