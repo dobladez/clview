@@ -263,9 +263,11 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   since the drawing's scan skips some elements by name. A document's page that is a tile draws
   the pictures it refers to as tiles too (`picture::Promise::draw`), drawn again for a page.
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
-  export needs patches. It is read and laid out to open, and keeps only where its bytes are and its
-  pages' sizes; its renderer or pool reads and lays it out again on its first render, and keeps
-  that ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)).
+  export needs patches. It is read and laid out to open, and keeps only where its bytes are, its
+  pages' sizes and which body paragraphs each page has; its renderer or pool reads and lays it out
+  again on its first render, and keeps that
+  ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)). A pool
+  and a search share that layout ([A document's text](#a-documents-text-wordcraftrs)).
   HTML comes through wordcraft's importer as a fragment (`html::import_with`), whose text takes the
   document's styles, not as a web page (`import_on`), which sets Times New Roman over them
   ([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)), on a page the
@@ -1039,6 +1041,30 @@ or no room for a worker (six alive) leaves all of it unread the same way.
 the `Kill` the reader set as the search's end once the worker was greeted (`Ending::on_end`), so a
 request waiting on the worker ends at once and the pager's thread waits on neither. A worker
 being started at that moment is let go of when the reader finds the search ended.
+
+### A document's text (`wordcraft.rs`)
+
+`Paged::texts` gives a `Paragraphs`: a body paragraph a chunk, in `para_paths(StoryRef::Body)`'s
+order, tables' cells walked; a page's chunks (`Document::on`) are its body paragraphs, first to
+last, as the layout made at open places them (`Placed::Lines`), kept for every kind, so a paragraph
+across a page break is on both. Its `texts::Answer` (`wordcraft::Reader`) reads from the layout the
+pool renders with: `Document::shared` hands the pool and the search one `Cache` while either holds
+it, through a `Weak`, so a search after the first render costs no second layout (some 200 MB for
+500 pages), a `/` before it lays the document out for the pool, and a fresh pool (`Pager::enter`)
+still lets go of what the old one held once no search holds it either. A list's tile renders
+through its own (`renderer()`) and never searches. No worker process: what a document costs to lay
+out is bounded before it is ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)),
+and a paragraph's text and selection cost little beside that.
+
+A chunk's text is the paragraph's `text` read piece by piece (`pieces`): an inline object (`OBJ`)
+as its `plain_text()`, so a field as its result; a soft hyphen as nothing and a non-breaking one as
+`-`, so a word reads as typed; a column break as a space. A paragraph past 1 MiB of it
+(`MAX_PARAGRAPH`) is answered as unread, with its first page. A range's rectangles are wordcraft's
+selection of it (`DocLayout::selection_rects`): the range's characters mapped back to bytes of the
+paragraph's `text` (`bytes_of`, the whole object for a character of its text), the selection a
+rectangle a line, or a visual piece of a bidirectional one, on each page it runs over, the hyphen
+drawn at a line's end inside the first, at most 64 (`MAX_LINES`). Its `page_hint` matters only for
+headers, footers and notes: a body paragraph's pieces come from the layout's index of every page.
 
 ## The terminal's state
 

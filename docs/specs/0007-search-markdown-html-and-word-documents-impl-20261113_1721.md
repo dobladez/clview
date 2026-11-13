@@ -53,3 +53,78 @@ surprises, and what a later reader would want.
   -j 2` whole (the PDF search tests of Spec-0006 in `tests/it/view_pager.rs`, `view_tmux.rs`,
   `pdfcraft.rs` and `gridcraft.rs` unchanged and passing), the no-backend gates, and each backend
   alone, clippy and tests, and `pdf,svg`.
+
+## Task 2: a document's text and its matches' places
+
+- **The layout shared through a `Weak`, not one `Arc` the `Document` keeps.** The spec has the
+  `Document` keep one `Arc<Cache>` for `pool()` and `texts()`. But the pager makes a fresh pool on
+  entering a file from a list (`Pager::enter`) so that the old one lets go of what its files
+  rendered with; a `Cache` the `Document` held would keep every Markdown file of a list laid out
+  for as long as the list is open. So `Document::shared` hands out the `Cache` a pool or a search
+  still holds, or a new one, keeping only a `Weak`: one layout while either is alive, none once both
+  are gone. A pool's render threads and the search's thread let go of it when they stop, a moment
+  after their owners are dropped; the test waits for that.
+- **`chunks_on` for every kind**: opening already walks the body's paragraphs for Markdown and HTML
+  (`paragraphs_of`, for `anchor` and `find`); it now does so for every kind (`paras_of`), keeping
+  each page's first to last paragraph (`Document::on`) and their count, and `paragraphs` for the
+  kinds that lay out again, as before. A page's range is from its lowest paragraph to its highest:
+  a table row split over a page break, its cells side by side, may make that range take in a
+  paragraph of the next page, which only costs asking for rectangles that turn out to be elsewhere.
+- **A page with no paragraph** says `0..0`. The search took that as starting at 0 and stretched it
+  to the page before's end; it now takes an empty range as none, between the pages around it
+  (`search.rs`, a line in `chunks_follow_the_pages_given_and_where_they_start`). Not in the task's
+  files: found writing this one.
+- **A chunk's text** (`pieces`): the paragraph's `text`, an `OBJ` as its object's `plain_text()`, a
+  soft hyphen as nothing and a non-breaking hyphen as `-` (both decided here: the spec said each
+  inline object as its text, and was silent on these; without them `hyphen` doesn't match
+  `hy­phen`, nor `-` a non-breaking one), a column break as a space (`U+000E` isn't whitespace).
+  Line breaks, page breaks, tabs and no-break spaces are whitespace already, which the search makes
+  one space.
+- **A range's bytes** (`bytes_of`): from where the piece its first character is in starts to where
+  the piece its last is in ends, so a match inside a field's result selects the field whole.
+- **A paragraph over 1 MiB** is refused by the backend, before the viewer's own `MAX_CHUNK`, so it
+  says which page it is on: `a paragraph on page N has more text than a search keeps of one`. Every
+  page the paragraph is on is then unread by the rule of task 1; in the test, the two short
+  paragraphs share their pages with it, so `read 0 of 264 pages`.
+- **The hyphen drawn at a line's end is inside the first rectangle**, as `selection_rects` gives it:
+  checked on the page's pixels (`a_word_hyphenated_at_a_lines_end_is_placed_on_both_lines`, no ink
+  right of it on its line).
+- **`page_hint`** (the 🟡): the paragraph's first page. For the body it is unused (task 1's note).
+- **Panics.** wordcraft's calls on the queue's thread (`para_paths`, `selection_rects`) go through
+  `caught`, as the renders do; a panic there would otherwise end the thread and leave the search
+  reading for ever.
+- **`opened`**, the body of `Wordcraft::open_at`, is a function of its own returning the `Paged`,
+  so the unit tests can read the layouts counted (`Document::layouts`, `#[cfg(test)]`).
+- **The 🟡 on `MAX_CHUNKS`.** Counted with a throwaway test through `opened` (debug build): Rust's
+  `releases.md` (894 KB, mostly short list items) is 7,341 body paragraphs on 462 pages, laid out
+  in 0.46 s; tokio's `CHANGELOG.md` (195 KB), 2,126 on 134. So real documents sit one or two orders
+  under 100,000. A synthetic Markdown file of short list items can pass it (8 MiB of text and
+  500,000 marks allow several hundred thousand): its first 100,000 paragraphs are searched, the
+  pages past them counted unread. No number of its own is wanted for paragraphs; the cap stays.
+- **Tests.** Unit, in `wordcraft.rs`: `a_documents_chunks_are_its_body_paragraphs_a_tables_cells_included`,
+  `a_fields_result_is_its_text`, `a_word_hyphenated_at_a_lines_end_is_placed_on_both_lines`,
+  `a_paragraph_over_a_mebibyte_is_left_unread_with_its_page`, `the_pool_and_a_search_lay_a_document_out_once`.
+  In the pager, in `tests/it/wordcraft.rs` (so `--test it wordcraft` runs them), with
+  `view_pager.rs`'s helpers made `pub(crate)`:
+  `a_word_documents_body_is_searched_a_hyphenated_word_a_cell_and_a_field`,
+  `a_paragraph_across_a_page_break_is_searched_on_the_page_shown_and_on_dark_paper`,
+  `a_paragraph_over_a_mebibyte_is_left_unread_and_the_rest_searched`. The scroll to a match isn't
+  tested for a document: its pages are as tall as the window, so nothing scrolls unzoomed; the
+  scroll itself is the search's, tested on PDFs.
+- **Files beyond the task's list:** `src/source.rs` (the `cfg` of `texts.rs` and of `Got`'s
+  `expect`), `src/view/search.rs` (an empty page), `CHANGELOG.md`, `CONTRIBUTING.md` (Tests).
+  `tests/it/view_pager.rs` only lends its helpers.
+- **Seen failing**, each by changing the line it covers and copying the file back (`cmp`):
+  `Paged::texts` giving none (the five unit tests and the three pager tests); the soft hyphen kept
+  (`a_documents_chunks…`); an object as nothing (`a_fields_result…`); characters taken for bytes
+  (`a_documents_chunks…`, by where "and" starts); no paragraph cap (`a_paragraph_over…`, unit); the
+  pool with a `Cache` of its own (`the_pool_and_a_search…`: two layouts), and the shared one never
+  let go of (the same, at its wait); pages' paragraphs kept only for Markdown and HTML
+  (`a_word_documents_body…`); an empty page taken as said (`chunks_follow…`); and task 1's
+  `above` without the shared chunk (`a_paragraph_across…`, which then never says `2/2`).
+- **Verify.** The commands pass (below). The manual check (kitty, `clv README.md`, `/search⏎`, `n`,
+  `p`, then `d`) is the owner's and hasn't been done: the task's box stays open until it is.
+- **Gates.** The five pass (461 unit tests, 213 in `tests/it`), and each backend alone, clippy and
+  tests, and `pdf,svg`. `word` alone first failed clippy: `Queue::ending` and `Ending::on_end` are
+  the PDF's reader's alone, so dead code there; their `expect(dead_code)` now holds without `pdf`
+  outside tests.

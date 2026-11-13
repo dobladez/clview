@@ -20,7 +20,7 @@ mod picture;
 mod svg;
 #[cfg(feature = "tar")]
 mod tar;
-#[cfg(feature = "pdf")]
+#[cfg(any(feature = "pdf", feature = "word"))]
 mod texts;
 mod threads;
 #[cfg(any(feature = "zip", feature = "tar"))]
@@ -732,7 +732,7 @@ pub(crate) enum Want {
 }
 
 /// What a source gives of its text ([`Texts::try_recv`]), or why not, in words for the reader.
-#[cfg_attr(not(any(feature = "pdf", test)), expect(dead_code, reason = "only PDFs give their text"))]
+#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents give their text"))]
 pub(crate) enum Got {
     /// A chunk's text. Why not costs the search that chunk alone.
     Text(usize, Result<String, String>),

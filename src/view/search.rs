@@ -449,9 +449,14 @@ impl Search {
         let (mut start, mut end) = (0, 0);
         for page in 0..count {
             let said = texts.chunks_on(page);
-            start = said.start.clamp(start, total);
-            end = said.end.clamp(end.max(start), total);
-            on.push(start..end);
+            if said.is_empty() {
+                // None: where the page before ends, so that it is between that page's and the next's.
+                start = end;
+            } else {
+                start = said.start.clamp(start, total);
+                end = said.end.clamp(end.max(start), total);
+            }
+            on.push(start..end.max(start));
             past.push(said.end > total && said.start < said.end);
         }
         let mut chunks: Vec<Chunk> = std::iter::repeat_with(|| Chunk::Out).take(total).collect();
@@ -1758,6 +1763,11 @@ pub(super) mod tests {
         let odd = Rc::new(Fake { chunks: vec!["a".into(), "b".into()], on: Some(vec![1..2, 0..1, 9..12]), ..Fake::default() });
         let search = self::search(&odd);
         assert_eq!(search.on, [1..2, 1..2, 2..2]);
+        // A page without text is none, between the pages around it, whatever range it says.
+        let gaps = Rc::new(Fake { chunks: vec!["a".into(), "b".into(), "c".into()], on: Some(vec![0..2, 5..5, 1..1, 2..3]), ..Fake::default() });
+        let search = self::search(&gaps);
+        assert_eq!(search.on, [0..2, 2..2, 2..2, 2..3]);
+        assert_eq!(search.pages_of(1), 0..1);
     }
 
     /// A chunk that runs from one page onto the next is on both: with either page alone on screen,

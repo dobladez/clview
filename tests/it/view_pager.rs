@@ -279,7 +279,7 @@ fn take_files(output: &[u8], mut from: usize, taken: &mut Vec<Result<PathBuf, St
 
 /// Whether the status line has said `place` with nothing left to render: without the `…` it
 /// carries while the pages on screen render.
-fn drawn(text: &str, place: &str) -> bool {
+pub(crate) fn drawn(text: &str, place: &str) -> bool {
     text.contains(&format!("  {place} "))
 }
 
@@ -1186,7 +1186,7 @@ fn a_lists_tiles_start_no_worker_for_a_drawings_labels_and_opening_one_does() {
 
 /// What the status line last said, each run of spaces made one: from the last time it was written,
 /// with the screen or by itself.
-fn last_bar(text: &str) -> String {
+pub(crate) fn last_bar(text: &str) -> String {
     const START: &str = "\x1b[2K\x1b[7m";
     let said = text.rfind(START).map_or("", |at| &text[at + START.len()..]);
     bar(said.find("\x1b[0m").map_or("", |end| &said[..end]))
@@ -1433,17 +1433,17 @@ pub(crate) fn pngs(text: &str) -> Vec<(u32, ::image::RgbImage)> {
 }
 
 /// The ids after each `code` in `text`, in order: of the images placed first on screen, or deleted.
-fn ids_after(text: &str, code: &str) -> Vec<u32> {
+pub(crate) fn ids_after(text: &str, code: &str) -> Vec<u32> {
     let ids = text.match_indices(code).map(|(at, _)| text[at + code.len()..].chars().take_while(char::is_ascii_digit).collect::<String>());
     ids.filter_map(|id| id.parse().ok()).collect()
 }
 
 /// The image now placed first on screen, and the images deleted so far.
-const PLACED: &str = "\x1b_Ga=p,q=1,i=";
+pub(crate) const PLACED: &str = "\x1b_Ga=p,q=1,i=";
 const DELETED: &str = "\x1b_Ga=d,d=I,q=2,i=";
 
 /// Wait until the page on screen is another image than `was`, and say which, with its pixels.
-fn next_image(view: &Session, what: &str, was: u32) -> (u32, ::image::RgbImage) {
+pub(crate) fn next_image(view: &Session, what: &str, was: u32) -> (u32, ::image::RgbImage) {
     view.wait_until(what, |t| {
         let placed = ids_after(t, PLACED).last().copied();
         placed.is_some_and(|id| id != was && pngs(t).iter().any(|(sent, _)| *sent == id))
@@ -1454,8 +1454,8 @@ fn next_image(view: &Session, what: &str, was: u32) -> (u32, ::image::RgbImage) 
 }
 
 /// The tint's colours on white paper: the matches', and the match the reader is on.
-const TINT: [u8; 3] = [255, 236, 130];
-const OWN_TINT: [u8; 3] = [255, 170, 60];
+pub(crate) const TINT: [u8; 3] = [255, 236, 130];
+pub(crate) const OWN_TINT: [u8; 3] = [255, 170, 60];
 
 /// The matches of a search kept are tinted into the page as it is sent, where they are and nowhere
 /// else, the reader's another colour; `n` moves that colour, the page sent again; `Esc` sends the

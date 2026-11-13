@@ -348,11 +348,13 @@ file's pages, `/` [searches its text](#searching-a-documents-text) instead.
 ## Searching a document's text
 
 In a file's pages, `/` opens a prompt in the status line, as a list's filter does, and searches
-the file's text: a PDF's, and a spreadsheet's, which is shown as the PDF it prints to. Type what
+the file's text: a PDF's, a spreadsheet's, which is shown as the PDF it prints to, and a
+[document's](#documents): a Word document's, an OpenDocument text's, an RTF's, Markdown's and
+HTML's. Type what
 to find, at most 256 characters; `Backspace` takes one back, and every key that types a character
 is part of it, `q` and `n` too (`Ctrl-C` still quits; the arrows and the other keys do nothing
-meanwhile). A number typed before `/` is dropped. A picture, a drawing or a document has no text
-to search, and `/` says so.
+meanwhile). A number typed before `/` is dropped. A picture or a drawing has no text to search,
+and `/` says so.
 
 While you type, the status line counts the matches in the text read so far (`/word 17…`, and
 `/word 17` once all of it is read and matched), and the view stays where it is. `Enter` searches,
@@ -389,19 +391,31 @@ ends on going back to the list.
 
 Upper and lower case match letter by letter, as in a list's filter (`É` matches `é`, and `e`
 doesn't). A run of spaces, tabs or line ends matches a run of them, in what you type and in the
-text; whitespace alone matches nothing. Matches don't overlap, and none runs from one page onto
-the next: a phrase split by a page break isn't found.
+text; whitespace alone matches nothing. Matches don't overlap. In a PDF none runs from one page
+onto the next: a phrase split by a page break isn't found. In a document none runs from one
+paragraph into the next, but a paragraph that runs onto the next page is searched whole, and is
+on both pages: with only the second on screen, `Enter` goes to a match in the part on it.
 
-The text is read from `/` on, once, outward from the page on screen, in a process of its own, so
-the keys never wait on it: a book of 600 pages is read in about a second. That process is held to
-its time and memory, since a page can be made to cost a lot of either. A page that takes too much
-of one is left unread, and the status line says which and why (`/word 3/17 · page 40 unread`), the
-others searched as before; at a fourth such page, or past two minutes of reading, the rest is left
-unread and the status line says how far the reading got (`· read 120 of 500 pages`). A PDF over
-512 MiB isn't read at all, and `/` says so. The process ends with the search, and with `clv`. With
-`--pages`, only the pages given are searched.
+The text is read from `/` on, once, outward from the page on screen, so the keys never wait on it. A
+PDF's is read in a process of its own: a book of 600 pages is read in about a second. That process
+is held to its time and memory, since a page can be made to cost a lot of either. A page that takes
+too much of one is left unread, and the status line says which and why (`/word 3/17 · page 40
+unread`), the others searched as before; at a fourth such page, or past two minutes of reading, the
+rest is left unread and the status line says how far the reading got (`· read 120 of 500 pages`). A
+PDF over 512 MiB isn't read at all, and `/` says so. The process ends with the search, and with
+`clv`. With `--pages`, only the pages given are searched.
 
-What is searched is the text pdfcraft reads on each page, in its reading order:
+A document's text is read from the layout its pages are drawn from, a paragraph at a time, on a
+thread of its own: what a document costs to lay out is bounded when it opens, and its text costs
+little beside that. A paragraph of more than 1 MiB of text is left unread, and with it every page
+it is on, the status line saying so (`· read 120 of 500 pages`) and why.
+
+What is searched in a document is its body, each paragraph's own text: a table's cells too, a
+field as its result (a page number as printed, an author's name), not its headers, footers,
+notes, text boxes or comments. **A word wordcraft hyphenated at a line's end is found whole**,
+and tinted on both lines, the hyphen with it.
+
+What is searched in a PDF is the text pdfcraft reads on each page, in its reading order:
 
 - all of it, an invisible layer too (the text OCR puts under a scan), a form's values, and
   comments drawn on the page; a scan without such a layer has no text, and the status line says
@@ -542,7 +556,8 @@ lists, pictures and shapes; tracked changes marked up, as Word prints them unles
 no comment balloons, no proofing marks. Text is set in the fonts it names when the system has
 them, and otherwise in the ones wordcraft substitutes, its own included (Source Serif, Source
 Sans, Inter, JetBrains Mono). Fonts a document embeds are not used. A protected Word document opens
-with `--password`; without it, clv says it needs one.
+with `--password`; without it, clv says it needs one. `/` [searches](#searching-a-documents-text)
+a document's body.
 
 Markdown and HTML are laid out the same way, on pages the window's size, since they give no page size
 of their own ([A page the window's size](#a-page-the-windows-size)), or to a width of your own.
@@ -870,7 +885,8 @@ limit, it does as the last column says. How large a page is drawn is under
 | A PDF whose text is [searched](#searching-a-documents-text) | 512 MiB | its text isn't read, and `/` says so |
 | The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
-| What a search keeps of a file's text, and its matches | 64 MiB; 100,000 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
+| A document's paragraph, for a search | 1 MiB | that paragraph is left unread, and the pages it is on, the status line saying how far the reading got and why |
+| What a search keeps of a file's text, and its matches | 64 MiB; 100,000 pages, or a document's paragraphs; 10,000 matches | past 64 MiB or those, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
 | The matches tinted at a time, on the pages on screen and those kept ready around them | 256, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
 | The pages on screen and a page sent again with its tint, together | 256 MiB of pixels, what the terminal is given to keep | the page waits for another's old copy to go; where none will, it is blank until its tinted copy arrives |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |

@@ -185,7 +185,10 @@ backend alone is left to you, above.
   `src/source/worker.rs`; the pager's, that a list's tiles start none, in `tests/it/view_pager.rs`.
 - **`tests/it/wordcraft.rs`** and **`tests/it/gridcraft.rs`**: documents and workbooks as pages, a
   protected one opened with its password, a workbook searched through its PDF, their pins, and that
-  nothing else names their libraries.
+  nothing else names their libraries. A document searched in the pager, on a pseudo-terminal: a
+  word hyphenated at a line's end, a table's cell, a field's result, a paragraph across a page
+  break, one too long to search, and the tint on dark paper. What a document's text answers, and
+  that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
   else names its decompressors.

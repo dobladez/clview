@@ -4,7 +4,8 @@
 //!
 //! Opening reads and lays out the document once, to know it opens and its pages' sizes, and keeps
 //! only where its bytes are: a renderer, or a pool, reads and lays it out again on its first
-//! render and keeps that for the renders after, until it goes, as a drawing keeps its tree.
+//! render and keeps that for the renders after, until it goes, as a drawing keeps its tree. A
+//! search reads its text, a body paragraph a chunk, from the pool's layout ([`Paragraphs`]).
 //!
 //! A docx and an odt are zips: this backend is asked before the zip backend, and knows one by the
 //! names of the files that start it, or a Word document by its own name.
@@ -17,22 +18,24 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
 
 use pulldown_cmark::{BlockQuoteKind, Event, Options, Parser, Tag};
-use wordcraft_doc::para::{InlineObject, Wrap};
+use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, NB_HYPHEN, OBJ, SOFT_HYPHEN, Wrap};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
-use wordcraft_doc::{Block, Rgb, StoryRef, TextColor};
+use wordcraft_doc::{Block, Paragraph, Pos, Rgb, StoryRef, TextColor};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 use wordcraft_render::RenderOptions;
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::picture::{Pictures, Promised};
+use super::texts::{Answer, Queue};
 use super::threads::Threads;
 use super::{
-    Again, Anchor, Auto, Backend, Bounds, Deferred, Effect, Format, Frame, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render,
-    Reopenable, Request, Room, Setting, Source, Value, Values, guarded,
+    Again, Anchor, Auto, Backend, Bounds, Deferred, Effect, Format, Frame, Got, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render,
+    Reopenable, Request, Room, Setting, Source, Texts, Value, Values, Want, guarded,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -412,36 +415,41 @@ impl Backend for Wordcraft {
     /// Markdown and HTML are laid out for `room`, the window's pages area; the rest have pages of their
     /// own.
     fn open_at(&self, input: Input, options: &Parsed<'_>, room: Room) -> Result<Opened, String> {
-        let path = input.path.clone();
-        let error = |e: String| format!("{path}: {e}");
-        let kind = Kind::of(&path, &input.head).ok_or_else(|| error("not a document this reads".into()))?;
-        let password = options.value("--password").map(String::from);
-        let width = Width::given(options.value(WIDTH.option.name));
-        let font = font_given(options.value(FONT.option.name));
-        let margin = margin_given(options.value(MARGIN.option.name));
-        let at = At { width, font, margin };
-        let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room));
-        let (stored, laid) = match input.reopenable()? {
-            Reopenable::Disk(file) => {
-                let bytes = read(file).map_err(error)?;
-                (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
-            }
-            Reopenable::Bytes(bytes) => {
-                let bytes = within(bytes).map_err(error)?;
-                let laid = read_as(&bytes, None);
-                (Stored::Memory(bytes), laid)
-            }
-            Reopenable::Again(again) => {
-                let bytes = again().and_then(within).map_err(error)?;
-                (Stored::Held(again), read_as(&bytes, None))
-            }
-        };
-        // Only the pages' sizes are kept, and where their paragraphs are: the document goes, and a render
-        // reads it again.
-        let laid = laid.map_err(error)?;
-        let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, kind));
-        Ok(Opened::Pages(Box::new(Paged(Arc::new(Document { stored, kind, password, path, sizes, at, room, paragraphs })))))
+        opened(input, options, room).map(|paged| Opened::Pages(Box::new(paged)))
     }
+}
+
+/// The document `input` is, given `options`, laid out for `room` ([`Backend::open_at`]).
+fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, String> {
+    let path = input.path.clone();
+    let error = |e: String| format!("{path}: {e}");
+    let kind = Kind::of(&path, &input.head).ok_or_else(|| error("not a document this reads".into()))?;
+    let password = options.value("--password").map(String::from);
+    let width = Width::given(options.value(WIDTH.option.name));
+    let font = font_given(options.value(FONT.option.name));
+    let margin = margin_given(options.value(MARGIN.option.name));
+    let at = At { width, font, margin };
+    let read_as = |bytes: &[u8], beside: Option<&Path>| caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room));
+    let (stored, laid) = match input.reopenable()? {
+        Reopenable::Disk(file) => {
+            let bytes = read(file).map_err(error)?;
+            (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
+        }
+        Reopenable::Bytes(bytes) => {
+            let bytes = within(bytes).map_err(error)?;
+            let laid = read_as(&bytes, None);
+            (Stored::Memory(bytes), laid)
+        }
+        Reopenable::Again(again) => {
+            let bytes = again().and_then(within).map_err(error)?;
+            (Stored::Held(again), read_as(&bytes, None))
+        }
+    };
+    // Only the pages' sizes are kept, and where their paragraphs are: the document goes, and a render
+    // reads it again.
+    let laid = laid.map_err(error)?;
+    let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, kind));
+    Ok(Paged(Arc::new(Document::new(stored, kind, password, path, sizes, (at, room), paras))))
 }
 
 /// The largest file this reads: 256 MiB.
@@ -573,6 +581,16 @@ struct Document {
     /// Each page's paragraphs, for Markdown and HTML, which lay out again: where the reader is, found
     /// again in the new layout ([`Source::anchor`]). Empty for the rest.
     paragraphs: Vec<Vec<Para>>,
+    /// Of every kind, each page's body paragraphs, first to last by their order in the document, and
+    /// how many it has: a search's chunks ([`Paragraphs`]).
+    on: Vec<Range<usize>>,
+    count: usize,
+    /// The layout a pool renders with and a search reads, while either holds it: laid out once for
+    /// both, and let go of with the last ([`Document::shared`]).
+    shared: Mutex<Weak<Cache>>,
+    /// How many times it was laid out to render or to search.
+    #[cfg(test)]
+    layouts: std::sync::atomic::AtomicUsize,
 }
 
 /// What Markdown and HTML are laid out at, as asked: the width, the font size (a percentage, [`FONT`])
@@ -605,14 +623,41 @@ fn sizes_of(laid: &Laid) -> Vec<(f32, f32)> {
     laid.layout.pages.iter().map(|page| (page.w, page.h)).collect()
 }
 
-/// Each page's paragraphs of `laid`, in the order they are placed, for a document of `kind` that lays
-/// out again: the body's, by their order in the document, with the lines each has on the page.
-fn paragraphs_of(laid: &Laid, kind: Kind) -> Vec<Vec<Para>> {
-    if !settings_of(kind).contains(&WIDTH.name) {
-        return Vec::new();
-    }
+/// What a document laid out says of its body's paragraphs: where each is on each page, for Markdown
+/// and HTML, which lay out again; each page's, first to last; and how many there are.
+struct Paras {
+    paragraphs: Vec<Vec<Para>>,
+    on: Vec<Range<usize>>,
+    count: usize,
+}
+
+/// What `laid`, a document of `kind`, says of its body's paragraphs ([`Paras`]).
+fn paras_of(laid: &Laid, kind: Kind) -> Paras {
+    let (paragraphs, count) = paragraphs_of(laid);
+    let on = paragraphs
+        .iter()
+        .map(|page| {
+            let first = page.iter().map(|para| para.index).min();
+            let last = page.iter().map(|para| para.index).max();
+            match (first, last) {
+                (Some(first), Some(last)) => {
+                    usize::try_from(first).unwrap_or(usize::MAX)..usize::try_from(last).unwrap_or(usize::MAX).saturating_add(1)
+                }
+                _ => 0..0,
+            }
+        })
+        .collect();
+    let paragraphs = if settings_of(kind).contains(&WIDTH.name) { paragraphs } else { Vec::new() };
+    Paras { paragraphs, on, count }
+}
+
+/// Each page's paragraphs of `laid`, in the order they are placed: the body's, by their order in the
+/// document, with the lines each has on the page; and how many the body has.
+fn paragraphs_of(laid: &Laid) -> (Vec<Vec<Para>>, usize) {
     let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
-    let order: HashMap<_, u32> = document.para_paths(StoryRef::Body).into_iter().zip(0u32..).collect();
+    let paths = document.para_paths(StoryRef::Body);
+    let count = paths.len();
+    let order: HashMap<_, u32> = paths.into_iter().zip(0u32..).collect();
     let placed = |item: &Placed| match item {
         Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } => {
             let height = para.lines.get(*l0..*l1).unwrap_or_default().iter().map(|line| line.height).sum();
@@ -620,7 +665,7 @@ fn paragraphs_of(laid: &Laid, kind: Kind) -> Vec<Vec<Para>> {
         }
         _ => None,
     };
-    laid.layout.pages.iter().map(|page| page.items.iter().filter_map(placed).collect()).collect()
+    (laid.layout.pages.iter().map(|page| page.items.iter().filter_map(placed).collect()).collect(), count)
 }
 
 /// Where a document's bytes are.
@@ -687,9 +732,9 @@ fn pictures_on<'a>(document: &'a wordcraft_doc::Document, page: &Page) -> Vec<&'
     page.items.iter().filter_map(paragraph).flat_map(|para| para.objects.iter()).filter_map(picture).collect()
 }
 
-/// A document laid out, by the first render of a renderer or a pool, each of which has its own:
-/// an error, or a panic's, is kept too, so a document that fails isn't read again for every
-/// render.
+/// A document laid out, by the first render of a renderer or a pool, or a search's first read: an
+/// error, or a panic's, is kept too, so a document that fails isn't read again for every render. A
+/// renderer (a list's tile) has its own; a pool and a search share one ([`Document::shared`]).
 type Cache = OnceLock<Result<Arc<Laid>, String>>;
 
 impl Source for Paged {
@@ -716,7 +761,7 @@ impl Source for Paged {
     }
 
     fn pool(&self, threads: usize) -> Box<dyn Pool> {
-        let (document, laid) = (self.0.clone(), Arc::new(Cache::new()));
+        let (document, laid) = (self.0.clone(), self.0.shared());
         Box::new(Threads::new(threads, Arc::new(move |request| document.render(request, &laid))))
     }
 
@@ -796,6 +841,147 @@ impl Source for Paged {
             .enumerate()
             .find_map(|(page, paragraphs)| paragraphs.iter().find(|para| para.index == index).map(|para| (page, para.y.max(0.0))))
     }
+
+    /// Its body's text, a paragraph a chunk, read from the layout the pool renders with.
+    fn texts(&self) -> Option<Box<dyn Texts>> {
+        let queue = Queue::new();
+        queue.start("document text", Reader { document: self.0.clone(), laid: self.0.shared(), paths: None });
+        Some(Box::new(Paragraphs { queue, document: self.0.clone() }))
+    }
+}
+
+/// The most bytes of a paragraph's text a search reads: a longer one is left unread, as the viewer
+/// leaves a longer chunk.
+const MAX_PARAGRAPH: usize = 1 << 20;
+
+/// The most rectangles a match is given, one a line.
+const MAX_LINES: usize = 64;
+
+/// A document's text for a search ([`Texts`]): a body paragraph a chunk, tables' cells included, read
+/// on a queue's thread from the layout the pool renders with ([`Document::shared`]): no second layout.
+struct Paragraphs {
+    queue: Queue,
+    document: Arc<Document>,
+}
+
+impl Texts for Paragraphs {
+    fn chunks(&self) -> usize {
+        self.document.count
+    }
+
+    fn chunks_on(&self, page: usize) -> Range<usize> {
+        self.document.on.get(page).cloned().unwrap_or_default()
+    }
+
+    fn set_queue(&self, wanted: Vec<Want>) {
+        self.queue.set_queue(wanted);
+    }
+
+    fn try_recv(&self) -> Option<Got> {
+        self.queue.try_recv()
+    }
+}
+
+/// The queue's side of [`Paragraphs`]: the layout, laid out by the first to want it, a render or
+/// this; and its body's paragraphs, in order, once read.
+struct Reader {
+    document: Arc<Document>,
+    laid: Arc<Cache>,
+    paths: Option<Vec<wordcraft_doc::Path>>,
+}
+
+/// Each piece of a paragraph's text as it is searched, with the bytes of [`Paragraph::text`] it
+/// stands for: a character as it is, an inline object as its text (a field as its result) or
+/// nothing, a soft hyphen as nothing, a non-breaking one as a hyphen, a column break as a space.
+fn pieces(para: &Paragraph) -> impl Iterator<Item = (&str, usize, usize)> {
+    let mut objects = para.objects.iter();
+    para.text.char_indices().map(move |(at, c)| {
+        let end = at.saturating_add(c.len_utf8());
+        let piece = match c {
+            OBJ => objects.next().map_or("", InlineObject::plain_text),
+            SOFT_HYPHEN => "",
+            NB_HYPHEN => "-",
+            COLUMN_BREAK => " ",
+            _ => para.text.get(at..end).unwrap_or(""),
+        };
+        (piece, at, end)
+    })
+}
+
+/// The bytes of `para`'s text that the characters `from..to` of its text as searched ([`pieces`])
+/// stand for: from where the piece the first is in starts to where the one the last is in ends.
+/// `None` for a range of none of them.
+fn bytes_of(para: &Paragraph, from: usize, to: usize) -> Option<(usize, usize)> {
+    let (mut at, mut start, mut end) = (0usize, None, None);
+    for (piece, first, past) in pieces(para) {
+        if at >= to {
+            break;
+        }
+        let next = at.saturating_add(piece.chars().count());
+        if next > at && next > from {
+            start.get_or_insert(first);
+            end = Some(past);
+        }
+        at = next;
+    }
+    start.zip(end)
+}
+
+impl Reader {
+    /// The layout, laid out now if nothing has yet, and the body's paragraphs, in order.
+    fn laid(&mut self) -> Result<(Arc<Laid>, &[wordcraft_doc::Path]), String> {
+        let laid = self.document.laid(&self.laid)?;
+        if self.paths.is_none() {
+            let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+            self.paths = Some(caught(|| Ok(document.para_paths(StoryRef::Body)))?);
+        }
+        Ok((laid, self.paths.as_deref().unwrap_or_default()))
+    }
+
+    /// The first page paragraph `chunk` is on (0-based).
+    fn page_of(&self, chunk: usize) -> usize {
+        self.document.on.iter().position(|on| on.contains(&chunk)).unwrap_or(0)
+    }
+}
+
+impl Answer for Reader {
+    fn text(&mut self, chunk: usize) -> Result<String, String> {
+        let (laid, paths) = self.laid()?;
+        let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+        let mut text = String::new();
+        let mut long = false;
+        if let Some(para) = paths.get(chunk).and_then(|path| document.para(StoryRef::Body, path)) {
+            for (piece, ..) in pieces(para) {
+                long |= text.len().saturating_add(piece.len()) > MAX_PARAGRAPH;
+                if long {
+                    break;
+                }
+                text.push_str(piece);
+            }
+        } else {
+            let page = self.page_of(chunk).saturating_add(1);
+            return Err(format!("a paragraph on page {page} is no longer in the file: open it again to search it"));
+        }
+        if long {
+            let page = self.page_of(chunk).saturating_add(1);
+            return Err(format!("a paragraph on page {page} has more text than a search keeps of one"));
+        }
+        Ok(text)
+    }
+
+    /// Wordcraft's own selection of the characters `from..to`: a rectangle for each line, or each
+    /// piece of a bidirectional one, the hyphen drawn at a line's end included, on each page it runs
+    /// over, in points from the page's top left.
+    fn rects(&mut self, chunk: usize, from: usize, to: usize) -> Result<Vec<(usize, [f32; 4])>, String> {
+        let hint = self.page_of(chunk);
+        let (laid, paths) = self.laid()?;
+        let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+        let Some(path) = paths.get(chunk) else { return Ok(Vec::new()) };
+        let Some((start, end)) = document.para(StoryRef::Body, path).and_then(|para| bytes_of(para, from, to)) else { return Ok(Vec::new()) };
+        let (a, b) = (Pos::new(StoryRef::Body, path.clone(), start), Pos::new(StoryRef::Body, path.clone(), end));
+        let rects = caught(|| Ok(laid.layout.selection_rects(&document, &a, &b, hint)))?;
+        Ok(rects.into_iter().take(MAX_LINES).map(|(page, r)| (page, [r.x, r.y, r.x + r.w, r.y + r.h])).collect())
+    }
 }
 
 struct Renderer {
@@ -810,17 +996,53 @@ impl Render for Renderer {
 }
 
 impl Document {
+    /// What `stored` holds, of `kind`, laid out `at` for a room into pages of `sizes`, with `paras`.
+    fn new(stored: Stored, kind: Kind, password: Option<String>, path: String, sizes: Vec<(f32, f32)>, (at, room): (At, Room), paras: Paras) -> Self {
+        let Paras { paragraphs, on, count } = paras;
+        Self {
+            stored,
+            kind,
+            password,
+            path,
+            sizes,
+            at,
+            room,
+            paragraphs,
+            on,
+            count,
+            shared: Mutex::new(Weak::new()),
+            #[cfg(test)]
+            layouts: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// The layout a pool and a search share: the one either holds, or a new one, not yet laid out.
+    fn shared(&self) -> Arc<Cache> {
+        let mut shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        shared.upgrade().unwrap_or_else(|| {
+            let cache = Arc::new(Cache::new());
+            *shared = Arc::downgrade(&cache);
+            cache
+        })
+    }
+
+    /// It laid out, once for `laid`: by whoever asks first, the others waiting for it.
+    fn laid(&self, laid: &Cache) -> Result<Arc<Laid>, String> {
+        laid.get_or_init(|| {
+            #[cfg(test)]
+            self.layouts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let bytes = self.bytes()?;
+            caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), self.at, &self.room)).map(Arc::new)
+        })
+        .clone()
+    }
+
     fn render(&self, request: Request, laid: &Cache) -> Frame {
         self.rendered(request, laid).unwrap_or_else(|e| Frame::failed(request, e))
     }
 
     fn rendered(&self, request: Request, laid: &Cache) -> Result<Frame, String> {
-        let laid = laid
-            .get_or_init(|| {
-                let bytes = self.bytes()?;
-                caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), self.at, &self.room)).map(Arc::new)
-            })
-            .clone()?;
+        let laid = self.laid(laid)?;
         let page = laid.layout.pages.get(request.page).ok_or_else(|| format!("the document has no page {}", request.page.saturating_add(1)))?;
         let (w, h) = (pixels(page.w, request.scale)?, pixels(page.h, request.scale)?);
         let side = u64::from(wordcraft_render::MAX_SIDE);
@@ -853,8 +1075,8 @@ impl Document {
         let laid = caught(|| laid_out(&bytes, self.kind, self.password.as_deref(), &self.path, self.beside(), at, &room))?;
         let Self { stored, kind, password, path, .. } = self;
         let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
-        let (sizes, paragraphs) = (sizes_of(&laid), paragraphs_of(&laid, *kind));
-        Ok(Paged(Arc::new(Document { stored, kind: *kind, password, path, sizes, at, room, paragraphs })))
+        let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, *kind));
+        Ok(Paged(Arc::new(Document::new(stored, *kind, password, path, sizes, (at, room), paras))))
     }
 
     /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
@@ -2363,6 +2585,208 @@ mod tests {
             assert!(pixels(612.0, scale).is_err(), "{scale}");
         }
         assert!(pixels(f32::MAX, f32::MAX).is_err());
+    }
+
+    /// `contents` opened as a file named `name`, laid out for no room of the viewer's.
+    fn paged(name: &str, contents: &[u8]) -> Paged {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let at = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("clview-word-text-{}-{at}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, contents).unwrap();
+        let input = crate::source::Input::open(path.to_str().unwrap()).unwrap();
+        opened(input, &Parsed::default(), ROOMLESS).unwrap()
+    }
+
+    /// A docx of one 200 × 300 pt page whose body is `body`, with `settings`.
+    fn docx(body: &str, settings: &str) -> Vec<u8> {
+        use std::io::Write as _;
+        const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let files = [
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>"#.to_owned(),
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_owned(),
+            ),
+            (
+                "word/_rels/document.xml.rels",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>"#.to_owned(),
+            ),
+            (
+                "word/document.xml",
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}"><w:body>{body}<w:sectPr><w:pgSz w:w="4000" w:h="6000"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>"#
+                ),
+            ),
+            ("word/settings.xml", format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}">{settings}</w:settings>"#)),
+        ];
+        let mut zip = ::zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in files {
+            zip.start_file(name, ::zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// What `texts` gives for `wanted`, each once, within twenty seconds.
+    fn gave(texts: &dyn Texts, wanted: Vec<Want>) -> Vec<Got> {
+        let (mut got, begun) = (Vec::new(), std::time::Instant::now());
+        texts.set_queue(wanted.clone());
+        while got.len() < wanted.len() && begun.elapsed() < std::time::Duration::from_secs(20) {
+            match texts.try_recv() {
+                Some(one) => got.push(one),
+                None => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        assert_eq!(got.len(), wanted.len(), "not all given");
+        got
+    }
+
+    /// Every chunk's text of `paged`, in order.
+    fn all_text(paged: &Paged) -> Vec<String> {
+        let texts = paged.texts().unwrap();
+        let got = gave(&*texts, (0..texts.chunks()).map(Want::Text).collect());
+        got.into_iter()
+            .map(|got| match got {
+                Got::Text(_, Ok(text)) => text,
+                Got::Text(chunk, Err(why)) => panic!("chunk {chunk}: {why}"),
+                Got::Rects(..) => panic!("rectangles not asked for"),
+            })
+            .collect()
+    }
+
+    /// The rectangles `texts` gives for the characters `from..to` of chunk `chunk`.
+    fn placed(texts: &dyn Texts, chunk: usize, from: usize, to: usize) -> Vec<(usize, [f32; 4])> {
+        match gave(texts, vec![Want::Rects { chunk, from, to }]).pop() {
+            Some(Got::Rects(_, Ok(rects))) => rects,
+            _ => panic!("no rectangles"),
+        }
+    }
+
+    /// A document's text is its body's paragraphs, a chunk each, in order, a table's cells
+    /// included: each its own text, a soft hyphen as nothing and a non-breaking one as a hyphen, so
+    /// a word is found as it reads; and all on the one page they are on.
+    #[test]
+    fn a_documents_chunks_are_its_body_paragraphs_a_tables_cells_included() {
+        let markdown = "# Title\n\nSoft hy\u{AD}phen and non\u{2011}breaking.\n\n| one | two |\n|---|---|\n| three | four |\n\nAfter.\n";
+        let paged = paged("a.md", markdown.as_bytes());
+        let text = all_text(&paged);
+        assert_eq!(text.first().map(String::as_str), Some("Title"), "{text:?}");
+        assert!(text.contains(&"Soft hyphen and non-breaking.".to_owned()), "{text:?}");
+        let cells: Vec<&str> = text.iter().map(String::as_str).filter(|t| ["one", "two", "three", "four"].contains(t)).collect();
+        assert_eq!(cells, ["one", "two", "three", "four"]);
+        assert_eq!(text.last().map(String::as_str), Some("After."), "{text:?}");
+        let texts = paged.texts().unwrap();
+        assert_eq!((texts.chunks(), texts.chunks_on(0), texts.chunks_on(1)), (text.len(), 0..text.len(), 0..0));
+        // Where "hyphen" is: one rectangle, on the line its paragraph is on, wider than its letters.
+        // Where "hyphen" is, after a soft hyphen of two bytes: one rectangle, on its paragraph's line,
+        // ending a space before where "and" starts.
+        let at = text[1].find("hyphen").unwrap();
+        let rects = placed(&*texts, 1, at, at + 6);
+        let [(0, [x0, y0, x1, y1])] = rects[..] else { panic!("{rects:?}") };
+        assert!(x1 > x0 + 10.0 && y1 > y0, "{rects:?}");
+        let and = placed(&*texts, 1, at + 7, at + 10);
+        assert!(matches!(and[..], [(0, [start, ..])] if start > x1 && start < x1 + 5.0), "{rects:?} {and:?}");
+    }
+
+    /// An inline field is its result, as it is drawn.
+    #[test]
+    fn a_fields_result_is_its_text() {
+        let body = r#"<w:p><w:r><w:t xml:space="preserve">By </w:t></w:r><w:fldSimple w:instr=" AUTHOR "><w:r><w:t>Ada Lovelace</w:t></w:r></w:fldSimple><w:r><w:t>.</w:t></w:r></w:p>"#;
+        let paged = paged("field.docx", &docx(body, ""));
+        assert_eq!(all_text(&paged), ["By Ada Lovelace."]);
+        let texts = paged.texts().unwrap();
+        let rects = placed(&*texts, 0, 3, 7);
+        assert!(matches!(rects[..], [(0, [x0, _, x1, _])] if x1 > x0), "the field's result is placed: {rects:?}");
+    }
+
+    /// A word hyphenated at a line's end is found whole, its rectangles on both lines, the first
+    /// reaching the line's end.
+    #[test]
+    fn a_word_hyphenated_at_a_lines_end_is_placed_on_both_lines() {
+        let body = r#"<w:p><w:r><w:rPr><w:lang w:val="en-US"/></w:rPr><w:t>Internationalization considerations notwithstanding, extraordinarily comprehensive documentation characteristically demonstrates unquestionable professionalism</w:t></w:r></w:p>"#;
+        let paged = paged("hyphens.docx", &docx(body, "<w:autoHyphenation/>"));
+        let text = all_text(&paged).remove(0);
+        let texts = paged.texts().unwrap();
+        let mut split = Vec::new();
+        let mut at = 0;
+        for word in text.split(' ') {
+            let chars = word.chars().count();
+            let rects = placed(&*texts, 0, at, at + chars);
+            if rects.len() == 2 {
+                split.push((word.to_owned(), rects));
+            }
+            at += chars + 1;
+        }
+        let Some((_, rects)) = split.first() else { panic!("no word hyphenated in {text:?}") };
+        let [(0, first), (0, second)] = rects[..] else { panic!("{rects:?}") };
+        assert!(second[1] >= first[3] - 0.5, "the second line below the first: {rects:?}");
+        assert!(first[2] > 150.0 && second[0] < 50.0, "the head at the line's end, the tail at the next's start: {rects:?}");
+        // The hyphen drawn at the line's end is within the first: no ink to its right on that line.
+        const SCALE: f32 = 4.0;
+        let frame = paged.renderer().unwrap().render(Request { page: 0, scale: SCALE, ..Request::default() });
+        let width = frame.width as usize;
+        let rows = (first[1] * SCALE).ceil() as usize..(first[3] * SCALE).floor() as usize;
+        let inked = |x: usize, y: usize| frame.rgba[(y * width + x) * 4..][..3].iter().any(|v| *v < 160);
+        let right = (first[2] * SCALE).ceil() as usize + 1;
+        assert!(rows.clone().all(|y| (right..width).all(|x| !inked(x, y))), "ink right of the head: the hyphen left out");
+        assert!(rows.clone().any(|y| (((first[2] - 4.0) * SCALE) as usize..right).any(|x| inked(x, y))), "no ink at the head's end");
+    }
+
+    /// A paragraph past what a search keeps of one is left unread, with the page it is on; the
+    /// others are read.
+    #[test]
+    fn a_paragraph_over_a_mebibyte_is_left_unread_with_its_page() {
+        let markdown = format!("First.\n\n{}\n\nLast.\n", "word ".repeat(220_000));
+        let paged = paged("long.md", markdown.as_bytes());
+        let texts = paged.texts().unwrap();
+        let got = gave(&*texts, vec![Want::Text(0), Want::Text(1), Want::Text(2)]);
+        let [Got::Text(0, Ok(first)), Got::Text(1, Err(why)), Got::Text(2, Ok(last))] = &got[..] else { panic!("not what was asked") };
+        assert_eq!((first.as_str(), last.as_str()), ("First.", "Last."));
+        assert_eq!(why, "a paragraph on page 1 has more text than a search keeps of one");
+    }
+
+    /// A search reads the layout the pool renders with: laid out once for both, whichever asks
+    /// first; with both gone, it is let go of, and laid out again for the next.
+    #[test]
+    fn the_pool_and_a_search_lay_a_document_out_once() {
+        let layouts = |paged: &Paged| paged.0.layouts.load(std::sync::atomic::Ordering::Relaxed);
+        let rendered = |pool: &dyn Pool| {
+            pool.set_queue(vec![Request { page: 0, scale: 1.0, ..Request::default() }]);
+            let begun = std::time::Instant::now();
+            loop {
+                if let Some(frame) = pool.try_recv() {
+                    assert_eq!(frame.error, None);
+                    break;
+                }
+                assert!(begun.elapsed() < std::time::Duration::from_secs(20), "never rendered");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        let paged = paged("once.md", b"# One\n\nTwo.\n");
+        // The search first, then the pool.
+        let texts = paged.texts().unwrap();
+        gave(&*texts, vec![Want::Text(1)]);
+        let pool = paged.pool(1);
+        rendered(&*pool);
+        assert_eq!(layouts(&paged), 1);
+        // Both let go of, once their threads have stopped: the next pool lays it out again, and a
+        // search started meanwhile shares it.
+        drop((texts, pool));
+        let begun = std::time::Instant::now();
+        while paged.0.shared.lock().unwrap().upgrade().is_some() {
+            assert!(begun.elapsed() < std::time::Duration::from_secs(10), "the layout is held after its pool and search");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let pool = paged.pool(1);
+        rendered(&*pool);
+        let texts = paged.texts().unwrap();
+        gave(&*texts, vec![Want::Text(0)]);
+        assert_eq!(layouts(&paged), 2);
     }
 
     proptest! {

@@ -127,6 +127,7 @@ impl Queue {
     }
 
     /// The hold a reader of this queue keeps on it.
+    #[cfg_attr(not(any(feature = "pdf", test)), expect(dead_code, reason = "only a PDF's reader has something to end"))]
     pub(crate) fn ending(&self) -> Ending {
         Ending(self.shared.clone())
     }
@@ -194,7 +195,7 @@ impl Ending {
     /// What to do when the search ends, from now on, in place of what was set before; nothing,
     /// for `None`. `false` if it has ended already, when `end` is left undone: the reader is to do
     /// it itself.
-    #[cfg_attr(not(feature = "pdf"), expect(dead_code, reason = "only a PDF's reader has something to end"))]
+    #[cfg_attr(not(any(feature = "pdf", test)), expect(dead_code, reason = "only a PDF's reader has something to end"))]
     pub(crate) fn on_end(&self, end: Option<Box<dyn FnOnce() + Send>>) -> bool {
         let mut state = lock(&self.0.state);
         if state.stop {

@@ -830,3 +830,154 @@ fn nothing_but_this_backend_names_wordcraft_or_pulldown_cmark() {
         &["wordcraft", "pulldown"],
     );
 }
+
+/// A docx of one narrow page (200 × 300 pt) whose body is `body`, with `settings`.
+fn docx_of(body: &str, settings: &str) -> Vec<u8> {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let document = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W}"><w:body>{body}<w:sectPr><w:pgSz w:w="4000" w:h="6000"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>"#
+    );
+    let settings = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="{W}">{settings}</w:settings>"#);
+    zip(&[
+        (
+            "[Content_Types].xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>"#,
+        ),
+        ("word/document.xml", &document),
+        ("word/settings.xml", &settings),
+    ])
+}
+
+/// The rows of `page` that have a pixel of `colour`, as bands: each from its first row to its last.
+fn bands_of(page: &::image::RgbImage, colour: [u8; 3]) -> Vec<(u32, u32)> {
+    let mut bands: Vec<(u32, u32)> = Vec::new();
+    for y in 0..page.height() {
+        if !(0..page.width()).any(|x| page.get_pixel(x, y).0 == colour) {
+            continue;
+        }
+        match bands.last_mut() {
+            Some((_, last)) if *last + 1 == y => *last = y,
+            _ => bands.push((y, y)),
+        }
+    }
+    bands
+}
+
+/// A Word document is searched as a PDF is, its body: a word wordcraft hyphenated at a line's end
+/// found whole and tinted on both lines, a table's cell, and a field's result.
+#[test]
+fn a_word_documents_body_is_searched_a_hyphenated_word_a_cell_and_a_field() {
+    use crate::view_pager::{OWN_TINT, PLACED, Session, ids_after, last_bar, next_image, pty_works};
+    if !pty_works() {
+        return;
+    }
+    let long = "Internationalization considerations notwithstanding, extraordinarily comprehensive documentation characteristically demonstrates unquestionable professionalism";
+    let cell = |text: &str| format!("<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>");
+    let body = format!(
+        r#"<w:p><w:r><w:rPr><w:lang w:val="en-US"/></w:rPr><w:t>{long}</w:t></w:r></w:p><w:tbl><w:tr>{}{}</w:tr></w:tbl><w:p><w:r><w:t xml:space="preserve">By </w:t></w:r><w:fldSimple w:instr=" AUTHOR "><w:r><w:t>Ada Lovelace</w:t></w:r></w:fldSimple></w:p>"#,
+        cell("Celled"),
+        cell("Other")
+    );
+    let path = write(tmp("word-search", "body.docx"), &docx_of(&body, "<w:autoHyphenation/>"));
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("the page shown", |t| t.contains(" page 1/1 ") && !ids_after(t, PLACED).is_empty());
+    let first = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    // "notwithstanding," is hyphenated at the first line's end (the backend's own test says so).
+    view.press("/notwithstanding\r");
+    let (tinted, page) = next_image(&view, "the page tinted", first);
+    view.wait_until("found whole", |t| last_bar(t).contains(" /notwithstanding 1/1 "));
+    // The head at the end of a line, the tail at the start of the next, below it.
+    let bands = bands_of(&page, OWN_TINT);
+    let [(top, bottom)] = bands[..] else { panic!("{bands:?}") };
+    let xs = |y: u32| (0..page.width()).filter(|x| page.get_pixel(*x, y).0 == OWN_TINT).collect::<Vec<u32>>();
+    let (head, tail) = (xs(top), xs(bottom));
+    let middle = page.width() / 2;
+    assert!(head.iter().all(|x| *x > middle) && tail.iter().all(|x| *x < middle), "tinted on both lines: {bands:?}");
+    view.press("/\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fcelled\r");
+    view.wait_until("a cell's word", |t| last_bar(t).contains(" /celled 1/1 "));
+    let (_, page) = next_image(&view, "the cell tinted", tinted);
+    assert_eq!(bands_of(&page, OWN_TINT).len(), 1);
+    view.press("/\x7f\x7f\x7f\x7f\x7f\x7flovelace\r");
+    view.wait_until("a field's result", |t| last_bar(t).contains(" /lovelace 1/1 "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A Markdown paragraph that runs from one page onto the next is searched on either: with its last
+/// page alone on screen, Enter goes to the match in its tail, there, and tints it; with its first,
+/// to the one in its head. On dark paper (`d`) the match is tinted with the dark blend.
+#[test]
+fn a_paragraph_across_a_page_break_is_searched_on_the_page_shown_and_on_dark_paper() {
+    use crate::view_pager::{OWN_TINT, PLACED, Session, TINT, ids_after, last_bar, next_image, pty_works};
+    if !pty_works() {
+        return;
+    }
+    let lines: String = (1..=20).map(|n| format!("Line {n}.\n\n")).collect();
+    let markdown = format!("{lines}Marker {} marker.\n", "filler words ".repeat(500));
+    let path = write(tmp("word-search", "across.md"), markdown.as_bytes());
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("the first page", |t| last_bar(t).contains(" page 1/") && !ids_after(t, PLACED).is_empty());
+    let pages: u32 = {
+        let bar = last_bar(&view.text());
+        let at = bar.find(" page 1/").unwrap() + " page 1/".len();
+        bar[at..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap()
+    };
+    assert!(pages >= 2, "the paragraph fits a page: {pages} pages");
+    // The last page alone: the tail's match, on it.
+    view.press("G");
+    view.wait_until("the last page", |t| last_bar(t).contains(&format!(" page {pages}/{pages} ")));
+    let last = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("/marker\r");
+    view.wait_until("the tail's match", |t| last_bar(t).contains(&format!(" /marker 2/2 page {pages}/{pages} ")));
+    let (tinted, page) = next_image(&view, "the last page tinted", last);
+    assert!(page.pixels().any(|pixel| pixel.0 == OWN_TINT), "the tail's match not tinted");
+    // The first page alone: the head's.
+    view.press("g");
+    view.wait_until("the first page", |t| last_bar(t).contains(" page 1/"));
+    view.press("/\r");
+    view.wait_until("the head's match", |t| last_bar(t).contains(&format!(" /marker 1/2 page 1/{pages} ")));
+    let (_, page) = next_image(&view, "the first page tinted", tinted);
+    assert!(page.pixels().any(|pixel| pixel.0 == OWN_TINT), "the head's match not tinted");
+    // Dark paper: the reader's match a dark orange, under light text, neither colour of white paper's.
+    view.press("d");
+    let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    let (_, dark) = next_image(&view, "the page on dark paper", shown);
+    assert!(dark.get_pixel(0, 0).0.iter().all(|v| *v < 100), "not dark paper: {:?}", dark.get_pixel(0, 0));
+    assert!(!dark.pixels().any(|pixel| pixel.0 == OWN_TINT || pixel.0 == TINT), "white paper's tint on dark paper");
+    let orange = dark.pixels().filter(|pixel| (90..200).contains(&pixel[0]) && i32::from(pixel[0]) > i32::from(pixel[2]) + 50).count();
+    assert!(orange > 50, "{orange} pixels of the dark tint");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A paragraph past what a search keeps of one is left unread, and every page it is on with it,
+/// the status line saying so and why; the rest is searched. Here the two short paragraphs share
+/// their pages with it, so no page is read whole.
+#[test]
+fn a_paragraph_over_a_mebibyte_is_left_unread_and_the_rest_searched() {
+    use crate::view_pager::{PLACED, Session, ids_after, last_bar, pty_works};
+    if !pty_works() {
+        return;
+    }
+    let markdown = format!("First marker.\n\n{}\n\nLast marker.\n", "word ".repeat(220_000));
+    let path = write(tmp("word-search", "long.md"), markdown.as_bytes());
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--pager"], 220, 60);
+    view.wait_until("the first pages", |t| last_bar(t).contains(" pages 1–2/") && !ids_after(t, PLACED).is_empty());
+    view.press("/marker");
+    view.wait_until("both found, the long paragraph's pages unread", |t| {
+        let bar = last_bar(t);
+        bar.contains(" /marker 2 · read 0 of ") && bar.contains(" pages a paragraph on page 1 has more text than a search keeps of one ")
+    });
+    view.press("\rn");
+    view.wait_until("the last", |t| last_bar(t).contains(" /marker 2/2 · read 0 of "));
+    view.press("q");
+    assert!(view.finish().success());
+}
