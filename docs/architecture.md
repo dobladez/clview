@@ -899,7 +899,7 @@ the chunks whose matches weren't kept are no longer known.
 **Where the reader is.** The match the reader is on is a chunk and a place in it, never a number
 among the matches, so text read later leaves it theirs and only its number changes. `Enter` goes to
 the first match at or after the top of the screen, round to the first of all;
-with none known yet, the view goes the same way once one is, by what is known then, once. `n` and `N` go from the match the reader
+with none known yet, the view goes the same way once one is, by what is known then, once. `n` and `N` (or `p`, the same step back) go from the match the reader
 is on while it is on screen, and otherwise from the top of the screen. The screen's top is the
 chunk its first page starts with, and on a page taller than the window (`Screen::visible`, the part
 of it the pager shows, from `Nav::part_shown`), the top of that part: a match is on screen there

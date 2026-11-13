@@ -1202,9 +1202,9 @@ fn no_text_worker(view: &Session, why: &str) {
 }
 
 /// `/` in a PDF's pages searches its text, read in a worker process from then on: what is typed is
-/// counted while the view stays, Enter goes to the first match from the top of the screen, `n` and
-/// `N` go on and back round the ends, and Esc clears the search, after which `n` turns pages
-/// again. The worker is started by `/`, and goes with the search, and with the pager.
+/// counted while the view stays, Enter goes to the first match from the top of the screen, `n`
+/// goes on and `N` or `p` back, round the ends, and Esc clears the search, after which `n` and `p`
+/// turn pages again. The worker is started by `/`, and goes with the search, and with the pager.
 #[test]
 fn slash_searches_a_pdfs_text_in_a_worker_that_goes_with_the_search() {
     if !pty_works() {
@@ -1231,13 +1231,22 @@ fn slash_searches_a_pdfs_text_in_a_worker_that_goes_with_the_search() {
     view.wait_until("and back", |t| last_bar(t).contains(" /PAGER TEST 5/5 · search wrapped page 5/5 "));
     view.press("2N");
     view.wait_until("two back", |t| last_bar(t).contains(" /PAGER TEST 3/5 page 3/5 "));
+    // `p` is `N`: the match before, and with a number that many back, round the start.
+    view.press("p");
+    view.wait_until("one back", |t| last_bar(t).contains(" /PAGER TEST 2/5 page 2/5 "));
+    view.press("3p");
+    view.wait_until("three back, round", |t| last_bar(t).contains(" /PAGER TEST 4/5 · search wrapped page 4/5 "));
+    view.press("p");
+    view.wait_until("one more back", |t| last_bar(t).contains(" /PAGER TEST 3/5 page 3/5 "));
     assert_eq!(workers(&view).len(), 1, "one worker for the whole search");
-    // Esc clears the search: the worker goes, the view stays, and `n` turns pages again.
+    // Esc clears the search: the worker goes, the view stays, and `n` and `p` turn pages again.
     view.press("\x1b");
     view.wait_until("cleared", |t| !last_bar(t).contains("/PAGER") && last_bar(t).contains(" many.pdf page 3/5 "));
     no_text_worker(&view, "the search was cleared");
-    view.press("n");
-    view.wait_until("the next page", |t| last_bar(t).contains(" many.pdf page 4/5 "));
+    view.press("p");
+    view.wait_until("the page before", |t| last_bar(t).contains(" many.pdf page 2/5 "));
+    view.press("nn");
+    view.wait_until("two pages on", |t| last_bar(t).contains(" many.pdf page 4/5 "));
     // Nothing matches: said once all is read. And quitting with a search open leaves no worker:
     // looked for by its own id, since one that outlived the pager would be nobody's descendant.
     view.press("/zebra");

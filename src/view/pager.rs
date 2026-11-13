@@ -142,7 +142,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     (", .  3.", "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto"),
     ("/", "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
-    ("n N  3n", "with a search: the next match, or the one before; 3n the third on"),
+    ("n  N p  3n", "with a search: the next match, or with N or p the one before; 3n the third on"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
 ];
@@ -833,9 +833,9 @@ impl Nav {
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
             Key::Char('j') | Key::Down | Key::Enter => self.forward(STEP, self.row()),
             Key::Char('k') | Key::Up => self.back(STEP, self.row()),
-            // With a search kept, from match to match; the arrows still turn pages.
+            // With a search kept, from match to match, `p` back as `N` is; the arrows still turn pages.
             Key::Char('n') if self.search.is_some() => self.step_match(true),
-            Key::Char('N') if self.search.is_some() => self.step_match(false),
+            Key::Char('N' | 'p') if self.search.is_some() => self.step_match(false),
             Key::Char('N') => self.message = Some(NO_SEARCH.into()),
             Key::Char('n') | Key::Right => self.go(self.first().saturating_add(self.per_screen())),
             Key::Char('p') | Key::Left => self.go(self.first().saturating_sub(self.per_screen())),
@@ -1448,14 +1448,14 @@ impl Nav {
 
     /// The keys a number typed here goes to, as the status line names them: to a page (`g`), or in a
     /// list a tile (`Enter`); to the pages to a row (`.`); with a search kept, that many matches on
-    /// (`n`); and to each setting with numbers what is
+    /// or back (`n`, `p`); and to each setting with numbers what is
     /// shown has and lets change here (not one that lays out again, in a list or with `--pages`), by its
     /// up key and its name, the one on the zoom keys first.
     fn takes_a_number(&self) -> Vec<String> {
         let first = if self.list { "Enter tile" } else { "g page" };
         let mut keys = vec![first.to_owned(), ". per row".to_owned()];
         if self.search.is_some() {
-            keys.push("n match".to_owned());
+            keys.push("n p match".to_owned());
         }
         let here = |setting: &&&Setting| {
             setting.numbers.is_some() && self.has.contains(&setting.name) && !(setting.effect == Effect::Relayout && (self.list || self.picked))
@@ -4468,7 +4468,7 @@ mod tests {
         assert_eq!((page(&nav), searched(&nav)), (2, "/page 3/5".into()));
         // A number typed says that `n` takes it.
         search_keys(&mut nav, &texts, &[Key::Char('2')]);
-        assert_eq!(nav.status("a.pdf", 80, false).trim_end(), " 2: g page · . per row · n match");
+        assert_eq!(nav.status("a.pdf", 80, false).trim_end(), " 2: g page · . per row · n p match");
         // Two pages to a screen: a match on the page beside the reader's moves nothing.
         let (mut nav, texts) = searching();
         nav.grid(2, 1, 8);
@@ -4477,6 +4477,39 @@ mod tests {
         assert_eq!((nav.on_screen(), searched(&nav)), (vec![Some(0), Some(1)], "/page 2/5".into()));
         search_keys(&mut nav, &texts, &[Key::Char('n')]);
         assert_eq!((nav.on_screen(), searched(&nav)), (vec![Some(2), Some(3)], "/page 3/5".into()));
+    }
+
+    /// With a search kept, `p` goes to the match before, as `N` does and as `n` goes to the next:
+    /// round the start, saying so, and a number first goes that many back. The arrows still turn
+    /// pages; and once the search is cleared, `p` turns back a page again.
+    #[test]
+    fn p_goes_to_the_match_before_while_a_search_is_kept_as_shift_n_does() {
+        let (mut nav, texts) = searching();
+        search_for(&mut nav, &texts, "/page");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('p')]);
+        assert_eq!((page(&nav), searched(&nav)), (4, "/page 5/5 · search wrapped".into()), "round to the last");
+        search_keys(&mut nav, &texts, &[Key::Char('p')]);
+        assert_eq!((page(&nav), searched(&nav)), (3, "/page 4/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('3'), Key::Char('p')]);
+        assert_eq!((page(&nav), nav.typed.as_str(), searched(&nav)), (0, "", "/page 1/5".into()));
+        // `n` on, `p` back, as `N`: the same match either way.
+        search_keys(&mut nav, &texts, &[Key::Char('n'), Key::Char('n'), Key::Char('p')]);
+        let with_p = (page(&nav), searched(&nav));
+        search_keys(&mut nav, &texts, &[Key::Char('n'), Key::Char('N')]);
+        assert_eq!((with_p.clone(), (page(&nav), searched(&nav))), ((1, "/page 2/5".into()), with_p));
+        // The arrows turn pages all along, and paged away, `p` goes from the top of the screen.
+        search_keys(&mut nav, &texts, &[Key::Right, Key::Right, Key::Left]);
+        assert_eq!((page(&nav), searched(&nav)), (2, "/page 2/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('p')]);
+        assert_eq!((page(&nav), searched(&nav)), (1, "/page 2/5".into()), "the last match before the page on screen");
+        // A number typed says that `n` and `p` take it; `?` lists `p` with `N`.
+        search_keys(&mut nav, &texts, &[Key::Char('2')]);
+        assert_eq!(nav.status("a.pdf", 80, false).trim_end(), " 2: g page · . per row · n p match");
+        search_keys(&mut nav, &texts, &[Key::Escape]);
+        assert!(nav.help_lines().iter().any(|(keys, what)| keys == "n  N p  3n" && what.contains("N or p")), "{:?}", nav.help_lines());
+        // Cleared: `p` turns back a page, as `n` turns one on.
+        search_keys(&mut nav, &texts, &[Key::Escape, Key::Char('n'), Key::Char('n'), Key::Char('p')]);
+        assert_eq!((nav.search.is_none(), page(&nav)), (true, 2));
     }
 
     /// Text that arrives after Enter: the first match read is gone to, once; the match the reader
@@ -4621,7 +4654,7 @@ mod tests {
         assert!(line.contains(" /Page]52;c;cHduZWQ= no match  page 4's text took too long to read  "), "{line:?}");
         // `?` lists the search's keys in a file's pages.
         let keys: Vec<String> = nav.help_lines().into_iter().map(|(keys, _)| keys).collect();
-        assert!(keys.contains(&"/".to_owned()) && keys.contains(&"n N  3n".to_owned()), "{keys:?}");
+        assert!(keys.contains(&"/".to_owned()) && keys.contains(&"n  N p  3n".to_owned()), "{keys:?}");
     }
 
     /// Zoomed in to a page that scrolls, the match gone to is scrolled into view once the source says

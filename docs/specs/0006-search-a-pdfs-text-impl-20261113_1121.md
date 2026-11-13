@@ -305,3 +305,15 @@ Four findings; the first three were reproduced by a test before anything was cha
   `a_match_on_a_page_that_scrolls_is_scrolled_into_view`); nothing read past the cap, and the pages
   past it not counted (`a_text_in_more_chunks_than_are_searched_is_read_as_far_as_that`); the kill
   taken out of the search's end (`quitting_while_a_pages_text_is_read_leaves_no_worker`).
+
+## `p` as the match before (the owner's request, 2026-11-13)
+
+- With a search kept, `p` is `N`: `n` and `p` are a pair for pages, and stay one for matches. One
+  arm in `Nav::key` (`Key::Char('N' | 'p') if self.search.is_some()`), so the number before it, the
+  wrap and "from the top of the screen" are `N`'s. Without a search `p` turns back a page, as ever;
+  the arrows turn pages throughout.
+- The status line names both keys for a number (`2: g page · . per row · n p match`), and `?`
+  lists `n  N p  3n`.
+- **Seen failing** before the arm was added: `p_goes_to_the_match_before_while_a_search_is_kept_as_shift_n_does`
+  (`p` turned back a page of none: page 1, `1/5`, where the last match, `5/5 · search wrapped`, was
+  wanted). The pager's test on a pseudo-terminal presses `p`, `3p` and, after `Esc`, `p` for a page.

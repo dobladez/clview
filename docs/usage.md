@@ -89,9 +89,9 @@ In a file's pages:
 | `j`, `↓`, `Enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
 | `k`, `↑` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
 | `n`, `→` | next page (or screen of pages); with a search kept, `n` goes to the next match |
-| `p`, `←` | previous page (or screen of pages) |
+| `p`, `←` | previous page (or screen of pages); with a search kept, `p` goes to the match before |
 | `/` | search the file's text ([Searching a document's text](#searching-a-documents-text)): type, then `Enter` |
-| `N` | with a search kept, the match before; a number, then `n` or `N`, goes that many matches on or back |
+| `N` | with a search kept, the match before, as `p`; a number, then `n`, `N` or `p`, goes that many matches on or back |
 | `g`, `Home` | first page |
 | `G`, `End` | last page |
 | a number, then `Enter` or `g` | that page |
@@ -185,7 +185,7 @@ reminder of the main keys. A [search](#searching-a-documents-text) is said there
 message: what is typed and its count, then the match you are on.
 
 While you type a number, the status line says only the number and the keys that take it on this
-file: `7: g page · . per row` on a PDF, and `· n match` after them with a search kept; on a Markdown
+file: `7: g page · . per row` on a PDF, and `· n p match` after them with a search kept; on a Markdown
 or HTML file the settings with numbers too, by
 name, `7: g page · . per row · + font · ] width · } margin`; in a list `7: Enter tile · . per row`.
 The name, where you are, the zoom and `? help` give it the room, and come back with the next key; a
@@ -364,14 +364,15 @@ with nothing typed.
 The matches on screen are tinted once `Enter` keeps the search, a yellow under them and the one
 you are on an orange, on white paper as on dark: the paper takes the colour and the ink stays
 ink. A page is sent to the terminal again with its tint, so for a moment after a key it shows
-as it was; `n` and `N` move the orange, and clearing the search sends the pages as they were.
+as it was; `n`, `N` and `p` move the orange, and clearing the search sends the pages as they were.
 Nothing is tinted while you type. At most 1,024 matches are tinted on the pages on screen and
 those kept ready around them. `c` copies the page untinted, as it was rendered. In
 [text cells](#text-cells) the tint shows as far as the cells' colours carry it, and without
 colours not at all: the status line still says which match you are on.
 
-With a search kept, `n` goes to the next match and `N` to the one before, round the ends of the
-file, where the status line says `search wrapped`; a number first goes that many on (`3n`). They
+With a search kept, `n` goes to the next match and `N` or `p` to the one before, round the ends of
+the file, where the status line says `search wrapped`; a number first goes that many on or back
+(`3n`, `3p`). They
 go from the match you are on while it is on screen, and once you have paged or scrolled away, from
 the top of the screen: zoomed in to a page that scrolls, that is the top of the part you see. `→`
 and `←` still turn pages. A match on a page not shown brings that page on
@@ -379,7 +380,7 @@ screen, and zoomed in to a page that scrolls, the match is scrolled into view, a
 down the window. The status line says which match you are on and how many there are (`/word
 3/17`, with `…` after while text is still being read), or `no match`; at most 10,000 are kept and
 counted, the first in the file, and more say `10000+`. `Esc`, `Backspace` or `u` clear the search
-before they go back to the list or quit, after which `n` turns pages again; a number being typed
+before they go back to the list or quit, after which `n` and `p` turn pages again; a number being typed
 is cleared first, as ever. `/` again edits what was searched for. A search belongs to its file: it
 ends on going back to the list.
 
@@ -866,7 +867,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
 | What a search keeps of a file's text, and its matches | 64 MiB; 262,144 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
-| The matches tinted at a time, on the pages on screen and those kept ready around them | 1,024, and 64 lines of one match | the rest aren't tinted; `n` and `N` still go to them |
+| The matches tinted at a time, on the pages on screen and those kept ready around them | 1,024, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 
 ## Known issues

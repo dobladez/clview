@@ -25,8 +25,8 @@ screen as a PDF. `/` opens a prompt in the status line, and the pages' text star
 in a worker process of clv's own, outward from the page you are on. While you type, the status line
 counts the matches in what has been read (`/word 17…`); `Enter` searches, as in less: the view goes
 to the first match from the top of the screen, and the matches on screen are tinted, the one you are
-on more strongly. `n` and `N` go from match to match while the search is kept, and `Esc` clears it,
-after which `n` turns pages again.
+on more strongly. `n` and `N` (or `p`) go from match to match while the search is kept, and `Esc`
+clears it, after which `n` and `p` turn pages again.
 
 The work is split along the code's layers. A backend gives its text in chunks, in the document's
 order (a PDF's chunk is a page), and the rectangles a range of a chunk covers when asked, through a
@@ -64,23 +64,24 @@ it would hold the keys up (the measurements are under Open questions).
 
 **A kept search**
 
-- `n` goes to the next match, `N` to the one before, past the ends round to the other, saying
-  `search wrapped`; a number first goes that many matches on (`3n`). From the match you are on
+- `n` goes to the next match, `N` to the one before, and so does `p`, as `n`'s pair: past the ends
+  round to the other, saying `search wrapped`; a number first goes that many matches on or back
+  (`3n`, `3p`). From the match you are on
   while it is on screen; once you have paged away, from the top of the screen. A match on a page not
   shown brings that page on screen; zoomed in to a page that scrolls, the match is scrolled into
   view. `→` and `←` still turn pages.
 - A number being typed is cleared by `Esc` or `Backspace` first, as now. Then `Esc`, `Backspace` or
-  `u` clear a kept search, before they go back to the list or quit; `n` turns pages again after.
-  `/` again edits the query kept.
-- `N` becomes one of the viewer's keys (`VIEWER_KEYS`), and `?` lists `/`, `n` and `N` in a file's
-  pages.
+  `u` clear a kept search, before they go back to the list or quit; `n` and `p` turn pages again
+  after. `/` again edits the query kept.
+- `N` becomes one of the viewer's keys (`VIEWER_KEYS`), and `?` lists `/`, `n`, `N` and `p` in a
+  file's pages.
 - The status line says `/word 3/17`, the match you are on and how many, with `…` after while text is
   still being read, or `no match`; its right side keeps its place, as with the filter. The query is
   shown through `printable`.
 
 **Highlights**
 
-- After `Enter`, `n`, `N` or a match arriving on a page on screen, its matches are tinted, the one
+- After `Enter`, `n`, `N`, `p` or a match arriving on a page on screen, its matches are tinted, the one
   you are on more strongly, with colours that read on a PDF's white and on Markdown's dark paper
   alike. Clearing the search takes the tint off.
 - A page whose tint changes is asked of the render pool again and tinted as it arrives, before it
@@ -278,3 +279,5 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   colours are the first thing to look at (ADR-0028).
 - 2026-11-13 — Five findings of Codex's review of the code fixed (the notes say which).
 - 2026-11-13 — Four findings of its second review fixed (the notes say which).
+- 2026-11-13 — At the owner's request: with a search kept, `p` goes to the match before, as `N`
+  does, since `n` goes to the next; after the search is cleared it turns back a page again.
