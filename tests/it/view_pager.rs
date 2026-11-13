@@ -1501,7 +1501,7 @@ fn a_searchs_matches_are_tinted_into_the_page_and_esc_takes_the_tint_off() {
 
     // `n`: the page again, the reader's colour on the second match.
     view.press("n");
-    let (second_id, second) = next_image(&view, "the page tinted again", tinted_id);
+    let (_, second) = next_image(&view, "the page tinted again", tinted_id);
     let again = changed(&second);
     assert!(left_of(OWN_TINT, &again).unwrap() > own && left_of(TINT, &again).unwrap() == own, "the reader's colour moved on");
     assert_eq!(again.len(), marked.len(), "the same pixels, tinted otherwise");
@@ -1524,10 +1524,24 @@ fn a_searchs_matches_are_tinted_into_the_page_and_esc_takes_the_tint_off() {
         std::thread::sleep(Duration::from_millis(30));
     }
     view.wait_until("round the file", |t| last_bar(t).contains(" /e 14/15 "));
+    let placed_before = ids_after(&view.text(), PLACED).len();
     view.press("\x1bg");
     view.wait_until("cleared, on page 1", |t| !last_bar(t).contains("/e") && last_bar(t).contains(" page 1/5 "));
-    let (last_id, last) = next_image(&view, "page 1 as it was", second_id);
-    assert!(last == plain, "page 1 after Esc isn't the page as first sent");
+    // The bar says page 1 before page 1, rendered again, is placed: until then the image placed last
+    // is page 5's, tinted. Wait for the image placed last since the `Esc` to be page 1 as first sent.
+    let deadline = Instant::now() + PATIENCE;
+    let last_id = loop {
+        let text = view.text();
+        let shown = ids_after(&text, PLACED).get(placed_before..).and_then(|ids| ids.last().copied());
+        let page = shown.and_then(|id| pngs(&text).into_iter().rfind(|(sent, _)| *sent == id));
+        if let Some((id, page)) = page
+            && page == plain
+        {
+            break id;
+        }
+        assert!(Instant::now() < deadline, "page 1 after Esc isn't the page as first sent");
+        std::thread::sleep(Duration::from_millis(20));
+    };
     // Until nothing more is sent: at most a page each is left in the terminal, the others deleted.
     let deadline = Instant::now() + PATIENCE;
     loop {
