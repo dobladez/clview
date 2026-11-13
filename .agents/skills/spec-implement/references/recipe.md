@@ -65,8 +65,8 @@ For each `- [ ]` under `## Tasks`, **in order**:
    A test that can't fail tests nothing. Say in the notes what you reverted and how it failed.
 3. Run *Verify:*. A command must **pass**; a manual check must be **confirmed** by the user,
    asked precisely ("In kitty, open X and press Y: do you see Z?"). No pass, no tick.
-4. Before the commit, the quality gates in `project.md`, under a `timeout`; each backend alone too
-   if the task touched `cfg` attributes.
+4. Before the commit, the quality gates in `project.md`, under a `timeout`: the build that ships,
+   every feature on; other feature sets only as `project.md` says.
 5. Tick that one box. **Not all at the end.**
 6. Write in the notes what was decided, what changed from the plan, what surprised you. "<task>:
    as planned" is fine.

@@ -175,7 +175,7 @@ too, where pictures by path can't be reached.
   a broken diagram shows as its code and the first page says so; Markdown through a pipe and in a zip
   draws its block; an `<img src>` naming a block's key, written in the document, shows as its alt
   text; a document of 1,025 blocks leaves the last out; the document rendered page after page without
-  the diagram made again; the fences test; each feature alone. Manual: in kitty, a README with
+  the diagram made again; the fences test. Manual: in kitty, a README with
   diagrams, `]` and `+`.
 - [ ] **HTML's blocks** — the scanner. *Files:* `src/source/wordcraft.rs`, `tests/it/mermaid.rs`,
   usage. *Verify:* `cargo test -j 2 --lib scanner`: `<pre><code class="language-mermaid">` and
@@ -200,8 +200,7 @@ too, where pictures by path can't be reached.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
-  backend alone too.
+- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [ ] Tests added, each seen failing without the change: name them.
 - [ ] Manual: in kitty, a README with diagrams, through a pipe, `s`, `]`; GitHub's HTML of it; inside
   tmux.

@@ -82,7 +82,7 @@ it prints, never by name.
   `source.rs` declares or re-exports, and `main.rs` alone names `source::BACKENDS`, to hand the list
   to the viewer. An extension may use the core the other way (`args`, `encode`), never `src/view/`,
   and never another backend by name. `source::tests::the_viewer_names_no_backend` checks the core's
-  files, and `cargo clippy --no-default-features` builds the core with no backend at all.
+  files, and CI's nightly run builds the core with no backend at all (`cargo clippy --no-default-features`).
 - **A backend's library is its own.** pdfcraft is named in code only in `src/source/pdfcraft.rs`,
   its tests (`tests/it/pdfcraft*.rs`), `Cargo.toml` and the line listing it in `source::BACKENDS`;
   swapping the PDF renderer must touch nothing else in the code, and in the docs only what credits
@@ -134,18 +134,16 @@ Before every commit, under a `timeout`:
 cargo fmt --check
 cargo clippy --all-targets -j 2 -- -D warnings
 cargo test -j 2
-cargo clippy --no-default-features --all-targets -j 2 -- -D warnings   # the viewer without backends
-cargo test --no-default-features -j 2
 ```
 
-After touching `cfg` attributes, each backend alone too (`--no-default-features --features image`,
-then `pdf`, then `svg`, then `svg-html`, then `zip`, then `tar`, then `word`, then `sheet`), and
-`pdf,svg`, so the integration tests run the SVG backend without its HTML labels. The PDF backend is a
-large build: keep `-j 2` unless the machine is free. CI (`.github/workflows/ci.yml`) runs on Linux
+That is the build clv ships, every feature on, and the only one tested before a commit: other
+feature sets, each backend alone among them, aren't built locally, even after touching `cfg`
+attributes. The PDF backend is a large build: keep `-j 2` unless the machine is free. CI (`.github/workflows/ci.yml`) runs on Linux
 and macOS, with Rust 1.95.0, the `rust-version`. Every push tests the binary shipped, all features:
 `fmt`, clippy and every test. Nightly, if `main` moved since the last nightly run, it builds and
-tests the viewer without backends, and `pdf,svg`; `gh workflow run CI` runs both at once. Each
-backend alone is left to you, above.
+tests the viewer without backends (which keeps the core free of the extensions,
+[Layers](docs/architecture.md#layers)), and `pdf,svg`; `gh workflow run CI` runs both at once, worth
+it after a change to `cfg` attributes. Each backend alone is tested nowhere.
 
 ## Tests
 

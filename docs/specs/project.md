@@ -9,7 +9,7 @@ keep it short.
 | Purpose | Command |
 |---|---|
 | The quality gates, before every commit | The five in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates), each under a `timeout` |
-| After touching `cfg` attributes | Each backend alone, also there |
+| Other feature sets (no backends, `pdf,svg`) | CI's nightly run, or `gh workflow run CI`: never locally |
 | One test, while working | `cargo test -j 2 --test it <name>`, or `--bin clv <name>` for a unit test |
 | The docs' links and the specs' Index | `cargo test -j 2 --test docs` |
 | The queue | `cargo specs [bucket]`, an alias of `cargo run -q --no-default-features --example spec_list` |
