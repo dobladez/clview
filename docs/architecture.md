@@ -880,7 +880,8 @@ whole word's lower case had), each run of whitespace made one space. With it, a 
 text back to the original's characters, one entry (a byte of the folded text, a character of the
 original) wherever the two stop running one for one, so that a page of ordinary prose has one entry:
 the source is asked for rectangles by the original's characters. At most 1 MiB a chunk
-(`MAX_CHUNK`), 64 MiB in all, maps included (`MAX_TEXT`), and 262,144 chunks (`MAX_CHUNKS`); past
+(`MAX_CHUNK`), 64 MiB in all, maps included (`MAX_TEXT`: what each holds, shrunk to what it came
+to, so a megabyte of whitespace costs the one space it folds to), and 262,144 chunks (`MAX_CHUNKS`); past
 them the chunk, or the rest, is left unread, and the status line says so. With `--pages`, only the
 chunks of the pages given are read.
 
@@ -908,7 +909,9 @@ the pages rendered around them are,
 the reader's first, at most 1,024 of them and none while the query is typed; then the chunks still
 unread, outward from the one the top of the screen starts with. The queue is set again only when
 that changes (the reader moved, the matches or the one the reader is on changed), not as chunks
-arrive: a `Texts` gives a thing once while it stays listed.
+arrive: a `Texts` gives a thing once while it stays listed. What changed is told by the ranges
+asked for (`Queued`), not by the matches they are of: another query's match may start where the
+last one's did, and its range is another.
 
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
@@ -923,12 +926,15 @@ the last one and says it isn't settled, and none while the query is typed. In th
 in the terminal carries the key it was sent with (`Sent::tint`, 0 for none), and `Pager::draw`
 takes a page as there only with the key of now, or with any while the tint isn't settled;
 otherwise it asks the pool for the page again, like one never sent. A render under way for the
-page carries on and takes the tint of the latest draw (`Wanted::tint`). `Pager::receive` copies
-the frame's pixels, tints them (`search::tint`: each pixel under a mark once, between a colour
-multiplied in and one screened on, by its luma), and only then encodes them, writes them to a
-temporary file or makes text cells of them. The page as it was sent before stays in the
-terminal, and on screen, until `Pager::place` has placed the new one, the last sent of that view,
-and is deleted then (`superseded`); a page not on screen is deleted as its replacement is sent.
+page carries on, and its frame takes the tint the search gives the page when it arrives, not the
+one of the draw that asked for it: a key read in the same pass may have moved the reader's match
+since. If the terminal already holds the page with that tint, the frame isn't sent. `Pager::receive`
+copies the frame's pixels, tints them (`search::tint`: each pixel under a mark once, between a
+colour multiplied in and one screened on, by its luma), and only then encodes them, writes them
+to a temporary file or makes text cells of them. The page as it was sent before stays in the
+terminal, and on screen, until `Pager::place` has placed the one with the tint of now (`shown`;
+until that one has come, the last sent), and is deleted then (`superseded`); a page not on screen
+is deleted as its replacement is sent.
 So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
 counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before
 the tint. The pager's loop polls every `POLL` while the source owes a match's rectangles
@@ -943,9 +949,13 @@ too large, its reading given up) answers each chunk asked with why.
 ### A PDF's text (`pdfcraft.rs`)
 
 `Pdf::texts` gives a `PagesText`: a chunk a page. A thread of its own (`Reader::run`) takes the
-most urgent thing wanted and not yet given, asks a worker process for it, and sends back what
-comes; nothing in the viewer's process reads a page's text
-([ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)). A spreadsheet's
+most urgent thing wanted and not yet given, asks a worker process for it, and leaves what comes
+for the viewer to take; nothing in the viewer's process reads a page's text
+([ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)). The answers wait
+under the lock the queue is replaced under (`State::answers`), so one whose request is no longer
+listed is dropped with it, waiting or still being read, and never comes out of `try_recv`; and
+the thread reads nothing more while 4 MiB of them wait (`MAX_WAITING`), so a viewer busy writing
+to a slow terminal holds that and the one being read, not the whole document. A spreadsheet's
 pages are a PDF's, so `gridcraft.rs`'s `Noted`, which wraps them to carry what gridcraft said,
 hands `texts` on to them, by the contract.
 

@@ -8,7 +8,7 @@
 //! and a page past them costs the search that page
 //! ([ADR-0027](../../docs/adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)).
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -230,6 +230,11 @@ const DOCUMENT: Duration = Duration::from_secs(120);
 /// rest is left unread.
 const MAX_KILLS: u32 = 3;
 
+/// The most bytes of answers that wait to be taken: at it, no more is read until the viewer has
+/// taken some. What a viewer busy elsewhere (writing to a slow terminal) leaves waiting is that
+/// and one answer more, the one being read, whatever the document.
+const MAX_WAITING: usize = 4 << 20;
+
 /// The worker that reads a PDF's text: `clv --worker pdf-text`.
 pub(crate) struct TextWorker;
 
@@ -405,13 +410,12 @@ impl Read {
 /// comes back. Dropped, it kills the worker without waiting for it.
 struct PagesText {
     shared: Arc<Shared>,
-    results: Receiver<Got>,
     pages: usize,
 }
 
 struct Shared {
     state: Mutex<State>,
-    /// Work wanted, or time to stop.
+    /// Work wanted, room for its answer, or time to stop.
     wake: Condvar,
 }
 
@@ -421,19 +425,71 @@ struct State {
     queue: Vec<Want>,
     /// Given while still in the queue: not read again when listed again.
     given: Vec<Want>,
+    /// The answers given and not yet taken, each to a request still in the queue, and the bytes
+    /// they hold ([`weight`]): the thread reads no more while that is [`MAX_WAITING`] or over.
+    answers: VecDeque<Got>,
+    waiting: usize,
     /// The worker at work, to kill when the search ends.
     kill: Option<Kill>,
     stop: bool,
 }
 
+impl Shared {
+    /// The most urgent thing wanted and not yet given, waited for, and for room for its answer.
+    /// `None` when the search has ended.
+    fn next(&self) -> Option<Want> {
+        let mut state = lock(&self.state);
+        loop {
+            if state.stop {
+                return None;
+            }
+            let want = state.queue.iter().find(|want| !state.given.contains(want)).copied();
+            if let Some(want) = want.filter(|_| state.waiting < MAX_WAITING) {
+                return Some(want);
+            }
+            state = self.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// The answer to `want`, for the viewer to take, if it is still wanted: under the lock the queue
+    /// is replaced under, so none is ever given for a request no longer listed. Whether the search
+    /// goes on.
+    fn give(&self, want: Want, got: Got) -> bool {
+        let mut state = lock(&self.state);
+        if state.queue.contains(&want) && !state.stop {
+            state.given.push(want);
+            state.waiting = state.waiting.saturating_add(weight(&got));
+            state.answers.push_back(got);
+        }
+        !state.stop
+    }
+}
+
+/// What `got` answers.
+fn asked(got: &Got) -> Want {
+    match got {
+        Got::Text(page, _) => Want::Text(*page),
+        Got::Rects(want, _) => *want,
+    }
+}
+
+/// The bytes an answer holds while it waits, near enough: its text or its rectangles, or why not,
+/// and itself.
+fn weight(got: &Got) -> usize {
+    let held = match got {
+        Got::Text(_, Ok(text)) | Got::Text(_, Err(text)) | Got::Rects(_, Err(text)) => text.len(),
+        Got::Rects(_, Ok(rects)) => rects.len().saturating_mul(std::mem::size_of::<(usize, [f32; 4])>()),
+    };
+    held.saturating_add(std::mem::size_of::<Got>())
+}
+
 impl PagesText {
     fn new(bytes: Arc<Vec<u8>>, password: Option<Arc<str>>, pages: usize) -> Self {
         let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() });
-        let (give, results) = channel();
-        let reader = Reader { shared: shared.clone(), bytes, password, give, link: None, kills: 0, spent: Duration::ZERO, ended: None };
+        let reader = Reader { shared: shared.clone(), bytes, password, link: None, kills: 0, spent: Duration::ZERO, ended: None };
         // A thread that can't start leaves the text unread, which the search shows as still reading.
         let _ = std::thread::Builder::new().name("pdf text".into()).spawn(move || reader.run());
-        Self { shared, results, pages }
+        Self { shared, pages }
     }
 }
 
@@ -446,15 +502,24 @@ impl Texts for PagesText {
         page
     }
 
+    /// An answer waiting for a request no longer listed is dropped with it: listed again, it is
+    /// read again.
     fn set_queue(&self, wanted: Vec<Want>) {
         let mut state = lock(&self.shared.state);
         state.given.retain(|given| wanted.contains(given));
+        state.answers.retain(|got| wanted.contains(&asked(got)));
+        state.waiting = state.answers.iter().map(weight).fold(0, usize::saturating_add);
         state.queue = wanted;
         self.shared.wake.notify_all();
     }
 
     fn try_recv(&self) -> Option<Got> {
-        self.results.try_recv().ok()
+        let mut state = lock(&self.shared.state);
+        let got = state.answers.pop_front()?;
+        state.waiting = state.waiting.saturating_sub(weight(&got));
+        // Room again, maybe: the thread reads on.
+        self.shared.wake.notify_all();
+        Some(got)
     }
 }
 
@@ -483,7 +548,6 @@ struct Reader {
     shared: Arc<Shared>,
     bytes: Arc<Vec<u8>>,
     password: Option<Arc<str>>,
-    give: Sender<Got>,
     /// The worker, once started and given the document.
     link: Option<Link>,
     /// Workers killed so far, and the time the requests took.
@@ -511,33 +575,13 @@ impl Reader {
         } else if self.password.as_ref().is_some_and(|password| password.len() > MAX_PASSWORD) {
             self.ended = Some("its password is too long for its text to be read".into());
         }
-        loop {
-            let want = {
-                let mut state = lock(&self.shared.state);
-                loop {
-                    if state.stop {
-                        return;
-                    }
-                    if let Some(want) = state.queue.iter().find(|want| !state.given.contains(want)).copied() {
-                        break want;
-                    }
-                    state = self.shared.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
-                }
-            };
+        while let Some(want) = self.shared.next() {
             let got = match want {
                 Want::Text(page) => Got::Text(page, self.text(page)),
                 Want::Rects { chunk, from, to } => Got::Rects(want, self.rects(chunk, from, to)),
             };
-            let mut state = lock(&self.shared.state);
-            if state.stop {
+            if !self.shared.give(want, got) {
                 return;
-            }
-            if state.queue.contains(&want) {
-                state.given.push(want);
-                drop(state);
-                if self.give.send(got).is_err() {
-                    return;
-                }
             }
         }
     }
@@ -880,9 +924,8 @@ mod tests {
     fn past_the_documents_time_the_rest_of_its_text_is_left_unread() {
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() });
-        let (give, _results) = channel();
         let bytes = Arc::new(pdf(&[LINES, LINES]));
-        let mut reader = Reader { shared, bytes, password: None, give, link: None, kills: 0, spent: Duration::ZERO, ended: None };
+        let mut reader = Reader { shared, bytes, password: None, link: None, kills: 0, spent: Duration::ZERO, ended: None };
         assert_eq!(reader.text(0).as_deref(), Ok("Search words well- known here"));
         assert!(reader.spent > Duration::ZERO && reader.spent < DOCUMENT);
         reader.spent = DOCUMENT + Duration::from_millis(1);
@@ -901,6 +944,91 @@ mod tests {
         let texts = PagesText::new(source.bytes.clone(), Some(Arc::from("x".repeat(MAX_PASSWORD + 1))), 1);
         let got = gave(&texts, vec![Want::Text(0)]);
         assert!(matches!(&got[..], [Got::Text(0, Err(why))] if why == "its password is too long for its text to be read"));
+    }
+
+    /// An answer waiting when its request is taken off the queue is never given, nor is the request
+    /// counted as given: listed again, it is read again, and given once.
+    #[test]
+    fn an_answer_whose_request_was_dropped_never_comes() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+        let source = Pdf::open("lines.pdf", Arc::new(pdf(&[LINES, "BT /F1 12 Tf 20 250 Td (other) Tj ET"])), None).unwrap();
+        let texts = PagesText::new(source.bytes.clone(), None, 2);
+        let rects = Want::Rects { chunk: 0, from: 7, to: 12 };
+        texts.set_queue(vec![Want::Text(0), Want::Text(1), rects]);
+        let begun = Instant::now();
+        while lock(&texts.shared.state).answers.len() < 3 {
+            assert!(begun.elapsed() < Duration::from_secs(10), "its answers never came");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // All three wait; only the second page's is still wanted.
+        texts.set_queue(vec![Want::Text(1)]);
+        assert!(matches!(texts.try_recv(), Some(Got::Text(1, Ok(other))) if other == "other"));
+        assert!(texts.try_recv().is_none(), "an answer to a request no longer listed");
+        texts.set_queue(Vec::new());
+        {
+            let state = lock(&texts.shared.state);
+            assert!(state.answers.is_empty() && state.given.is_empty() && state.waiting == 0);
+        }
+        // Listed again: read again, given once.
+        let got = gave(&texts, vec![rects, Want::Text(0)]);
+        assert!(
+            matches!(&got[..], [Got::Rects(asked, Ok(placed)), Got::Text(0, Ok(_))] if *asked == rects && placed.len() == 1),
+            "{} given",
+            got.len()
+        );
+        // And one being read when its request is dropped isn't given when it is done.
+        let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() });
+        let texts = PagesText { shared: shared.clone(), pages: 1 };
+        texts.set_queue(vec![Want::Text(0)]);
+        assert_eq!(shared.next(), Some(Want::Text(0)));
+        texts.set_queue(Vec::new());
+        assert!(shared.give(Want::Text(0), Got::Text(0, Ok("read too late".into()))), "the search goes on");
+        assert!(texts.try_recv().is_none() && lock(&shared.state).given.is_empty());
+    }
+
+    /// The answers that wait to be taken are bounded: with [`MAX_WAITING`] bytes of them waiting,
+    /// nothing more is read until the viewer takes some, so a viewer that takes none for a while
+    /// holds that and no more; taking them lets the reading go on, to the end. Here a megabyte a
+    /// page, given as the thread gives them.
+    #[test]
+    fn answers_wait_for_the_viewer_within_a_budget() {
+        let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() });
+        let texts = PagesText { shared: shared.clone(), pages: 12 };
+        texts.set_queue((0..12).map(Want::Text).collect());
+        let reader = std::thread::spawn(move || {
+            let mut read = 0;
+            while let Some(want) = shared.next() {
+                let Want::Text(page) = want else { break };
+                if !shared.give(want, Got::Text(page, Ok("x".repeat(1 << 20)))) {
+                    break;
+                }
+                read += 1;
+            }
+            read
+        });
+        // Left alone, it stops at the budget: four pages of a megabyte, never a fifth.
+        std::thread::sleep(Duration::from_millis(200));
+        {
+            let state = lock(&texts.shared.state);
+            assert_eq!(state.answers.len(), 4, "{} bytes waiting", state.waiting);
+            assert!((MAX_WAITING..MAX_WAITING + (1 << 20)).contains(&state.waiting), "{}", state.waiting);
+        }
+        // Each one taken makes room for one more, to the last.
+        let (mut pages, begun) = (Vec::new(), Instant::now());
+        while pages.len() < 12 && begun.elapsed() < Duration::from_secs(10) {
+            match texts.try_recv() {
+                Some(Got::Text(page, Ok(text))) if text.len() == 1 << 20 => pages.push(page),
+                Some(_) => panic!("not what was given"),
+                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+            assert!(lock(&texts.shared.state).waiting < MAX_WAITING + (1 << 20));
+        }
+        assert_eq!(pages, (0..12).collect::<Vec<_>>());
+        assert_eq!(lock(&texts.shared.state).waiting, 0);
+        // The search ended: the thread stops, though more may be wanted.
+        texts.set_queue(vec![Want::Text(99)]);
+        drop(texts);
+        assert!((12..=13).contains(&reader.join().unwrap()));
     }
 
     #[test]

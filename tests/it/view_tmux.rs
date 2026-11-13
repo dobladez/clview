@@ -312,10 +312,27 @@ fn inside_tmux_a_tinted_page_reaches_a_terminal_that_attaches_later() {
     all_arrive(&server, &output, "tinted");
     let second = server.client("attach-session -t view");
     all_arrive(&server, &second, "in the second terminal");
-    // tmux hands its client's terminal what went through passthrough as it was written.
-    let pages = crate::view_pager::pngs(&String::from_utf8_lossy(&second.lock().unwrap()));
-    let has = |colour: [u8; 3]| pages.iter().any(|(_, page)| page.pixels().any(|pixel| pixel.0 == colour));
-    assert!(has([255, 170, 60]) && has([255, 236, 130]), "{} pages reached the second terminal, none tinted", pages.len());
+    // tmux hands its client's terminal what went through passthrough as it was written: the page
+    // with the reader's match and the one beside it, each in its colour. Waited for, since what
+    // tmux tells of an upload and what has reached this end of the client's terminal aren't one
+    // moment, and a page tmux dropped on a busy machine is sent again.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let pages = crate::view_pager::pngs(&String::from_utf8_lossy(&second.lock().unwrap()));
+        let has = |colour: [u8; 3]| pages.iter().any(|(_, page)| page.pixels().any(|pixel| pixel.0 == colour));
+        if has([255, 170, 60]) && has([255, 236, 130]) {
+            break;
+        }
+        let said = (pages.len(), has([255, 170, 60]), has([255, 236, 130]));
+        assert!(
+            Instant::now() < deadline,
+            "of {} pages that reached the second terminal, the reader's match tinted: {}, another: {}",
+            said.0,
+            said.1,
+            said.2
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     server.tmux(&["send-keys", "-t", "view:0", "Escape", "q"]);
 }
 

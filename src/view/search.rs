@@ -87,6 +87,9 @@ impl Folded {
                 folded.push(c, index, &mut expected);
             }
         }
+        // Kept as long as the search is: no more held than it came to (a megabyte of spaces is one).
+        folded.text.shrink_to_fit();
+        folded.runs.shrink_to_fit();
         folded
     }
 
@@ -99,9 +102,9 @@ impl Folded {
         *expected = Some(index.saturating_add(1));
     }
 
-    /// What it takes of the memory a search keeps.
+    /// What it takes of the memory a search keeps: what it holds, used or not.
     fn size(&self) -> usize {
-        self.text.len().saturating_add(self.runs.len().saturating_mul(std::mem::size_of::<(u32, u32)>()))
+        self.text.capacity().saturating_add(self.runs.capacity().saturating_mul(std::mem::size_of::<(u32, u32)>()))
     }
 
     /// The matches of `needle`, at most `most` of them: where each starts and ends, in bytes.
@@ -158,12 +161,14 @@ struct Placed {
     rects: Option<Vec<(usize, [f32; 4])>>,
 }
 
-/// What a search's queue was last set for ([`Search::queue`]).
+/// What a search's queue was last set for ([`Search::queue`]): the chunk read outward from, whether
+/// text was still read, and the ranges whose rectangles were asked for, as they were asked. The
+/// ranges, not the matches they are of: another query's match may start where this one's did.
 #[derive(Debug, PartialEq, Eq)]
 struct Queued {
     centre: usize,
     reading: bool,
-    placed: Vec<(usize, u32)>,
+    placed: Vec<Want>,
 }
 
 /// What of the screen a search goes by: the document's page at its top left, the pages on it, and
@@ -349,8 +354,7 @@ pub(super) struct Search {
     tints: BTreeMap<usize, (Option<Rc<Tint>>, bool)>,
     /// Whether what the tints are made from changed since they were.
     marked: bool,
-    /// What the queue was last set for: the chunk read outward from, whether reading had stopped,
-    /// and the matches whose rectangles are wanted.
+    /// What the queue was last set for.
     queued: Option<Queued>,
     status: String,
     /// How many times a chunk was matched against a needle.
@@ -814,16 +818,14 @@ impl Search {
         }
         let centre = self.starts.get(screen.top).copied().unwrap_or(0);
         let reading = self.reading();
-        let wanted: Vec<(usize, u32)> = self.placed.keys().copied().collect();
-        let queued = Queued { centre, reading, placed: wanted };
+        // The reader's match first, then the others in order.
+        let keys = self.at.into_iter().chain(self.placed.keys().copied().filter(|key| Some(*key) != self.at));
+        let rects = keys.filter_map(|key| self.placed.get(&key).map(|placed| Want::Rects { chunk: key.0, from: placed.from, to: placed.to }));
+        let queued = Queued { centre, reading, placed: rects.collect() };
         if self.queued.as_ref() == Some(&queued) {
             return;
         }
-        let wanted = &queued.placed;
-        // The reader's match first, then the others in order.
-        let rects = self.at.into_iter().chain(wanted.iter().copied().filter(|key| Some(*key) != self.at));
-        let rects = rects.filter_map(|key| self.placed.get(&key).map(|placed| Want::Rects { chunk: key.0, from: placed.from, to: placed.to }));
-        let mut queue: Vec<Want> = rects.collect();
+        let mut queue = queued.placed.clone();
         if reading {
             let unread = |chunk: &usize| matches!(self.chunks.get(*chunk), Some(Chunk::Unread));
             let (mut on, mut back) = (centre..self.chunks.len(), (0..centre.min(self.chunks.len())).rev());
@@ -1006,6 +1008,28 @@ pub(super) mod tests {
         assert_eq!(folded("  a  "), " a ");
         assert_eq!((fold("Café/ ÉTÉ"), fold("ΟΔΟΣ")), ("café/ été".into(), "οδοσ".into()), "the filter's: the same letters, whitespace as it is");
         assert_eq!((needle("  \t "), needle(""), needle(" A  b")), (None, None, Some(" a b".into())));
+    }
+
+    /// What a chunk is charged against the text kept is what its folded text holds, not what it
+    /// uses: a megabyte of whitespace folds to one space, and holds no more than that; and whatever
+    /// it holds is counted.
+    #[test]
+    fn a_folded_chunk_holds_what_it_is_charged_for() {
+        let spaces = Folded::new(&" \n".repeat(MAX_CHUNK / 2));
+        assert_eq!(spaces.text, " ");
+        assert!(spaces.text.capacity() < 64 && spaces.runs.capacity() < 8, "{} bytes held for a space", spaces.text.capacity());
+        for text in [" \n".repeat(1000), "word ".repeat(1000), "É  ".repeat(1000), String::new()] {
+            let folded = Folded::new(&text);
+            assert!(folded.size() >= folded.text.capacity() + folded.runs.capacity() * 8, "{text:.12}");
+            assert!(folded.size() <= folded.text.len() + folded.runs.len() * 8 + 64, "{text:.12}: {} held", folded.size());
+        }
+        // Eighty pages of whitespace cost the search eighty spaces, not eighty megabytes it doesn't count.
+        let chunks: Vec<String> = (0..80).map(|_| " ".repeat(MAX_CHUNK)).collect();
+        let mut search = search(&Rc::new(Fake { chunks, ..Fake::default() }));
+        settle(&mut search, &at(&[0]));
+        assert!(!search.full && search.kept < 80 * 64, "{}", search.kept);
+        let held: usize = search.chunks.iter().map(|chunk| if let Chunk::Read(folded) = chunk { folded.text.capacity() } else { 0 }).sum();
+        assert!(held <= search.kept, "{held} held, {} counted", search.kept);
     }
 
     /// A match in the folded text says which of the original's characters it covers, past
@@ -1199,6 +1223,31 @@ pub(super) mod tests {
         search.edit();
         settle(&mut search, &at(&[1]));
         assert!(fake.state.borrow().queue.is_empty());
+    }
+
+    /// A query changed and kept again before the next pass (`/p⏎` read together, after `a`): the
+    /// match starts where the last one did, and its rectangles are asked for anew, for the
+    /// characters it covers now. The ones the source gave for the old match aren't taken for it.
+    #[test]
+    fn a_query_changed_between_passes_asks_for_its_matches_rectangles_anew() {
+        let fake = Fake::of(&["apple"]);
+        let mut search = search(&fake);
+        let screen = at(&[0]);
+        type_in(&mut search, "a");
+        search.enter(&screen);
+        settle(&mut search, &screen);
+        assert_eq!(fake.state.borrow().queue, [Want::Rects { chunk: 0, from: 0, to: 1 }]);
+        assert_eq!(search.tint(0).0.map(|tint| tint.marks.clone()), Some(vec![([0.0, 0.0, 1.0, 10.0], true)]));
+        search.edit();
+        search.typed('p');
+        search.enter(&screen);
+        settle(&mut search, &screen);
+        assert_eq!(fake.state.borrow().queue, [Want::Rects { chunk: 0, from: 0, to: 2 }], "the longer match's");
+        assert!(!search.expecting(), "nothing is owed for ever");
+        assert_eq!(search.tint(0).0.map(|tint| tint.marks.clone()), Some(vec![([0.0, 0.0, 2.0, 10.0], true)]));
+        // And rectangles that come late for the old match change nothing.
+        search.place(Want::Rects { chunk: 0, from: 0, to: 1 }, Ok(vec![(0, [50.0, 50.0, 60.0, 60.0])]), &square);
+        assert_eq!(search.placed.values().next().and_then(|placed| placed.rects.clone()), Some(vec![(0, [0.0, 0.0, 2.0, 10.0])]));
     }
 
     /// What the source gives is checked: a chunk that isn't one of its own or comes twice, text past

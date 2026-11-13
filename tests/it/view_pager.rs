@@ -1494,6 +1494,49 @@ fn a_searchs_matches_are_tinted_into_the_page_and_esc_takes_the_tint_off() {
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
+/// The page on screen shows the match the status line says, however a render's arrival falls among
+/// the keys: `n` then `N`, from no time apart to longer than a page takes to render, always ends
+/// with the reader's colour back on the first match, in an image the terminal still holds. A page
+/// that arrived just as `N` was read was tinted for the match `n` went to, and took the place of
+/// the right one.
+#[test]
+fn the_page_shows_the_match_the_status_line_says_whenever_its_render_arrives() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("tint-race", 2);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/2") && transmitted(t) == 2);
+    let first = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("/e\r");
+    let (_, tinted) = next_image(&view, "the page tinted", first);
+    view.wait_until("the first match", |t| last_bar(t).contains(" /e 1/6 "));
+    let own_at = |page: &::image::RgbImage| page.enumerate_pixels().filter(|(_, _, pixel)| pixel.0 == OWN_TINT).map(|(x, ..)| x).min();
+    let home = own_at(&tinted).expect("the reader's match");
+    for apart in (0..40).step_by(2) {
+        view.press("n");
+        std::thread::sleep(Duration::from_millis(apart));
+        view.press("N");
+        view.wait_until("back on the first match", |t| last_bar(t).contains(" /e 1/6 "));
+        // Until nothing more is written: every render asked for has arrived or been let go of.
+        loop {
+            let before = view.text().len();
+            std::thread::sleep(Duration::from_millis(150));
+            if view.text().len() == before {
+                break;
+            }
+        }
+        let text = view.text();
+        let placed = ids_after(&text, PLACED).last().copied().unwrap();
+        assert!(!ids_after(&text, DELETED).contains(&placed), "{apart} ms apart: the page on screen was deleted");
+        let page = pngs(&text).into_iter().rfind(|(id, _)| *id == placed).unwrap().1;
+        assert_eq!(own_at(&page), Some(home), "{apart} ms apart: the status line says the first match, the page another");
+    }
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
 /// With a search kept and its matches tinted on screen, `c` copies the page as rendered: black on
 /// white, none of the tint's colours.
 #[test]

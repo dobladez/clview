@@ -217,3 +217,45 @@ surprises, and what a later reader would want.
   before kept (`a_searchs_matches_are_tinted…`, by the images left); a copy tinted
   (`c_copies_a_page_untinted…`). One change proved nothing and went: a filter that left tints out
   while the query is typed, which no rectangle survives anyway.
+
+## After the first review (Codex, 2026-11-13)
+
+Five findings, all real; two were reproduced by a test before anything was changed.
+
+- **A folded chunk was charged for what it used and held what it reserved** (`Folded::new`
+  reserved the original's length): a megabyte of whitespace kept a megabyte and counted nine bytes,
+  so whitespace pages could hold far past 64 MiB. The folded text and its map are shrunk to fit,
+  and `Folded::size` charges their capacity.
+- **Answers waiting for the viewer had no bound** (an unbounded channel, in `pdfcraft.rs`). They
+  now wait in a queue under the same lock as what is wanted (`State::answers`), and the thread
+  reads no more while 4 MiB of them wait (`MAX_WAITING`): bytes rather than a count, so a book's
+  small pages still arrive a thousand a pass. `Shared::next` and `Shared::give` are the thread's
+  two steps, which the test drives without a worker.
+- **An answer could come for a request no longer listed** (already in the channel, or sent between
+  the check and the send). With the answers under the queue's lock, `set_queue` drops those no
+  longer listed, and forgets they were given; `give` checks under the same lock.
+- **A query changed and kept between two passes left its rectangles asked for ever.** Reproduced:
+  `a`, kept, then `/p⏎` in one read, on `apple`. The match starts where the old one did, and the
+  queue was known by matches' keys, so the new range was never sent to the source, and
+  `expecting()` stayed true. `Queued` now holds the ranges asked, as asked.
+- **A render arriving in the pass that read a key was tinted for the match before the key.**
+  Reproduced on a pseudo-terminal: `n` then `N` between 0 and 38 ms apart; at 2 to 4 ms the page
+  ended with the reader's colour on the second match while the status line said the first, three
+  runs of three. `receive` took the tint from the last draw (`Wanted::tint`), `draw` then found the
+  older image right and asked for nothing, and `place` put up the newest. Now a frame takes the
+  tint the search gives its page when it arrives (`Wanted::tint` is gone), a frame the terminal
+  already holds with that tint isn't sent, and `place` puts up the image with the tint of now
+  (`shown`). The frame not sent is a saving only, and has no test of its own.
+- **Seen failing:** the two reproductions, before their fixes
+  (`a_query_changed_between_passes_asks_for_its_matches_rectangles_anew`,
+  `the_page_shows_the_match_the_status_line_says_whenever_its_render_arrives`); and by changing
+  the line and copying the file back: the shrink taken out (`a_folded_chunk_holds_what_it_is_charged_for`);
+  no budget on the answers waiting, and an answer taken freeing no room
+  (`answers_wait_for_the_viewer_within_a_budget`); the queue known by how many ranges it asks; the
+  last sent placed whatever its tint (`a_page_sent_again_takes_the_place_of_the_one_before`); a
+  frame left untinted on arrival (the race test); an answer waiting outliving its request, and one
+  given for a request dropped while it was read (`an_answer_whose_request_was_dropped_never_comes`).
+- **A test of task 3 made patient.** `inside_tmux_a_tinted_page_reaches_a_terminal_that_attaches_later`
+  failed once in a full run, on a busy machine, and passed five times of five alone: it read the
+  second client's stream the moment tmux said the uploads were whole, and found one page of the
+  two. It now waits, up to its deadline, for both tinted pages to be in that stream.
