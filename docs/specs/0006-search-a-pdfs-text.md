@@ -1,6 +1,6 @@
 # Spec-0006: Search a PDF's text
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-13
 - **Related:** [README's Plans](../../README.md#plans) ("Search!": PDFs and spreadsheets here,
   Markdown, HTML and Word in [Spec-0007](0007-search-markdown-html-and-word-documents.md));
@@ -242,7 +242,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   and `1/1`; a PDF opened from a list searches; clearing the search leaves no worker (`ps`); `cargo
   test -j 2 --test it gridcraft`: a workbook with warnings searches its cells; each backend alone,
   `pdf,svg`, and none.
-- [ ] **Matches tinted** — the tint's generation in `Sent`, the pages rendered again, `tint` in
+- [x] **Matches tinted** — the tint's generation in `Sent`, the pages rendered again, `tint` in
   `receive`, the old image deleted, keys read together tinting once, text cells; the ADR. *Files:*
   `src/view/search.rs`, `src/view/pager.rs`, `src/view/cells.rs` if needed,
   `tests/it/view_pager.rs`, `tests/it/view_tmux.rs`, `docs/architecture.md`, `docs/adr/`,
@@ -260,7 +260,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - [x] Tests added, each seen failing without the change: `search.rs`'s matching and property
   tests, the pager's prompt, `n`/`N` and clearing on a fake `Texts`, a PDF searched and its worker
   gone with the search, `Noted`'s forwarding, the tint's pixels and the images it leaves.
-- [ ] Manual: in kitty, a 500-page PDF: `/` and a word, the count growing as it is read, `Enter` on
+- [x] Manual: in kitty, a 500-page PDF: `/` and a word, the count growing as it is read, `Enter` on
   the first match within a second, the keys answering throughout; the same inside tmux and over SSH.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)): usage's
   keys, a section on searching, the known difference on hyphens; architecture's contract, worker and
@@ -287,3 +287,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   are the caps (the notes say more).
 - 2026-11-13 — The owner reverses the first of those: a page with no room beside its old copy, and
   none to come, is blank until its tinted copy arrives, rather than left with the wrong matches.
+- 2026-11-13 — Done: the owner's manual checks in kitty, inside tmux and over SSH pass.

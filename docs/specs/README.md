@@ -41,8 +41,8 @@ fails while it disagrees with them.
 | 0003 | [Markdown and HTML on pages the window's size, and a font size](0003-lay-markdown-and-html-out-to-the-window.md) | Done |
 | 0004 | [Draw an SVG's HTML labels](0004-draw-an-svgs-html-labels.md) | Done |
 | 0005 | [Pages to a row on their own keys, and a document's margins](0005-set-pages-to-a-row-and-margins.md) | Done |
-| 0006 | [Search a PDF's text](0006-search-a-pdfs-text.md) | Implementing |
-| 0007 | [Search Markdown, HTML and Word documents](0007-search-markdown-html-and-word-documents.md) | Draft |
+| 0006 | [Search a PDF's text](0006-search-a-pdfs-text.md) | Done |
+| 0007 | [Search Markdown, HTML and Word documents](0007-search-markdown-html-and-word-documents.md) | Ready |
 
 ## Lifecycle
 
