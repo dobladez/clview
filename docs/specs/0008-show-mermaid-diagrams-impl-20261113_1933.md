@@ -103,8 +103,13 @@ unused in test builds: it has a unit test of its own now. Once, under the load o
 `view_pager::a_copy_still_rendering_stops_when_the_document_is_laid_out_again` failed on its
 timing; alone, and in the next full run, it passed.
 
-**Manual check pending:** in kitty, `clv tests/data/flow.mmd` (asked of the owner through the team
-lead). The task's box stays unticked until it is confirmed.
+**Manual check:** confirmed by the owner on 2026-11-13, in kitty, from the worktree's
+`target/debug/clv`: `flow.mmd` Start to Finish on white and readable, `sequence.mermaid`'s
+lifelines and messages on white edge to edge, `notes.mmd` refused. Task 2 ticked then.
+
+**Gates, from 2026-11-13 on:** the owner's rule makes them the build that ships alone (`fmt`,
+`clippy --all-targets`, `test`, every feature on); each feature alone and the build without backends
+are CI's nightly run's. The runs above were made before it.
 
 ## Task 3: A diagram in a list and in a document
 
@@ -121,7 +126,9 @@ task 2 already made answer every opening of the same bytes.
   it (`c`), with no worker again: the page is drawn from the cache.
   `a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at` pages through a
   Markdown document with the diagram twice in it (`n`, `n`, `g`) and lays it out again (`40]`,
-  `]`).
+  `]`). The spec's Verify says "the worker answers once, by its request count": the request count
+  isn't seen from outside the process, so the test goes by the worker's life instead, which tells
+  the same: a second answer would leave a worker alive.
 - A list's diagram that fails is said at the end by its page (`clv: page 2: b.mmd: merman: …`), as
   a list's PDFs are, once it defers; before, it was left out at listing.
 - Text cells: `--protocol ascii` and `blocks` print `flow.mmd`.

@@ -236,7 +236,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   [ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md) (Proposed) and
   `docs/adr/0030-measure/`, the PNGs drawn through resvg 0.49 in a program of its own, not in kitty;
   the owner's word on 2026-11-13.
-- [ ] **A Mermaid file shown** — the feature and merman, `mermaid.rs`'s opening, its worker's
+- [x] **A Mermaid file shown** — the feature and merman, `mermaid.rs`'s opening, its worker's
   both sides, its service and its cache, `BACKENDS`, `WORKERS`; usage, architecture, the changelog,
   CONTRIBUTING, CI, and ADR-0030 Accepted and listed. *Verify:* `cargo test -j 2 --test it mermaid`:
   `flow.mmd` drawn (ink where its nodes are) and `sequence.mermaid`; `notes.mmd` and a `.mmd` whose
@@ -249,7 +249,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   (bounded, a failure kept, `TooMany` not), the idle timer (the worker gone 2 s after its answer)
   and the white rect (sized to the viewBox); `worker.rs`'s own tests for the kernel's and the
   allocator's kills, since nothing merman accepts reaches the caps; nothing else naming
-  merman; `the_extensions_a_backend_lists_are_the_names_it_opens_by`; each feature alone. Manual: in
+  merman; `the_extensions_a_backend_lists_are_the_names_it_opens_by`. Manual: in
   kitty, `clv tests/data/flow.mmd`.
 - [ ] **A diagram in a list and in a document** — `deferred` and `draws_pictures`, and what they
   need of the cache. *Files:* `src/source/mermaid.rs`, `tests/it/mermaid.rs`, `tests/it/view_pager.rs`,
@@ -263,8 +263,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass, each
-  backend alone too.
+- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [ ] Tests added, each seen failing without the change: name them.
 - [ ] Manual: in kitty, a diagram of each kind merman draws, beside mermaid.js's; a list's tiles; a
   Markdown file's `![](x.mmd)`; inside tmux.
@@ -284,3 +283,5 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   worker, since nothing merman accepts reaches the caps (0.32 s and 232 MiB at worst, the notes
   say); a diagram on white, over its viewBox (the Theme line said both "on white" and "as a drawing
   is", which is transparent); a kanban board's cards are HTML labels too.
+- 2026-11-13 — "Each feature alone" out of task 2's Verify and the Done line: the owner's rule, the
+  quality gates are now the build that ships alone, other feature sets left to CI's nightly run.
