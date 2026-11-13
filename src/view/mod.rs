@@ -12,6 +12,7 @@ mod keys;
 mod kitty;
 mod pager;
 mod relayout;
+mod search;
 mod sweep;
 mod tmux;
 mod tty;

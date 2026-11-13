@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use super::clip;
 use crate::encode::PngEffort;
 use crate::source::{
-    Bounds, Container, Effect, Frame, Handle, Keys, Later, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source, Value, Values,
+    Bounds, Container, Effect, Frame, Handle, Keys, Later, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source, Texts, Value, Values,
 };
 
 use super::files::{Files, Written};
@@ -40,6 +40,7 @@ use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
 use super::kitty::{self, Rect};
 use super::relayout::{self, Ended, Hold, Relayout};
+use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
     FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, cell_lines, chars, checked,
@@ -61,8 +62,11 @@ const MAX_TYPED: usize = 9;
 const MAX_FILTER: usize = 256;
 /// What the status line says after a filter being typed, when there is room.
 const FILTER_KEYS: &str = "⏎ keep · esc cancel";
-/// What `/` says in a file's pages.
-const NO_SEARCH: &str = "no text search; / filters lists";
+/// What the status line says after a search being typed, when there is room.
+const SEARCH_KEYS: &str = "⏎ search · esc cancel";
+/// What `/` says in the pages of a file with no text to search, and `N` without a search.
+const NO_TEXT: &str = "no text to search";
+const NO_SEARCH: &str = "no search: / starts one";
 /// What a relayout setting's keys say in a list, and while `--pages` picks the pages.
 const REFLOW_IN_LIST: &str = "open a document to reflow it";
 const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
@@ -122,7 +126,7 @@ const KEYS: [&str; 4] = [
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknphl +=-_,.r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknNphl +=-_,.r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -137,6 +141,8 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("12 Enter  12g", "page 12"),
     ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
     (", .  3.", "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto"),
+    ("/", "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
+    ("n N  3n", "with a search: the next match, or the one before; 3n the third on"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
 ];
@@ -235,6 +241,7 @@ pub(super) fn run(
         relayout: Relayout::new(),
         hold: Hold::default(),
         bounds_for: None,
+        ready: false,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -264,6 +271,9 @@ pub(super) fn run(
         } else if let Some(wait) = pager.copier.wait() {
             wait
         } else if !pager.wanted.is_empty() && !pager.hidden {
+            POLL
+        } else if pager.level.nav.search.as_ref().is_some_and(Search::busy) {
+            // A search's text being read, or matched: taken between keys.
             POLL
         } else {
             TICK
@@ -330,6 +340,11 @@ pub(super) fn run(
                     Step::Leave | Step::Back => pager.back()?,
                     Step::Open(at) => pager.open(at, opener)?,
                     Step::ToClipboard(page) => pager.copy(page)?,
+                    // Its text is read from here on, by the source, and let go of with the search.
+                    Step::Search => {
+                        let texts = pager.level.source.texts();
+                        pager.level.nav.start_search(texts);
+                    }
                 }
                 if quit {
                     break;
@@ -356,11 +371,15 @@ pub(super) fn run(
         // A layout that failed put the count to a row back: the bounds follow it before the draw.
         pager.refresh_bounds();
         redraw |= pager.copy_on()?;
+        let (searched, moved) = pager.search_on();
+        redraw |= moved;
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
         let arrived = !pager.hidden && pager.receive()?;
         if arrived || redraw || lost {
             pager.draw()?;
+        } else if searched {
+            pager.status_line()?;
         }
         if pager.tmux_check.is_some_and(|at| Instant::now() >= at) && pager.ask_tmux() {
             pager.draw()?;
@@ -385,6 +404,8 @@ enum Step {
     /// This key again, once the bounds are asked again: it set the pages to a row back to `auto`
     /// first, and steps from the bounds of the room at `auto` ([`Nav::setting_key`]).
     Again(Key),
+    /// `/` in a file's pages: a search of the source's text, if it has any ([`Nav::start_search`]).
+    Search,
 }
 
 /// Where the reader is, and what keys do to it: in a file's pages, or in a list, where the reader
@@ -448,6 +469,11 @@ struct Nav {
     laid: Option<String>,
     /// The value a relayout under way is for, said the same way, while it is.
     relaying: Option<String>,
+    /// A file's search of its text (`/`), while it has one: typed, then kept.
+    search: Option<Search>,
+    /// Where to scroll to once the page's rows are known, if it isn't on screen: the match the reader
+    /// went to, from its top to its bottom as shares of the page's height.
+    reveal: Option<(f32, f32)>,
 }
 
 /// A list narrowed to the tiles whose names hold some text, typed after `/`. The list is whole
@@ -625,11 +651,6 @@ fn stepped(named: &[Named], at: Option<u32>, numbers: Numbers, now: Value, up: b
     }
 }
 
-/// A name as a filter matches it: in lower case, so that case doesn't matter.
-fn fold(name: &str) -> String {
-    name.to_lowercase()
-}
-
 impl Nav {
     fn new(pages: Vec<usize>, count: usize, zoom: Zoom) -> Self {
         Self {
@@ -662,6 +683,8 @@ impl Nav {
             picked: false,
             laid: None,
             relaying: None,
+            search: None,
+            reveal: None,
         }
     }
 
@@ -769,6 +792,9 @@ impl Nav {
     fn key(&mut self, key: Key) -> Step {
         self.message = None;
         self.hint = false;
+        if let Some(search) = self.search.as_mut() {
+            search.heard();
+        }
         // Any key leaves the keys, but Ctrl-C, which still quits.
         if std::mem::take(&mut self.help) && key != Key::Interrupt {
             return Step::Continue;
@@ -777,6 +803,10 @@ impl Nav {
         if self.filter.as_ref().is_some_and(|filter| filter.typing) {
             return self.filter_key(key);
         }
+        // And so does a search.
+        if self.search.as_ref().is_some_and(Search::typing) {
+            return self.search_key(key);
+        }
         let typing = !self.typed.is_empty();
         match key {
             Key::Char('?') => self.help = true,
@@ -784,6 +814,9 @@ impl Nav {
             // A filter kept goes before the list does.
             Key::Escape | Key::Backspace if self.filter.is_some() && !typing => self.unfilter(self.chosen()),
             Key::Char('u') if self.filter.is_some() => self.unfilter(self.chosen()),
+            // And a search kept before the file does.
+            Key::Escape | Key::Backspace if self.search.is_some() && !typing => self.search = None,
+            Key::Char('u') if self.search.is_some() => self.search = None,
             Key::Escape if !typing => return Step::Leave,
             Key::Escape => self.typed.clear(),
             // Past MAX_TYPED digits, more are ignored (no other arm takes a digit).
@@ -800,6 +833,10 @@ impl Nav {
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
             Key::Char('j') | Key::Down | Key::Enter => self.forward(STEP, self.row()),
             Key::Char('k') | Key::Up => self.back(STEP, self.row()),
+            // With a search kept, from match to match; the arrows still turn pages.
+            Key::Char('n') if self.search.is_some() => self.step_match(true),
+            Key::Char('N') if self.search.is_some() => self.step_match(false),
+            Key::Char('N') => self.message = Some(NO_SEARCH.into()),
             Key::Char('n') | Key::Right => self.go(self.first().saturating_add(self.per_screen())),
             Key::Char('p') | Key::Left => self.go(self.first().saturating_sub(self.per_screen())),
             Key::Char('g') | Key::Home => self.go(0),
@@ -812,10 +849,93 @@ impl Nav {
             Key::Char(',') => self.per_row_key(true),
             Key::Char('.') => self.per_row_key(false),
             Key::Char('r' | '\u{c}') => self.rerender = true,
-            Key::Char('/') => self.message = Some(NO_SEARCH.into()),
+            // A number typed before it is dropped. The search kept is typed on; with none, the pager
+            // asks the source for its text.
+            Key::Char('/') => {
+                self.typed.clear();
+                match self.search.as_mut() {
+                    Some(search) => search.edit(),
+                    None => return Step::Search,
+                }
+            }
             _ => return self.setting_key(key),
         }
         Step::Continue
+    }
+
+    /// `/` in a file's pages: a search to type, of `texts`, the source's text; or with none, a word
+    /// that there is none to search.
+    fn start_search(&mut self, texts: Option<Box<dyn Texts>>) {
+        match texts {
+            Some(texts) => self.search = Some(Search::new(texts, &self.pages, self.count)),
+            None => self.message = Some(NO_TEXT.into()),
+        }
+    }
+
+    /// What `key` does while a search is typed: a character is part of it, the matches counted as
+    /// it is typed, the view where it was; Backspace takes the last one back; Enter keeps the
+    /// search, and goes to the first match from the top of the screen; Esc leaves no search, as
+    /// Backspace and Enter do with nothing typed. Ctrl-C still quits, and no other key does anything.
+    fn search_key(&mut self, key: Key) -> Step {
+        let Some(search) = self.search.as_mut() else { return Step::Continue };
+        let empty = search.query().is_empty();
+        match key {
+            Key::Interrupt => return Step::Quit,
+            // Past MAX_FILTER characters, more are ignored.
+            Key::Char(c) if !c.is_control() && search.query().chars().count() < MAX_FILTER => search.typed(c),
+            Key::Backspace if !empty => search.backspace(),
+            Key::Enter if !empty => {
+                let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
+                let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
+                let go = self.search.as_mut().and_then(|search| search.enter(&screen));
+                self.go_to_match(go);
+            }
+            Key::Backspace | Key::Enter | Key::Escape => self.search = None,
+            _ => {}
+        }
+        Step::Continue
+    }
+
+    /// `n` (`forward`) or `N` with a search kept: to the next match or the one before, or as many on
+    /// as the number typed before it.
+    fn step_match(&mut self, forward: bool) {
+        // At most `MAX_TYPED` digits: it fits.
+        let count = std::mem::take(&mut self.typed).parse::<usize>().unwrap_or(1);
+        let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
+        let go = self.search.as_mut().and_then(|search| search.step(forward, count, &screen));
+        self.go_to_match(go);
+    }
+
+    /// The view where a match is, if `go` says where: its page brought on screen if it isn't, and,
+    /// where the page scrolls, the match scrolled into view once the page's rows are known.
+    fn go_to_match(&mut self, go: Option<search::Go>) {
+        let Some(go) = go else { return };
+        let Some(index) = self.pages.iter().position(|page| *page == go.page) else { return };
+        let first = self.first();
+        if !(first..first.saturating_add(self.per_screen())).contains(&index) {
+            self.go(index);
+        }
+        // Only a page alone on screen scrolls.
+        self.reveal = go.span.filter(|_| self.first() == index);
+    }
+
+    /// Take what the search's source has read, and match it, a little at a time: whether the status
+    /// line or the view changed. `size_of` is a page's size, as the source says it.
+    fn search_on(&mut self, size_of: &dyn Fn(usize) -> Option<(f32, f32)>) -> bool {
+        if self.search.is_none() {
+            return false;
+        }
+        let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen };
+        let Some(polled) = self.search.as_mut().map(|search| search.poll(&screen, size_of)) else { return false };
+        let moved = polled.go.is_some();
+        self.go_to_match(polled.go);
+        let said = polled.said.is_some();
+        if let Some(said) = polled.said {
+            self.message = Some(said);
+        }
+        polled.changed || moved || said
     }
 
     /// What `key` does in a list: the arrows move from tile to tile, the screen following, and
@@ -1188,6 +1308,15 @@ impl Nav {
             // A share of the rows, so within them.
             self.scroll = (share.clamp(0.0, 1.0) * f32::from(rows)).round() as u16;
         }
+        if let Some((top, bottom)) = self.reveal.take() {
+            // Shares of the rows, so within them. A match off screen comes a third of the way down it,
+            // as far as the page scrolls; one on screen leaves the view where it is.
+            let row = |share: f32| (share.clamp(0.0, 1.0) * f32::from(rows)) as u16;
+            let (top, bottom) = (row(top), row(bottom));
+            if top < self.scroll || bottom >= self.scroll.saturating_add(visible) {
+                self.scroll = top.saturating_sub(visible / 3);
+            }
+        }
         self.scroll = self.scroll.min(self.max_scroll);
     }
 
@@ -1200,7 +1329,8 @@ impl Nav {
     /// then the key. On the left, the name, cut short in its middle to leave room for a message,
     /// which ends two spaces before the right side. Until the first key, the message is the
     /// reminder of the keys, as much of it as fits. A list's filter takes the message's place:
-    /// always while it is typed, otherwise when there is no message.
+    /// always while it is typed, otherwise when there is no message. A file's search does while it is
+    /// typed (`/word 17…`), and kept, comes before the message (`/word 3/17`).
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
         let width = usize::from(cols);
         // A number being typed is all the line says: the number, and the keys that take it here.
@@ -1252,6 +1382,18 @@ impl Nav {
             Some(filter) if said.is_empty() => format!("/{}", filter.text),
             _ => said,
         };
+        // A search likewise while it is typed; one kept is always said, with its matches, before
+        // anything else there is to say.
+        let said = match self.search.as_ref().map(|search| (search.typing(), search.status())) {
+            Some((true, typed)) => {
+                let keys = format!("{typed}  {SEARCH_KEYS}");
+                let fits = chars(&keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
+                if fits { keys } else { typed }
+            }
+            Some((false, kept)) if said.is_empty() => kept,
+            Some((false, kept)) => format!("{kept}  {said}"),
+            None => said,
+        };
         // A space at the start; the message, then two spaces; and at least two spaces between the
         // name and the message, or one after the name alone.
         let said = cut(&said, room.saturating_sub(3));
@@ -1281,12 +1423,16 @@ impl Nav {
     }
 
     /// The keys a number typed here goes to, as the status line names them: to a page (`g`), or in a
-    /// list a tile (`Enter`); to the pages to a row (`.`); and to each setting with numbers what is
+    /// list a tile (`Enter`); to the pages to a row (`.`); with a search kept, that many matches on
+    /// (`n`); and to each setting with numbers what is
     /// shown has and lets change here (not one that lays out again, in a list or with `--pages`), by its
     /// up key and its name, the one on the zoom keys first.
     fn takes_a_number(&self) -> Vec<String> {
         let first = if self.list { "Enter tile" } else { "g page" };
         let mut keys = vec![first.to_owned(), ". per row".to_owned()];
+        if self.search.is_some() {
+            keys.push("n match".to_owned());
+        }
         let here = |setting: &&&Setting| {
             setting.numbers.is_some() && self.has.contains(&setting.name) && !(setting.effect == Effect::Relayout && (self.list || self.picked))
         };
@@ -1555,6 +1701,8 @@ struct Pager<'a> {
     hold: Hold,
     /// What the level's bounds were asked for: the level, the values and the room ([`Pager::refresh_bounds`]).
     bounds_for: Option<(u64, Values, Room)>,
+    /// Whether the last draw had every page on screen ready: what the status line says of it.
+    ready: bool,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1685,8 +1833,32 @@ impl Pager<'_> {
         out.extend_from_slice(b"\x1b[2K\x1b[7m");
         out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !ready).as_bytes());
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
+        self.ready = ready;
         self.wrote(0);
         self.tty.write_all(&out)
+    }
+
+    /// The status line written again, the rest of the screen as it is: a search's count as its text
+    /// is read.
+    fn status_line(&mut self) -> Result<(), String> {
+        let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
+        let mut out = Vec::new();
+        cursor(&mut out, size.rows.saturating_sub(1), 0);
+        out.extend_from_slice(b"\x1b[2K\x1b[7m");
+        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !self.ready).as_bytes());
+        out.extend_from_slice(b"\x1b[0m");
+        self.wrote(0);
+        self.tty.write_all(&out)
+    }
+
+    /// Take the search on, if the file on screen has one ([`Nav::search_on`]): whether the status
+    /// line has news, and whether the view moved, to a match.
+    fn search_on(&mut self) -> (bool, bool) {
+        let source = self.level.source.clone();
+        let (at, scroll) = (self.level.nav.at, self.level.nav.scroll);
+        let changed = self.level.nav.search_on(&|page| source.size(page));
+        let moved = (at, scroll) != (self.level.nav.at, self.level.nav.scroll) || self.level.nav.reveal.is_some();
+        (changed, moved)
     }
 
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,
@@ -4102,16 +4274,305 @@ mod tests {
         }
     }
 
+    /// A reader on the first of five pages, whose text is a chunk a page: `Title, page N`. And the
+    /// text, to say what it gives and when.
+    fn searching() -> (Nav, Rc<search::tests::Fake>) {
+        let fake = search::tests::Fake::of(&["Title, page 1", "Title, page 2", "Title, page 3", "Title, page 4", "Title, page 5"]);
+        (reader(0, 5, 40, 40), fake)
+    }
+
+    /// `keys` pressed as the pager takes them: `/` asks the source for its text, here `texts`, and
+    /// what there is to read is read and matched after each key.
+    fn search_keys(nav: &mut Nav, texts: &Rc<search::tests::Fake>, keys: &[Key]) -> Step {
+        let mut first = Step::Continue;
+        for key in keys {
+            let mut step = nav.key(*key);
+            if step == Step::Search {
+                nav.start_search(Some(Box::new(texts.clone())));
+                step = Step::Continue;
+            }
+            // Until two passes in a row have no news: what one asks for, the next is given.
+            while nav.search_on(&search::tests::square) | nav.search_on(&search::tests::square) {}
+            if first == Step::Continue {
+                first = step;
+            }
+        }
+        first
+    }
+
+    /// `text` typed after `/`, as [`search_keys`] presses keys.
+    fn search_for(nav: &mut Nav, texts: &Rc<search::tests::Fake>, text: &str) -> Step {
+        search_keys(nav, texts, &text.chars().map(Key::Char).collect::<Vec<_>>())
+    }
+
+    /// What the status line says of the search, and nothing else of it.
+    fn searched(nav: &Nav) -> String {
+        let line = squeezed(&nav.status("a.pdf", 120, false));
+        let said = line.trim_start_matches(" a.pdf ");
+        said[..said.rfind(" page").unwrap_or(said.len())].to_owned()
+    }
+
+    /// `/` in a file's pages opens a prompt: what is typed is counted in the text, the view
+    /// staying where it is; Enter goes to the first match from the top of the screen and keeps the
+    /// search, which the status line says, with the match the reader is on.
     #[test]
-    fn slash_in_a_files_pages_says_that_it_filters_lists() {
+    fn slash_in_a_files_pages_searches_its_text_and_enter_goes_to_the_first_match() {
+        let (mut nav, texts) = searching();
+        assert_eq!(nav.key(Key::Char('/')), Step::Search, "the pager's to ask the source");
+        assert_eq!(search_for(&mut nav, &texts, "/page 3"), Step::Continue);
+        assert_eq!((page(&nav), searched(&nav)), (0, "/page 3 1 ⏎ search · esc cancel".into()), "counted, the view where it was");
+        search_keys(&mut nav, &texts, &[Key::Enter]);
+        assert_eq!((page(&nav), searched(&nav)), (2, "/page 3 1/1".into()));
+        assert!(nav.search.as_ref().is_some_and(|search| !search.typing()));
+        // From the top of the screen, not of the file: on page 4, the first match is page 4's.
+        let (mut nav, texts) = searching();
+        nav.go(3);
+        search_for(&mut nav, &texts, "/PAGE");
+        search_keys(&mut nav, &texts, &[Key::Enter]);
+        assert_eq!((page(&nav), searched(&nav)), (3, "/PAGE 4/5".into()));
+        // A number typed before `/` is dropped.
+        let (mut nav, texts) = searching();
+        search_for(&mut nav, &texts, "4/e 2");
+        search_keys(&mut nav, &texts, &[Key::Enter]);
+        assert_eq!((page(&nav), nav.typed.as_str(), searched(&nav)), (1, "", "/e 2 1/1".into()));
+    }
+
+    /// With a search kept, `n` and `N` go from match to match, round the ends, saying so; a
+    /// number first goes that many on; the arrows still turn pages; and paged away, `n` goes on from
+    /// the top of the screen.
+    #[test]
+    fn n_and_shift_n_go_from_match_to_match_while_a_search_is_kept() {
+        let (mut nav, texts) = searching();
+        search_for(&mut nav, &texts, "/page");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n'), Key::Char('n')]);
+        assert_eq!((page(&nav), searched(&nav)), (2, "/page 3/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('N')]);
+        assert_eq!((page(&nav), searched(&nav)), (1, "/page 2/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('3'), Key::Char('n')]);
+        assert_eq!((page(&nav), nav.typed.as_str(), searched(&nav)), (4, "", "/page 5/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('n')]);
+        assert_eq!((page(&nav), searched(&nav)), (0, "/page 1/5 · search wrapped".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('N')]);
+        assert_eq!((page(&nav), searched(&nav)), (4, "/page 5/5 · search wrapped".into()));
+        // The arrows turn pages, and the match the reader was on is no longer on screen: `n` goes on
+        // from the top of the screen, to the match there.
+        search_keys(&mut nav, &texts, &[Key::Left, Key::Left]);
+        assert_eq!((page(&nav), searched(&nav)), (2, "/page 5/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('n')]);
+        assert_eq!((page(&nav), searched(&nav)), (2, "/page 3/5".into()));
+        // A number typed says that `n` takes it.
+        search_keys(&mut nav, &texts, &[Key::Char('2')]);
+        assert_eq!(nav.status("a.pdf", 80, false).trim_end(), " 2: g page · . per row · n match");
+        // Two pages to a screen: a match on the page beside the reader's moves nothing.
+        let (mut nav, texts) = searching();
+        nav.grid(2, 1, 8);
+        search_for(&mut nav, &texts, "/page");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n')]);
+        assert_eq!((nav.on_screen(), searched(&nav)), (vec![Some(0), Some(1)], "/page 2/5".into()));
+        search_keys(&mut nav, &texts, &[Key::Char('n')]);
+        assert_eq!((nav.on_screen(), searched(&nav)), (vec![Some(2), Some(3)], "/page 3/5".into()));
+    }
+
+    /// Text that arrives after Enter: the first match read is gone to, once; the match the reader
+    /// is on stays theirs as the rest arrives, in whatever order, its number following.
+    #[test]
+    fn text_arriving_out_of_order_leaves_the_match_the_reader_is_on() {
+        let (mut nav, texts) = searching();
+        nav.go(3);
+        texts.allow(0);
+        search_for(&mut nav, &texts, "/page");
+        assert_eq!(searched(&nav), "/page 0… ⏎ search · esc cancel");
+        search_keys(&mut nav, &texts, &[Key::Enter]);
+        assert_eq!((page(&nav), searched(&nav)), (3, "/page 0…".into()), "none read yet: the view stays");
+        // Read outward from the page on screen: page 4 first, then, the reader back on page 1, pages 1, 2,
+        // 3 and 5.
+        nav.go(0);
+        texts.allow(1);
+        nav.search_on(&search::tests::square);
+        assert_eq!((page(&nav), searched(&nav)), (3, "/page 1/1…".into()), "the first to arrive brings the view to it");
+        nav.key(Key::Char('g'));
+        for (allowed, said) in [(1, "/page 2/2…"), (2, "/page 4/4…"), (1, "/page 4/5")] {
+            texts.allow(allowed);
+            nav.search_on(&search::tests::square);
+            nav.search_on(&search::tests::square);
+            assert_eq!((page(&nav), searched(&nav).as_str()), (0, said), "no match found later moves it");
+        }
+    }
+
+    /// A number being typed is cleared first, as ever. Then Esc, Backspace and `u` clear a kept
+    /// search before they go back or quit, and `n` turns pages again; `/` again edits the query kept.
+    #[test]
+    fn with_a_search_kept_esc_backspace_and_u_clear_it_before_they_go_back() {
+        for key in [Key::Escape, Key::Backspace, Key::Char('u')] {
+            let (mut nav, texts) = searching();
+            search_for(&mut nav, &texts, "/page");
+            search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n')]);
+            assert_eq!(search_keys(&mut nav, &texts, &[Key::Char('7'), Key::Escape]), Step::Continue);
+            assert_eq!((nav.typed.as_str(), nav.search.is_some()), ("", true), "the number first");
+            assert_eq!(search_keys(&mut nav, &texts, &[key]), Step::Continue, "{key:?}");
+            assert_eq!((nav.search.is_none(), page(&nav)), (true, 1), "{key:?}: cleared, the view where it was");
+            assert!(!nav.status("a.pdf", 100, false).contains(" /page"));
+            // `n` turns pages again, and the key goes back, or quits.
+            search_keys(&mut nav, &texts, &[Key::Char('n')]);
+            assert_eq!(page(&nav), 2);
+            let then = if key == Key::Escape { Step::Leave } else { Step::Back };
+            assert_eq!(search_keys(&mut nav, &texts, &[key]), then, "{key:?}");
+        }
+        // `/` again: the query kept, typed on.
+        let (mut nav, texts) = searching();
+        search_for(&mut nav, &texts, "/page");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n'), Key::Char('/')]);
+        assert_eq!((page(&nav), searched(&nav)), (1, "/page 5 ⏎ search · esc cancel".into()));
+        search_for(&mut nav, &texts, " 4");
+        search_keys(&mut nav, &texts, &[Key::Enter]);
+        assert_eq!((page(&nav), searched(&nav)), (3, "/page 4 1/1".into()));
+    }
+
+    /// While a search is typed, every key that types a character is part of it, at most
+    /// [`MAX_FILTER`] of them; Backspace takes one back; Esc leaves no search, as Enter and Backspace
+    /// do with nothing typed; Ctrl-C still quits, and the keys that move do nothing.
+    #[test]
+    fn while_a_search_is_typed_every_key_that_types_a_character_is_text() {
+        let (nav, texts) = searching();
+        let mut nav = declaring(nav, true);
+        assert_eq!(search_for(&mut nav, &texts, "/q nN1?u gG+-/rcd"), Step::Continue);
+        assert_eq!(nav.search.as_ref().map(Search::query), Some("q nN1?u gG+-/rcd"));
+        assert_eq!((nav.help, nav.typed.as_str(), nav.rerender, page(&nav)), (false, "", false, 0));
+        assert_eq!(nav.settings.values.get(), Values::default(), "typed, a setting's key is a letter of the search");
+        for key in [Key::Right, Key::Left, Key::Down, Key::PageDown, Key::End, Key::Char('\u{c}')] {
+            assert_eq!(search_keys(&mut nav, &texts, &[key]), Step::Continue, "{key:?}");
+            assert_eq!((page(&nav), nav.rerender, nav.search.as_ref().map(Search::query)), (0, false, Some("q nN1?u gG+-/rcd")), "{key:?}");
+        }
+        search_keys(&mut nav, &texts, &[Key::Backspace]);
+        assert_eq!(nav.search.as_ref().map(Search::query), Some("q nN1?u gG+-/rc"));
+        assert_eq!(search_keys(&mut nav, &texts, &[Key::Interrupt]), Step::Quit);
+        assert_eq!(search_keys(&mut nav, &texts, &[Key::Escape]), Step::Continue, "Esc doesn't leave the file");
+        assert!(nav.search.is_none());
+        for key in [Key::Enter, Key::Backspace] {
+            assert_eq!(search_keys(&mut nav, &texts, &[Key::Char('/'), key]), Step::Continue, "{key:?} goes nowhere");
+            assert!(nav.search.is_none(), "{key:?}");
+        }
+        search_for(&mut nav, &texts, "/ab");
+        search_keys(&mut nav, &texts, &[Key::Backspace, Key::Backspace]);
+        assert_eq!(nav.search.as_ref().map(|search| (search.typing(), search.query())), Some((true, "")));
+        search_keys(&mut nav, &texts, &[Key::Backspace]);
+        assert!(nav.search.is_none());
+        // Esc while the query kept is typed on leaves no search either.
+        search_for(&mut nav, &texts, "/page");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('/'), Key::Char('x'), Key::Escape]);
+        assert!(nav.search.is_none());
+        search_keys(&mut nav, &texts, &[Key::Char('/')]);
+        search_keys(&mut nav, &texts, &[Key::Char('é'); MAX_FILTER + 10]);
+        assert_eq!(nav.search.as_ref().map(|search| search.query().chars().count()), Some(MAX_FILTER));
+        for cols in 0..=200 {
+            assert_eq!(chars(&nav.status("a.pdf", cols, false)), usize::from(cols));
+        }
+    }
+
+    /// A source with no text to search says so at `/`, and opens no prompt; `N` without a search
+    /// says there is none.
+    #[test]
+    fn a_source_without_text_says_no_text_to_search() {
         let mut nav = reader(2, 12, 40, 40);
-        assert_eq!(press(&mut nav, &[Key::Char('/')]), Step::Continue);
-        assert_eq!((nav.message.as_deref(), nav.filter.is_none(), page(&nav)), (Some(NO_SEARCH), true, 2));
-        // Whole in a window 80 columns wide.
-        assert!(nav.status("report.pdf", 80, false).contains(&format!("  {NO_SEARCH}  ")));
+        assert_eq!(nav.key(Key::Char('/')), Step::Search);
+        nav.start_search(None);
+        assert_eq!((nav.message.as_deref(), nav.search.is_none(), page(&nav)), (Some(NO_TEXT), true, 2));
+        assert!(nav.status("scan.png", 80, false).contains(&format!("  {NO_TEXT}  ")));
         // The keys after it are the pager's.
         assert_eq!(press(&mut nav, &[Key::Char('n'), Key::Char('q')]), Step::Quit);
         assert_eq!(page(&nav), 3);
+        press(&mut nav, &[Key::Char('N')]);
+        assert_eq!((nav.message.as_deref(), page(&nav)), (Some(NO_SEARCH), 3));
+    }
+
+    /// The status line with a search: typed, what is typed and its count, the keys when there is
+    /// room; kept, the match the reader is on, before whatever else there is to say; the right side
+    /// where it was, and nothing a query holds reaching the terminal raw.
+    #[test]
+    fn the_status_line_shows_the_search_and_the_match_the_reader_is_on() {
+        let (mut nav, texts) = searching();
+        let at = column(&nav.status("a.pdf", 100, false), "page 1/5");
+        search_for(&mut nav, &texts, "/Page");
+        let line = nav.status("a.pdf", 100, false);
+        assert!(squeezed(&line).starts_with(" a.pdf /Page 5 ⏎ search · esc cancel page 1/5 "), "{line:?}");
+        assert_eq!(column(&line, "page 1/5"), at);
+        let narrow = nav.status("a.pdf", 50, false);
+        assert!(narrow.contains("  /Page 5  ") && !narrow.contains("cancel"), "{narrow:?}");
+        search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n')]);
+        nav.message = Some("page 2: content past the page's safety budget was skipped".into());
+        let line = nav.status("a.pdf", 120, false);
+        assert!(line.contains("  /Page 2/5  page 2: content past the page's safety budget was skipped  "), "{line:?}");
+        assert_eq!(column(&nav.status("a.pdf", 100, false), "page 2/5"), at);
+        search_keys(&mut nav, &texts, &[Key::Char('/')]);
+        search_for(&mut nav, &texts, "\u{1b}]52;c;cHduZWQ=\u{7}");
+        for cols in 0..=200 {
+            let line = nav.status("a.pdf", cols, false);
+            assert!(chars(&line) == usize::from(cols) && !line.chars().any(char::is_control), "{line:?}");
+        }
+        // `?` lists the search's keys in a file's pages.
+        let keys: Vec<String> = nav.help_lines().into_iter().map(|(keys, _)| keys).collect();
+        assert!(keys.contains(&"/".to_owned()) && keys.contains(&"n N  3n".to_owned()), "{keys:?}");
+    }
+
+    /// Zoomed in to a page that scrolls, the match gone to is scrolled into view once the source says
+    /// where it is: a third of the way down the screen; one already on screen leaves the view.
+    #[test]
+    fn a_match_on_a_page_that_scrolls_is_scrolled_into_view() {
+        let fake = search::tests::Fake::of(&["", &format!("{}abab and ab", "x ".repeat(30))]);
+        let mut nav = reader(0, 2, 20, 100);
+        search_for(&mut nav, &fake, "/ab");
+        search_keys(&mut nav, &fake, &[Key::Enter]);
+        // The match is 60 characters into its chunk: the fake puts it 60 of the page's 100 units down,
+        // 10 high.
+        assert_eq!((page(&nav), nav.scroll, nav.reveal), (1, 0, Some((0.6, 0.7))));
+        nav.shown(20, 100);
+        assert_eq!((nav.scroll, nav.reveal), (54, None), "row 60, a third of the 20 rows from the top");
+        // The next match is on screen already (rows 62 to 72): the view stays. The one after is only
+        // partly (rows 69 to 79): it comes a third of the way down.
+        search_keys(&mut nav, &fake, &[Key::Char('n')]);
+        nav.shown(20, 100);
+        assert_eq!((page(&nav), nav.scroll, searched(&nav)), (1, 54, "/ab 2/3".into()));
+        search_keys(&mut nav, &fake, &[Key::Char('n')]);
+        nav.shown(20, 100);
+        assert_eq!(nav.scroll, 63);
+        search_keys(&mut nav, &fake, &[Key::Char('N')]);
+        // Back to the first, scrolled away from: into view again. Near the end, as far as the page scrolls.
+        nav.scroll = 0;
+        search_keys(&mut nav, &fake, &[Key::Char('N')]);
+        nav.shown(20, 100);
+        assert_eq!(nav.scroll, 54);
+        nav.reveal = Some((0.95, 1.0));
+        nav.shown(20, 100);
+        assert_eq!(nav.scroll, 80);
+    }
+
+    proptest::proptest! {
+        /// Whatever is pressed with a search typed or kept, and whenever its text comes, nothing
+        /// panics, the reader's page is on screen, and the status line is as wide as the window.
+        #[test]
+        fn a_search_never_takes_the_reader_off_the_pages(
+            steps in proptest::collection::vec(
+                (proptest::sample::select(vec![
+                    Key::Char('/'), Key::Char('p'), Key::Char('a'), Key::Char(' '), Key::Char('3'), Key::Char('n'), Key::Char('N'),
+                    Key::Char('u'), Key::Char('+'), Key::Enter, Key::Escape, Key::Backspace, Key::Right, Key::PageDown,
+                 ]),
+                 0usize..3),
+                0..60,
+            ),
+        ) {
+            let (mut nav, texts) = searching();
+            texts.allow(0);
+            for (key, allowed) in steps {
+                texts.allow(allowed);
+                if nav.key(key) == Step::Search {
+                    nav.start_search(Some(Box::new(texts.clone())));
+                }
+                nav.search_on(&search::tests::square);
+                nav.shown(40, 40);
+                proptest::prop_assert!(nav.at < 5 && nav.on_screen().contains(&Some(nav.at)), "{nav:?}");
+                proptest::prop_assert_eq!(chars(&nav.status("a.pdf", 90, false)), 90);
+            }
+        }
     }
 
     #[test]

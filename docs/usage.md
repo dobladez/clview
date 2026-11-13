@@ -339,7 +339,7 @@ the list filtered as you left it. With `--pages`, the filter narrows the tiles g
 Letters past ASCII (`café`) are typed as the terminal sends them, in UTF-8. Upper and lower case
 match letter by letter (`É` matches `é`), and that is all: `e` doesn't match `é`, nor does an `é`
 typed as one letter match a name that stores it as `e` and an accent, as macOS's HFS+ did. In a
-file's pages, `/` only says that it filters lists: there is no search in a document's text.
+file's pages, `/` says `no text to search`: no kind of file gives its text to search yet.
 
 ## Which files it shows
 

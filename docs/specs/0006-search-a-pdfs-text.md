@@ -221,7 +221,7 @@ it would hold the keys up (the measurements are under Open questions).
 
 One checkbox each: a session's work, and a commit that builds and passes on its own.
 
-- [ ] **The contract and the search, without a backend** — `Source::texts`, `Texts`, `search.rs`,
+- [x] **The contract and the search, without a backend** — `Source::texts`, `Texts`, `search.rs`,
   the prompt, the count while typing, `Enter`, `n`/`N` and their numbers, the keys that clear,
   `no text to search`, the status line. *Files:* `src/source.rs`, `src/view/search.rs`,
   `src/view/pager.rs`, `src/view/mod.rs`. *Verify:* `cargo test -j 2 --lib search`; `cargo test -j 2

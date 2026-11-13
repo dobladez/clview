@@ -683,6 +683,58 @@ pub(crate) trait Source {
     fn find(&self, _anchor: &Anchor) -> Option<(usize, f32)> {
         None
     }
+    /// Its text, for the reader to search (`/`): read on threads or in a process of the source's
+    /// own from here on, so asked for only when a search starts, and let go of when it ends.
+    /// `None` for a source with no text to search (a picture, a drawing), the default.
+    fn texts(&self) -> Option<Box<dyn Texts>> {
+        None
+    }
+}
+
+/// A source's text, for the viewer to search ([`Source::texts`]): in chunks, in the document's
+/// order, each whatever the backend's text comes in (a PDF's page, a document's paragraph). The
+/// viewer folds case, matches and tints, the same for every backend; a match never runs from one
+/// chunk onto the next.
+///
+/// A chunk's text is the text as it should be searched: what the end of a line, a hyphen there or
+/// a ligature becomes is the backend's to decide, and the viewer never corrects it. A place in it
+/// is a count of its characters (`char`s) from its start.
+///
+/// The work keeps [`Pool`]'s contract: [`Texts::set_queue`] replaces what is wanted,
+/// [`Texts::try_recv`] never blocks, a result arrives only while it is wanted, and dropping this
+/// ends its work without waiting for it. Whatever it gives is input like any other: the viewer
+/// checks it.
+pub(crate) trait Texts {
+    /// How many chunks the text comes in.
+    fn chunks(&self) -> usize;
+    /// The chunk page `page` (0-based) starts with: the one its first text is in, never less than
+    /// an earlier page's.
+    fn chunk_of(&self, page: usize) -> usize;
+    /// Replace what is wanted, the most urgent first. One still waited for is listed again every
+    /// time; one given isn't given again while it stays listed.
+    fn set_queue(&self, wanted: Vec<Want>);
+    /// Something wanted, if it is ready. Never blocks.
+    fn try_recv(&self) -> Option<Got>;
+}
+
+/// What the viewer wants of a source's text ([`Texts::set_queue`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Want {
+    /// A chunk's text.
+    Text(usize),
+    /// Where the characters `from..to` of a chunk's text are on its pages.
+    Rects { chunk: usize, from: usize, to: usize },
+}
+
+/// What a source gives of its text ([`Texts::try_recv`]), or why not, in words for the reader.
+#[cfg_attr(not(test), expect(dead_code, reason = "no backend gives its text yet"))]
+pub(crate) enum Got {
+    /// A chunk's text. Why not costs the search that chunk alone.
+    Text(usize, Result<String, String>),
+    /// The rectangles a [`Want::Rects`] covers, one for each line: the page (0-based) each is on,
+    /// and its left, top, right and bottom there, in the page's unit from its top left, y down,
+    /// as [`Source::size`] measures it.
+    Rects(Want, Result<Vec<(usize, [f32; 4])>, String>),
 }
 
 /// A place in a document as its source knows it ([`Source::anchor`]), meaning nothing to the viewer,

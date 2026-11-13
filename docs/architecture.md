@@ -61,7 +61,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer, and `source::WORKERS` to `source::serve` when clv is run again as a worker; command-line options and page lists |
 | `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/view/` | The viewer, below |
-| `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |
+| `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Texts`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |
 | `src/source/<backend>.rs` | One backend each ([Backends](#backends)) |
 | `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and painted by Blitz for `svg.rs`, in a worker process: the one file that names Blitz, both sides of that worker |
 | `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and heap capped by itself, killed past them, at most six alive ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)) |
@@ -90,6 +90,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
+| `search.rs` | A file's search (`/`): what is typed, the text read so far, folded, the matches in it and the one the reader is on ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). No IO of its own |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `icon.rs` | The icon beside `--help`'s first lines: whether it can show, where it goes, and its escape codes ([The icon in `--help`](#the-icon-in---help-iconrs)) |
 | `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
@@ -113,6 +114,10 @@ request is still listed; `try_recv` never blocks. A backend that has no better w
 images and drawings, gets plain threads from `source/threads.rs`: a render once begun runs to its
 end, and one no longer wanted is dropped when it is done; a render that panics comes back as a
 failed page.
+
+A source may give its text too, for the reader to search: `Source::texts` is `None` by default,
+and otherwise a `Texts`, which keeps the pool's contract for another kind of work
+([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)).
 
 ## Backends
 
@@ -847,6 +852,63 @@ a second, is no. The pager never waits for any of it:
 
 Quitting while an answer is due (the question, or a write's end) waits up to a second for it, so
 it doesn't land on the shell's command line.
+
+## Searching a file's text (`search.rs`, `pager.rs`)
+
+`/` in a file's pages searches its text
+([Spec-0006](specs/0006-search-a-pdfs-text.md)). The work is split along the layers: a backend
+gives its text and says where a part of it is on its pages, and the viewer folds case, matches,
+counts and moves, the same for every backend with text.
+
+**The contract.** `Source::texts` gives a `Texts`, asked for when a search starts and dropped when
+it ends, which ends its work without waiting for it. The text comes in chunks, in the document's
+order, each whatever the backend's text comes in, and a match never runs from one onto the next.
+`chunk_of(page)` says which chunk a page starts with. The work keeps `Pool`'s contract:
+`set_queue` replaces what is wanted, the most urgent first, each a `Want`: a chunk's text
+(`Want::Text`), or where the characters `from..to` of a chunk are on the pages (`Want::Rects`);
+`try_recv` never blocks and gives a `Got`: the text, or the rectangles, one for each line, each
+with its page, in the page's unit from its top left, as `Source::size` measures it; or why not, in
+words for the reader. A chunk's text is the text as it should be searched: what a line's end, a
+hyphen there or a ligature becomes is the backend's to decide.
+
+**What the viewer keeps** (`Search`). Each chunk's text is folded once (`Folded`): a character at
+a time to lower case (a final sigma to a sigma, so that folding a letter at a time loses nothing a
+whole word's lower case had), each run of whitespace made one space. With it, a map from the folded
+text back to the original's characters, one entry (a byte of the folded text, a character of the
+original) wherever the two stop running one for one, so that a page of ordinary prose has one entry:
+the source is asked for rectangles by the original's characters. At most 1 MiB a chunk
+(`MAX_CHUNK`), 64 MiB in all, maps included (`MAX_TEXT`), and 262,144 chunks (`MAX_CHUNKS`); past
+them the chunk, or the rest, is left unread, and the status line says so. With `--pages`, only the
+chunks of the pages given are read.
+
+**Matching** is `str::match_indices` on the folded text with the query folded the same way: left
+to right, never overlapping, about a millisecond a megabyte. No key waits on it: a key, and each
+pass of the pager's loop after it (`Nav::search_on`, every `POLL` while `Search::busy`), folds at
+most 4 MiB of new text and matches at most 4 MiB (`SLICE`), and the status line's count ends in `…`
+until both are done. A query the last one starts (a character typed) can only match in the chunks
+the last one matched in, so only those are matched again; anything else matches every chunk again.
+At most 10,000 matches are kept (`MAX_MATCHES`), the first in the document's order however the
+chunks arrive, and counted as `10000+`; past that, a longer query matches every chunk again, since
+the chunks whose matches weren't kept are no longer known.
+
+**Where the reader is.** The match the reader is on is a chunk and a place in it, never a number
+among the matches, so text read later leaves it theirs and only its number changes. `Enter` goes to
+the first match at or after the chunk the top of the screen starts with, round to the first of all;
+with none known yet, the first to arrive is gone to, once. `n` and `N` go from the match the reader
+is on while its page is on screen, and otherwise from the top of the screen. The view goes to the
+page the match's chunk starts on; the match's rectangles are asked for then, and when they arrive
+(`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way down the
+screen, unless it was on screen already or a key was pressed since.
+
+**What is asked of the source** (`Search::queue`): where the matches on the screen's pages are,
+the reader's first, at most 1,024 of them and none while the query is typed; then the chunks still
+unread, outward from the one the top of the screen starts with. The queue is set again only when
+that changes (the reader moved, the matches or the one the reader is on changed), not as chunks
+arrive: a `Texts` gives a thing once while it stays listed.
+
+**What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
+its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
+at most 64 for a match. What fails costs that chunk or that rectangle.
 
 ## The terminal's state
 

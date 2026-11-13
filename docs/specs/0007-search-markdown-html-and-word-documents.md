@@ -68,6 +68,13 @@ change, so a search outlives one.
   field, a tab or an inline object becomes in it.
 - 🟡 **Paragraphs over the cap** — 1 MiB a chunk (Spec-0006): a paragraph past it, which ADR-0012's
   limits may allow.
+- 🟡 **A paragraph across a page break** — the viewer asks where the matches are for the chunks of
+  the pages on screen, from the chunk a page starts with to the next page's (`search.rs`'s
+  `chunks_of`, from Spec-0006, where a chunk is a page). A paragraph that starts on one page and
+  ends on the next is the first page's alone unless `chunk_of` says the next page starts with it
+  too: say which in the backend, and check that a match in its tail is found and scrolled to with
+  only the second page on screen. The status line's `page N unread` and `read N of M parts` are
+  worded for chunks that aren't pages only as far as that.
 
 ## Tasks
 

@@ -10,7 +10,7 @@ keep it short.
 |---|---|
 | The quality gates, before every commit | The five in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates), each under a `timeout` |
 | After touching `cfg` attributes | Each backend alone, also there |
-| One test, while working | `cargo test -j 2 --test it <name>`, or `--lib <name>` |
+| One test, while working | `cargo test -j 2 --test it <name>`, or `--bin clv <name>` for a unit test |
 | The docs' links and the specs' Index | `cargo test -j 2 --test docs` |
 | The queue | `cargo run -q --no-default-features --example spec_list [bucket]` |
 | Rewrite the Index | `cargo run -q --no-default-features --example spec_list -- --index` |
