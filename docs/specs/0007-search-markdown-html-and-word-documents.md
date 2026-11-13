@@ -1,6 +1,6 @@
 # Spec-0007: Search Markdown, HTML and Word documents
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-13
 - **Related:** [Spec-0006](0006-search-a-pdfs-text.md) (the search this extends, and its
   contract) and [its implementation notes](0006-search-a-pdfs-text-impl-20261113_1121.md);
@@ -130,7 +130,7 @@ change, so a search outlives one.
   pdfcraft`, and Spec-0006's PDF search tests unchanged; a fake `Texts` whose chunk runs over two
   pages, tinted with either page alone on screen (seen failing on `chunk_of`); a fake of paragraphs
   says `read N of M pages`, never `parts`.
-- [ ] **A document's text and its matches' places** — `Paged::texts` on the shared `Cache`,
+- [x] **A document's text and its matches' places** — `Paged::texts` on the shared `Cache`,
   `chunks_on` for every kind, the chunks' text and map, `selection_rects`. *Files:*
   `src/source/wordcraft.rs`, `tests/it/wordcraft.rs`, `tests/it/view_pager.rs`, `docs/usage.md`,
   `docs/architecture.md`. *Verify:* `cargo test -j 2 --test it wordcraft`: a word hyphenated at a
@@ -140,7 +140,7 @@ change, so a search outlives one.
   dark paper (`d`) tinted as ADR-0028's dark blend; the pool laid out once with a search going (a
   count of layouts through a `#[cfg(test)]` field). Manual: in kitty, `clv README.md`, `/search⏎`,
   `n`, `p`; then `d`: the tint reads on dark paper.
-- [ ] **A search across a relayout** — the search handed to the new level and its `Texts`, the
+- [x] **A search across a relayout** — the search handed to the new level and its `Texts`, the
   match you are on kept, its rectangles asked for again. *Files:* `src/view/pager.rs`,
   `src/view/search.rs`, `tests/it/view_pager.rs`, `docs/usage.md`. *Verify:* `cargo test -j 2
   --test it view_pager`: `/the⏎ 3n` then `]` on a Markdown file: still `3/N`, the tint on the new
@@ -152,7 +152,7 @@ change, so a search outlives one.
 
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: name them.
-- [ ] Manual: in kitty, a Markdown file and a Word document with a table, `/word⏎`, `n` through
+- [x] Manual: in kitty, a Markdown file and a Word document with a table, `/word⏎`, `n` through
   the matches, `]` and a resize keeping the match, `d` on the Markdown; inside tmux the same.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)); README's
   Plans bullet "Search Markdown, HTML and Word documents" comes out.
@@ -165,3 +165,4 @@ change, so a search outlives one.
   across a page break; the text queue shared in `src/source/texts.rs`; the status line in pages;
   the paragraphs' text settled; three tasks (spec-update).
 - 2026-11-13 — Implementing ([notes](0007-search-markdown-html-and-word-documents-impl-20261113_1721.md)).
+- 2026-11-13 — Done.

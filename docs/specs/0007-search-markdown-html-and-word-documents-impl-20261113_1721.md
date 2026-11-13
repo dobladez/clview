@@ -261,3 +261,11 @@ Three findings, each with a test seen failing before its fix.
   nothing for `ASK` and `SET`). Usage says so. Test: `a_fields_result_is_its_text` with a `PAGE`
   saved as 99 and a `NUMPAGES` as 98, seen failing (`Page 99.`). The author field's rectangles are
   still placed, in the same test.
+
+## Done
+
+- **The manual checks** passed, the owner's, on a release build of `f6fa109`: kitty and tmux,
+  `README.md` searched with `n`, `p` and `d`; a Markdown file's search kept across `]`, `+` and a
+  resize; a Word document with a table. Tasks 2 and 3 and the Done list's manual item are ticked
+  on that word. The two rounds of review fixes after it (`db8f9b8`, `67edfa5`) have their tests
+  and gates, not a manual check of their own.
