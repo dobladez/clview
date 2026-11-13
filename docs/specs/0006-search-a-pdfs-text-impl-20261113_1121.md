@@ -259,3 +259,49 @@ Five findings, all real; two were reproduced by a test before anything was chang
   failed once in a full run, on a busy machine, and passed five times of five alone: it read the
   second client's stream the moment tmux said the uploads were whole, and found one page of the
   two. It now waits, up to its deadline, for both tinted pages to be in that stream.
+
+## After the second review (Codex, 2026-11-13)
+
+Four findings; the first three were reproduced by a test before anything was changed.
+
+- **A query taken back and typed again as it was left its rectangles owed for ever** (`a`, kept;
+  then `/`, Backspace, `a`, Enter in one read). `requery` threw the rectangles away, the ranges
+  asked came out the same as before, and the source, which gives a range once while it is listed,
+  never gave them again. Asking again wouldn't have helped either, without a queue that left them
+  out in between. So nothing is thrown away while it is still asked for: `requery` leaves what was
+  placed, and `Search::queue` makes the ranges wanted again from the matches there are, each
+  keeping what came for it if the same range was asked before, by this match or by another query's.
+  That also covers two matches of two queries that start at different places and cover the same
+  characters.
+- **`n` and `N` took a match for on screen whenever its page was**, also scrolled out of view on a
+  page taller than the window, and `Enter` started from the page's top. `Screen::visible` is the
+  part of the top page the pager shows; a match is on screen when some of it is in that part, and
+  the top of the screen is the top of that part, by the matches' rectangles where they are known.
+  They aren't known when `Enter` is pressed (none is asked for while the query is typed), so on
+  such a page `Enter` chooses by page, as before, and chooses again once the page's rectangles
+  have come (`picking`), before the view is scrolled to anything: one scroll, to the right match;
+  the status line may say `1/3` for the moment in between. A key pressed meanwhile leaves the
+  first choice. Task 1's note that "at or after the top of the screen" is by chunk no longer holds
+  on such a page.
+- **A match ending exactly where the screen ends was scrolled to**, as if off it: found by the
+  test above. Its last row is the one before its bottom edge.
+- **More than 262,144 chunks stopped all reading**, at the start. The first 262,144 are read, and a
+  page shown that is past them is counted as unread (`beyond`), so the status line says `read 1 of
+  2 pages`. The unit it counts in comes from the text itself (a chunk a page), not from how many
+  chunks are kept.
+- **The pager-exit test couldn't have caught a worker left behind**: it looked among the pager's
+  descendants after the pager had gone. It now takes the worker's id first and asks `ps` for that
+  id after. A second trap was under it: on the test's pseudo-terminal the session ends with `clv`,
+  and the hang-up kills a worker left behind anyway. `quitting_while_a_pages_text_is_read_leaves_no_worker`
+  runs `clv` from a shell that outlives it, as a reader's does, and quits while the worker is on a
+  heavy page; with the kill taken out of `PagesText`'s drop it fails. (A worker idle at the quit
+  ends by itself when its stdin does, kill or no kill, so only a busy one can show the difference.)
+- **Seen failing:** the three reproductions before their fixes; and by changing the line and
+  copying the file back: the rectangles thrown away at a query change, and not kept when the
+  ranges are made again (`a_query_typed_again_as_it_was_keeps_its_matches_rectangles`); a match on
+  screen whenever its page is, the screen's top taken for the page's, `Enter` never choosing again,
+  the pager saying no part of the page, and a match ending at the screen's end taken for off it
+  (`on_a_page_that_scrolls_n_goes_from_the_part_on_screen`, and for some
+  `a_match_on_a_page_that_scrolls_is_scrolled_into_view`); nothing read past the cap, and the pages
+  past it not counted (`a_text_in_more_chunks_than_are_searched_is_read_as_far_as_that`); the kill
+  taken out of the search's end (`quitting_while_a_pages_text_is_read_leaves_no_worker`).

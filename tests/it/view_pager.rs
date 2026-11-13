@@ -1238,17 +1238,62 @@ fn slash_searches_a_pdfs_text_in_a_worker_that_goes_with_the_search() {
     no_text_worker(&view, "the search was cleared");
     view.press("n");
     view.wait_until("the next page", |t| last_bar(t).contains(" many.pdf page 4/5 "));
-    // Nothing matches: said once all is read. And quitting with a search open leaves no worker.
+    // Nothing matches: said once all is read. And quitting with a search open leaves no worker:
+    // looked for by its own id, since one that outlived the pager would be nobody's descendant.
     view.press("/zebra");
     view.wait_until("no match", |t| last_bar(t).contains(" /zebra no match ⏎ search · esc cancel page 4/5 "));
-    let pid = view.child.id();
+    let open = workers(&view);
+    assert_eq!(open.len(), 1, "the worker of the search still open");
     view.press("\x03");
     assert!(view.finish().success());
     let deadline = Instant::now() + PATIENCE;
-    while !descendants_running(pid, "--worker pdf-text").is_empty() {
+    while open.iter().any(|pid| still_a_text_worker(*pid)) {
         assert!(Instant::now() < deadline, "the worker outlived the pager");
         std::thread::sleep(Duration::from_millis(20));
     }
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// Whether process `pid` is, still, a worker reading a PDF's text: asked of `ps` by its id, so a
+/// worker whose viewer is gone, and that is no longer anyone's descendant, is found all the same.
+fn still_a_text_worker(pid: u32) -> bool {
+    let ps = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output().unwrap();
+    String::from_utf8_lossy(&ps.stdout).contains("--worker pdf-text")
+}
+
+/// Quitting while the worker is reading a page kills it with the pager: it isn't left to finish
+/// the page, or to run into its cap, with nobody to answer. The page is a heavy one, which takes
+/// the worker a second, and the worker is looked for by its own id once the pager has gone. The
+/// shell that ran `clv` stays a while after it, as a reader's does: a terminal that closed with
+/// the pager would hang the worker up, and hide one left behind.
+#[test]
+fn quitting_while_a_pages_text_is_read_leaves_no_worker() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = with_heavy_pages("search-heavy-quit", 2, &[0]);
+    let command = format!("'{BIN}' '{}' --protocol kitty --per-row 1; sleep 2", pdf.display());
+    let mut view = Session::start_command(PLAIN, &command, 160, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/2"));
+    view.press("/page");
+    let deadline = Instant::now() + PATIENCE;
+    let reading = loop {
+        let found = descendants_running(view.child.id(), "--worker pdf-text");
+        if !found.is_empty() {
+            break found;
+        }
+        assert!(Instant::now() < deadline, "no worker for the search");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(reading.iter().all(|pid| still_a_text_worker(*pid)), "found by its id while it reads");
+    view.press("\x03");
+    view.wait_until("the pager gone", |t| t.contains("\x1b[?1049l"));
+    let gone = Instant::now();
+    while reading.iter().any(|pid| still_a_text_worker(*pid)) {
+        assert!(gone.elapsed() < Duration::from_millis(400), "the worker outlived the pager, still reading");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 

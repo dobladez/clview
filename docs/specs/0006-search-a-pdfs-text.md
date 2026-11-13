@@ -277,3 +277,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   item under Done stay open: looking at it in kitty and inside tmux is the owner's, and the tint's
   colours are the first thing to look at (ADR-0028).
 - 2026-11-13 — Five findings of Codex's review of the code fixed (the notes say which).
+- 2026-11-13 — Four findings of its second review fixed (the notes say which).

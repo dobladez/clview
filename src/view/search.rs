@@ -153,12 +153,14 @@ enum Chunk {
 }
 
 /// Where a match's rectangles are, asked of the source: the original's characters it covers, and
-/// the rectangles once they have come, each on its page, within it.
-#[derive(Debug)]
+/// the rectangles once they have come, each on its page, within it; with them, where the first is
+/// down its page, its top and its bottom as shares of the page's height.
+#[derive(Clone, Debug)]
 struct Placed {
     from: usize,
     to: usize,
     rects: Option<Vec<(usize, [f32; 4])>>,
+    span: Option<(usize, f32, f32)>,
 }
 
 /// What a search's queue was last set for ([`Search::queue`]): the chunk read outward from, whether
@@ -172,12 +174,15 @@ struct Queued {
 }
 
 /// What of the screen a search goes by: the document's page at its top left, the pages on it, and
-/// the pages `near` it, rendered ahead of the reader, whose matches are tinted as theirs are.
+/// the pages `near` it, rendered ahead of the reader, whose matches are tinted as theirs are. And
+/// of a top page taller than the window, the part `visible`, from where it starts to where it
+/// ends as shares of the page's height: `None` for a page all on screen.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Screen<'a> {
     pub(super) top: usize,
     pub(super) pages: &'a [usize],
     pub(super) near: &'a [usize],
+    pub(super) visible: Option<(f32, f32)>,
 }
 
 /// A match's rectangle on a page, in the page's unit from its top left (left, top, right, bottom),
@@ -315,12 +320,15 @@ pub(super) struct Search {
     /// The chunks searched, and those of them still to come, or that never will.
     wanted: usize,
     unread: usize,
+    /// The pages shown whose text is past the chunks a search takes ([`MAX_CHUNKS`]): never read.
+    beyond: usize,
+    /// Whether the text comes a chunk a page: what the status line counts in.
+    paged: bool,
     failed: usize,
     first_failed: Option<usize>,
     /// Why the last chunk left unread was, as told.
     told: Option<String>,
-    /// The bytes kept ([`Folded::size`]), and whether reading stopped at [`MAX_TEXT`] or
-    /// [`MAX_CHUNKS`].
+    /// The bytes kept ([`Folded::size`]), and whether reading stopped at [`MAX_TEXT`].
     kept: usize,
     full: bool,
     /// Whether any chunk read holds anything but whitespace.
@@ -342,6 +350,9 @@ pub(super) struct Search {
     waiting: bool,
     /// The match the reader is on is to be scrolled to, once its rectangles are known.
     revealing: bool,
+    /// Enter's match is to be chosen again once the top page's matches' rectangles are known: it
+    /// was chosen by page, and the page is taller than the window.
+    picking: bool,
     wrapped: bool,
     /// The rectangles of the matches on the pages on screen, by chunk and start.
     placed: BTreeMap<(usize, u32), Placed>,
@@ -380,8 +391,9 @@ impl Search {
     /// (`--pages`, or all): being typed, with nothing typed yet. Only the chunks of those pages are
     /// read and searched.
     pub(super) fn new(texts: Box<dyn Texts>, pages: &[usize], count: usize) -> Self {
+        // Of a text in more chunks than a search takes, the first are read, and the rest left unread.
         let total = texts.chunks().min(MAX_CHUNKS);
-        let full = texts.chunks() > MAX_CHUNKS;
+        let paged = texts.chunks() == count;
         let mut starts = Vec::new();
         let mut start = 0;
         for page in 0..count {
@@ -390,8 +402,11 @@ impl Search {
         }
         starts.push(total);
         let mut chunks: Vec<Chunk> = std::iter::repeat_with(|| Chunk::Out).take(total).collect();
-        let mut wanted = 0usize;
+        let (mut wanted, mut beyond) = (0usize, 0usize);
         for page in pages {
+            if texts.chunk_of(*page) >= total && *page < count {
+                beyond = beyond.saturating_add(1);
+            }
             for chunk in chunks_of(&starts, *page) {
                 if let Some(slot @ Chunk::Out) = chunks.get_mut(chunk) {
                     *slot = Chunk::Unread;
@@ -405,11 +420,13 @@ impl Search {
             starts,
             wanted,
             unread: wanted,
+            beyond,
+            paged,
             failed: 0,
             first_failed: None,
             told: None,
             kept: 0,
-            full,
+            full: false,
             any_text: false,
             typing: true,
             query: String::new(),
@@ -421,6 +438,7 @@ impl Search {
             at: None,
             waiting: false,
             revealing: false,
+            picking: false,
             wrapped: false,
             placed: BTreeMap::new(),
             dirty: true,
@@ -449,6 +467,7 @@ impl Search {
     pub(super) fn heard(&mut self) {
         self.wrapped = false;
         self.revealing = false;
+        self.picking = false;
     }
 
     /// `/` again: the query kept is typed on.
@@ -497,7 +516,8 @@ impl Search {
         self.waiting = false;
         self.revealing = false;
         self.wrapped = false;
-        self.placed.clear();
+        // What was placed stays until the queue is made again ([`Search::queue`]), which keeps the
+        // rectangles of a range still asked for: the source gives them once while it is listed.
         self.dirty = true;
         self.count_on(SLICE);
     }
@@ -512,32 +532,55 @@ impl Search {
         let found = self.first_from(screen);
         self.at = found;
         self.waiting = found.is_none() && self.busy();
+        // On a page taller than the window, which of its matches is the first on screen is known
+        // once their rectangles are: chosen again then ([`Search::poll`]).
+        self.picking = screen.visible.is_some();
         found.map(|hit| self.go_to(hit))
     }
 
     /// The first match known at or after the top of the `screen`, or past the end, the first of all.
     fn first_from(&self, screen: &Screen<'_>) -> Option<(usize, u32)> {
-        let top = self.starts.get(screen.top).copied().unwrap_or(0);
-        let first = |(chunk, hits): (&usize, &Vec<Hit>)| hits.first().map(|hit| (*chunk, hit.0));
-        self.hits.range(top..).find_map(first).or_else(|| self.hits.iter().find_map(first))
+        self.nth(self.before(screen)).or_else(|| self.nth(0))
     }
 
-    /// `n` (`forward`) or `N`, `count` matches on: from the match the reader is on while its page
-    /// is on screen, otherwise from the top of the screen; past the last, round to the first, and
-    /// the other way, which the status line then says. `None` with no match to go to.
+    /// How many matches come before the top of the `screen`: those of the chunks before the one its
+    /// top page starts with, and on a page taller than the window, those of that page that end
+    /// above the part on screen, as far as their rectangles are known: the first not known to, and
+    /// those after it, count as on it.
+    fn before(&self, screen: &Screen<'_>) -> usize {
+        let top = self.starts.get(screen.top).copied().unwrap_or(0);
+        let earlier = self.hits.range(..top).map(|(_, hits)| hits.len()).fold(0usize, usize::saturating_add);
+        let Some((from, _)) = screen.visible else { return earlier };
+        let keys = chunks_of(&self.starts, screen.top).flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
+        let above = |key: &(usize, u32)| {
+            self.placed.get(key).and_then(|placed| placed.span).is_some_and(|(page, _, bottom)| page == screen.top && bottom <= from)
+        };
+        earlier.saturating_add(keys.take_while(above).count())
+    }
+
+    /// Whether the match `at` is on the `screen`: its page is, and on a top page taller than the
+    /// window, some of the match is in the part on screen, where its rectangles say where it is.
+    fn on_screen(&self, at: (usize, u32), screen: &Screen<'_>) -> bool {
+        match (self.placed.get(&at).and_then(|placed| placed.span), screen.visible) {
+            (Some((page, top, bottom)), Some((from, to))) if page == screen.top => bottom > from && top < to,
+            _ => screen.pages.contains(&self.page_at(at)),
+        }
+    }
+
+    /// `n` (`forward`) or `N`, `count` matches on: from the match the reader is on while it is on
+    /// screen, otherwise from the top of the screen; past the last, round to the first, and the
+    /// other way, which the status line then says. `None` with no match to go to.
     pub(super) fn step(&mut self, forward: bool, count: usize, screen: &Screen<'_>) -> Option<Go> {
         self.wrapped = false;
         let total = isize::try_from(self.count).ok().filter(|total| *total > 0)?;
         let steps = isize::try_from(count.max(1)).unwrap_or(isize::MAX);
-        let on = self.at.filter(|at| screen.pages.contains(&self.page_at(*at))).and_then(|at| self.ordinal(at));
+        let on = self.at.filter(|at| self.on_screen(*at, screen)).and_then(|at| self.ordinal(at));
         let from = match on {
             Some(ordinal) => isize::try_from(ordinal).unwrap_or(0),
             None => {
                 // From the top of the screen: the first match at or after it is one step on, and
                 // the last before it one step back.
-                let top = self.starts.get(screen.top).copied().unwrap_or(0);
-                let before = self.hits.range(..top).map(|(_, hits)| hits.len()).fold(0usize, usize::saturating_add);
-                let before = isize::try_from(before).unwrap_or(0);
+                let before = isize::try_from(self.before(screen)).unwrap_or(0);
                 if forward { before.saturating_sub(1) } else { before }
             }
         };
@@ -586,13 +629,29 @@ impl Search {
         }
         if self.revealing
             && let Some(at) = self.at
-            && let Some((page, span)) = self.span(at, size_of)
+            && let Some((page, span)) = self.span(at)
         {
             self.revealing = false;
             polled.go = Some(Go { page, span: Some(span) });
         }
         self.queue(screen);
         polled.tinted = self.retint(screen);
+        // Enter chose among the top page's matches before it knew where they are: now that it
+        // does, the first at or after the top of what is shown, if that is another.
+        if self.picking && !self.waiting && self.tints.get(&screen.top).is_none_or(|(_, settled)| *settled) {
+            self.picking = false;
+            if let Some(hit) = self.first_from(screen).filter(|hit| Some(*hit) != self.at) {
+                self.at = Some(hit);
+                self.dirty = true;
+                self.queue(screen);
+                polled.tinted |= self.retint(screen);
+                polled.go = Some(match self.span(hit) {
+                    Some((page, span)) => Go { page, span: Some(span) },
+                    None => self.go_to(hit),
+                });
+                self.revealing = self.span(hit).is_none();
+            }
+        }
         let status = self.status();
         polled.changed = status != self.status;
         self.status = status;
@@ -764,10 +823,8 @@ impl Search {
 
     /// The page the match `at` is on and where on it, from its top to its bottom as shares of the
     /// page's height, once its rectangles are known.
-    fn span(&self, at: (usize, u32), size_of: &dyn Fn(usize) -> Option<(f32, f32)>) -> Option<(usize, (f32, f32))> {
-        let (page, [_, top, _, bottom]) = *self.placed.get(&at)?.rects.as_ref()?.first()?;
-        let (_, height) = size_of(page).filter(|(_, height)| *height > 0.0)?;
-        Some((page, (top / height, bottom / height)))
+    fn span(&self, at: (usize, u32)) -> Option<(usize, (f32, f32))> {
+        self.placed.get(&at)?.span.map(|(page, top, bottom)| (page, (top, bottom)))
     }
 
     /// The rectangles the source gives for `want`, or why not: kept for the match that asked, each
@@ -783,7 +840,12 @@ impl Search {
             let rect = [x0.max(0.0), y0.max(0.0), x1.min(width), y1.min(height)];
             (finite && rect[0] < rect[2] && rect[1] < rect[3]).then_some((page, rect))
         };
-        placed.rects = Some(rects.unwrap_or_default().into_iter().take(MAX_LINES).filter_map(clipped).collect());
+        let rects: Vec<(usize, [f32; 4])> = rects.unwrap_or_default().into_iter().take(MAX_LINES).filter_map(clipped).collect();
+        placed.span = rects.first().and_then(|(page, [_, top, _, bottom])| {
+            let (_, height) = size_of(*page).filter(|(_, height)| *height > 0.0)?;
+            Some((*page, top / height, bottom / height))
+        });
+        placed.rects = Some(rects);
         self.marked = true;
     }
 
@@ -802,19 +864,23 @@ impl Search {
                 let hits = chunks.flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
                 keys.extend(hits.take(MAX_PLACED));
             }
-            self.placed.retain(|key, _| keys.contains(key));
-            // The original's characters each covers, a chunk's in one pass.
-            let mut new = keys.iter().filter(|key| !self.placed.contains_key(key)).copied().peekable();
-            let mut found = Vec::new();
-            while let Some((chunk, _)) = new.peek().copied() {
-                let starts: Vec<u32> = std::iter::from_fn(|| new.next_if(|key| key.0 == chunk)).map(|key| key.1).collect();
+            // Made again from the matches there are now: the original's characters each covers, a
+            // chunk's in one pass. A range asked for before, by this match or by another query's,
+            // keeps what the source gave for it, or is still owed it: the source gives a range once
+            // while it stays listed, so its rectangles are never thrown away while it does.
+            let was = std::mem::take(&mut self.placed);
+            let mut keys = keys.into_iter().peekable();
+            while let Some((chunk, _)) = keys.peek().copied() {
+                let starts: Vec<u32> = std::iter::from_fn(|| keys.next_if(|key| key.0 == chunk)).map(|key| key.1).collect();
                 let (Some(Chunk::Read(folded)), Some(all)) = (self.chunks.get(chunk), self.hits.get(&chunk)) else { continue };
                 let hits: Vec<Hit> = all.iter().filter(|hit| starts.binary_search(&hit.0).is_ok()).copied().collect();
                 for (hit, (from, to)) in hits.iter().zip(folded.originals(&hits)) {
-                    found.push(((chunk, hit.0), Placed { from, to, rects: None }));
+                    let asked =
+                        was.range((chunk, 0)..=(chunk, u32::MAX)).map(|(_, placed)| placed).find(|placed| placed.from == from && placed.to == to);
+                    let placed = asked.cloned().unwrap_or(Placed { from, to, rects: None, span: None });
+                    self.placed.insert((chunk, hit.0), placed);
                 }
             }
-            self.placed.extend(found);
         }
         let centre = self.starts.get(screen.top).copied().unwrap_or(0);
         let reading = self.reading();
@@ -860,12 +926,11 @@ impl Search {
         if self.wrapped {
             said.push_str(" · search wrapped");
         }
-        let pages = self.starts.len().saturating_sub(1);
-        let unit = if self.chunks.len() == pages { "pages" } else { "parts" };
+        let unit = if self.paged { "pages" } else { "parts" };
         match self.first_failed {
-            _ if self.full || self.failed > 1 => {
+            _ if self.full || self.failed > 1 || self.beyond > 0 => {
                 let read = self.wanted.saturating_sub(self.unread).saturating_sub(self.failed);
-                said.push_str(&format!(" · read {read} of {} {unit}", self.wanted));
+                said.push_str(&format!(" · read {read} of {} {unit}", self.wanted.saturating_add(self.beyond)));
             }
             Some(chunk) => said.push_str(&format!(" · page {} unread", self.page_of(chunk).saturating_add(1))),
             None => {}
@@ -980,7 +1045,7 @@ pub(super) mod tests {
 
     /// The first page on screen, alone.
     fn at(page: &[usize]) -> Screen<'_> {
-        Screen { top: page[0], pages: page, near: &[] }
+        Screen { top: page[0], pages: page, near: &[], visible: None }
     }
 
     /// Polled until there is no more to read or to match.
@@ -1250,6 +1315,54 @@ pub(super) mod tests {
         assert_eq!(search.placed.values().next().and_then(|placed| placed.rects.clone()), Some(vec![(0, [0.0, 0.0, 2.0, 10.0])]));
     }
 
+    /// A query taken back and typed again as it was, and kept, all between two passes (`/`,
+    /// Backspace, `a`, Enter read together): its matches are the same, and so are the ranges asked
+    /// for, which the source has given and won't give again while they stay listed. Their rectangles
+    /// are kept, so nothing is owed, and the reader's mark still follows `n`.
+    #[test]
+    fn a_query_typed_again_as_it_was_keeps_its_matches_rectangles() {
+        let fake = Fake::of(&["apple apple"]);
+        let mut search = search(&fake);
+        let screen = at(&[0]);
+        type_in(&mut search, "a");
+        search.enter(&screen);
+        settle(&mut search, &screen);
+        let marks = |search: &Search| search.tint(0).0.map(|tint| tint.marks.clone());
+        assert_eq!(marks(&search), Some(vec![([0.0, 0.0, 1.0, 10.0], true), ([6.0, 6.0, 7.0, 16.0], false)]));
+        search.edit();
+        search.backspace();
+        search.typed('a');
+        search.enter(&screen);
+        settle(&mut search, &screen);
+        assert!(!search.expecting(), "rectangles the source gave are owed again, for ever");
+        search.step(true, 1, &screen);
+        settle(&mut search, &screen);
+        assert_eq!(search.status(), "/a 2/2");
+        assert_eq!(marks(&search), Some(vec![([0.0, 0.0, 1.0, 10.0], false), ([6.0, 6.0, 7.0, 16.0], true)]));
+    }
+
+    /// A text in more chunks than a search takes is read as far as that, not left unread whole: a
+    /// match on its first page is found, and a page past the cap is said to be unread.
+    #[test]
+    fn a_text_in_more_chunks_than_are_searched_is_read_as_far_as_that() {
+        let mut chunks = vec![String::new(); MAX_CHUNKS + 1];
+        chunks[0] = "needle".into();
+        chunks[MAX_CHUNKS] = "needle".into();
+        let fake = Rc::new(Fake { chunks, ..Fake::default() });
+        let mut first = Search::new(Box::new(fake.clone()), &[0], MAX_CHUNKS + 1);
+        type_in(&mut first, "needle");
+        settle(&mut first, &at(&[0]));
+        assert_eq!(first.status(), "/needle 1");
+        // The page past the cap, with the first: one read of the two, and said.
+        let mut both = Search::new(Box::new(fake.clone()), &[0, MAX_CHUNKS], MAX_CHUNKS + 1);
+        type_in(&mut both, "needle");
+        settle(&mut both, &at(&[0]));
+        assert_eq!(both.status(), "/needle 1 · read 1 of 2 pages");
+        assert!(!both.busy() && !both.expecting());
+        both.enter(&at(&[0]));
+        assert_eq!(both.step(true, 1, &at(&[0])), Some(Go { page: 0, span: None }), "round to the one match");
+    }
+
     /// What the source gives is checked: a chunk that isn't one of its own or comes twice, text past
     /// the cap, a rectangle on no page, not finite, or outside its page. Each costs only itself.
     #[test]
@@ -1480,7 +1593,7 @@ pub(super) mod tests {
     fn a_pages_tint_is_its_matches_once_their_rectangles_have_come() {
         let fake = Fake::of(&["page page", "page", "none", "page"]);
         let mut search = search(&fake);
-        let screen = Screen { top: 0, pages: &[0], near: &[1, 2] };
+        let screen = Screen { top: 0, pages: &[0], near: &[1, 2], visible: None };
         type_in(&mut search, "page");
         settle(&mut search, &screen);
         assert_eq!((search.tint(0), search.tint(1)), ((None, true), (None, true)), "none while it is typed");
@@ -1503,7 +1616,7 @@ pub(super) mod tests {
         assert_eq!(second.marks, [([0.0, 0.0, 4.0, 10.0], false), ([5.0, 5.0, 9.0, 15.0], true)]);
         assert_ne!(second.key, first.key);
         // Paged on: page 4 is on screen, its rectangles asked for, and page 1's tint let go of.
-        let on = Screen { top: 3, pages: &[3], near: &[2] };
+        let on = Screen { top: 3, pages: &[3], near: &[2], visible: None };
         assert!(search.poll(&on, &square).tinted);
         assert_eq!((search.tint(3), search.tint(0)), ((None, false), (None, true)));
         search.poll(&on, &square);

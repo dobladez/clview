@@ -886,7 +886,8 @@ impl Nav {
             Key::Backspace if !empty => search.backspace(),
             Key::Enter if !empty => {
                 let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-                let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[] };
+                let screen =
+                    search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[], visible: self.part_shown() };
                 let go = self.search.as_mut().and_then(|search| search.enter(&screen));
                 self.go_to_match(go);
             }
@@ -902,7 +903,7 @@ impl Nav {
         // At most `MAX_TYPED` digits: it fits.
         let count = std::mem::take(&mut self.typed).parse::<usize>().unwrap_or(1);
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
-        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[] };
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[], visible: self.part_shown() };
         let go = self.search.as_mut().and_then(|search| search.step(forward, count, &screen));
         self.go_to_match(go);
     }
@@ -929,7 +930,7 @@ impl Nav {
         }
         let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
         let near = self.around(AHEAD, BEHIND);
-        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &near };
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &near, visible: self.part_shown() };
         let Some(polled) = self.search.as_mut().map(|search| search.poll(&screen, size_of)) else { return (false, false) };
         let moved = polled.go.is_some();
         self.go_to_match(polled.go);
@@ -938,6 +939,18 @@ impl Nav {
             self.message = Some(said);
         }
         (polled.changed || said, moved || polled.tinted)
+    }
+
+    /// The part of the first page on screen that shows, where it is taller than the window: from
+    /// where it starts to where it ends, as shares of the page's height, by the last draw's rows.
+    /// `None` for a page all on screen.
+    fn part_shown(&self) -> Option<(f32, f32)> {
+        if self.max_scroll == 0 {
+            return None;
+        }
+        let rows = f32::from(self.visible) + f32::from(self.max_scroll);
+        let top = f32::from(self.scroll.min(self.max_scroll));
+        Some((top / rows, (top + f32::from(self.visible)) / rows))
     }
 
     /// Page `page`'s tint, where a search kept has matches on it, and whether it is the one the page
@@ -1319,9 +1332,10 @@ impl Nav {
         if let Some((top, bottom)) = self.reveal.take() {
             // Shares of the rows, so within them. A match off screen comes a third of the way down it,
             // as far as the page scrolls; one on screen leaves the view where it is.
-            let row = |share: f32| (share.clamp(0.0, 1.0) * f32::from(rows)) as u16;
-            let (top, bottom) = (row(top), row(bottom));
-            if top < self.scroll || bottom >= self.scroll.saturating_add(visible) {
+            // Its first row, and the row after its last (a hundredth of a row is the arithmetic's).
+            let rows_down = |share: f32| share.clamp(0.0, 1.0) * f32::from(rows);
+            let (top, bottom) = (rows_down(top) as u16, (rows_down(bottom) - 0.01).ceil().max(0.0) as u16);
+            if top < self.scroll || bottom > self.scroll.saturating_add(visible) {
                 self.scroll = top.saturating_sub(visible / 3);
             }
         }
@@ -4632,14 +4646,63 @@ mod tests {
         nav.shown(20, 100);
         assert_eq!(nav.scroll, 63);
         search_keys(&mut nav, &fake, &[Key::Char('N')]);
-        // Back to the first, scrolled away from: into view again. Near the end, as far as the page scrolls.
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 2/3".into(), 56), "back to the second, its top above the screen");
+        // Scrolled away to the top of the page, the match off screen: `N` goes from the top of the screen,
+        // where none comes before, so round to the last, into view. Near the end, as far as the page scrolls.
         nav.scroll = 0;
         search_keys(&mut nav, &fake, &[Key::Char('N')]);
         nav.shown(20, 100);
-        assert_eq!(nav.scroll, 54);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 3/3 · search wrapped".into(), 63));
+        // A match that ends where the screen does is on it.
+        nav.scroll = 60;
+        nav.reveal = Some((0.7, 0.8));
+        nav.shown(20, 100);
+        assert_eq!(nav.scroll, 60);
         nav.reveal = Some((0.95, 1.0));
         nav.shown(20, 100);
         assert_eq!(nav.scroll, 80);
+    }
+
+    /// On a page that scrolls, "on screen" is the part of it on screen: with the reader's match
+    /// scrolled off, `n` and `N` go from the top of what is shown, not from that match; and Enter
+    /// goes to the first match at or after the top of what is shown, not of the page.
+    #[test]
+    fn on_a_page_that_scrolls_n_goes_from_the_part_on_screen() {
+        // Three matches, 10, 50 and 90 of the page's 100 units down, each 10 high; 20 rows of 100 show.
+        let text = format!("{0}ab{1}ab{1}ab", "x".repeat(10), "x".repeat(38));
+        let fake = search::tests::Fake::of(&[&text]);
+        let mut nav = reader(0, 1, 20, 100);
+        search_for(&mut nav, &fake, "/ab");
+        search_keys(&mut nav, &fake, &[Key::Enter]);
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 1/3".into(), 0), "rows 10 to 20: on screen already");
+        // Scrolled to the bottom, rows 80 to 100: the match there is the next, and the view stays.
+        nav.scroll = 80;
+        search_keys(&mut nav, &fake, &[Key::Char('n')]);
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 3/3".into(), 80));
+        // Scrolled to the middle, rows 40 to 60, the reader's match off screen below: `N` goes to
+        // the last match above the top of the screen, and `n` to the first from it.
+        nav.scroll = 40;
+        search_keys(&mut nav, &fake, &[Key::Char('N')]);
+        assert_eq!(searched(&nav), "/ab 1/3");
+        nav.shown(20, 100);
+        nav.scroll = 40;
+        search_keys(&mut nav, &fake, &[Key::Char('n')]);
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 2/3".into(), 40));
+        // With the match on screen, from it, as ever.
+        search_keys(&mut nav, &fake, &[Key::Char('n')]);
+        assert_eq!(searched(&nav), "/ab 3/3");
+        // Enter, scrolled past the first two: the first match from the top of what is shown.
+        nav.shown(20, 100);
+        nav.scroll = 70;
+        search_keys(&mut nav, &fake, &[Key::Char('/'), Key::Enter]);
+        assert_eq!(searched(&nav), "/ab 3/3");
+        nav.scroll = 30;
+        search_keys(&mut nav, &fake, &[Key::Char('/'), Key::Enter]);
+        assert_eq!(searched(&nav), "/ab 2/3");
     }
 
     proptest::proptest! {

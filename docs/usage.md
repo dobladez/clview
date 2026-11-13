@@ -356,7 +356,7 @@ to search, and `/` says so.
 
 While you type, the status line counts the matches in the text read so far (`/word 17…`, and
 `/word 17` once all of it is read and matched), and the view stays where it is. `Enter` searches,
-as in `less`: the view goes to the first match at or after the page at the top of the screen, or
+as in `less`: the view goes to the first match at or after the top of the screen, or
 past the end, to the first in the file, and the search is kept. If no text has been read yet, it
 goes there as soon as a match is. `Esc` while typing leaves no search, as `Enter` or `Backspace` do
 with nothing typed.
@@ -372,8 +372,9 @@ colours not at all: the status line still says which match you are on.
 
 With a search kept, `n` goes to the next match and `N` to the one before, round the ends of the
 file, where the status line says `search wrapped`; a number first goes that many on (`3n`). They
-go from the match you are on while its page is on screen, and once you have paged away, from the
-top of the screen. `→` and `←` still turn pages. A match on a page not shown brings that page on
+go from the match you are on while it is on screen, and once you have paged or scrolled away, from
+the top of the screen: zoomed in to a page that scrolls, that is the top of the part you see. `→`
+and `←` still turn pages. A match on a page not shown brings that page on
 screen, and zoomed in to a page that scrolls, the match is scrolled into view, a third of the way
 down the window. The status line says which match you are on and how many there are (`/word
 3/17`, with `…` after while text is still being read), or `no match`; at most 10,000 are kept and
@@ -864,7 +865,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | A PDF whose text is [searched](#searching-a-documents-text) | 512 MiB | its text isn't read, and `/` says so |
 | The process that reads a PDF's text for a search: its CPU time on a page, and its memory | 5 s a page, or three times that on the clock; 768 MiB, the PDF included | the process is killed and that page left unread, the status line saying which and why; another reads the rest |
 | A PDF's text, for a search | 1 MiB a page; three processes killed; 120 s of reading in all | past 1 MiB, that page is left unread; at a fourth killed, or past the 120 s, the rest is, and the status line says how far the reading got |
-| What a search keeps of a file's text, and its matches | 64 MiB; 10,000 matches | past 64 MiB, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
+| What a search keeps of a file's text, and its matches | 64 MiB; 262,144 pages; 10,000 matches | past 64 MiB or the pages, the rest is left unread, and the status line says how far the reading got; past 10,000, the first are kept, and counted as `10000+` |
 | The matches tinted at a time, on the pages on screen and those kept ready around them | 1,024, and 64 lines of one match | the rest aren't tinted; `n` and `N` still go to them |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
 

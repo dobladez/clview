@@ -882,8 +882,9 @@ original) wherever the two stop running one for one, so that a page of ordinary 
 the source is asked for rectangles by the original's characters. At most 1 MiB a chunk
 (`MAX_CHUNK`), 64 MiB in all, maps included (`MAX_TEXT`: what each holds, shrunk to what it came
 to, so a megabyte of whitespace costs the one space it folds to), and 262,144 chunks (`MAX_CHUNKS`); past
-them the chunk, or the rest, is left unread, and the status line says so. With `--pages`, only the
-chunks of the pages given are read.
+them the chunk, or the rest, is left unread, and the status line says so: of a text in more
+chunks, the first 262,144 are read as any are, and the pages past them counted as unread. With
+`--pages`, only the chunks of the pages given are read.
 
 **Matching** is `str::match_indices` on the folded text with the query folded the same way: left
 to right, never overlapping, about a millisecond a megabyte. No key waits on it: a key, and each
@@ -897,12 +898,18 @@ the chunks whose matches weren't kept are no longer known.
 
 **Where the reader is.** The match the reader is on is a chunk and a place in it, never a number
 among the matches, so text read later leaves it theirs and only its number changes. `Enter` goes to
-the first match at or after the chunk the top of the screen starts with, round to the first of all;
+the first match at or after the top of the screen, round to the first of all;
 with none known yet, the view goes the same way once one is, by what is known then, once. `n` and `N` go from the match the reader
-is on while its page is on screen, and otherwise from the top of the screen. The view goes to the
-page the match's chunk starts on; the match's rectangles are asked for then, and when they arrive
-(`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way down the
-screen, unless it was on screen already or a key was pressed since.
+is on while it is on screen, and otherwise from the top of the screen. The screen's top is the
+chunk its first page starts with, and on a page taller than the window (`Screen::visible`, the part
+of it the pager shows, from `Nav::part_shown`), the top of that part: a match is on screen there
+when some of it is in that part, and before the screen's top when it ends above it
+(`Search::on_screen`, `Search::before`), by the match's rectangles, where they are known. `Enter`
+chooses before they are (none is asked for while the query is typed), so on such a page it chooses
+again once the top page's have come (`Search::picking`), unless a key was pressed since. The view
+goes to the page the match's chunk starts on; the match's rectangles are asked for then, and when
+they arrive (`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way
+down the screen, unless it was wholly on screen already or a key was pressed since.
 
 **What is asked of the source** (`Search::queue`): where the matches on the screen's pages and
 the pages rendered around them are,
@@ -911,7 +918,11 @@ unread, outward from the one the top of the screen starts with. The queue is set
 that changes (the reader moved, the matches or the one the reader is on changed), not as chunks
 arrive: a `Texts` gives a thing once while it stays listed. What changed is told by the ranges
 asked for (`Queued`), not by the matches they are of: another query's match may start where the
-last one's did, and its range is another.
+last one's did, and its range is another. For the same reason the rectangles given for a range
+are kept for as long as the range is asked for, whatever became of the match that asked: when the
+matches change, the ranges wanted are made again from them, and one asked for before keeps what
+came for it (a query taken back and typed again asks for the same ranges, which the source won't
+give twice).
 
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
