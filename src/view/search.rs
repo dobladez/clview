@@ -1338,6 +1338,10 @@ pub(super) mod tests {
         assert_eq!(folded("  a  "), " a ");
         assert_eq!((fold("Café/ ÉTÉ"), fold("ΟΔΟΣ")), ("café/ été".into(), "οδοσ".into()), "the filter's: the same letters, whitespace as it is");
         assert_eq!((needle("  \t "), needle(""), needle(" A  b")), (None, None, Some(" a b".into())));
+        // What a source puts for an object left out (a document's computed field) is kept as it is,
+        // and no match runs across it.
+        assert_eq!(folded("ab\u{FFFC}cd"), "ab\u{FFFC}cd");
+        assert!(Folded::new("ab\u{FFFC}cd").find("abcd", 9).is_empty());
     }
 
     /// What a chunk is charged against the text kept is what its folded text holds, not what it

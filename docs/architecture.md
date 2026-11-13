@@ -1083,10 +1083,13 @@ and a paragraph's text and selection cost little beside that
 ([ADR-0030](adr/0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md)).
 
 A chunk's text is the paragraph's `text` read piece by piece (`pieces`): an inline object (`OBJ`)
-as its `plain_text()`, but a field as the page shows it (`object_text`, through wordcraft's own
-`fields::field_text_on`): one the layout computes from where it lands (`PAGE`, `NUMPAGES`,
-`SECTION`) or from what it was given when it saved nothing is left out, so the search never finds
-text the page doesn't show; a soft hyphen as nothing and a non-breaking one as
+as its `plain_text()`, but a field as the page shows it, asked in the order wordcraft's layout asks
+(`object_text`): its code in braces if it is shown as code, a legacy drop-down's entry, then
+`fields::field_text_on`. One the page doesn't show as text (a legacy check box, an `EQ \o`
+overstrike) or that the layout computes (from where it lands, `PAGE`, `NUMPAGES`, `SECTION`; or
+from what it was given, when it saved nothing) is left out as U+FFFC (`LEFT_OUT`), mapped to the
+field's bytes as any object, so the search never finds text the page doesn't show, nor a match
+across the field; a soft hyphen as nothing and a non-breaking one as
 `-`, so a word reads as typed; a column break as a space. A paragraph past 1 MiB of it
 (`MAX_PARAGRAPH`) is answered as unread, with its first page. A range's rectangles are wordcraft's
 selection of it (`DocLayout::selection_rects`): the range's characters mapped back to bytes of the

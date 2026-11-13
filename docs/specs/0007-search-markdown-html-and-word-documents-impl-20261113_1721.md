@@ -269,3 +269,20 @@ Three findings, each with a test seen failing before its fix.
   resize; a Word document with a table. Tasks 2 and 3 and the Done list's manual item are ticked
   on that word. The two rounds of review fixes after it (`db8f9b8`, `67edfa5`) have their tests
   and gates, not a manual check of their own.
+
+## After the last review (Codex, on `67edfa5`)
+
+- **A field left out joined its neighbours** (`ab`, `PAGE`, `cd` searched as `abcd`). It now stands
+  as U+FFFC (`LEFT_OUT`), mapped to the field's bytes like any object: no query typed holds it, and
+  the search folds it to itself and makes no space of it (checked in
+  `text_is_folded_a_letter_at_a_time…`: kept, and `abcd` not found across it; that held already).
+- **Fields drawn otherwise than as their result.** `object_text` now asks in the order wordcraft's
+  layout does (`paragraph.rs`'s `field`): a field marked to show its code is its code in braces
+  (`field_code_text`; clv lays out with `field_codes` off); a legacy check box is left out; a
+  legacy drop-down is the entry it shows (`LegacyForm::shown_text`, which wordcraft gives); a
+  legacy text field falls through to its result, which is what it shows; an overstrike
+  (`eq::parse_overstrike`) is left out; then `field_text_on` as before.
+- **Test:** `a_field_left_out_stops_a_match` (a `PAGE`, an `EQ \o(=,/)` saved as `stale`, a
+  `FORMCHECKBOX` saved as `stale`, a `FORMDROPDOWN` showing `Two`, a `FORMTEXT`), seen failing
+  before the change (`abcd`, `abstalecd` three times); a range over the stand-in is placed where the
+  field is drawn. `a_fields_result_is_its_text` now expects the stand-in for `PAGE` and `NUMPAGES`.

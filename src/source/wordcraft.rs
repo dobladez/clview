@@ -939,17 +939,40 @@ fn pieces(para: &Paragraph) -> impl Iterator<Item = (Cow<'_, str>, usize, usize)
     })
 }
 
-/// An inline object's text as it is searched: its `plain_text()`, but a field as the page shows
-/// it. A field whose text the layout computes from where it lands (`PAGE`, `NUMPAGES`, `SECTION`,
-/// …), or from what it was given when its saved result is empty (`FILENAME`, `TITLE`), is nothing:
-/// a search never finds text the page doesn't show. The rest show their saved result, but `ASK`
-/// and `SET`, which show nothing.
+/// What stands for a field left out of a search: a character no query typed holds, so that no
+/// match runs across the field, and that maps to the field's bytes as any object does.
+const LEFT_OUT: &str = "\u{FFFC}";
+
+/// An inline object's text as it is searched: its `plain_text()`, but a field as the page shows it,
+/// asked as wordcraft's layout asks: shown as its code, the code in braces; a legacy drop-down, its
+/// entry shown; then, through `field_text_on`, its saved result, or nothing for `ASK` and `SET`. A
+/// field whose text the page doesn't show as text, or that the layout computes, is left out
+/// ([`LEFT_OUT`]): a legacy check box, an overstrike (`EQ \o`), one that depends on where it lands
+/// (`PAGE`, `NUMPAGES`, `SECTION`, …), and one with nothing saved, whose text (`TITLE`, `FILENAME`)
+/// comes from the document. A search never finds text the page doesn't show.
 fn object_text(object: &InlineObject) -> Cow<'_, str> {
-    let InlineObject::Field { instr, result, .. } = object else { return Cow::Borrowed(object.plain_text()) };
+    use wordcraft_doc::legacy_form::LegacyForm;
+    let InlineObject::Field { instr, result, code, .. } = object else { return Cow::Borrowed(object.plain_text()) };
+    // Printed, fields show their results ([`LayoutOptions::field_codes`]): one marked otherwise, its code.
+    if *code {
+        return Cow::Owned(wordcraft_layout::fields::field_code_text(instr));
+    }
+    match object.legacy_form() {
+        Some(LegacyForm::CheckBox { .. }) => return Cow::Borrowed(LEFT_OUT),
+        Some(form) => {
+            if let Some(shown) = form.shown_text() {
+                return Cow::Owned(shown.to_owned());
+            }
+        }
+        None => {}
+    }
+    if wordcraft_doc::eq::parse_overstrike(instr).is_some() {
+        return Cow::Borrowed(LEFT_OUT);
+    }
     let shown = caught(|| Ok(wordcraft_layout::fields::field_text_on(instr, result, &wordcraft_layout::FieldCtx::default(), 1)));
     match shown {
         Ok((shown, false)) if !result.is_empty() => Cow::Owned(shown),
-        _ => Cow::Borrowed(""),
+        _ => Cow::Borrowed(LEFT_OUT),
     }
 }
 
@@ -2754,10 +2777,40 @@ mod tests {
         };
         let body = format!("{body}{}{}", page("PAGE", "99"), page("NUMPAGES", "98"));
         let paged = paged("field.docx", &docx(&body, ""));
-        assert_eq!(all_text(&paged), ["By Ada Lovelace.", "Page .", "Page ."]);
+        assert_eq!(all_text(&paged), ["By Ada Lovelace.", "Page \u{FFFC}.", "Page \u{FFFC}."]);
         let texts = paged.texts().unwrap();
         let rects = placed(&*texts, 0, 3, 7);
         assert!(matches!(rects[..], [(0, [x0, _, x1, _])] if x1 > x0), "the field's result is placed: {rects:?}");
+    }
+
+    /// A field left out of a search stands as a character no query holds, so that no match runs
+    /// across it: `ab`, a page number, `cd` is never `abcd`. Fields drawn otherwise than as their
+    /// result are left out too, but a drop-down, its entry shown: an overstrike (`EQ \o`), a
+    /// legacy check box.
+    #[test]
+    fn a_field_left_out_stops_a_match() {
+        let field = |instr: &str, saved: &str| format!(r#"<w:fldSimple w:instr=" {instr} "><w:r><w:t>{saved}</w:t></w:r></w:fldSimple>"#);
+        let form = |data: &str, instr: &str, saved: &str| {
+            format!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="F"/>{data}</w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> {instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{saved}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+            )
+        };
+        let para = |inner: &str| format!(r#"<w:p><w:r><w:t>ab</w:t></w:r>{inner}<w:r><w:t>cd</w:t></w:r></w:p>"#);
+        let body = [
+            para(&field("PAGE", "9")),
+            para(&field(r"EQ \o(=,/)", "stale")),
+            para(&form(r#"<w:checkBox><w:sizeAuto/><w:default w:val="0"/></w:checkBox>"#, "FORMCHECKBOX", "stale")),
+            para(&form(r#"<w:ddList><w:result w:val="1"/><w:listEntry w:val="One"/><w:listEntry w:val="Two"/></w:ddList>"#, "FORMDROPDOWN", "stale")),
+            para(&form("<w:textInput/>", "FORMTEXT", "typed")),
+        ]
+        .concat();
+        let paged = paged("left.docx", &docx(&body, ""));
+        let stand = "ab\u{FFFC}cd";
+        assert_eq!(all_text(&paged), [stand, stand, stand, "abTwocd", "abtypedcd"]);
+        // The stand-in is the field's: a range over it is placed where the field is drawn.
+        let texts = paged.texts().unwrap();
+        let rects = placed(&*texts, 0, 1, 4);
+        assert!(matches!(rects[..], [(0, [x0, _, x1, _])] if x1 > x0), "{rects:?}");
     }
 
     /// A word hyphenated at a line's end is found whole, its rectangles on both lines, the first
