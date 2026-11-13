@@ -1808,8 +1808,11 @@ impl Pager<'_> {
         // What the terminal holds of the screen, to begin with: every copy of every page on it, since
         // nothing makes room among those ([`make_room`]). A page sent again is held beside all of it.
         let mut near = self.sent.iter().filter(|s| on_screen.contains(&Some(s.view))).map(Sent::bytes).fold(0, u64::saturating_add);
-        // Whether a page to send again was left as it is, for want of room beside what is on screen.
+        // Whether a page to send again was left as it is for now, for want of room beside what is on
+        // screen; and what the screen holds that goes once a copy already asked for, or already here,
+        // is placed: the room such a page waits for.
         let mut held_back = false;
+        let mut freeing = 0u64;
         self.replaced = false;
         for v in on_screen.iter().flatten().copied().chain(self.level.nav.around(AHEAD, BEHIND).into_iter().map(view)) {
             if self.failed.iter().any(|(f, _)| *f == v) || wanted.iter().any(|w: &Wanted| w.view == v) {
@@ -1822,8 +1825,13 @@ impl Pager<'_> {
             let shown = on_screen.contains(&Some(v));
             let copies = self.sent.iter().filter(|s| s.view == v).map(Sent::bytes).fold(0, u64::saturating_add);
             if self.sent.iter().any(|s| s.view == v && (s.tint == key || !settled)) {
-                // All the terminal holds of it, which the screen's pages were counted with.
+                // All the terminal holds of it, which the screen's pages were counted with. Its
+                // copies with another tint go as the one to show is placed.
                 near = near.saturating_add(if shown { 0 } else { copies });
+                if shown {
+                    let stays = self::shown(&self.sent, v, key).map_or(0, Sent::bytes);
+                    freeing = freeing.saturating_add(copies.saturating_sub(stays));
+                }
                 continue;
             }
             // Laid out each time, since a file's size may have come to be known meanwhile: then what
@@ -1847,15 +1855,32 @@ impl Pager<'_> {
                     // the screen holds. Its copies nobody sees go as this one is sent.
                     let old = displayed(&self.sent, v, &self.placed);
                     let held = if shown { near.saturating_sub(copies.saturating_sub(old)) } else { near.saturating_add(old) };
-                    match replacing(old, new, held, self.budget) {
-                        Replace::Beside => near = held.saturating_add(new),
-                        // No room beside what is on screen: the page stays as it is, never blank, and
-                        // without its tint until there is room (another page's old copy gone, a page
-                        // turned). Nothing is asked for it meanwhile, and the others go on.
+                    match replacing(old, new, held, freeing, self.budget) {
+                        Replace::Beside => {
+                            near = held.saturating_add(new);
+                            freeing = freeing.saturating_add(if shown { old } else { 0 });
+                        }
+                        // No room beside what is on screen until an old copy on its way out has gone:
+                        // the page stays as it is until then, and the others go on. So does a page
+                        // that left the screen at this draw: nobody is looking at it.
                         Replace::Wait => {
                             held_back = true;
                             near = near.saturating_add(if shown { 0 } else { copies });
                             continue;
+                        }
+                        Replace::Instead if !shown => {
+                            near = near.saturating_add(copies);
+                            continue;
+                        }
+                        // No room, and none to come: the page goes first, and its place is empty
+                        // until this one comes, rather than showing another search's matches, or the
+                        // reader's match where it no longer is.
+                        Replace::Instead => {
+                            for gone in superseded(&mut self.sent, v) {
+                                delete(&mut out, gone, self.output);
+                                self.placed.retain(|(placed, _)| *placed != gone);
+                            }
+                            near = held.saturating_sub(old).saturating_add(new);
                         }
                     }
                     if near > self.budget && !shown {
@@ -1896,8 +1921,8 @@ impl Pager<'_> {
         self.ready = ready;
         self.wrote(0);
         self.tty.write_all(&out)?;
-        // A page left as it was, and an old copy gone with this draw's placements: there may be room
-        // for it now. Each time round one copy fewer is held twice, so it ends.
+        // A page left as it was, and an old copy gone with this draw's placements: there is room for
+        // it now, or it goes first. Each time round one copy fewer is held twice, so it ends.
         if held_back && std::mem::take(&mut self.replaced) {
             return self.draw();
         }
@@ -2752,6 +2777,14 @@ fn shown(sent: &[Sent], view: View, key: u64) -> Option<&Sent> {
     sent.iter().rfind(|s| s.view == view && s.tint == key).or_else(|| sent.iter().rfind(|s| s.view == view))
 }
 
+/// Every copy of `view` in `sent`, taken out, and their ids: for a page about to be sent again that
+/// can't be held beside itself.
+fn superseded(sent: &mut Vec<Sent>, view: View) -> Vec<u32> {
+    let gone: Vec<u32> = sent.iter().filter(|s| s.view == view).map(|s| s.id).collect();
+    sent.retain(|s| s.view != view);
+    gone
+}
+
 /// The copies of `view` in `sent` that aren't among those `placed` on screen, taken out, and their
 /// ids: nobody sees them, so one sent again needn't wait to take their place.
 fn unseen(sent: &mut Vec<Sent>, view: View, placed: &[(u32, u32)]) -> Vec<u32> {
@@ -2786,23 +2819,34 @@ fn outdated(sent: &mut Vec<Sent>, placed: &[(u32, u32)]) -> Vec<u32> {
 }
 
 /// What becomes of a page to be sent again with another tint while the terminal holds it as it
-/// was, placed on screen, where the old copy stays until the new one is placed over it: a page on
-/// screen is never taken away for its replacement to come
+/// was, placed on screen, where the old copy stays until the new one is placed over it
 /// ([ADR-0028](../../docs/adr/0028-matches-tinted-into-the-pages-pixels.md)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Replace {
     /// Sent, and held beside the old copy until it is placed.
     Beside,
-    /// Not sent: beside the old copy and the rest of the screen it would pass the budget. The page
-    /// stays as it is until there is room.
+    /// Not yet: beside the old copy and the rest of the screen it would pass the budget, and
+    /// wouldn't once the copies on their way out have gone. The page stays as it is until then.
     Wait,
+    /// Sent once the old copy has been deleted: no room beside it, and none to come. The page's
+    /// place is empty until the new one arrives: a blank for a moment, rather than a page left
+    /// with the wrong matches.
+    Instead,
 }
 
 /// [`Replace`] for a page of `new` bytes whose copy placed on screen takes `old` (0: none is, and
 /// it is sent as any page is), in a terminal that holds `held` bytes of the screen's pages, that
-/// copy among them, and is to hold `budget` at most.
-fn replacing(old: u64, new: u64, held: u64, budget: u64) -> Replace {
-    if old == 0 || held.saturating_add(new) <= budget { Replace::Beside } else { Replace::Wait }
+/// copy among them, of which `freeing` go as copies already asked for are placed, and that is to
+/// hold `budget` at most.
+fn replacing(old: u64, new: u64, held: u64, freeing: u64, budget: u64) -> Replace {
+    let both = held.saturating_add(new);
+    if old == 0 || both <= budget {
+        Replace::Beside
+    } else if freeing > 0 && both.saturating_sub(freeing) <= budget {
+        Replace::Wait
+    } else {
+        Replace::Instead
+    }
 }
 
 /// Room in the terminal for a page of `incoming` bytes: the least recently shown pages not
@@ -4172,24 +4216,36 @@ mod tests {
 
     /// A page sent again while its old copy is on screen is held beside it until placed, so the two
     /// count against what the terminal keeps: beside what the screen holds already it is sent only
-    /// if all of it fits, and otherwise waits for another page's old copy to go; a page that
-    /// doesn't fit beside itself goes first. With no copy on screen it is sent as any page is.
+    /// if all of it fits; otherwise it waits for an old copy on its way out, if that makes the
+    /// room; and otherwise goes first. With no copy on screen it is sent as any page is.
     #[test]
-    fn a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits() {
+    fn a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits_or_goes_first() {
+        const BUDGET: u64 = 192 << 20;
         let mib = |n: u64| n << 20;
         // Two pages of 61 MiB on screen, 122 held, each to be sent again: the first beside all of it
         // (183), the second not beside that (244), until the first's old copy has gone (122 again).
-        assert_eq!(replacing(mib(61), mib(61), mib(122), BUDGET), Replace::Beside);
-        assert_eq!(replacing(mib(61), mib(61), mib(183), BUDGET), Replace::Wait);
-        // Three of 51 MiB, 153 held: a fourth image never fits, and none is sent again, nor taken away.
-        assert_eq!(replacing(mib(51), mib(51), mib(153), BUDGET), Replace::Wait);
-        // Nor a page past half of what the terminal keeps, alone on screen.
-        assert_eq!(replacing(mib(100), mib(100), mib(100), BUDGET), Replace::Wait);
-        assert_eq!(replacing(mib(20), mib(20), mib(20), MIN_BUDGET), Replace::Wait);
-        assert_eq!(replacing(mib(16), mib(16), mib(16), MIN_BUDGET), Replace::Beside, "to the byte");
+        assert_eq!(replacing(mib(61), mib(61), mib(122), 0, BUDGET), Replace::Beside);
+        assert_eq!(replacing(mib(61), mib(61), mib(183), mib(61), BUDGET), Replace::Wait);
+        assert_eq!(replacing(mib(61), mib(61), mib(122), 0, BUDGET), Replace::Beside);
+        // Three of 51 MiB, 153 held: a fourth image never fits, and nothing is on its way out, so
+        // waiting would be for ever. Each goes first, and the three are held again, never four.
+        assert_eq!(replacing(mib(51), mib(51), mib(153), 0, BUDGET), Replace::Instead);
+        // Nor does it wait for room that wouldn't be enough: 30 MiB to go, 12 short.
+        assert_eq!(replacing(mib(51), mib(51), mib(183), mib(30), BUDGET), Replace::Instead);
+        assert_eq!(replacing(mib(51), mib(51), mib(183), mib(42), BUDGET), Replace::Wait, "to the byte");
+        // A page past half of what the terminal keeps, alone on screen, never beside itself.
+        assert_eq!(replacing(mib(100), mib(100), mib(100), 0, BUDGET), Replace::Instead);
+        assert_eq!(replacing(mib(20), mib(20), mib(20), 0, MIN_BUDGET), Replace::Instead);
+        assert_eq!(replacing(mib(16), mib(16), mib(16), 0, MIN_BUDGET), Replace::Beside, "to the byte");
         // No copy on screen: as any page, the budget the caller's own.
-        assert_eq!((replacing(0, mib(61), mib(183), BUDGET), replacing(0, u64::MAX, u64::MAX, BUDGET)), (Replace::Beside, Replace::Beside));
-        assert_eq!(replacing(u64::MAX, u64::MAX, u64::MAX, BUDGET), Replace::Wait, "sizes that would overflow don't");
+        let unplaced = (replacing(0, mib(61), mib(183), 0, BUDGET), replacing(0, u64::MAX, u64::MAX, 0, BUDGET));
+        assert_eq!(unplaced, (Replace::Beside, Replace::Beside));
+        assert_eq!(replacing(u64::MAX, u64::MAX, u64::MAX, u64::MAX, BUDGET), Replace::Wait, "sizes that would overflow don't");
+        assert_eq!(replacing(u64::MAX, u64::MAX, u64::MAX, 0, BUDGET), Replace::Instead);
+        // Taken out whole for one that goes first.
+        let mut all = vec![sent(0, 1, 10, None), sent(1, 2, 10, None), sent(0, 3, 10, None)];
+        let view = all[0].view;
+        assert_eq!((superseded(&mut all, view), all.iter().map(|s| s.id).collect::<Vec<_>>()), (vec![1, 3], vec![2]));
         // What is on screen of a page, and what isn't.
         let tinted = |page: usize, id: u32, tint: u64| Sent { tint, ..sent(page, id, 10, None) };
         let mut kept = vec![tinted(0, 1, 0), tinted(1, 2, 0), tinted(0, 3, 7), tinted(2, 4, 0), tinted(2, 5, 3)];

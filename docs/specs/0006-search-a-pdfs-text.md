@@ -285,3 +285,5 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-13 — Two findings of Codex's fourth review fixed, and two decisions of the owner's: a page
   on screen is never blanked to be sent again with its tint, and 100,000 pages and 256 tinted matches
   are the caps (the notes say more).
+- 2026-11-13 — The owner reverses the first of those: a page with no room beside its old copy, and
+  none to come, is blank until its tinted copy arrives, rather than left with the wrong matches.

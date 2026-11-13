@@ -958,15 +958,18 @@ until that one has come, the last sent), and is deleted then (`outdated`). Only 
 screen is kept that way: one nobody sees (off screen, or with the keys up in the pages' place, or
 while the screen before stays up) is deleted as its replacement is sent (`unseen`). The two copies
 of a page on screen count against `BUDGET` for as long as both are held, with every other page on
-screen, since nothing makes room among those: `Pager::draw` asks for a page again only if it fits
-beside all the screen holds (`replacing`). One that doesn't is left as it is, with the tint it has
-or none: a page on screen is never taken away for its replacement to come, so the screen never
-shows a blank where a page was
-([ADR-0028](adr/0028-matches-tinted-into-the-pages-pixels.md)). Nothing is asked for it meanwhile,
-the other pages go on, and it is looked at again at every draw: once another page's old copy has
-gone (the pager draws again then), or after a page is turned. Three pages of 51 MiB side by side
-leave no room for a fourth image under 192 MiB, and stay untinted; the status line still says
-which match the reader is on.
+screen, since nothing makes room among those: `Pager::draw` asks for a page again beside its old
+copy only if it fits beside all the screen holds (`replacing`, `Replace::Beside`). One that
+doesn't waits (`Replace::Wait`) while what is on its way out would leave the room: the old copy of
+a page asked for again before it in this draw, or of one whose new copy is here and not yet
+placed. Nothing is asked for it meanwhile, the other pages go on, and the pager draws again when
+a placement takes an old copy away. Where nothing on its way out leaves the room, the page's
+copies are deleted first (`Replace::Instead`, `superseded`) and it is asked for as a page never
+sent: its place is empty until it arrives, rather than showing matches that are no longer the
+search's ([ADR-0028](adr/0028-matches-tinted-into-the-pages-pixels.md)). So a page never waits
+for room nothing will make. Three pages of 51 MiB side by side leave no room for a fourth image
+under 192 MiB: each goes first. A page that left the screen in this draw is never deleted this
+way; it is looked at again when it is shown.
 So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
 counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before
 the tint. The pager's loop polls every `POLL` while the source owes a match's rectangles

@@ -407,3 +407,32 @@ Two findings, each reproduced by a test before its fix, and two decisions of the
   on screen, the matches a step waits for not asked for, the reader's match with no place yet taken
   for on screen, a waiting step forgetting what it knows (the second); the choice made by the
   screen as it is now (`enter_on_a_scrolled_page_scrolls_once_its_choice_is_settled`).
+
+## The owner reverses "no blank, ever" (2026-11-13)
+
+- **A brief blank over a wrong page.** Left as it was, a page with no room for its replacement
+  showed no tint, or another search's, for as long as the screen filled the budget: the status
+  line said one thing and the page another. The third review's last rule is back, on the fourth
+  review's count of the whole screen: `replacing` answers `Beside` (it fits beside all the screen
+  holds), `Wait` (it would once the copies on their way out have gone: `freeing`, the old copy of
+  each page asked for again before it in this draw, and the copies of a page whose new one is here
+  and not yet placed), or `Instead` (no room, and none to come: its copies are deleted first,
+  `superseded`, and it is asked for as a page never sent). So a wait always has something in
+  flight to end it: a placement that takes an old copy away makes the pager draw again, and a
+  render that fails stops counting as on its way.
+- **Three pages of 51 MiB to a row** (153 of 192 MiB): each goes first, the three come back
+  tinted, and the terminal never holds a fourth. `n` then sends two again (the one that lost the
+  reader's match, the one that gained it), each gone first.
+- **Two pages of 52 MiB:** the first beside its old copy, the second waiting for that old copy to
+  go: no blank, as before.
+- **A page that left the screen in this draw** is never deleted for a replacement: it is skipped,
+  and looked at again if it is shown.
+- **Tests.** `where_the_screen_leaves_no_room_a_page_goes_before_its_tinted_copy_comes` took the
+  place of `…_pages_keep_their_image_untinted`; seen failing on the fourth review's code (no page
+  was ever tinted). `pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps` now
+  follows which image is deleted when: seen failing with `replacing` never waiting, with a page
+  sent beside its old copy not counted as freeing it, and with a new copy here but not yet placed
+  not counted. The unit test is
+  `a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits_or_goes_first`. The first of
+  these tests waited for the last page sent to be the tinted one, which the pages around the
+  screen, sent after it, sometimes weren't: it now looks among the pages sent since.
