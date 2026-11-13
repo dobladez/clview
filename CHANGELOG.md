@@ -11,7 +11,7 @@ works today. A version's section becomes the notes of its
 - `/` in a file's pages searches its text: a PDF's, a spreadsheet's, through the PDF it prints
   to, and a Word document's, an OpenDocument text's, an RTF's, Markdown's and HTML's, their body a
   paragraph at a time, so that a word hyphenated at a line's end, or a paragraph running onto the
-  next page, is found whole. The status line counts the matches as you type (`/word 17…`), `Enter` goes to the first from
+  next page, is found whole; and their search outlives their being laid out again. The status line counts the matches as you type (`/word 17…`), `Enter` goes to the first from
   the top of the screen and keeps the search, `n` goes to the next match and `N` or `p` to the one
   before (`3n` three on, `3p` three back), and `Esc` clears it. The matches on screen are tinted, the one you are on in
   another colour. The text is read when `/` is pressed, in a process of its

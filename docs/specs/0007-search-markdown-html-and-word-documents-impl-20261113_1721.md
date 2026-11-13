@@ -128,3 +128,36 @@ surprises, and what a later reader would want.
   tests, and `pdf,svg`. `word` alone first failed clippy: `Queue::ending` and `Ending::on_end` are
   the PDF's reader's alone, so dead code there; their `expect(dead_code)` now holds without `pdf`
   outside tests.
+
+## Task 3: a search across a relayout
+
+- **`Search::relaid`** builds the new level's search from the old one and the new source's `Texts`:
+  a `Search::new` on the new text, given the old query, whether it is typed, and whether `Enter`
+  is waiting; then, while the new text has as many chunks (the spec's test of "the same text"),
+  the chunks read and those left unread, the matches, the count, the match the reader is on and
+  what is still to match. The rectangles (`placed`), tints and queue are not carried: the new
+  `Texts` is asked for every rectangle anew, and the old one, dropped, takes what was still asked
+  of the old layout with it. Fewer or more chunks: the search starts over with the query kept,
+  counted anew (`/with 80`), with no match to be on.
+- **The view on the match** (the spec's "the view on the match"): `Pager::replace` already puts the
+  view where the paragraph at the top of the screen went. On top of that, if the reader's match was
+  on screen (`Nav::take_search`, `Search::showing`), the new search goes back to it once its new
+  place is known (`revealing`, as after `n`), bringing its page on screen; a match scrolled away
+  from isn't followed. Decided here: the spec said only "the view on the match".
+- **Typed while laid out again.** `]` while a search is typed is part of the query, so the pager
+  test lays out again with `0]` and types `/wit` in the same write: the relayout lands while the
+  query is typed, which then counts the whole text's matches (`/wit 60`) and is typed on (`h⏎`).
+- **Tests.** `search.rs`: `a_search_outlives_a_relayout_of_the_same_text`,
+  `a_search_of_another_text_laid_out_starts_over`. `view_pager.rs`:
+  `a_search_outlives_a_relayout_and_starts_over_on_another_text` (`/with⏎ 3n`, `40]`: `4/60`, the
+  new layout's page placed with the reader's tint, `n` to `5/60`; the typed case; the file
+  rewritten with 80 paragraphs, `40]`: `/with 80`). At 40 characters two pages share the screen,
+  so the test looks at every page placed since, not the last.
+- **Files beyond the task's list:** `docs/architecture.md`, `CHANGELOG.md`.
+- **Seen failing**, each by changing the line it covers and copying the file back (`cmp`): the
+  search not handed to the new level (the pager test: never `4/60` after `40]`); every relayout
+  starting over (`a_search_outlives…`); none starting over (`a_search_of_another_text…`); the view
+  never following the match, and the typing dropped (`a_search_outlives…`).
+- **Verify.** `cargo test -j 2 --test it view_pager` passes, with the five gates (463 unit tests,
+  214 in `tests/it`) and each backend alone and `pdf,svg`. The manual check (kitty, a Markdown
+  file, `/word⏎ n`, then `]` and `+`) is the owner's: the task's box stays open until it is done.

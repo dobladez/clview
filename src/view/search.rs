@@ -525,6 +525,57 @@ impl Search {
         }
     }
 
+    /// This search, of a document laid out again, on its new text `texts`, the document's `count`
+    /// pages of which `pages` are shown. While the new text comes in as many chunks, it is the same
+    /// text: the query, whether it is typed, the chunks read, the matches and the one the reader is
+    /// on are kept, and only where the matches are is asked for again, of the new layout; what was
+    /// asked of the old is let go of with it. The view goes back to the reader's match once its new
+    /// place is known if it was on screen (`follow`). Otherwise the text is another (the file
+    /// changed): the search starts over, the query kept.
+    pub(super) fn relaid(self, texts: Box<dyn Texts>, pages: &[usize], count: usize, follow: bool) -> Self {
+        let mut new = Self::new(texts, pages, count);
+        new.typing = self.typing;
+        new.query = self.query;
+        new.needle = self.needle;
+        new.waiting = self.waiting;
+        if new.chunks.len() != self.chunks.len() {
+            return new;
+        }
+        for (chunk, was) in self.chunks.into_iter().enumerate() {
+            let Some(slot @ Chunk::Unread) = new.chunks.get_mut(chunk) else { continue };
+            let read = match was {
+                Chunk::Read(folded) => {
+                    *slot = Chunk::Read(folded);
+                    true
+                }
+                Chunk::Failed => {
+                    *slot = Chunk::Failed;
+                    false
+                }
+                Chunk::Out | Chunk::Unread => continue,
+            };
+            new.unread = new.unread.saturating_sub(1);
+            new.done(chunk, read);
+        }
+        new.told = self.told;
+        new.kept = self.kept;
+        new.full = self.full;
+        new.any_text = self.any_text;
+        new.hits = self.hits;
+        new.count = self.count;
+        new.more = self.more;
+        new.pending = self.pending;
+        new.at = self.at;
+        new.revealing = follow && new.at.is_some() && !new.typing;
+        new.going = new.revealing;
+        new
+    }
+
+    /// Whether the match the reader is on is on the `screen`, with the search kept.
+    pub(super) fn showing(&self, screen: &Screen<'_>) -> bool {
+        !self.typing && self.at.is_some_and(|at| self.on_screen(at, screen))
+    }
+
     /// Whether the query is still being typed.
     pub(super) fn typing(&self) -> bool {
         self.typing
@@ -1820,6 +1871,60 @@ pub(super) mod tests {
         type_in(&mut search, "a");
         settle(&mut search, &at(&[0]));
         assert_eq!(search.status(), "/a 2 · read 1 of 4 pages");
+    }
+
+    /// The same text laid out again keeps its search: the query, the match the reader is on, the
+    /// count, and the text read, asked for no more; only where the matches are is asked of the new
+    /// layout, and the view goes back to the reader's match if it was on screen. Typed, it is typed
+    /// on.
+    #[test]
+    fn a_search_outlives_a_relayout_of_the_same_text() {
+        let chunks = ["one x", "two x", "three x", "four x"].map(String::from).to_vec();
+        let old = Rc::new(Fake { chunks: chunks.clone(), ..Fake::default() });
+        let mut search = search(&old);
+        type_in(&mut search, "x");
+        settle(&mut search, &at(&[0]));
+        search.enter(&at(&[0]));
+        search.step(true, 1, &at(&[0]));
+        settle(&mut search, &at(&[1]));
+        assert_eq!(search.status(), "/x 2/4");
+        // Two paragraphs a page now: the reader's match on the first.
+        let new = Rc::new(Fake { chunks: chunks.clone(), on: Some(vec![0..2, 2..4]), ..Fake::default() });
+        let mut search = search.relaid(Box::new(new.clone()), &[0, 1], 2, true);
+        assert_eq!(search.status(), "/x 2/4");
+        let polled = settle(&mut search, &at(&[1]));
+        assert!(new.state.borrow().given.iter().all(|want| matches!(want, Want::Rects { .. })), "text read again");
+        assert_eq!(polled.iter().find_map(|polled| polled.go).map(|go| go.page), Some(0), "the view not taken back to the match");
+        assert_eq!(search.step(true, 1, &at(&[0])).map(|go| go.page), Some(1));
+        assert_eq!(search.status(), "/x 3/4");
+        // Not followed when it was off screen.
+        let again = Rc::new(Fake { chunks: chunks.clone(), ..Fake::default() });
+        let mut search = search.relaid(Box::new(again), &[0, 1, 2, 3], 4, false);
+        assert!(settle(&mut search, &at(&[0])).iter().all(|polled| polled.go.is_none()));
+        assert_eq!(search.status(), "/x 3/4");
+        // Being typed.
+        search.edit();
+        search.typed('y');
+        let typed = Rc::new(Fake { chunks, ..Fake::default() });
+        let search = search.relaid(Box::new(typed), &[0, 1, 2, 3], 4, true);
+        assert!(search.typing() && search.query() == "xy");
+    }
+
+    /// Another text (the file changed on disk) starts the search over, the query kept, its matches
+    /// counted in the new text.
+    #[test]
+    fn a_search_of_another_text_laid_out_starts_over() {
+        let old = Fake::of(&["x", "x"]);
+        let mut search = search(&old);
+        type_in(&mut search, "x");
+        settle(&mut search, &at(&[0]));
+        search.enter(&at(&[0]));
+        assert_eq!(search.status(), "/x 1/2");
+        let new = Fake::of(&["x", "x", "x x"]);
+        let mut search = search.relaid(Box::new(new), &[0, 1, 2], 3, true);
+        let polled = settle(&mut search, &at(&[0]));
+        assert_eq!(search.status(), "/x 4");
+        assert!(polled.iter().all(|polled| polled.go.is_none()));
     }
 
     /// Past the memory a search keeps, reading stops, and the status line says how far it read.

@@ -868,6 +868,15 @@ impl Nav {
 
     /// `/` in a file's pages: a search to type, of `texts`, the source's text; or with none, a word
     /// that there is none to search.
+    /// The search, taken for the document laid out again ([`Search::relaid`]), and whether the match
+    /// the reader is on is on screen, for the view to follow it there.
+    fn take_search(&mut self) -> Option<(Search, bool)> {
+        let on_screen: Vec<usize> = self.on_screen().into_iter().flatten().collect();
+        let screen = search::Screen { top: on_screen.first().copied().unwrap_or(0), pages: &on_screen, near: &[], visible: self.part_shown() };
+        let follow = self.search.as_ref().is_some_and(|search| search.showing(&screen));
+        self.search.take().map(|search| (search, follow))
+    }
+
     fn start_search(&mut self, texts: Option<Box<dyn Texts>>) {
         match texts {
             Some(texts) => self.search = Some(Search::new(texts, &self.pages, self.count)),
@@ -2257,9 +2266,11 @@ impl Pager<'_> {
     /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
     /// the page where the paragraph at the top of the screen now is, scrolled to it where a page scrolls
     /// ([`Source::anchor`]), or at the reader's page where the sources don't say; at the same zoom, gone
-    /// into from a list if this one was. This one goes as a level gone back from does ([`Pager::let_go`]).
+    /// into from a list if this one was, with its search ([`Search::relaid`]). This one goes as a level
+    /// gone back from does ([`Pager::let_go`]).
     fn replace(&mut self, source: Box<dyn Source + Send>) -> Result<(), String> {
         let place = self.place_on_screen().and_then(|anchor| source.find(&anchor));
+        let search = self.level.nav.take_search();
         let source: Box<dyn Source> = source;
         let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone()), items: Vec::new() };
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone(), self.room);
@@ -2276,6 +2287,12 @@ impl Pager<'_> {
         level.nav.hint = false;
         level.nav.help = self.level.nav.help;
         level.nav.message.clone_from(&self.level.nav.message);
+        // The search goes on in the new layout, on its text, the old one's let go of with it.
+        if let Some((search, follow)) = search {
+            let texts = level.source.texts();
+            let nav = &mut level.nav;
+            nav.search = texts.map(|texts| search.relaid(texts, &nav.pages, nav.count, follow));
+        }
         self.relayout.forget();
         let gone = std::mem::replace(&mut self.level, level);
         let id = gone.id;

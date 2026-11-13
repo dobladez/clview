@@ -946,6 +946,15 @@ matches change, the ranges wanted are made again from them, and one asked for be
 came for it (a query taken back and typed again asks for the same ranges, which the source won't
 give twice).
 
+**A document laid out again** (`Pager::replace`) keeps its search: the level is replaced whole,
+and the search is taken from the old one (`Nav::take_search`, with whether the reader's match is on
+screen) and handed the new source's `Texts` (`Search::relaid`). While the new text comes in as many
+chunks it is taken for the same text: the chunks read, the matches and the one the reader is on are
+kept, every rectangle is dropped and asked for again of the new layout, and the old `Texts` goes
+with what was still asked of it; the view goes back to the reader's match once its place is known
+if it was on screen. A text in another number of chunks (the file changed on disk) starts the
+search over, the query and whether it is typed kept.
+
 **What a source gives is checked** (`Search::read`, `Search::place`): a chunk one still wanted,
 its text within `MAX_CHUNK`; a rectangle on a page of the document, finite, clipped to the page,
 at most 64 for a match. What fails costs that chunk or that rectangle.

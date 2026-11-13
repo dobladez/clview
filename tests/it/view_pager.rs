@@ -3070,3 +3070,47 @@ fn a_dumb_terminal_is_sent_no_escape_codes() {
         assert_eq!(text.contains("drawing text cells instead"), args.is_empty(), "{args:?}: {text:?}");
     }
 }
+
+/// A search outlives a relayout of its document: kept, the match you are on stays the one you are
+/// on, its tint on the new layout's pages and the view on it; being typed, it is typed on, and
+/// counts what the whole text holds. A document whose text changed on disk meanwhile starts its
+/// search over, the query kept.
+#[cfg(feature = "word")]
+#[test]
+fn a_search_outlives_a_relayout_and_starts_over_on_another_text() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("search-relayout", "long.md");
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    // Every paragraph says "with" once: the fourth is the one gone to.
+    view.press("/with\r");
+    view.wait_until("the first", |t| last_bar(t).contains(" /with 1/60 "));
+    view.press("3n");
+    view.wait_until("the fourth", |t| last_bar(t).contains(" /with 4/60 "));
+    let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("40]");
+    view.wait_until("laid out again, the same match", |t| bar(t).contains("· width 40 ·") && last_bar(t).contains(" /with 4/60 "));
+    // Its pages come first as rendered, then tinted once the match's new place is known: one placed
+    // since, two to a row now, has the reader's colour.
+    view.wait_until("the new layout's page, tinted", |t| {
+        let placed = ids_after(t, PLACED);
+        let new = placed.iter().skip_while(|id| **id != shown).filter(|id| **id > shown).collect::<Vec<_>>();
+        pngs(t).iter().any(|(sent, page)| new.contains(&sent) && page.pixels().any(|pixel| pixel.0 == OWN_TINT))
+    });
+    view.press("n");
+    view.wait_until("on from it", |t| last_bar(t).contains(" /with 5/60 "));
+    // Being typed: laid out again meanwhile, it is typed on, and counts the whole text's.
+    view.press("\x1b0]/wit");
+    view.wait_until("laid out again while typed", |t| last_bar(t).contains(" /wit 60 ") && last_bar(t).contains(" 1 per row "));
+    view.press("h\r");
+    view.wait_until("kept", |t| last_bar(t).contains(" /with ") && last_bar(t).contains("/60 "));
+    // Another text on disk: its search starts over, the query kept, its matches counted anew.
+    let more: String = (1..=80).map(|n| format!("Paragraph {n}, with other words.\n\n")).collect();
+    std::fs::write(&path, format!("# Longer\n\n{more}")).unwrap();
+    view.press("40]");
+    view.wait_until("started over", |t| bar(t).contains("· width 40 ·") && last_bar(t).contains(" /with 80 "));
+    view.press("q");
+    assert!(view.finish().success());
+}

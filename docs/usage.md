@@ -387,7 +387,10 @@ down the window. The status line says which match you are on and how many there 
 counted, the first in the file, and more say `10000+`. `Esc`, `Backspace` or `u` clear the search
 before they go back to the list or quit, after which `n` and `p` turn pages again; a number being typed
 is cleared first, as ever. `/` again edits what was searched for. A search belongs to its file: it
-ends on going back to the list.
+ends on going back to the list. It outlives Markdown or HTML laid out again (`[` `]`, `{` `}`, `+`
+`-`, `,` `.`, a window resized): being typed, it is typed on; kept, the match you are on stays the
+one you are on, tinted on the new pages, and the view goes back to it if it was on screen. A file
+changed on disk since its search began starts the search over, what you typed kept.
 
 Upper and lower case match letter by letter, as in a list's filter (`É` matches `é`, and `e`
 doesn't). A run of spaces, tabs or line ends matches a run of them, in what you type and in the
