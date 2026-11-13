@@ -415,7 +415,9 @@ it is on, the status line saying so (`· read 120 of 500 pages`) and why.
 
 What is searched in a document is its body, each paragraph's own text: a table's cells too, a
 field as its result (a page number as printed, an author's name), not its headers, footers,
-notes, text boxes or comments. **A word wordcraft hyphenated at a line's end is found whole**,
+notes, text boxes or comments. A table row that runs over several pages is searched with each
+page it is on, whole: with `--pages` picking one of them, a match in the row's part on another
+page is found and counted too, and while any of the row is unread, so is each of its pages. **A word wordcraft hyphenated at a line's end is found whole**,
 and tinted on both lines, the hyphen with it.
 
 What is searched in a PDF is the text pdfcraft reads on each page, in its reading order:

@@ -173,14 +173,31 @@ enum Page {
 }
 
 /// Where a match's rectangles are, asked of the source: the original's characters it covers, and
-/// the rectangles once they have come, each on its page, within it; with them, where the first is
-/// down its page, its top and its bottom as shares of the page's height.
+/// the rectangles once they have come, each on its page, within it; with them, where each is down
+/// its page, its top and its bottom as shares of the page's height (`shares`), the first apart
+/// (`span`), where the view goes.
 #[derive(Clone, Debug)]
 struct Placed {
     from: usize,
     to: usize,
     rects: Option<Vec<(usize, [f32; 4])>>,
     span: Option<(usize, f32, f32)>,
+    shares: Vec<(usize, f32, f32)>,
+}
+
+impl Placed {
+    /// Whether all of it that is known is before the part `from` down page `top` shown: on pages
+    /// before, or above that part of it. Not for a match with no rectangle.
+    fn before(&self, top: usize, from: f32) -> bool {
+        !self.shares.is_empty() && self.shares.iter().all(|(page, _, bottom)| *page < top || (*page == top && *bottom <= from))
+    }
+
+    /// Whether some of it is on the `screen`: on a page shown, and on its top page within the part
+    /// of it shown.
+    fn shown(&self, screen: &Screen<'_>) -> bool {
+        let within = |page: usize, top: f32, bottom: f32| page != screen.top || screen.visible.is_none_or(|(from, to)| bottom > from && top < to);
+        self.shares.iter().any(|(page, top, bottom)| screen.pages.contains(page) && within(*page, *top, *bottom))
+    }
 }
 
 /// What a search's queue was last set for ([`Search::queue`]): the chunk read outward from, whether
@@ -697,7 +714,8 @@ impl Search {
     }
 
     /// How many of page `top`'s matches, in order, are above the part of it shown (`visible`): on
-    /// a page before, in a chunk it shares with that page, or ending above that part; the first
+    /// a page before, in a chunk it shares with that page, or ending above that part, by every
+    /// rectangle of it ([`Placed::before`]); the first
     /// `checked` of them known to be already; and whether that is settled. It isn't while the next
     /// match's rectangles haven't come, or weren't asked for: a place not known is never taken for
     /// on screen, nor for above it. A match the source could give no rectangle for is where the
@@ -711,9 +729,8 @@ impl Search {
         let mut above = checked;
         for key in self.on_page(top).skip(checked) {
             match self.placed.get(&key) {
-                Some(Placed { rects: Some(rects), span, .. }) => {
-                    let before = !rects.is_empty() && rects.iter().all(|(page, _)| *page < top);
-                    if !before && !span.is_some_and(|(page, _, bottom)| page == top && bottom <= from) {
+                Some(placed @ Placed { rects: Some(_), .. }) => {
+                    if !placed.before(top, from) {
                         return (above, true);
                     }
                     above = above.saturating_add(1);
@@ -724,23 +741,20 @@ impl Search {
         (above, true)
     }
 
-    /// Whether the match `at` is on the `screen`: its page is, and on a top page taller than the
-    /// window, some of the match is in the part shown, by its rectangles. While those are still to
-    /// come it isn't taken for on screen; if the source had none to give, its page is all there is
-    /// to go by.
+    /// Whether the match `at` is on the `screen`: some of it is on a page shown, and on a top page
+    /// taller than the window, in the part shown, by its rectangles ([`Placed::shown`]). While
+    /// those are still to come it isn't taken for on screen where the top page scrolls, and
+    /// elsewhere is if every page its chunk is on is shown; if the source had none to give, its
+    /// page is all there is to go by.
     fn on_screen(&self, at: (usize, u32), screen: &Screen<'_>) -> bool {
-        let placed = self.placed.get(&at);
-        match (placed.and_then(|placed| placed.span), screen.visible) {
-            (Some((page, top, bottom)), Some((from, to))) if page == screen.top => bottom > from && top < to,
-            (None, Some(_)) if self.page_of(at.0) == screen.top && placed.is_none_or(|placed| placed.rects.is_none()) => false,
-            _ => match placed.and_then(|placed| placed.rects.as_ref()).filter(|rects| !rects.is_empty()) {
-                Some(rects) => rects.iter().any(|(page, _)| screen.pages.contains(page)),
-                // Not known: on screen if every page its chunk is on is.
-                None => {
-                    let mut pages = self.pages_of(at.0);
-                    if pages.is_empty() { screen.pages.contains(&self.page_of(at.0)) } else { pages.all(|page| screen.pages.contains(&page)) }
-                }
-            },
+        match self.placed.get(&at) {
+            Some(placed) if !placed.shares.is_empty() => placed.shown(screen),
+            Some(Placed { rects: Some(_), .. }) => screen.pages.contains(&self.page_of(at.0)),
+            _ if screen.visible.is_some() && self.page_of(at.0) == screen.top => false,
+            _ => {
+                let mut pages = self.pages_of(at.0);
+                if pages.is_empty() { screen.pages.contains(&self.page_of(at.0)) } else { pages.all(|page| screen.pages.contains(&page)) }
+            }
         }
     }
 
@@ -1053,10 +1067,12 @@ impl Search {
             (finite && rect[0] < rect[2] && rect[1] < rect[3]).then_some((page, rect))
         };
         let rects: Vec<(usize, [f32; 4])> = rects.unwrap_or_default().into_iter().take(MAX_LINES).filter_map(clipped).collect();
-        placed.span = rects.first().and_then(|(page, [_, top, _, bottom])| {
+        let share = |(page, [_, top, _, bottom]): &(usize, [f32; 4])| {
             let (_, height) = size_of(*page).filter(|(_, height)| *height > 0.0)?;
             Some((*page, top / height, bottom / height))
-        });
+        };
+        placed.shares = rects.iter().filter_map(share).collect();
+        placed.span = rects.first().and_then(share);
         placed.rects = Some(rects);
         self.marked = true;
     }
@@ -1094,7 +1110,7 @@ impl Search {
                 for (hit, (from, to)) in hits.iter().zip(folded.originals(&hits)) {
                     let asked =
                         was.range((chunk, 0)..=(chunk, u32::MAX)).map(|(_, placed)| placed).find(|placed| placed.from == from && placed.to == to);
-                    let placed = asked.cloned().unwrap_or(Placed { from, to, rects: None, span: None });
+                    let placed = asked.cloned().unwrap_or(Placed { from, to, rects: None, span: None, shares: Vec::new() });
                     self.placed.insert((chunk, hit.0), placed);
                 }
             }
@@ -1226,16 +1242,27 @@ pub(super) mod tests {
                 Want::Text(chunk) if self.broken.contains(&chunk) => Got::Text(chunk, Err(format!("chunk {chunk} is broken"))),
                 Want::Text(chunk) => Got::Text(chunk, Ok(self.chunks[chunk].clone())),
                 // A line 10 high, as far down its page as the match is into its chunk, and as wide as
-                // it; of a chunk on several pages, 50 characters to a page, the last taking the rest.
+                // it; of a chunk on several pages, 50 characters to a page, the last taking the rest,
+                // and a match across two of them a line on each, to the page's edge and from its top.
                 Want::Rects { chunk, from, to } => {
                     let pages: Vec<usize> =
                         self.on.as_ref().map_or(vec![chunk], |on| (0..on.len()).filter(|page| on[*page].contains(&chunk)).collect());
-                    let (page, down) = match pages[..] {
-                        [] => (0, from),
-                        [page] => (page, from),
-                        _ => (pages[(from / 50).min(pages.len() - 1)], from % 50),
+                    let line = |page: usize, down: usize| (page, [from as f32, down as f32, to as f32, down as f32 + 10.0]);
+                    let placed = match pages[..] {
+                        [] => vec![line(0, from)],
+                        [page] => vec![line(page, from)],
+                        _ => {
+                            let (first, last) = ((from / 50).min(pages.len() - 1), ((to.max(from + 1) - 1) / 50).min(pages.len() - 1));
+                            match first == last {
+                                true => vec![line(pages[first], from % 50)],
+                                false => vec![
+                                    (pages[first], [from as f32, (from % 50) as f32, 100.0, (from % 50) as f32 + 10.0]),
+                                    (pages[last], [0.0, 0.0, to as f32, 10.0]),
+                                ],
+                            }
+                        }
                     };
-                    let rects = state.rects.clone().unwrap_or_else(|| vec![(page, [from as f32, down as f32, to as f32, down as f32 + 10.0])]);
+                    let rects = state.rects.clone().unwrap_or(placed);
                     Got::Rects(want, Ok(rects))
                 }
             })
@@ -1852,6 +1879,50 @@ pub(super) mod tests {
         assert_eq!(search.step(true, 1, &second).map(|go| go.page), Some(1));
         settle(&mut search, &second);
         assert_eq!((search.status().as_str(), marks(&search, 1)), ("/needle 2/2", vec![([60.0, 10.0, 66.0, 20.0], true)]));
+    }
+
+    /// A page that says it has no text has none, whatever the pages around it have: searched alone
+    /// (`--pages`), it has nothing to read and nothing to match.
+    #[test]
+    fn a_page_without_text_searched_alone_has_none() {
+        let fake = Rc::new(Fake { chunks: vec!["a".into(), "a".into(), "a".into()], on: Some(vec![0..2, 0..0, 2..3]), ..Fake::default() });
+        let mut search = Search::new(Box::new(fake.clone()), &[1], 3);
+        type_in(&mut search, "a");
+        settle(&mut search, &at(&[1]));
+        assert_eq!(search.status(), "/a no text in this file");
+        assert!(fake.state.borrow().given.is_empty(), "the page before's text read");
+    }
+
+    /// A match that runs from one page onto the next is judged by all its rectangles against what
+    /// is shown: with the second page scrolled past its part of it, the match is above the screen,
+    /// not on it, so Enter goes to the one in view and `N` back to that one.
+    #[test]
+    fn a_match_across_a_page_break_scrolled_past_is_above_the_screen() {
+        // The second chunk's characters 0 to 49 are on the first page, the rest on the second: its
+        // first match runs over the break, its second sits 30 down the second page.
+        let across = format!("{}needle{}needle", "x".repeat(45), " y".repeat(14) + " ");
+        assert_eq!(across.find("needle"), Some(45));
+        assert_eq!(across.rfind("needle"), Some(80));
+        let fake = Rc::new(Fake { chunks: vec!["start".into(), across, "end".into()], on: Some(vec![0..2, 1..3]), ..Fake::default() });
+        let mut search = search(&fake);
+        type_in(&mut search, "needle");
+        let first = Screen { top: 0, pages: &[0], near: &[], visible: None };
+        settle(&mut search, &first);
+        // The second page, scrolled 15 down: the first match's 10 on it are above.
+        let scrolled = Screen { top: 1, pages: &[1], near: &[], visible: Some((0.15, 0.6)) };
+        search.enter(&scrolled);
+        settle(&mut search, &scrolled);
+        assert_eq!(search.status(), "/needle 2/2");
+        // On the first page's match, then that scrolled view: it isn't on screen, so `N` goes to the
+        // last before the top of the screen, that match, without going round.
+        search.enter(&first);
+        settle(&mut search, &first);
+        assert_eq!(search.status(), "/needle 1/2");
+        settle(&mut search, &scrolled);
+        assert!(!search.showing(&scrolled), "a match scrolled past is taken for on screen");
+        search.step(false, 1, &scrolled);
+        settle(&mut search, &scrolled);
+        assert_eq!(search.status(), "/needle 1/2");
     }
 
     /// The status line counts what is left unread in pages, whatever the chunks: a page is unread

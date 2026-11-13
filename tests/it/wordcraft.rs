@@ -911,6 +911,19 @@ fn a_word_documents_body_is_searched_a_hyphenated_word_a_cell_and_a_field() {
     assert!(view.finish().success());
 }
 
+/// Wait until a page placed after image `since` has the reader's tint, as a page is placed first as
+/// rendered and then again once its tint is known: that image.
+fn placed_tinted(view: &crate::view_pager::Session, what: &str, since: u32) -> u32 {
+    use crate::view_pager::{OWN_TINT, PLACED, ids_after, pngs};
+    let tinted = |t: &str| {
+        let placed = ids_after(t, PLACED);
+        let after: Vec<u32> = placed.iter().skip_while(|id| **id != since).copied().filter(|id| *id != since).collect();
+        pngs(t).into_iter().rev().find(|(id, page)| after.contains(id) && page.pixels().any(|pixel| pixel.0 == OWN_TINT)).map(|(id, _)| id)
+    };
+    view.wait_until(what, |t| tinted(t).is_some());
+    tinted(&view.text()).unwrap_or(since)
+}
+
 /// A Markdown paragraph that runs from one page onto the next is searched on either: with its last
 /// page alone on screen, Enter goes to the match in its tail, there, and tints it; with its first,
 /// to the one in its head. On dark paper (`d`) the match is tinted with the dark blend.
@@ -937,15 +950,13 @@ fn a_paragraph_across_a_page_break_is_searched_on_the_page_shown_and_on_dark_pap
     let last = ids_after(&view.text(), PLACED).last().copied().unwrap();
     view.press("/marker\r");
     view.wait_until("the tail's match", |t| last_bar(t).contains(&format!(" /marker 2/2 page {pages}/{pages} ")));
-    let (tinted, page) = next_image(&view, "the last page tinted", last);
-    assert!(page.pixels().any(|pixel| pixel.0 == OWN_TINT), "the tail's match not tinted");
+    let tinted = placed_tinted(&view, "the tail's match tinted on the last page", last);
     // The first page alone: the head's.
     view.press("g");
     view.wait_until("the first page", |t| last_bar(t).contains(" page 1/"));
     view.press("/\r");
     view.wait_until("the head's match", |t| last_bar(t).contains(&format!(" /marker 1/2 page 1/{pages} ")));
-    let (_, page) = next_image(&view, "the first page tinted", tinted);
-    assert!(page.pixels().any(|pixel| pixel.0 == OWN_TINT), "the head's match not tinted");
+    placed_tinted(&view, "the head's match tinted on the first page", tinted);
     // Dark paper: the reader's match a dark orange, under light text, neither colour of white paper's.
     view.press("d");
     let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();

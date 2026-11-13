@@ -634,21 +634,32 @@ struct Paras {
 /// What `laid`, a document of `kind`, says of its body's paragraphs ([`Paras`]).
 fn paras_of(laid: &Laid, kind: Kind) -> Paras {
     let (paragraphs, count) = paragraphs_of(laid);
-    let on = paragraphs
-        .iter()
-        .map(|page| {
-            let first = page.iter().map(|para| para.index).min();
-            let last = page.iter().map(|para| para.index).max();
-            match (first, last) {
-                (Some(first), Some(last)) => {
-                    usize::try_from(first).unwrap_or(usize::MAX)..usize::try_from(last).unwrap_or(usize::MAX).saturating_add(1)
-                }
-                _ => 0..0,
-            }
-        })
-        .collect();
+    let indices: Vec<Vec<usize>> =
+        paragraphs.iter().map(|page| page.iter().map(|para| usize::try_from(para.index).unwrap_or(usize::MAX)).collect()).collect();
+    let on = ranges_of(&indices);
     let paragraphs = if settings_of(kind).contains(&WIDTH.name) { paragraphs } else { Vec::new() };
     Paras { paragraphs, on, count }
+}
+
+/// Each page's chunks for a search ([`Texts::chunks_on`]), from the paragraphs on it, by their order
+/// in the document (`pages`): in order, each from the least paragraph on it or any page after to the
+/// most on it or any page before. That is each page's own, but for a table row over several pages,
+/// whose cells' paragraphs are side by side on each and one after another in the document: a page
+/// it is on takes in the row's paragraphs on its neighbours too, so that no page's chunks start or
+/// end before an earlier page's. A page with no paragraph has none.
+fn ranges_of(pages: &[Vec<usize>]) -> Vec<Range<usize>> {
+    let (mut least, mut most) = (vec![usize::MAX; pages.len()], vec![0usize; pages.len()]);
+    let mut after = usize::MAX;
+    for (page, slot) in pages.iter().zip(least.iter_mut()).rev() {
+        after = after.min(page.iter().copied().min().unwrap_or(usize::MAX));
+        *slot = after;
+    }
+    let mut before = None;
+    for (page, slot) in pages.iter().zip(most.iter_mut()) {
+        before = before.max(page.iter().copied().max().map(|last| last.saturating_add(1)));
+        *slot = before.unwrap_or(0);
+    }
+    pages.iter().zip(least.into_iter().zip(most)).map(|(page, (first, end))| if page.is_empty() { 0..0 } else { first..end }).collect()
 }
 
 /// Each page's paragraphs of `laid`, in the order they are placed: the body's, by their order in the
@@ -2748,6 +2759,33 @@ mod tests {
         let [Got::Text(0, Ok(first)), Got::Text(1, Err(why)), Got::Text(2, Ok(last))] = &got[..] else { panic!("not what was asked") };
         assert_eq!((first.as_str(), last.as_str()), ("First.", "Last."));
         assert_eq!(why, "a paragraph on page 1 has more text than a search keeps of one");
+    }
+
+    /// A page's chunks run from the least paragraph on it or after to the most on it or before: its
+    /// own, and of a table row over several pages, the row's on its neighbours too, never starting
+    /// or ending before an earlier page's; a page with none has none.
+    #[test]
+    fn a_pages_chunks_take_in_a_table_row_over_several_pages() {
+        // A row whose left cell has a paragraph on each of three pages, and whose right cell's one
+        // (the fourth in the document) is on the first.
+        assert_eq!(ranges_of(&[vec![0, 3], vec![1], vec![2], vec![4]]), [0..4, 1..4, 2..4, 4..5]);
+        assert_eq!(ranges_of(&[vec![0, 1], vec![], vec![2]]), [0..2, 0..0, 2..3]);
+        assert_eq!(ranges_of(&[vec![1], vec![0]]), [0..2, 0..2], "out of order: both, rather than none");
+        // Such a row in a docx: its left cell's three paragraphs over several pages, its right
+        // cell's on the first; then a paragraph after the table.
+        let words = |name: &str| format!("{name} {}", "word ".repeat(40));
+        let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+        let left: String = ["Pone", "Ptwo", "Pthree"].iter().map(|name| para(&words(name))).collect();
+        let body = format!("<w:tbl><w:tr><w:tc>{left}</w:tc><w:tc>{}</w:tc></w:tr></w:tbl>{}", para("Qright"), para("After"));
+        let paged = paged("row.docx", &docx(&body, ""));
+        let laid = paged.0.laid(&paged.0.shared()).unwrap();
+        let (pages, _) = paragraphs_of(&laid);
+        assert!(pages.len() > 2 && pages[0].iter().any(|para| para.index == 3), "not a row over pages: {pages:?}");
+        let on = &paged.0.on;
+        assert!(on.windows(2).all(|pair| pair[0].start <= pair[1].start && pair[0].end <= pair[1].end), "{on:?}");
+        for (page, paras) in pages.iter().enumerate() {
+            assert!(paras.iter().all(|para| on[page].contains(&(para.index as usize))), "page {page}: {paras:?} not in {:?}", on[page]);
+        }
     }
 
     /// A search reads the layout the pool renders with: laid out once for both, whichever asks

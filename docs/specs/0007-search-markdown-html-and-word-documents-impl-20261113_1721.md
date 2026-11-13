@@ -186,3 +186,43 @@ surprises, and what a later reader would want.
 - **Found on the way:** `main` gained two commits after this branch was made (`c980915`, a tint
   test in `view_pager.rs` waiting for page 1 after `Esc`, and `071da53`, CI), which a merge will
   have to meet; this branch makes some of `view_pager.rs`'s helpers `pub(crate)`.
+
+## After the first review (Codex, 2026-11-13)
+
+Three findings, two on task 1 and one on task 2.
+
+- **An empty page's range took the page before's chunks** (`[0..2, 0..0, 2..3]` made the blank page
+  `0..2`). Already put right in task 2 (an empty range is none, between its neighbours), found
+  while writing the Word backend's empty pages. Its test now has the reviewer's case of its own:
+  `a_page_without_text_searched_alone_has_none`, the blank page alone (`--pages 2`) reading nothing
+  and saying `no text in this file`. Seen failing with that fix taken out (`/a 2`).
+- **A match across a page break, scrolled past, was taken for on screen, and Enter chose it.**
+  `above` asked whether all of a match's rectangles were on earlier pages, else whether its first
+  ended above the part shown: a match from the bottom of page 1 onto the top of page 2 was
+  neither, so Enter on page 2 scrolled past it went back to it. `on_screen` took any rectangle on a
+  page shown for on screen. Each rectangle's place is now kept as shares of its page
+  (`Placed::shares`, beside `span`, which stays the first's, where the view goes), and a match is
+  before the screen's top when every rectangle is (`Placed::before`), on screen when one is in what
+  is shown (`Placed::shown`). Test: `a_match_across_a_page_break_scrolled_past_is_above_the_screen`,
+  seen failing on the old code (Enter: `1/2` for `2/2`) and with `shown` taking any rectangle on a
+  page shown (the match scrolled past taken for on screen; `the_first_match_on_screen_is_found…`
+  failed too). The test's fake places a match across its 50 characters a page on both pages.
+- **A table row over several pages made pages' ranges wrong.** Per page, from its least paragraph to
+  its most, a row's right cell (fourth in the text, on page 1) made page 1 `0..4`, taking in the
+  left cell's paragraphs on pages 2 and 3, and page 2 `1..2`, ending before page 1's, which the
+  search's clamp then turned into page 2 holding the right cell's. Measured on a docx: a row of
+  three 40-word paragraphs in a narrow cell runs over several pages, its right cell on the first.
+  Now each page runs from the least paragraph on it or any page after to the most on it or any
+  page before (`ranges_of`): monotone, each page's own paragraphs within it, a page with none
+  empty. The contract stays a range (the reviewer's suggestion, taken): a page's range may take in
+  a row's paragraphs on its neighbours, and `chunks_on`'s doc says so. Decided: rather than filter
+  matches by their rectangles' pages (which the count, made before any rectangle is asked for,
+  can't wait on), usage says that a table row over pages is searched with every page it is on,
+  with `--pages` too, and is unread with each. Tints and where the view goes already follow the
+  rectangles. Test: `a_pages_chunks_take_in_a_table_row_over_several_pages`, seen failing with
+  each page's own least to most (`[0..4, 1..2, 2..3, 4..5]`).
+- **A test of task 2 made patient.** In a full run `a_paragraph_across_a_page_break…` failed once,
+  and passed three times of three alone: after `g` the first page placed may be the page as
+  rendered, its tint coming with the next, and the test took the first placed. It now waits for a
+  page placed since with the reader's colour (`placed_tinted`), after `G` too.
+- **Gates.** The five pass; `tests/it` twice more in full, under the same load.

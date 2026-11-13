@@ -946,6 +946,12 @@ matches change, the ranges wanted are made again from them, and one asked for be
 came for it (a query taken back and typed again asks for the same ranges, which the source won't
 give twice).
 
+A match is judged by all its rectangles against the part of the screen's top page shown
+(`Placed::shares`, each rectangle's top and bottom as shares of its page's height): before the top
+of the screen when every one is on an earlier page or ends above that part (`Placed::before`), on
+screen when one is on a page shown and, on the top page, within that part (`Placed::shown`). So a
+match that runs from the bottom of one page onto the top of the next, scrolled past, is neither.
+
 **A document laid out again** (`Pager::replace`) keeps its search: the level is replaced whole,
 and the search is taken from the old one (`Nav::take_search`, with whether the reader's match is on
 screen) and handed the new source's `Texts` (`Search::relaid`). While the new text comes in as many
@@ -1056,7 +1062,12 @@ being started at that moment is let go of when the reader finds the search ended
 `Paged::texts` gives a `Paragraphs`: a body paragraph a chunk, in `para_paths(StoryRef::Body)`'s
 order, tables' cells walked; a page's chunks (`Document::on`) are its body paragraphs, first to
 last, as the layout made at open places them (`Placed::Lines`), kept for every kind, so a paragraph
-across a page break is on both. Its `texts::Answer` (`wordcraft::Reader`) reads from the layout the
+across a page break is on both. A table row over several pages has its cells' paragraphs side by
+side on each page and one after another in the text, so a page's range runs from the least
+paragraph on it or any page after to the most on it or any page before (`ranges_of`): never
+starting or ending before an earlier page's, and taking in the row's paragraphs on its neighbours.
+A match's rectangles say which page it is on, for its tint and where the view goes; with
+`--pages`, a match in such a row's part on a page not given is still counted (usage says so). Its `texts::Answer` (`wordcraft::Reader`) reads from the layout the
 pool renders with: `Document::shared` hands the pool and the search one `Cache` while either holds
 it, through a `Weak`, so a search after the first render costs no second layout (some 200 MB for
 500 pages), a `/` before it lays the document out for the pool, and a fresh pool (`Pager::enter`)

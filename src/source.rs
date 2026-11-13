@@ -713,7 +713,9 @@ pub(crate) trait Texts {
     fn chunks(&self) -> usize;
     /// The chunks with text on page `page` (0-based), first to last: none for a page without
     /// text. Two pages share a chunk that runs from one onto the other, so a page's first may be
-    /// the last of the page before; neither ever comes before an earlier page's.
+    /// the last of the page before; neither ever comes before an earlier page's. Where chunks
+    /// aren't in the pages' order (a table's cells, side by side on a page and one after another
+    /// in the text), the range may take in chunks with no text on that page.
     fn chunks_on(&self, page: usize) -> Range<usize>;
     /// Replace what is wanted, the most urgent first. One still waited for is listed again every
     /// time; one given isn't given again while it stays listed.
