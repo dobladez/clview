@@ -1,16 +1,22 @@
-# The quality gates in CLAUDE.md, on Linux and macOS: every feature set, formatted and lint-free.
+# The quality gates in CONTRIBUTING.md, on Linux and macOS. Every push: the binary shipped, all
+# features, formatted, lint-free and every test. Nightly, if main moved since the last nightly: the
+# viewer without backends, and pdf,svg (the SVG backend without its HTML labels).
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# A push cancels the push before it, never a nightly run.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -19,6 +25,7 @@ env:
 jobs:
   gates:
     name: gates (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -42,44 +49,56 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  # Whether main moved since the last nightly run that finished, passed or failed: a cancelled one
+  # tested nothing. Run by hand, the nightly builds always run.
+  changed:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      moved: ${{ steps.last.outputs.moved }}
+    steps:
+      - id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --event schedule --limit 30 \
+            --json headSha,conclusion -q '[.[] | select(.conclusion == "success" or .conclusion == "failure")][0].headSha // ""')
+          echo "last nightly tested ${last:-nothing}, main is at $GITHUB_SHA"
+          if [ "$last" = "$GITHUB_SHA" ]; then echo moved=false; else echo moved=true; fi >> "$GITHUB_OUTPUT"
+
+  nightly:
+    name: other feature sets (${{ matrix.os }})
+    needs: changed
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.changed.outputs.moved == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.95.0
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      # The core names no backend: it builds, and its tests pass, with none.
       - name: no backends
         run: |
           cargo clippy --locked --no-default-features --all-targets -- -D warnings
           cargo test --locked --no-default-features
-      - name: image alone
-        run: |
-          cargo clippy --locked --no-default-features --features image --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features image
-      - name: pdf alone
-        run: |
-          cargo clippy --locked --no-default-features --features pdf --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features pdf
-      - name: svg alone
-        run: |
-          cargo clippy --locked --no-default-features --features svg --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features svg
-      - name: svg-html alone
-        run: |
-          cargo clippy --locked --no-default-features --features svg-html --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features svg-html
-      # The integration tests need the PDF backend: the SVG backend's, without its HTML labels.
+      # The integration tests need the PDF backend: the SVG backend's, without its HTML labels, and
+      # a build without the Word backend's `--theme`.
       - name: pdf and svg
         run: |
           cargo clippy --locked --no-default-features --features pdf,svg --all-targets -- -D warnings
           cargo test --locked --no-default-features --features pdf,svg
-      - name: zip alone
-        run: |
-          cargo clippy --locked --no-default-features --features zip --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features zip
-      - name: tar alone
-        run: |
-          cargo clippy --locked --no-default-features --features tar --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features tar
-      - name: word alone
-        run: |
-          cargo clippy --locked --no-default-features --features word --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features word
-      - name: sheet alone
-        run: |
-          cargo clippy --locked --no-default-features --features sheet --all-targets -- -D warnings
-          cargo test --locked --no-default-features --features sheet

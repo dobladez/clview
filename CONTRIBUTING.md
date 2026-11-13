@@ -140,8 +140,11 @@ cargo test --no-default-features -j 2
 After touching `cfg` attributes, each backend alone too (`--no-default-features --features image`,
 then `pdf`, then `svg`, then `svg-html`, then `zip`, then `tar`, then `word`, then `sheet`), and
 `pdf,svg`, so the integration tests run the SVG backend without its HTML labels. The PDF backend is a
-large build: keep `-j 2` unless the machine is free. CI (`.github/workflows/ci.yml`) runs them all
-on Linux and macOS, with Rust 1.95.0, the `rust-version`.
+large build: keep `-j 2` unless the machine is free. CI (`.github/workflows/ci.yml`) runs on Linux
+and macOS, with Rust 1.95.0, the `rust-version`. Every push tests the binary shipped, all features:
+`fmt`, clippy and every test. Nightly, if `main` moved since the last nightly run, it builds and
+tests the viewer without backends, and `pdf,svg`; `gh workflow run CI` runs both at once. Each
+backend alone is left to you, above.
 
 ## Tests
 
