@@ -66,6 +66,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source/svg/html.rs` | An SVG's HTML labels, laid out, recorded and painted by Blitz for `svg.rs`, in a worker process: the one file that names Blitz, both sides of that worker |
 | `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and its heap capped by itself (`Worker::takes`, `Worker::heap`), killed past them, or from another thread while its answer is awaited (`Kill`); a payload its own or shared (`Link::request_shared`, a file's bytes written from where the viewer holds them); at most six alive, of every kind ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md), [ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
+| `src/source/texts.rs` | The queue a backend's `Texts` keeps: a thread that answers what is wanted of its text with the backend's `Answer`, the answers held for the viewer while still listed ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)) |
 | `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
@@ -869,7 +870,9 @@ counts and moves, the same for every backend with text.
 **The contract.** `Source::texts` gives a `Texts`, asked for when a search starts and dropped when
 it ends, which ends its work without waiting for it. The text comes in chunks, in the document's
 order, each whatever the backend's text comes in, and a match never runs from one onto the next.
-`chunk_of(page)` says which chunk a page starts with. The work keeps `Pool`'s contract:
+`chunks_on(page)` says which chunks have text on a page, first to last: a PDF's page is its own
+chunk, and two pages share a chunk that runs from one onto the other (a paragraph across a page
+break), so a page is searched whole whatever its text comes in. The work keeps `Pool`'s contract:
 `set_queue` replaces what is wanted, the most urgent first, each a `Want`: a chunk's text
 (`Want::Text`), or where the characters `from..to` of a chunk are on the pages (`Want::Rects`);
 `try_recv` never blocks and gives a `Got`: the text, or the rectangles, one for each line, each
@@ -904,7 +907,10 @@ among the matches, so text read later leaves it theirs and only its number chang
 the first match at or after the top of the screen, round to the first of all;
 with none known yet, the view goes the same way once one is, by what is known then, once. `n` and `N` (or `p`, the same step back) go from the match the reader
 is on while it is on screen, and otherwise from the top of the screen. The screen's top is the
-chunk its first page starts with, and on a page taller than the window (`Screen::visible`, the part
+first chunk on its first page; the matches of a chunk that page shares with the page before are
+before the top when their rectangles are all on that page, so that `Enter` on the second page of
+a paragraph across the break goes to a match in its tail, and the step waits for those rectangles
+as below. On a page taller than the window (`Screen::visible`, the part
 of it the pager shows, from `Nav::part_shown`), the top of that part: a match is on screen there
 when some of it is in that part, and before the screen's top when it ends above it
 (`Search::on_screen`, `Search::above`), by the match's rectangles. A place not known yet is never
@@ -919,7 +925,8 @@ unless it is a step the same way, which goes on with it. A match a key
 has just gone to is where the next key goes on from, on screen yet or not (`Search::going`, which
 `Search::heard` hands to the next key as `stepping`): keys read together, or faster than the
 match's place is known, follow one another as keys read apart do. The view
-goes to the page the match's chunk starts on; the match's rectangles are asked for then, and when
+goes to the page of the match's first rectangle, if known, and otherwise to the page its chunk
+starts on; the match's rectangles are asked for then, and when
 they arrive (`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way
 down the screen, unless it was wholly on screen already or a key was pressed since.
 
@@ -979,25 +986,31 @@ the tint. The pager's loop polls every `POLL` while the source owes a match's re
 (`Search::expecting`), so a tint follows its key by a render, not by the loop's idle tick.
 
 **A chunk a source can't give** comes as its reason, in words for the reader (`Got::Text`'s
-`Err`): the chunk is left unread, the status line says so from then on (`· page 40 unread`, or
-`· read 120 of 500 pages` once more than one is), and the reason is its message once, with the
+`Err`): the chunk is left unread, the status line says so from then on, in pages whatever the chunks
+(`· page 40 unread`, or `· read 120 of 500 pages` once more than one is): a page is read once
+every chunk on it is, and unread if one of them is (`search::Page`), and the reason is its message once, with the
 search while it is typed. There is no other channel: a source that reads nothing more (its file
 too large, its reading given up) answers each chunk asked with why.
 
 ### A PDF's text (`pdfcraft.rs`)
 
-`Pdf::texts` gives a `PagesText`: a chunk a page. A thread of its own (`Reader::run`) takes the
-most urgent thing wanted and not yet given, asks a worker process for it, and leaves what comes
-for the viewer to take; nothing in the viewer's process reads a page's text
-([ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)). The answers wait
-under the lock the queue is replaced under (`State::answers`), so one whose request is no longer
-listed is dropped with it, waiting or still being read, and never comes out of `try_recv`; and
-the thread reads nothing more while 4 MiB of them wait (`MAX_WAITING`), so a viewer busy writing
-to a slow terminal holds that and the one being read, not the whole document. Nothing under that
-lock goes through a list: what is listed and what was given are sets, and the next request to read
-is looked for from where the queue was last given up to (`State::from`), so a document of tens of
-thousands of pages costs the viewer's `try_recv` and `set_queue` no more than a short one (60,000
-empty pages asked, given and taken in 32 ms; with lists, 284 of them in 20 s). A spreadsheet's
+**The queue** (`source/texts.rs`) is the backends' own, as `threads.rs` is their render threads':
+a backend's `Texts` hands `set_queue` and `try_recv` to a `texts::Queue`, whose thread takes the
+most urgent thing wanted and not yet given and has the backend's `texts::Answer` answer it. The
+answers wait under the lock the queue is replaced under (`State::answers`), so one whose request
+is no longer listed is dropped with it, waiting or still being read, and never comes out of
+`try_recv`; and the thread reads nothing more while 4 MiB of them wait (`MAX_WAITING`), so a
+viewer busy writing to a slow terminal holds that and the one being read, not the whole document.
+Nothing under that lock goes through a list: what is listed and what was given are sets, and the
+next request to read is looked for from where the queue was last given up to (`State::from`), so
+a document of tens of thousands of chunks costs the viewer's `try_recv` and `set_queue` no more
+than a short one (60,000 empty pages asked, given and taken in 32 ms; with lists, 284 of them in
+20 s). Dropping the queue stops its thread and does what the reader last set to be done when the
+search ends (`Ending::on_end`), outside the lock and without waiting for the thread.
+
+`Pdf::texts` gives a `PagesText`: a chunk a page, on a `Queue` whose `Answer` (`Reader`) asks a
+worker process for each thing; nothing in the viewer's process reads a page's text
+([ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)). A spreadsheet's
 pages are a PDF's, so `gridcraft.rs`'s `Noted`, which wraps them to carry what gridcraft said,
 hands `texts` on to them, by the contract.
 
@@ -1022,10 +1035,10 @@ every chunk asked is answered as unread at once; rectangles are still answered a
 by the worker then alive, never after the kills. A PDF over `MAX_PDF`, one pdfcraft can't parse,
 or no room for a worker (six alive) leaves all of it unread the same way.
 
-**Ending a search** drops the `PagesText`: it sets the thread to stop and kills the worker
-through its `Kill`, which the thread put in the shared state once the worker was greeted, so a
+**Ending a search** drops the `PagesText`, and with it its queue, which kills the worker through
+the `Kill` the reader set as the search's end once the worker was greeted (`Ending::on_end`), so a
 request waiting on the worker ends at once and the pager's thread waits on neither. A worker
-being started at that moment is let go of when the thread sees the stop.
+being started at that moment is let go of when the reader finds the search ended.
 
 ## The terminal's state
 

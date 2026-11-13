@@ -20,6 +20,8 @@ mod picture;
 mod svg;
 #[cfg(feature = "tar")]
 mod tar;
+#[cfg(feature = "pdf")]
+mod texts;
 mod threads;
 #[cfg(any(feature = "zip", feature = "tar"))]
 mod tree;
@@ -31,7 +33,7 @@ mod zip;
 
 use std::fs::File;
 use std::io::{Read, Seek};
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -709,9 +711,10 @@ pub(crate) trait Source {
 pub(crate) trait Texts {
     /// How many chunks the text comes in.
     fn chunks(&self) -> usize;
-    /// The chunk page `page` (0-based) starts with: the one its first text is in, never less than
-    /// an earlier page's.
-    fn chunk_of(&self, page: usize) -> usize;
+    /// The chunks with text on page `page` (0-based), first to last: none for a page without
+    /// text. Two pages share a chunk that runs from one onto the other, so a page's first may be
+    /// the last of the page before; neither ever comes before an earlier page's.
+    fn chunks_on(&self, page: usize) -> Range<usize>;
     /// Replace what is wanted, the most urgent first. One still waited for is listed again every
     /// time; one given isn't given again while it stays listed.
     fn set_queue(&self, wanted: Vec<Want>);

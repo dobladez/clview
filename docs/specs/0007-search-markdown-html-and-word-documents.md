@@ -122,7 +122,7 @@ change, so a search outlives one.
 
 ## Tasks
 
-- [ ] **The contract's pages, and the queue shared** — `chunks_on` for `chunk_of`, `search.rs`'s
+- [x] **The contract's pages, and the queue shared** — `chunks_on` for `chunk_of`, `search.rs`'s
   `chunks_of` and unread counting on it (pages, for every backend), `src/source/texts.rs` lifted
   from `pdfcraft.rs` with its tests, `PagesText` on it. Nothing a user sees changes for a PDF.
   *Files:* `src/source.rs`, `src/source/texts.rs`, `src/source/pdfcraft.rs`, `src/view/search.rs`,

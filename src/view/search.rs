@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::source::{Got, Texts, Want};
@@ -154,6 +155,21 @@ enum Chunk {
     Read(Folded),
     /// The source couldn't give it, or gave more than is kept.
     Failed,
+}
+
+/// A page of the document, as the status line counts what is read: a page is unread while a chunk
+/// on it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    /// Not one of those shown.
+    Out,
+    /// This many of its chunks still to come.
+    Left(usize),
+    Read,
+    /// A chunk on it was left unread.
+    Failed,
+    /// Some of its text is past the chunks a search takes ([`MAX_CHUNKS`]): never read whole.
+    Beyond,
 }
 
 /// Where a match's rectangles are, asked of the source: the original's characters it covers, and
@@ -340,17 +356,19 @@ pub(super) struct Search {
     texts: Box<dyn Texts>,
     /// Each chunk, by its place in the text.
     chunks: Vec<Chunk>,
-    /// The chunk each page of the document starts with, and after the last, how many chunks.
-    starts: Vec<usize>,
-    /// The chunks searched, and those of them still to come, or that never will.
-    wanted: usize,
+    /// The chunks on each page of the document, first to last ([`Texts::chunks_on`]), in order and
+    /// within those searched: two pages share a chunk that runs from one onto the other.
+    on: Vec<Range<usize>>,
+    /// The chunks searched still to come.
     unread: usize,
-    /// The pages shown whose text is past the chunks a search takes ([`MAX_CHUNKS`]): never read.
-    beyond: usize,
-    /// Whether the text comes a chunk a page: what the status line counts in.
-    paged: bool,
+    /// Each page, as read so far; how many are shown, and of those, how many are read whole, have
+    /// a chunk left unread, the first of which, or have text past [`MAX_CHUNKS`].
+    pages: Vec<Page>,
+    counted: usize,
+    read_pages: usize,
     failed: usize,
     first_failed: Option<usize>,
+    beyond: usize,
     /// Why the last chunk left unread was, as told.
     told: Option<String>,
     /// The bytes kept ([`Folded::size`]), and whether reading stopped at [`MAX_TEXT`].
@@ -425,37 +443,52 @@ impl Search {
     pub(super) fn new(texts: Box<dyn Texts>, pages: &[usize], count: usize) -> Self {
         // Of a text in more chunks than a search takes, the first are read, and the rest left unread.
         let total = texts.chunks().min(MAX_CHUNKS);
-        let paged = texts.chunks() == count;
-        let mut starts = Vec::new();
-        let mut start = 0;
+        // What the source says, put right where it is wrong: each page's chunks start and end no
+        // earlier than an earlier page's, and within those searched.
+        let (mut on, mut past) = (Vec::with_capacity(count), Vec::with_capacity(count));
+        let (mut start, mut end) = (0, 0);
         for page in 0..count {
-            start = texts.chunk_of(page).clamp(start, total);
-            starts.push(start);
+            let said = texts.chunks_on(page);
+            start = said.start.clamp(start, total);
+            end = said.end.clamp(end.max(start), total);
+            on.push(start..end);
+            past.push(said.end > total && said.start < said.end);
         }
-        starts.push(total);
         let mut chunks: Vec<Chunk> = std::iter::repeat_with(|| Chunk::Out).take(total).collect();
-        let (mut wanted, mut beyond) = (0usize, 0usize);
+        let mut sheet = vec![Page::Out; count];
+        let (mut unread, mut counted, mut read_pages, mut beyond) = (0usize, 0usize, 0usize, 0usize);
         for page in pages {
-            if texts.chunk_of(*page) >= total && *page < count {
-                beyond = beyond.saturating_add(1);
-            }
-            for chunk in chunks_of(&starts, *page) {
+            let (Some(slot @ Page::Out), Some(range)) = (sheet.get_mut(*page), on.get(*page)) else { continue };
+            counted = counted.saturating_add(1);
+            *slot = match range.len() {
+                _ if past.get(*page).copied().unwrap_or(false) => {
+                    beyond = beyond.saturating_add(1);
+                    Page::Beyond
+                }
+                0 => {
+                    read_pages = read_pages.saturating_add(1);
+                    Page::Read
+                }
+                chunks => Page::Left(chunks),
+            };
+            for chunk in range.clone() {
                 if let Some(slot @ Chunk::Out) = chunks.get_mut(chunk) {
                     *slot = Chunk::Unread;
-                    wanted = wanted.saturating_add(1);
+                    unread = unread.saturating_add(1);
                 }
             }
         }
         Self {
             texts,
             chunks,
-            starts,
-            wanted,
-            unread: wanted,
-            beyond,
-            paged,
+            on,
+            unread,
+            pages: sheet,
+            counted,
+            read_pages,
             failed: 0,
             first_failed: None,
+            beyond,
             told: None,
             kept: 0,
             full: false,
@@ -576,29 +609,55 @@ impl Search {
         if self.count == 0 { None } else { self.land(Landing::from(screen, true, 1, false)) }
     }
 
-    /// How many matches are in the chunks before the one page `top` starts with.
+    /// How many matches are in the chunks before page `top`'s first.
     fn earlier(&self, top: usize) -> usize {
-        let top = self.starts.get(top).copied().unwrap_or(0);
+        let top = self.chunks_on(top).start;
         self.hits.range(..top).map(|(_, hits)| hits.len()).fold(0usize, usize::saturating_add)
     }
 
-    /// The matches of page `top`'s chunks, in order.
+    /// The matches of page `top`'s chunks, in order: those of a chunk it shares with the page
+    /// before too, which may be on that page.
     fn on_page(&self, top: usize) -> impl Iterator<Item = (usize, u32)> + '_ {
-        chunks_of(&self.starts, top).flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)))
+        self.chunks_on(top).flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)))
     }
 
-    /// How many of page `top`'s matches, in order, end above the part of it shown (`visible`), the
-    /// first `checked` of them known to already; and whether that is settled. It isn't while the
-    /// next match's rectangles haven't come, or weren't asked for: a place not known is never taken
-    /// for on screen, nor for above it. A match the source could give no rectangle for is where the
-    /// count stops, as one on screen is. On a page all on screen, none is above.
+    /// The chunks on page `page`.
+    fn chunks_on(&self, page: usize) -> Range<usize> {
+        self.on.get(page).cloned().unwrap_or_default()
+    }
+
+    /// The pages chunk `chunk` is on, first to last: none for a chunk on no page.
+    fn pages_of(&self, chunk: usize) -> Range<usize> {
+        let first = self.on.partition_point(|on| on.end <= chunk);
+        let last = self.on.partition_point(|on| on.start <= chunk);
+        first..last.max(first)
+    }
+
+    /// Whether page `page`'s first chunk is on the page before too: its matches may be there.
+    fn shares_its_first(&self, page: usize) -> bool {
+        let before = page.checked_sub(1).map_or(0..0, |before| self.chunks_on(before));
+        let on = self.chunks_on(page);
+        !on.is_empty() && before.contains(&on.start)
+    }
+
+    /// How many of page `top`'s matches, in order, are above the part of it shown (`visible`): on
+    /// a page before, in a chunk it shares with that page, or ending above that part; the first
+    /// `checked` of them known to be already; and whether that is settled. It isn't while the next
+    /// match's rectangles haven't come, or weren't asked for: a place not known is never taken for
+    /// on screen, nor for above it. A match the source could give no rectangle for is where the
+    /// count stops, as one on screen is. On a page all on screen whose chunks start on it, none is
+    /// above.
     fn above(&self, top: usize, visible: Option<(f32, f32)>, checked: usize) -> (usize, bool) {
-        let Some((from, _)) = visible else { return (0, true) };
+        if visible.is_none() && !self.shares_its_first(top) {
+            return (0, true);
+        }
+        let from = visible.map_or(0.0, |(from, _)| from);
         let mut above = checked;
         for key in self.on_page(top).skip(checked) {
             match self.placed.get(&key) {
-                Some(Placed { rects: Some(_), span, .. }) => {
-                    if !span.is_some_and(|(page, _, bottom)| page == top && bottom <= from) {
+                Some(Placed { rects: Some(rects), span, .. }) => {
+                    let before = !rects.is_empty() && rects.iter().all(|(page, _)| *page < top);
+                    if !before && !span.is_some_and(|(page, _, bottom)| page == top && bottom <= from) {
                         return (above, true);
                     }
                     above = above.saturating_add(1);
@@ -618,7 +677,14 @@ impl Search {
         match (placed.and_then(|placed| placed.span), screen.visible) {
             (Some((page, top, bottom)), Some((from, to))) if page == screen.top => bottom > from && top < to,
             (None, Some(_)) if self.page_of(at.0) == screen.top && placed.is_none_or(|placed| placed.rects.is_none()) => false,
-            _ => screen.pages.contains(&self.page_at(at)),
+            _ => match placed.and_then(|placed| placed.rects.as_ref()).filter(|rects| !rects.is_empty()) {
+                Some(rects) => rects.iter().any(|(page, _)| screen.pages.contains(page)),
+                // Not known: on screen if every page its chunk is on is.
+                None => {
+                    let mut pages = self.pages_of(at.0);
+                    if pages.is_empty() { screen.pages.contains(&self.page_of(at.0)) } else { pages.all(|page| screen.pages.contains(&page)) }
+                }
+            },
         }
     }
 
@@ -747,7 +813,7 @@ impl Search {
         let mut tints = BTreeMap::new();
         // While the query is typed no match's rectangles are asked for or kept, so no page has a tint.
         for page in screen.pages.iter().chain(screen.near) {
-            let mut asked = chunks_of(&self.starts, *page).flat_map(|chunk| self.placed.range((chunk, 0)..=(chunk, u32::MAX)));
+            let mut asked = self.chunks_on(*page).flat_map(|chunk| self.placed.range((chunk, 0)..=(chunk, u32::MAX)));
             if asked.any(|(_, placed)| placed.rects.is_none()) {
                 // Until they have all come, the page keeps what it had.
                 tints.insert(*page, (self.tints.get(page).and_then(|(tint, _)| tint.clone()), false));
@@ -794,8 +860,7 @@ impl Search {
             Err(why) => {
                 *slot = Chunk::Failed;
                 self.unread = self.unread.saturating_sub(1);
-                self.failed = self.failed.saturating_add(1);
-                self.first_failed.get_or_insert(chunk);
+                self.done(chunk, false);
                 if self.told.as_ref() != Some(&why) {
                     self.told = Some(why.clone());
                     *said = Some(why);
@@ -812,10 +877,32 @@ impl Search {
         self.any_text |= folded.text.chars().any(|c| c != ' ');
         *slot = Chunk::Read(folded);
         self.unread = self.unread.saturating_sub(1);
+        self.done(chunk, true);
         if self.needle.is_some() {
             self.pending.push_back(chunk);
         }
         text.len()
+    }
+
+    /// Chunk `chunk` is no longer to come, `read` or left unread: so are the pages it was the last
+    /// of, and a page it was on is unread if it is.
+    fn done(&mut self, chunk: usize, read: bool) {
+        for page in self.pages_of(chunk) {
+            let Some(slot) = self.pages.get_mut(page) else { continue };
+            *slot = match *slot {
+                Page::Left(_) if !read => {
+                    self.failed = self.failed.saturating_add(1);
+                    self.first_failed = Some(self.first_failed.map_or(page, |first| first.min(page)));
+                    Page::Failed
+                }
+                Page::Left(left) if left <= 1 => {
+                    self.read_pages = self.read_pages.saturating_add(1);
+                    Page::Read
+                }
+                Page::Left(left) => Page::Left(left.saturating_sub(1)),
+                other => other,
+            };
+        }
     }
 
     /// Match the chunks still to match, until `budget` bytes of them have been.
@@ -878,12 +965,9 @@ impl Search {
         None
     }
 
-    /// The page chunk `chunk` starts on.
+    /// The page chunk `chunk` starts on; for one on no page, the next page with any.
     fn page_of(&self, chunk: usize) -> usize {
-        // The last page that starts at or before it; a chunk of text a page starts within is that
-        // page's too, which is the last of those that start with it.
-        let pages = self.starts.len().saturating_sub(1);
-        self.starts.get(..pages).map_or(0, |starts| starts.partition_point(|start| *start <= chunk)).saturating_sub(1)
+        self.pages_of(chunk).start.min(self.on.len().saturating_sub(1))
     }
 
     /// The page the match `at` is on: where its first rectangle is, once known; until then, where
@@ -903,7 +987,7 @@ impl Search {
     /// on a page of the document, finite, and clipped to its page; what isn't is left out.
     fn place(&mut self, want: Want, rects: Result<Vec<(usize, [f32; 4])>, String>, size_of: &dyn Fn(usize) -> Option<(f32, f32)>) {
         let Want::Rects { chunk, from, to } = want else { return };
-        let pages = self.starts.len().saturating_sub(1);
+        let pages = self.on.len();
         let mut asked = self.placed.range_mut((chunk, 0)..=(chunk, u32::MAX));
         let Some((_, placed)) = asked.find(|(_, placed)| placed.from == from && placed.to == to) else { return };
         let clipped = |(page, [x0, y0, x1, y1]): (usize, [f32; 4])| {
@@ -932,7 +1016,7 @@ impl Search {
             let mut keys: BTreeSet<(usize, u32)> = BTreeSet::new();
             if !self.typing {
                 keys.extend(self.at);
-                let chunks = self.shown.iter().flat_map(|page| chunks_of(&self.starts, *page));
+                let chunks = self.shown.iter().flat_map(|page| self.chunks_on(*page));
                 let hits = chunks.flat_map(|chunk| self.hits.get(&chunk).into_iter().flatten().map(move |hit| (chunk, hit.0)));
                 keys.extend(hits.take(MAX_PLACED));
                 // And, apart from what is tinted, the matches a step is waiting to know the place of:
@@ -959,7 +1043,7 @@ impl Search {
                 }
             }
         }
-        let centre = self.starts.get(screen.top).copied().unwrap_or(0);
+        let centre = self.chunks_on(screen.top).start;
         let reading = self.reading();
         // The reader's match first, then the others in order.
         let keys = self.at.into_iter().chain(self.placed.keys().copied().filter(|key| Some(*key) != self.at));
@@ -1003,28 +1087,15 @@ impl Search {
         if self.wrapped {
             said.push_str(" · search wrapped");
         }
-        let unit = if self.paged { "pages" } else { "parts" };
         match self.first_failed {
             _ if self.full || self.failed > 1 || self.beyond > 0 => {
-                let read = self.wanted.saturating_sub(self.unread).saturating_sub(self.failed);
-                said.push_str(&format!(" · read {read} of {} {unit}", self.wanted.saturating_add(self.beyond)));
+                said.push_str(&format!(" · read {} of {} pages", self.read_pages, self.counted));
             }
-            Some(chunk) => said.push_str(&format!(" · page {} unread", self.page_of(chunk).saturating_add(1))),
+            Some(page) => said.push_str(&format!(" · page {} unread", page.saturating_add(1))),
             None => {}
         }
         said
     }
-}
-
-/// The chunks of page `page`, by the chunk each page starts with (`starts`, and after the last
-/// page's, how many chunks there are): from the one it starts with to the next page's; or, of a
-/// page within one chunk, that chunk.
-fn chunks_of(starts: &[usize], page: usize) -> std::ops::Range<usize> {
-    let total = starts.last().copied().unwrap_or(0);
-    let (Some(start), Some(end)) = (starts.get(page).copied(), page.checked_add(1).and_then(|next| starts.get(next)).copied()) else {
-        return 0..0;
-    };
-    if start < end { start..end } else { start..start.saturating_add(1).min(total) }
 }
 
 #[cfg(test)]
@@ -1034,13 +1105,12 @@ pub(super) mod tests {
 
     use super::*;
 
-    /// A text for the tests: its chunks, a page each unless `starts` says which chunk each page
-    /// starts with. It gives what is wanted in the order it is asked, when it is asked, as far as
+    /// A text for the tests: its chunks, a page each unless `on` says which chunks each page has. It gives what is wanted in the order it is asked, when it is asked, as far as
     /// `allowed` goes; a chunk in `broken` fails.
     #[derive(Default)]
     pub(in crate::view) struct Fake {
         pub(in crate::view) chunks: Vec<String>,
-        pub(in crate::view) starts: Option<Vec<usize>>,
+        pub(in crate::view) on: Option<Vec<Range<usize>>>,
         pub(in crate::view) broken: Vec<usize>,
         pub(in crate::view) state: RefCell<State>,
     }
@@ -1075,8 +1145,8 @@ pub(super) mod tests {
         fn chunks(&self) -> usize {
             self.chunks.len()
         }
-        fn chunk_of(&self, page: usize) -> usize {
-            self.starts.as_ref().map_or(page, |starts| starts.get(page).copied().unwrap_or(usize::MAX))
+        fn chunks_on(&self, page: usize) -> Range<usize> {
+            self.on.as_ref().map_or(page..page + 1, |on| on.get(page).cloned().unwrap_or_default())
         }
         fn set_queue(&self, wanted: Vec<Want>) {
             let mut state = self.state.borrow_mut();
@@ -1099,10 +1169,17 @@ pub(super) mod tests {
             Some(match want {
                 Want::Text(chunk) if self.broken.contains(&chunk) => Got::Text(chunk, Err(format!("chunk {chunk} is broken"))),
                 Want::Text(chunk) => Got::Text(chunk, Ok(self.chunks[chunk].clone())),
-                // A line 10 high, as far down its page as the match is into its chunk, and as wide as it.
+                // A line 10 high, as far down its page as the match is into its chunk, and as wide as
+                // it; of a chunk on several pages, 50 characters to a page, the last taking the rest.
                 Want::Rects { chunk, from, to } => {
-                    let page = self.starts.as_ref().map_or(chunk, |starts| starts.iter().rposition(|start| *start <= chunk).unwrap_or(0));
-                    let rects = state.rects.clone().unwrap_or_else(|| vec![(page, [from as f32, from as f32, to as f32, from as f32 + 10.0])]);
+                    let pages: Vec<usize> =
+                        self.on.as_ref().map_or(vec![chunk], |on| (0..on.len()).filter(|page| on[*page].contains(&chunk)).collect());
+                    let (page, down) = match pages[..] {
+                        [] => (0, from),
+                        [page] => (page, from),
+                        _ => (pages[(from / 50).min(pages.len() - 1)], from % 50),
+                    };
+                    let rects = state.rects.clone().unwrap_or_else(|| vec![(page, [from as f32, down as f32, to as f32, down as f32 + 10.0])]);
                     Got::Rects(want, Ok(rects))
                 }
             })
@@ -1116,7 +1193,7 @@ pub(super) mod tests {
 
     /// A search of `fake`, all its pages shown.
     fn search(fake: &Rc<Fake>) -> Search {
-        let pages = fake.starts.as_ref().map_or(fake.chunks.len(), Vec::len);
+        let pages = fake.on.as_ref().map_or(fake.chunks.len(), Vec::len);
         Search::new(Box::new(fake.clone()), &(0..pages).collect::<Vec<_>>(), pages)
     }
 
@@ -1649,8 +1726,8 @@ pub(super) mod tests {
         assert_eq!((search.count, search.more), (9_000, false));
     }
 
-    /// Only the chunks of the pages shown are read and searched; a page within a chunk, or a chunk
-    /// over several pages, is found by the page it starts on.
+    /// Only the chunks of the pages shown are read and searched; a chunk over several pages is on
+    /// each, and found where its matches are.
     #[test]
     fn chunks_follow_the_pages_given_and_where_they_start() {
         let fake = Fake::of(&["page one", "page two", "page three", "page four"]);
@@ -1660,21 +1737,79 @@ pub(super) mod tests {
         assert_eq!(search.status(), "/page 2");
         assert_eq!(search.enter(&at(&[3])), Some(Go { page: 3, span: None }));
         assert_eq!(search.step(true, 1, &at(&[3])), Some(Go { page: 1, span: None }));
-        // Seven paragraphs on three pages: the first page's three, a fourth onto the second page, where two
-        // more start, and one on the third.
+        // Seven paragraphs on three pages: the first page's three, a fourth from it onto the second
+        // page, where two more start, and one on the third.
         let chunks = ["a", "b", "c", "long", "d", "e", "last"].map(String::from).to_vec();
-        let fake = Rc::new(Fake { chunks, starts: Some(vec![0, 3, 6]), ..Fake::default() });
+        let fake = Rc::new(Fake { chunks, on: Some(vec![0..4, 3..6, 6..7]), ..Fake::default() });
         let mut search = self::search(&fake);
         settle(&mut search, &at(&[0]));
-        assert_eq!((0..7).map(|chunk| search.page_of(chunk)).collect::<Vec<_>>(), [0, 0, 0, 1, 1, 1, 2]);
+        assert_eq!((0..7).map(|chunk| search.page_of(chunk)).collect::<Vec<_>>(), [0, 0, 0, 0, 1, 1, 2]);
+        assert_eq!((0..7).map(|chunk| search.pages_of(chunk)).collect::<Vec<_>>(), [0..1, 0..1, 0..1, 0..2, 1..2, 1..2, 2..3]);
         type_in(&mut search, "l");
-        assert_eq!(search.enter(&at(&[1])), Some(Go { page: 1, span: None }));
-        assert_eq!(search.step(true, 1, &at(&[1])), Some(Go { page: 2, span: None }));
+        // "long"'s match is in its head, on the first page: from the second, Enter goes past it,
+        // once where it is is known.
+        assert_eq!(search.enter(&at(&[1])), None);
+        assert_eq!(settle(&mut search, &at(&[1])).into_iter().find_map(|polled| polled.go), Some(Go { page: 2, span: None }));
         assert_eq!(search.status(), "/l 2/2");
-        // A source that says a page starts before an earlier one, or past the end, is put right.
-        let odd = Rc::new(Fake { chunks: vec!["a".into(), "b".into()], starts: Some(vec![1, 0, 9]), ..Fake::default() });
+        assert_eq!(search.enter(&at(&[0])), Some(Go { page: 0, span: None }));
+        assert_eq!(search.status(), "/l 1/2");
+        // A source that says a page's chunks start or end before an earlier page's, or past the
+        // end, is put right.
+        let odd = Rc::new(Fake { chunks: vec!["a".into(), "b".into()], on: Some(vec![1..2, 0..1, 9..12]), ..Fake::default() });
         let search = self::search(&odd);
-        assert_eq!(search.starts, [1, 1, 2, 2]);
+        assert_eq!(search.on, [1..2, 1..2, 2..2]);
+    }
+
+    /// A chunk that runs from one page onto the next is on both: with either page alone on screen,
+    /// the match on it is tinted, gone to, and where the view goes; the other, on the page off
+    /// screen, is neither.
+    #[test]
+    fn a_chunk_across_a_page_break_is_searched_on_either_page_alone() {
+        // The second chunk's first 50 characters are on the first page, the rest on the second.
+        let across = format!("needle{}needle", " x".repeat(27));
+        let fake = Rc::new(Fake { chunks: vec!["start".into(), across, "end".into()], on: Some(vec![0..2, 1..3]), ..Fake::default() });
+        let mut search = search(&fake);
+        type_in(&mut search, "needle");
+        let (first, second) = (Screen { top: 0, pages: &[0], near: &[], visible: None }, Screen { top: 1, pages: &[1], near: &[], visible: None });
+        settle(&mut search, &second);
+        assert_eq!(search.status(), "/needle 2");
+        // Enter on the second page alone: the match in the tail, on it.
+        assert_eq!(search.enter(&second), None, "where the head's match is, is still to be known");
+        let gone: Vec<Go> = settle(&mut search, &second).into_iter().filter_map(|polled| polled.go).collect();
+        assert_eq!(search.status(), "/needle 2/2");
+        assert_eq!(gone.last().map(|go| go.page), Some(1), "{gone:?}");
+        let marks = |search: &Search, page| search.tint(page).0.map(|tint| tint.marks.clone()).unwrap_or_default();
+        assert_eq!(marks(&search, 1), [([60.0, 10.0, 66.0, 20.0], true)]);
+        // The first page alone: the match in the head, tinted, and the one Enter goes to.
+        settle(&mut search, &first);
+        assert_eq!(marks(&search, 0), [([0.0, 0.0, 6.0, 10.0], false)]);
+        assert_eq!(search.enter(&first), Some(Go { page: 0, span: None }));
+        settle(&mut search, &first);
+        assert_eq!((search.status().as_str(), marks(&search, 0)), ("/needle 1/2", vec![([0.0, 0.0, 6.0, 10.0], true)]));
+        // `n` from it, the second page alone: to the tail's.
+        settle(&mut search, &second);
+        assert_eq!(search.step(true, 1, &second).map(|go| go.page), Some(1));
+        settle(&mut search, &second);
+        assert_eq!((search.status().as_str(), marks(&search, 1)), ("/needle 2/2", vec![([60.0, 10.0, 66.0, 20.0], true)]));
+    }
+
+    /// The status line counts what is left unread in pages, whatever the chunks: a page is unread
+    /// while a chunk on it is, and a chunk on two pages that fails costs both.
+    #[test]
+    fn what_is_left_unread_is_counted_in_pages_whatever_the_chunks() {
+        // Six paragraphs on four pages, the third across the first page break.
+        let chunks = ["a", "b", "a cross", "a", "b", "a"].map(String::from).to_vec();
+        let on = Some(vec![0..3, 2..4, 4..5, 5..6]);
+        let fake = Rc::new(Fake { chunks: chunks.clone(), on: on.clone(), broken: vec![4], ..Fake::default() });
+        let mut search = search(&fake);
+        type_in(&mut search, "a");
+        settle(&mut search, &at(&[0]));
+        assert_eq!(search.status(), "/a 4 · page 3 unread");
+        let fake = Rc::new(Fake { chunks, on, broken: vec![2, 5], ..Fake::default() });
+        let mut search = self::search(&fake);
+        type_in(&mut search, "a");
+        settle(&mut search, &at(&[0]));
+        assert_eq!(search.status(), "/a 2 · read 1 of 4 pages");
     }
 
     /// Past the memory a search keeps, reading stops, and the status line says how far it read.
