@@ -317,3 +317,51 @@ Four findings; the first three were reproduced by a test before anything was cha
 - **Seen failing** before the arm was added: `p_goes_to_the_match_before_while_a_search_is_kept_as_shift_n_does`
   (`p` turned back a page of none: page 1, `1/5`, where the last match, `5/5 · search wrapped`, was
   wanted). The pager's test on a pseudo-terminal presses `p`, `3p` and, after `Esc`, `p` for a page.
+
+## After the third review (Codex, 2026-11-13)
+
+Four findings, each reproduced by a test before its fix. `p` behaves as `N` throughout.
+
+- **The text's queue could hold the lock the pager takes for as long as the document is long.**
+  `Shared::next` went through the queue looking each request up in a list of those given, under the
+  lock `try_recv` and `set_queue` take. Reproduced without a worker: 60,000 empty pages, a thread
+  giving them as the reader's does, the test taking them as the pager does; 284 were taken in 20 s.
+  What is listed and what was given are sets now, and the next request is looked for from where the
+  queue was last given up to; `set_queue` builds its set before taking the lock. The same run takes
+  32 ms, the slowest `try_recv` 3 ms, the queue set again half way in 3 ms. The test's bounds are
+  loose on purpose (5 s for the run, half a second for the queue): they tell the square from the
+  line, not this machine from another. `Want` derives `Hash` for it.
+- **Keys read together undid each other on a page that scrolls.** `nn` from the first of three
+  matches ended on the first: the second `n` judged the match the first had gone to by the screen
+  as it still was, found it off screen, and started again from the top. A match just gone to is
+  where the next key goes on from (`going`, handed to the next key by `heard` as `stepping`), until
+  the view has been taken there or another key came between.
+- **`Enter` scrolled to the match it had chosen for the time being**, whose rectangles are asked
+  for first, and then chose again by the screen it had just scrolled: the page's first match, at
+  the top, from near the bottom. Nothing is scrolled to while the choice is pending, and the
+  choice goes by the top page and the part of it shown when `Enter` was pressed (`picking` holds
+  them). It is only pending when the match chosen meanwhile is on that page.
+- **Two pages sent again before either was placed took the terminal past its budget.** Reproduced
+  end to end: two pages of 52 MiB side by side, a search kept and the keys (`?`) read together, so
+  that the tints arrive with nothing placed; the terminal held 203 MiB, by its own stream (each
+  upload counted from where it starts until its delete). Three rules now: an old copy that isn't
+  placed on screen goes as its replacement is sent (`unseen`: off screen, under the keys, or while
+  the screen before stays up; the last also ends a blank the old rule could cause, deleting a page
+  still shown because it was no longer wanted); a page is asked for again only if it fits the
+  budget beside its old copy and what the screen holds (`replacing`), and otherwise waits, the
+  pager drawing again once another page's old copy has gone; and a page that can't fit beside
+  itself has its old copy deleted first. That last is the one exception to "the old image deleted
+  once the new one is placed": with the budget at 192 MiB and a page at 64 MiB at most it takes a
+  terminal that dropped images, which halves the budget. ADR-0028 says so.
+- **Seen failing:** the four reproductions before their fixes
+  (`the_queue_stays_quick_with_tens_of_thousands_of_pages`,
+  `steps_read_together_go_on_from_one_another_on_a_page_that_scrolls`,
+  `enter_on_a_scrolled_page_scrolls_once_its_choice_is_settled`,
+  `pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps`, the last against the
+  pager as it was); and by changing the line and copying the file back: a request looked up by
+  going through those given; a match just gone to judged by the old screen, and any key counting
+  as a step; the scroll not held while the choice is pending, and the choice made by the screen as
+  it is; an unseen copy kept until placed, and a page held back never asked for (both the
+  end-to-end test); `replacing` never waiting, never going first, and `outdated` keeping the old
+  copy (`a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits`). One change proved
+  nothing and was replaced: the queue gone through from its start only when the thread sleeps.

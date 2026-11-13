@@ -351,8 +351,13 @@ pub(super) struct Search {
     /// The match the reader is on is to be scrolled to, once its rectangles are known.
     revealing: bool,
     /// Enter's match is to be chosen again once the top page's matches' rectangles are known: it
-    /// was chosen by page, and the page is taller than the window.
-    picking: bool,
+    /// was chosen by page, and the page is taller than the window. The page, and the part of it
+    /// that was shown when Enter was pressed, which the choice goes by.
+    picking: Option<(usize, Option<(f32, f32)>)>,
+    /// The reader's match was just gone to, and the view hasn't been taken there yet; and whether
+    /// that was so when the key now being answered was pressed ([`Search::heard`]).
+    going: bool,
+    stepping: bool,
     wrapped: bool,
     /// The rectangles of the matches on the pages on screen, by chunk and start.
     placed: BTreeMap<(usize, u32), Placed>,
@@ -438,7 +443,9 @@ impl Search {
             at: None,
             waiting: false,
             revealing: false,
-            picking: false,
+            picking: None,
+            going: false,
+            stepping: false,
             wrapped: false,
             placed: BTreeMap::new(),
             dirty: true,
@@ -467,7 +474,10 @@ impl Search {
     pub(super) fn heard(&mut self) {
         self.wrapped = false;
         self.revealing = false;
-        self.picking = false;
+        self.picking = None;
+        // Whether the key before this one went to a match the view hasn't been taken to yet: keys
+        // read together, or faster than the match's place is known.
+        self.stepping = std::mem::take(&mut self.going);
     }
 
     /// `/` again: the query kept is typed on.
@@ -534,7 +544,7 @@ impl Search {
         self.waiting = found.is_none() && self.busy();
         // On a page taller than the window, which of its matches is the first on screen is known
         // once their rectangles are: chosen again then ([`Search::poll`]).
-        self.picking = screen.visible.is_some();
+        self.picking = if self.waiting { None } else { self.seen(found, screen) };
         found.map(|hit| self.go_to(hit))
     }
 
@@ -574,7 +584,9 @@ impl Search {
         self.wrapped = false;
         let total = isize::try_from(self.count).ok().filter(|total| *total > 0)?;
         let steps = isize::try_from(count.max(1)).unwrap_or(isize::MAX);
-        let on = self.at.filter(|at| self.on_screen(*at, screen)).and_then(|at| self.ordinal(at));
+        // The match the key before went to is where this one goes on from, on screen yet or not:
+        // the view is on its way there.
+        let on = self.at.filter(|at| self.stepping || self.on_screen(*at, screen)).and_then(|at| self.ordinal(at));
         let from = match on {
             Some(ordinal) => isize::try_from(ordinal).unwrap_or(0),
             None => {
@@ -597,7 +609,17 @@ impl Search {
     /// place there if its rectangles are known; otherwise once they are ([`Search::poll`]).
     fn go_to(&mut self, hit: (usize, u32)) -> Go {
         self.revealing = true;
+        self.going = true;
         Go { page: self.page_at(hit), span: None }
+    }
+
+    /// The top page of the `screen` and the part of it shown, for Enter to choose by again once
+    /// the page's matches' rectangles are known ([`Search::poll`]): where the page is taller than
+    /// the window and the match chosen for now, `hit`, is on it. `None` where there is nothing
+    /// more to learn: the page is all on screen, or the match on another.
+    fn seen(&self, hit: Option<(usize, u32)>, screen: &Screen<'_>) -> Option<(usize, Option<(f32, f32)>)> {
+        let on_top = hit.is_some_and(|hit| self.page_of(hit.0) == screen.top);
+        (screen.visible.is_some() && on_top).then_some((screen.top, screen.visible))
     }
 
     /// Take what the source has read, match what is still to match, and ask the source for what is
@@ -622,34 +644,48 @@ impl Search {
                     self.at = Some(hit);
                     self.waiting = false;
                     self.dirty = true;
+                    self.picking = self.seen(Some(hit), screen);
                     polled.go = Some(self.go_to(hit));
                 }
                 None => self.waiting = self.busy(),
             }
         }
+        // Not while Enter's choice is still to be made again: the view is scrolled once, to the
+        // match chosen for good, never first to the one chosen meanwhile.
         if self.revealing
+            && self.picking.is_none()
             && let Some(at) = self.at
             && let Some((page, span)) = self.span(at)
         {
             self.revealing = false;
+            self.going = false;
             polled.go = Some(Go { page, span: Some(span) });
         }
         self.queue(screen);
         polled.tinted = self.retint(screen);
         // Enter chose among the top page's matches before it knew where they are: now that it
-        // does, the first at or after the top of what is shown, if that is another.
-        if self.picking && !self.waiting && self.tints.get(&screen.top).is_none_or(|(_, settled)| *settled) {
-            self.picking = false;
-            if let Some(hit) = self.first_from(screen).filter(|hit| Some(*hit) != self.at) {
+        // does, the first at or after the top of what was shown when Enter was pressed, wherever
+        // the view is now; and the view is scrolled to it.
+        if let Some((top, visible)) = self.picking.filter(|_| !self.waiting)
+            && self.tints.get(&top).is_none_or(|(_, settled)| *settled)
+        {
+            self.picking = None;
+            let seen = Screen { top, visible, ..*screen };
+            if let Some(hit) = self.first_from(&seen).filter(|hit| Some(*hit) != self.at) {
                 self.at = Some(hit);
                 self.dirty = true;
                 self.queue(screen);
                 polled.tinted |= self.retint(screen);
-                polled.go = Some(match self.span(hit) {
+            }
+            if self.revealing
+                && let Some(at) = self.at
+            {
+                polled.go = Some(match self.span(at) {
                     Some((page, span)) => Go { page, span: Some(span) },
-                    None => self.go_to(hit),
+                    None => Go { page: self.page_at(at), span: None },
                 });
-                self.revealing = self.span(hit).is_none();
+                self.revealing = self.span(at).is_none();
+                self.going = self.revealing;
             }
         }
         let status = self.status();
@@ -979,6 +1015,8 @@ pub(super) mod tests {
         pub(in crate::view) queues: usize,
         /// What it gives in place of a match's rectangles, when set.
         pub(in crate::view) rects: Option<Vec<(usize, [f32; 4])>>,
+        /// How many more matches' rectangles it gives: all that are asked, when `None`.
+        pub(in crate::view) placing: Option<usize>,
     }
 
     impl Fake {
@@ -1007,12 +1045,15 @@ pub(super) mod tests {
         }
         fn try_recv(&self) -> Option<Got> {
             let mut state = self.state.borrow_mut();
-            let held = state.allowed == Some(0);
-            let ready = |want: &&Want| !state.given.contains(want) && (!held || matches!(want, Want::Rects { .. }));
-            let want = *state.queue.iter().find(ready)?;
+            let held = |want: &Want| match want {
+                Want::Text(_) => state.allowed == Some(0),
+                Want::Rects { .. } => state.placing == Some(0),
+            };
+            let want = *state.queue.iter().find(|want| !state.given.contains(want) && !held(want))?;
             state.given.push(want);
-            if let Want::Text(_) = want {
-                state.allowed = state.allowed.map(|n| n - 1);
+            match want {
+                Want::Text(_) => state.allowed = state.allowed.map(|n| n - 1),
+                Want::Rects { .. } => state.placing = state.placing.map(|n| n - 1),
             }
             Some(match want {
                 Want::Text(chunk) if self.broken.contains(&chunk) => Got::Text(chunk, Err(format!("chunk {chunk} is broken"))),
@@ -1361,6 +1402,41 @@ pub(super) mod tests {
         assert!(!both.busy() && !both.expecting());
         both.enter(&at(&[0]));
         assert_eq!(both.step(true, 1, &at(&[0])), Some(Go { page: 0, span: None }), "round to the one match");
+    }
+
+    /// Enter on a page taller than the window, scrolled down it, chooses its match again once the
+    /// page's matches' rectangles have come, and scrolls only then, once, to the one chosen: by the
+    /// screen as it was when Enter was pressed. The first match of the page, chosen meanwhile, is
+    /// asked for first; its rectangles coming before the others' scroll nothing.
+    #[test]
+    fn enter_on_a_scrolled_page_scrolls_once_its_choice_is_settled() {
+        // Three matches, 10, 50 and 90 of the page's 100 units down; the part from 70 down is shown.
+        let text = format!("{0}ab{1}ab{1}ab", "x".repeat(10), "x".repeat(38));
+        let fake = Fake::of(&[&text]);
+        let mut search = search(&fake);
+        let low = Screen { top: 0, pages: &[0], near: &[], visible: Some((0.7, 1.0)) };
+        settle(&mut search, &low);
+        type_in(&mut search, "ab");
+        fake.state.borrow_mut().placing = Some(0);
+        assert_eq!(search.enter(&low), Some(Go { page: 0, span: None }), "by page, for now");
+        assert_eq!((search.poll(&low, &square).go, search.status()), (None, "/ab 1/3".into()));
+        // The reader's match's rectangles come, alone: nothing to scroll to yet.
+        fake.state.borrow_mut().placing = Some(1);
+        assert_eq!(search.poll(&low, &square).go, None, "scrolled to a match not chosen for good");
+        // The rest come. Wherever the pager's view is by then, the choice is by the screen Enter saw.
+        fake.state.borrow_mut().placing = None;
+        let moved = Screen { visible: Some((0.0, 0.2)), ..low };
+        assert_eq!(search.poll(&moved, &square).go, Some(Go { page: 0, span: Some((0.9, 1.0)) }));
+        assert_eq!(search.status(), "/ab 3/3");
+        assert_eq!(search.poll(&moved, &square).go, None, "once");
+        // Where the page's first match is the one, it is scrolled to as soon as that is known.
+        let mut search = self::search(&fake);
+        let high = Screen { visible: Some((0.0, 0.3)), ..low };
+        settle(&mut search, &high);
+        type_in(&mut search, "ab");
+        search.enter(&high);
+        let gone: Vec<Go> = settle(&mut search, &high).into_iter().filter_map(|polled| polled.go).collect();
+        assert_eq!((gone, search.status()), (vec![Go { page: 0, span: Some((0.1, 0.2)) }], "/ab 1/3".into()));
     }
 
     /// What the source gives is checked: a chunk that isn't one of its own or comes twice, text past

@@ -24,7 +24,12 @@ paper is white; Markdown's may be the terminal's dark.
    rectangles and of which is the reader's; 0 for none). A page whose tint is another by now is
    asked of the render pool again, like a page never sent, and sent under a new image id; the one
    in the terminal stays on screen until the new one is placed, and is deleted then. A page whose
-   tint didn't change is only placed. Nothing of a page's pixels is kept in clv for it.
+   tint didn't change is only placed. Nothing of a page's pixels is kept in clv for it. The two
+   copies count against the terminal's budget while both are held: a page is asked for again only
+   if it fits beside its old copy with what the screen holds, and otherwise waits for another
+   page's old copy to go. A copy nobody sees (off screen, or under the keys) goes as its
+   replacement is sent; and a page that doesn't fit beside itself, past half the budget, goes
+   first, its place empty until the new one comes: the one case where the screen isn't kept whole.
 3. **A render under way keeps going when the tint changes,** and gets the tint of the moment it
    arrives: a page is the same pixels whatever its tint. So keys read together, or a key held,
    cost at most one render and one send a page, for where they end.

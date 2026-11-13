@@ -1591,6 +1591,68 @@ fn the_page_shows_the_match_the_status_line_says_whenever_its_render_arrives() {
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
+/// The most bytes of pixels the terminal held at once, going by `text`: each page sent counted
+/// from where its upload starts, four bytes a pixel, until it is deleted.
+fn most_held(text: &str) -> u64 {
+    const SENT: &str = "\x1b_Ga=t,f=100,t=d,q=2,i=";
+    let sizes: std::collections::HashMap<u32, u64> =
+        pngs(text).into_iter().map(|(id, page)| (id, u64::from(page.width()) * u64::from(page.height()) * 4)).collect();
+    let id_at = |at: usize, code: &str| text[at + code.len()..].chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u32>().ok();
+    let mut events: Vec<(usize, bool, u32)> = Vec::new();
+    events.extend(text.match_indices(SENT).filter_map(|(at, _)| Some((at, true, id_at(at, SENT)?))));
+    events.extend(text.match_indices(DELETED).filter_map(|(at, _)| Some((at, false, id_at(at, DELETED)?))));
+    events.sort_unstable();
+    let (mut held, mut most) = (std::collections::HashMap::new(), 0u64);
+    for (_, sent, id) in events {
+        match sent {
+            true => held.insert(id, sizes.get(&id).copied().unwrap_or(0)),
+            false => held.remove(&id),
+        };
+        most = most.max(held.values().sum());
+    }
+    most
+}
+
+/// The terminal never holds more than its budget of pages while they are sent again with their
+/// tints. Two pages side by side of some 13 megapixels, 52 MiB each: the two as they were and the
+/// two tinted are 208 MiB, past the 192 MiB the pager keeps to. With the keys up in the pages'
+/// place when the tints come, nothing places the new pages over the old, which were both kept;
+/// an old copy nobody sees goes as its replacement is sent. And with the pages on screen, the
+/// second is sent again only once the first has taken its old copy's place.
+#[test]
+fn pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps() {
+    if !pty_works() {
+        return;
+    }
+    const BUDGET: u64 = 192 << 20;
+    let pdf = fixture("tint-budget", 2);
+    let terminal = Terminal { cell: Some((22, 42)), ..PLAIN };
+    let mut view = Session::start_on(terminal, &pdf, &["--protocol", "kitty"], 300, 100);
+    view.wait_until("both pages", |t| last_bar(t).contains(" pages 1–2/2 ") && transmitted(t) == 2 && pngs(t).len() == 2);
+    let page: u64 = pngs(&view.text()).iter().map(|(_, page)| u64::from(page.width()) * u64::from(page.height()) * 4).min().unwrap();
+    assert!(page * 4 > BUDGET && page * 3 <= BUDGET, "a page of {} MiB says nothing of a budget of 192", page >> 20);
+    // The search kept, then the keys, read together: the tints come while the keys are up.
+    view.press("/test\r?");
+    view.wait_until("both sent again, tinted", |t| pngs(t).len() == 4);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(most_held(&view.text()) <= BUDGET, "{} MiB held with the keys up", most_held(&view.text()) >> 20);
+    // Any key: the pages again. `n`: the reader's match goes from the first page to the second, and
+    // both are sent again, each over its old copy, on screen this time.
+    view.press("x");
+    view.wait_until("the pages back", |t| last_bar(t).contains(" /test 1/2 "));
+    view.press("n");
+    view.wait_until("the second page's match", |t| last_bar(t).contains(" /test 2/2 ") && pngs(t).len() == 6);
+    std::thread::sleep(Duration::from_millis(500));
+    let text = view.text();
+    assert!(most_held(&text) <= BUDGET, "{} MiB held with the pages on screen", most_held(&text) >> 20);
+    // And both ended tinted as the status line says: the second page's match the reader's.
+    let last: Vec<bool> = pngs(&text).iter().rev().take(2).map(|(_, page)| page.pixels().any(|pixel| pixel.0 == OWN_TINT)).collect();
+    assert_eq!(last.iter().filter(|own| **own).count(), 1, "one of the two pages last sent has the reader's match");
+    view.press("\x1bq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
 /// With a search kept and its matches tinted on screen, `c` copies the page as rendered: black on
 /// white, none of the tint's colours.
 #[test]

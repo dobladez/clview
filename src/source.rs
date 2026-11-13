@@ -720,7 +720,7 @@ pub(crate) trait Texts {
 }
 
 /// What the viewer wants of a source's text ([`Texts::set_queue`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Want {
     /// A chunk's text.
     Text(usize),

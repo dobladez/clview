@@ -281,3 +281,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-13 — Four findings of its second review fixed (the notes say which).
 - 2026-11-13 — At the owner's request: with a search kept, `p` goes to the match before, as `N`
   does, since `n` goes to the next; after the search is cleared it turns back a page again.
+- 2026-11-13 — Four findings of Codex's third review fixed (the notes say which).

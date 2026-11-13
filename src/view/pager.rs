@@ -242,6 +242,7 @@ pub(super) fn run(
         hold: Hold::default(),
         bounds_for: None,
         ready: false,
+        replaced: false,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -1731,6 +1732,8 @@ struct Pager<'a> {
     bounds_for: Option<(u64, Values, Room)>,
     /// Whether the last draw had every page on screen ready: what the status line says of it.
     ready: bool,
+    /// Whether the last placements took a page's old copy out of the terminal ([`Pager::place`]).
+    replaced: bool,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1803,6 +1806,9 @@ impl Pager<'_> {
         // under way for any of them carry on; the rest stop.
         let mut wanted = Vec::new();
         let mut near = 0u64;
+        // Whether a page to send again was left for later, for the room its old copy takes.
+        let mut held_back = false;
+        self.replaced = false;
         for v in on_screen.iter().flatten().copied().chain(self.level.nav.around(AHEAD, BEHIND).into_iter().map(view)) {
             if self.failed.iter().any(|(f, _)| *f == v) || wanted.iter().any(|w: &Wanted| w.view == v) {
                 continue;
@@ -1811,8 +1817,9 @@ impl Pager<'_> {
             // that tint isn't known yet (the matches' places still asked for), with any.
             let (tint, settled) = self.level.nav.tint(v.page);
             let key = tint.as_ref().map_or(0, |tint| tint.key);
-            if let Some(s) = self.sent.iter().find(|s| s.view == v && (s.tint == key || !settled)) {
-                near = near.saturating_add(s.bytes());
+            if self.sent.iter().any(|s| s.view == v && (s.tint == key || !settled)) {
+                // All the terminal holds of it: with another tint too, until this one is placed.
+                near = self.sent.iter().filter(|s| s.view == v).map(Sent::bytes).fold(near, u64::saturating_add);
                 continue;
             }
             // Laid out each time, since a file's size may have come to be known meanwhile: then what
@@ -1830,7 +1837,28 @@ impl Pager<'_> {
             match next {
                 Ok(w) => {
                     let size = source.size(v.page).unwrap_or_default();
-                    near = near.saturating_add(pixel_bytes(size, w.layout.scale));
+                    let new = pixel_bytes(size, w.layout.scale);
+                    // The page as it is in the terminal, with another tint, and on screen: it stays
+                    // until this one is placed over it, so the two are held together for a while.
+                    let old = displayed(&self.sent, v, &self.placed);
+                    match replacing(old, new, near, self.budget) {
+                        Replace::Beside => near = near.saturating_add(old),
+                        // Not beside what the screen holds already: once another's old copy has gone.
+                        Replace::Wait => {
+                            held_back = true;
+                            near = near.saturating_add(old);
+                            continue;
+                        }
+                        // Never beside itself, a page past half of what the terminal keeps: it goes
+                        // first, and its place is empty until this one comes.
+                        Replace::Instead => {
+                            for gone in superseded(&mut self.sent, v, None) {
+                                delete(&mut out, gone, self.output);
+                                self.placed.retain(|(placed, _)| *placed != gone);
+                            }
+                        }
+                    }
+                    near = near.saturating_add(new);
                     if near > self.budget && !on_screen.contains(&Some(v)) {
                         break;
                     }
@@ -1868,7 +1896,13 @@ impl Pager<'_> {
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
         self.ready = ready;
         self.wrote(0);
-        self.tty.write_all(&out)
+        self.tty.write_all(&out)?;
+        // A page left for later, and an old copy gone with this draw's placements: asked for now.
+        // Each time round one copy fewer is held twice, so it ends.
+        if held_back && std::mem::take(&mut self.replaced) {
+            return self.draw();
+        }
+        Ok(())
     }
 
     /// The status line written again, the rest of the screen as it is: a search's count as its text
@@ -2516,12 +2550,11 @@ impl Pager<'_> {
             }
         }
         // A page placed in place of itself as it was sent before, with another tint: that one goes
-        // from the terminal now that this one shows.
-        for (id, _) in &placed {
-            let Some(view) = self.sent.iter().find(|s| s.id == *id).map(|s| s.view) else { continue };
-            for gone in superseded(&mut self.sent, view, Some(*id)) {
-                delete(out, gone, self.output);
-            }
+        // from the terminal now that this one shows. So does the old copy of a page that left the
+        // screen with it.
+        for gone in outdated(&mut self.sent, &placed) {
+            delete(out, gone, self.output);
+            self.replaced = true;
         }
         self.placed = placed;
     }
@@ -2581,13 +2614,12 @@ impl Pager<'_> {
                         Payload::Text(text) => text_bytes(text),
                         Payload::Png(_) | Payload::File(_) => u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4),
                     };
-                    // The page as it was sent before, with another tint, goes now unless it is on
-                    // screen, where it stays until this one is placed over it ([`Pager::place`]).
-                    if !shown {
-                        for gone in superseded(&mut self.sent, wanted.view, None) {
-                            delete(&mut out, gone, self.output);
-                            self.placed.retain(|(placed, _)| *placed != gone);
-                        }
+                    // The page as it was sent before, with another tint, goes now unless it is placed
+                    // on screen, where it stays until this one is placed over it ([`Pager::place`]).
+                    // One that only would be on screen (the keys are up in its place, or the screen
+                    // before is, until this one's is ready) is seen by nobody: it goes too.
+                    for gone in unseen(&mut self.sent, wanted.view, &self.placed) {
+                        delete(&mut out, gone, self.output);
                     }
                     for gone in make_room(&mut self.sent, bytes, self.budget, self.kept, &self.on_screen) {
                         delete(&mut out, gone, self.output);
@@ -2727,6 +2759,65 @@ fn superseded(sent: &mut Vec<Sent>, view: View, kept: Option<u32>) -> Vec<u32> {
     let gone: Vec<u32> = sent.iter().filter(|s| s.view == view && Some(s.id) != kept).map(|s| s.id).collect();
     sent.retain(|s| !gone.contains(&s.id));
     gone
+}
+
+/// The copies of `view` in `sent` that aren't among those `placed` on screen, taken out, and their
+/// ids: nobody sees them, so one sent again needn't wait to take their place.
+fn unseen(sent: &mut Vec<Sent>, view: View, placed: &[(u32, u32)]) -> Vec<u32> {
+    let gone: Vec<u32> = sent.iter().filter(|s| s.view == view && !placed.iter().any(|(id, _)| *id == s.id)).map(|s| s.id).collect();
+    sent.retain(|s| !gone.contains(&s.id));
+    gone
+}
+
+/// The bytes the copies of `view` in `sent` take that are `placed` on screen: what one sent again
+/// is held beside until it is placed over them.
+fn displayed(sent: &[Sent], view: View, placed: &[(u32, u32)]) -> u64 {
+    let copies = sent.iter().filter(|s| s.view == view && placed.iter().any(|(id, _)| *id == s.id));
+    copies.map(Sent::bytes).fold(0, u64::saturating_add)
+}
+
+/// Of every page `sent` holds more than once, the copies another takes the place of, taken out,
+/// and their ids: all but the one `placed` on screen now, or with none placed, all but the last
+/// sent.
+fn outdated(sent: &mut Vec<Sent>, placed: &[(u32, u32)]) -> Vec<u32> {
+    let is_placed = |s: &Sent| placed.iter().any(|(id, _)| *id == s.id);
+    let mut gone = Vec::new();
+    for (at, s) in sent.iter().enumerate() {
+        let later = sent.get(at.saturating_add(1)..).unwrap_or_default();
+        let another_placed = sent.iter().any(|other| other.view == s.view && other.id != s.id && is_placed(other));
+        let outlived = another_placed || later.iter().any(|other| other.view == s.view);
+        if !is_placed(s) && outlived {
+            gone.push(s.id);
+        }
+    }
+    sent.retain(|s| !gone.contains(&s.id));
+    gone
+}
+
+/// What becomes of a page to be sent again with another tint while the terminal holds it as it
+/// was, on screen, where the old copy stays until the new one is placed over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Replace {
+    /// Sent, and held beside the old copy until it is placed.
+    Beside,
+    /// Not yet: beside the old copy it would pass the budget with what the screen holds already.
+    /// Once another page's old copy has gone, there is room.
+    Wait,
+    /// Sent once the old copy has been deleted: the two alone pass the budget.
+    Instead,
+}
+
+/// [`Replace`] for a page of `new` bytes whose copy on screen takes `old` (0: none is on screen, and
+/// it is sent as any page is), with `near` bytes held or asked for before it, in a terminal that is
+/// to hold `budget` at most.
+fn replacing(old: u64, new: u64, near: u64, budget: u64) -> Replace {
+    let both = old.saturating_add(new);
+    match old {
+        0 => Replace::Beside,
+        _ if both > budget => Replace::Instead,
+        _ if near.saturating_add(both) > budget => Replace::Wait,
+        _ => Replace::Beside,
+    }
 }
 
 /// Room in the terminal for a page of `incoming` bytes: the least recently shown pages not
@@ -4096,6 +4187,43 @@ mod tests {
         assert_eq!((id(7), id(9), id(5), shown(&kept, sent(4, 9, 1, None).view, 7).map(|s| s.id)), (Some(1), Some(3), Some(3), None));
     }
 
+    /// A page sent again while its old copy is on screen is held beside it until placed, so the two
+    /// count against what the terminal keeps: beside what the screen holds already it is sent only
+    /// if all of it fits, and otherwise waits for another page's old copy to go; a page that
+    /// doesn't fit beside itself goes first. With no copy on screen it is sent as any page is.
+    #[test]
+    fn a_page_sent_again_fits_the_budget_beside_its_old_copy_or_waits() {
+        let mib = |n: u64| n << 20;
+        // Two pages of 61 MiB on screen, each to be sent again: the first beside its old copy (122), the
+        // second not beside all of that (244), until the first's old copy has gone (61, and 183 with its own).
+        assert_eq!(replacing(mib(61), mib(61), 0, BUDGET), Replace::Beside);
+        assert_eq!(replacing(mib(61), mib(61), mib(122), BUDGET), Replace::Wait);
+        assert_eq!(replacing(mib(61), mib(61), mib(61), BUDGET), Replace::Beside);
+        // Past half of what the terminal keeps, never beside itself, whatever else is held.
+        assert_eq!(replacing(mib(100), mib(100), 0, BUDGET), Replace::Instead);
+        assert_eq!(replacing(mib(20), mib(20), 0, MIN_BUDGET), Replace::Instead);
+        // No copy on screen: as any page, the budget the caller's own.
+        assert_eq!((replacing(0, mib(61), mib(183), BUDGET), replacing(0, u64::MAX, u64::MAX, BUDGET)), (Replace::Beside, Replace::Beside));
+        assert_eq!(replacing(u64::MAX, u64::MAX, u64::MAX, BUDGET), Replace::Instead, "sizes that would overflow don't");
+        // What is on screen of a page, and what isn't.
+        let tinted = |page: usize, id: u32, tint: u64| Sent { tint, ..sent(page, id, 10, None) };
+        let mut kept = vec![tinted(0, 1, 0), tinted(1, 2, 0), tinted(0, 3, 7), tinted(2, 4, 0), tinted(2, 5, 3)];
+        let (first, third) = (kept[0].view, kept[3].view);
+        let placed = [(1, 1), (2, 2)];
+        assert_eq!((displayed(&kept, first, &placed), displayed(&kept, third, &placed), displayed(&kept, first, &[])), (mib(10), 0, 0));
+        // A copy nobody sees goes as its page is sent again; one placed stays.
+        assert_eq!((unseen(&mut kept, third, &placed), unseen(&mut kept, first, &placed)), (vec![4, 5], vec![3]));
+        assert_eq!(kept.iter().map(|s| s.id).collect::<Vec<_>>(), [1, 2]);
+        // Placed: of each page held twice, the one on screen stays, or with none on screen the last sent.
+        let mut kept = vec![tinted(0, 1, 0), tinted(1, 2, 0), tinted(0, 3, 7), tinted(2, 4, 0), tinted(2, 5, 3), tinted(3, 6, 0)];
+        assert_eq!(outdated(&mut kept, &[(3, 1), (2, 2)]), [1, 4]);
+        assert_eq!(kept.iter().map(|s| s.id).collect::<Vec<_>>(), [2, 3, 5, 6]);
+        assert!(outdated(&mut kept, &[(3, 1), (2, 2)]).is_empty() && outdated(&mut kept, &[]).is_empty());
+        // The older of two on screen: placed, it stays, and the newer goes.
+        let mut kept = vec![tinted(0, 1, 7), tinted(0, 3, 9)];
+        assert_eq!(outdated(&mut kept, &[(1, 1)]), [3]);
+    }
+
     #[test]
     fn a_page_takes_four_bytes_a_pixel() {
         // US Letter at 2 px per point: 1224 × 1584 pixels.
@@ -4386,6 +4514,11 @@ mod tests {
     /// `keys` pressed as the pager takes them: `/` asks the source for its text, here `texts`, and
     /// what there is to read is read and matched after each key.
     fn search_keys(nav: &mut Nav, texts: &Rc<search::tests::Fake>, keys: &[Key]) -> Step {
+        // Until two passes in a row have no news: what one asks for, the next is given.
+        let news = |nav: &mut Nav| {
+            let (said, drawn) = nav.search_on(&search::tests::square);
+            said || drawn
+        };
         let mut first = Step::Continue;
         for key in keys {
             let mut step = nav.key(*key);
@@ -4393,16 +4526,13 @@ mod tests {
                 nav.start_search(Some(Box::new(texts.clone())));
                 step = Step::Continue;
             }
-            // Until two passes in a row have no news: what one asks for, the next is given.
-            let news = |nav: &mut Nav| {
-                let (said, drawn) = nav.search_on(&search::tests::square);
-                said || drawn
-            };
             while news(nav) | news(nav) {}
             if first == Step::Continue {
                 first = step;
             }
         }
+        // With no key, the passes alone: after keys pressed together, with none between them.
+        while news(nav) | news(nav) {}
         first
     }
 
@@ -4736,6 +4866,40 @@ mod tests {
         nav.scroll = 30;
         search_keys(&mut nav, &fake, &[Key::Char('/'), Key::Enter]);
         assert_eq!(searched(&nav), "/ab 2/3");
+    }
+
+    /// Keys read together step from match to match as keys read apart do: on a page that scrolls,
+    /// the match a key went to is where the next key goes on from, though the view hasn't been
+    /// scrolled to it yet. `nn` from the first of three ends on the third; `pp` and `Np` come back.
+    #[test]
+    fn steps_read_together_go_on_from_one_another_on_a_page_that_scrolls() {
+        let text = format!("{0}ab{1}ab{1}ab", "x".repeat(10), "x".repeat(38));
+        let fake = search::tests::Fake::of(&[&text]);
+        let mut nav = reader(0, 1, 20, 100);
+        search_for(&mut nav, &fake, "/ab");
+        search_keys(&mut nav, &fake, &[Key::Enter]);
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 1/3".into(), 0));
+        // One read, no pass between the keys: the second goes on from the second match, off screen still.
+        press(&mut nav, &[Key::Char('n'), Key::Char('n')]);
+        search_keys(&mut nav, &fake, &[]);
+        nav.shown(20, 100);
+        assert_eq!((searched(&nav), nav.scroll), ("/ab 3/3".into(), 80));
+        for back in [[Key::Char('p'), Key::Char('p')], [Key::Char('N'), Key::Char('p')]] {
+            press(&mut nav, &back);
+            search_keys(&mut nav, &fake, &[]);
+            nav.shown(20, 100);
+            assert_eq!((searched(&nav), nav.scroll), ("/ab 1/3".into(), 4), "{back:?}");
+            press(&mut nav, &[Key::Char('n'), Key::Char('n')]);
+            search_keys(&mut nav, &fake, &[]);
+            nav.shown(20, 100);
+            assert_eq!(searched(&nav), "/ab 3/3");
+        }
+        // A key that isn't a step in between gives the view back to the reader: from the screen again.
+        nav.scroll = 0;
+        press(&mut nav, &[Key::Char('N'), Key::Char('k'), Key::Char('n')]);
+        search_keys(&mut nav, &fake, &[]);
+        assert_eq!(searched(&nav), "/ab 1/3", "the first on the screen at the top, not the one after the second");
     }
 
     proptest::proptest! {

@@ -906,7 +906,12 @@ of it the pager shows, from `Nav::part_shown`), the top of that part: a match is
 when some of it is in that part, and before the screen's top when it ends above it
 (`Search::on_screen`, `Search::before`), by the match's rectangles, where they are known. `Enter`
 chooses before they are (none is asked for while the query is typed), so on such a page it chooses
-again once the top page's have come (`Search::picking`), unless a key was pressed since. The view
+again once the top page's have come (`Search::picking`), by the part of the page that was shown
+when it was pressed, unless a key was pressed since; and the view isn't scrolled to the match
+chosen meanwhile, whose rectangles come first, but once, to the one chosen for good. A match a key
+has just gone to is where the next key goes on from, on screen yet or not (`Search::going`, which
+`Search::heard` hands to the next key as `stepping`): keys read together, or faster than the
+match's place is known, follow one another as keys read apart do. The view
 goes to the page the match's chunk starts on; the match's rectangles are asked for then, and when
 they arrive (`Polled::go`), a page that scrolls is scrolled so that the match is a third of the way
 down the screen, unless it was wholly on screen already or a key was pressed since.
@@ -944,8 +949,14 @@ copies the frame's pixels, tints them (`search::tint`: each pixel under a mark o
 colour multiplied in and one screened on, by its luma), and only then encodes them, writes them
 to a temporary file or makes text cells of them. The page as it was sent before stays in the
 terminal, and on screen, until `Pager::place` has placed the one with the tint of now (`shown`;
-until that one has come, the last sent), and is deleted then (`superseded`); a page not on screen
-is deleted as its replacement is sent.
+until that one has come, the last sent), and is deleted then (`outdated`). Only a copy placed on
+screen is kept that way: one nobody sees (off screen, or with the keys up in the pages' place, or
+while the screen before stays up) is deleted as its replacement is sent (`unseen`). The two copies
+of a page on screen count against `BUDGET` for as long as both are held: `Pager::draw` asks for a
+page again only if it fits beside its old copy with what the screen holds already (`replacing`),
+and otherwise leaves it until another page's old copy has gone, drawing again then; a page that
+doesn't fit beside itself, past half the budget (which a terminal that dropped images halves, down
+to 32 MiB), has its old copy deleted first, and its place is empty until the new one comes.
 So what the terminal holds stays within `MAX_SENT` and `BUDGET`, and a resend for a tint never
 counts among `MAX_RESENDS`. A copy (`c`) is a render of its own, taken out of `receive` before
 the tint. The pager's loop polls every `POLL` while the source owes a match's rectangles
@@ -966,7 +977,11 @@ for the viewer to take; nothing in the viewer's process reads a page's text
 under the lock the queue is replaced under (`State::answers`), so one whose request is no longer
 listed is dropped with it, waiting or still being read, and never comes out of `try_recv`; and
 the thread reads nothing more while 4 MiB of them wait (`MAX_WAITING`), so a viewer busy writing
-to a slow terminal holds that and the one being read, not the whole document. A spreadsheet's
+to a slow terminal holds that and the one being read, not the whole document. Nothing under that
+lock goes through a list: what is listed and what was given are sets, and the next request to read
+is looked for from where the queue was last given up to (`State::from`), so a document of tens of
+thousands of pages costs the viewer's `try_recv` and `set_queue` no more than a short one (60,000
+empty pages asked, given and taken in 32 ms; with lists, 284 of them in 20 s). A spreadsheet's
 pages are a PDF's, so `gridcraft.rs`'s `Noted`, which wraps them to carry what gridcraft said,
 hands `texts` on to them, by the contract.
 

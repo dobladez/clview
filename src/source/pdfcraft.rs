@@ -8,7 +8,7 @@
 //! and a page past them costs the search that page
 //! ([ADR-0027](../../docs/adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -419,12 +419,17 @@ struct Shared {
     wake: Condvar,
 }
 
+/// Nothing here is looked up by going through a list: a document has as many requests as pages, and
+/// the lock is the one the viewer takes between keys ([`Texts::try_recv`], [`Texts::set_queue`]).
 #[derive(Default)]
 struct State {
-    /// The latest queue, the most urgent first.
+    /// The latest queue, the most urgent first; what it lists, to look one up; and how far into it
+    /// every request has been given, where the next one to read is looked for from.
     queue: Vec<Want>,
+    listed: HashSet<Want>,
+    from: usize,
     /// Given while still in the queue: not read again when listed again.
-    given: Vec<Want>,
+    given: HashSet<Want>,
     /// The answers given and not yet taken, each to a request still in the queue, and the bytes
     /// they hold ([`weight`]): the thread reads no more while that is [`MAX_WAITING`] or over.
     answers: VecDeque<Got>,
@@ -443,9 +448,15 @@ impl Shared {
             if state.stop {
                 return None;
             }
-            let want = state.queue.iter().find(|want| !state.given.contains(want)).copied();
-            if let Some(want) = want.filter(|_| state.waiting < MAX_WAITING) {
-                return Some(want);
+            // Past what was given, each looked at once for a queue: a request given is never ungiven
+            // while its queue stands.
+            while state.waiting < MAX_WAITING
+                && let Some(want) = state.queue.get(state.from).copied()
+            {
+                if !state.given.contains(&want) {
+                    return Some(want);
+                }
+                state.from = state.from.saturating_add(1);
             }
             state = self.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
         }
@@ -456,8 +467,8 @@ impl Shared {
     /// goes on.
     fn give(&self, want: Want, got: Got) -> bool {
         let mut state = lock(&self.state);
-        if state.queue.contains(&want) && !state.stop {
-            state.given.push(want);
+        if state.listed.contains(&want) && !state.stop {
+            state.given.insert(want);
             state.waiting = state.waiting.saturating_add(weight(&got));
             state.answers.push_back(got);
         }
@@ -505,11 +516,15 @@ impl Texts for PagesText {
     /// An answer waiting for a request no longer listed is dropped with it: listed again, it is
     /// read again.
     fn set_queue(&self, wanted: Vec<Want>) {
+        // Made before the lock is taken: the thread reads on meanwhile.
+        let listed: HashSet<Want> = wanted.iter().copied().collect();
         let mut state = lock(&self.shared.state);
-        state.given.retain(|given| wanted.contains(given));
-        state.answers.retain(|got| wanted.contains(&asked(got)));
+        state.given.retain(|given| listed.contains(given));
+        state.answers.retain(|got| listed.contains(&asked(got)));
         state.waiting = state.answers.iter().map(weight).fold(0, usize::saturating_add);
         state.queue = wanted;
+        state.listed = listed;
+        state.from = 0;
         self.shared.wake.notify_all();
     }
 
@@ -1029,6 +1044,52 @@ mod tests {
         texts.set_queue(vec![Want::Text(99)]);
         drop(texts);
         assert!((12..=13).contains(&reader.join().unwrap()));
+    }
+
+    /// What the viewer's side does stays quick whatever the pages: sixty thousand of them, empty,
+    /// are asked for, given and taken, the queue set again half way, in well under the time one
+    /// search of them by hand would take. Looking each request up among those given, one after
+    /// another, under the lock the viewer takes, made this the square of the pages and worse.
+    #[test]
+    fn the_queue_stays_quick_with_tens_of_thousands_of_pages() {
+        const PAGES: usize = 60_000;
+        let shared = Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() });
+        let texts = PagesText { shared: shared.clone(), pages: PAGES };
+        let all: Vec<Want> = (0..PAGES).map(Want::Text).collect();
+        let begun = Instant::now();
+        texts.set_queue(all.clone());
+        let reader = std::thread::spawn(move || {
+            while let Some(want) = shared.next() {
+                let Want::Text(page) = want else { break };
+                if !shared.give(want, Got::Text(page, Ok(String::new()))) {
+                    break;
+                }
+            }
+        });
+        let (mut taken, mut slowest, mut relisted) = (0usize, Duration::ZERO, Duration::ZERO);
+        while taken < PAGES {
+            assert!(begun.elapsed() < Duration::from_secs(20), "{taken} of {PAGES} pages taken in 20 s");
+            // As the pager does between keys: all there is, then away for a moment.
+            let asked = Instant::now();
+            let got = texts.try_recv();
+            slowest = slowest.max(asked.elapsed());
+            match got {
+                Some(_) => taken += 1,
+                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+            // Half way, the reader moves: the same pages wanted, in another order.
+            if taken == PAGES / 2 && relisted.is_zero() {
+                let asked = Instant::now();
+                texts.set_queue(all.iter().rev().copied().collect());
+                relisted = asked.elapsed().max(Duration::from_nanos(1));
+            }
+        }
+        let took = begun.elapsed();
+        drop(texts);
+        reader.join().unwrap();
+        eprintln!("{PAGES} pages in {took:?}; the slowest try_recv {slowest:?}; the queue set again in {relisted:?}");
+        assert!(took < Duration::from_secs(5), "{took:?}");
+        assert!(relisted < Duration::from_millis(500), "the queue set again in {relisted:?}");
     }
 
     #[test]
