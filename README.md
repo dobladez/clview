@@ -88,7 +88,13 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 - Add support for TXT! yes, plain text not yet supported :-) ironic
 - Search Markdown, HTML and Word documents, as a PDF's text is searched now
   ([Spec-0007](docs/specs/0007-search-markdown-html-and-word-documents.md), a draft).
-- Markdown's fenced code: highlighted by its language, and a `mermaid` block drawn as its diagram.
+- Markdown's fenced code highlighted by its language.
+- Mermaid diagrams, their files and a Markdown `mermaid` block drawn as its diagram
+  ([Spec-0008](docs/specs/0008-show-mermaid-diagrams.md), a draft, then [Spec-0009](docs/specs/0009-draw-fenced-blocks-as-pictures.md)).
+- More diagram languages, drawn from their files and their fenced blocks as Mermaid's will be:
+  Graphviz (`dot`), D2, math. Each a backend of its own, listing the fences it draws.
+- Org-mode, AsciiDoc and reStructuredText documents, their source blocks drawn as Markdown's fenced
+  blocks are.
 - `/` as a search in lists too, as in a file's pages (`n` and `N` among the names that match, the
   list not narrowed), and the filter by name on a key of its own, so `/` means one thing everywhere.
 - Add a config file for customization and remembering settings

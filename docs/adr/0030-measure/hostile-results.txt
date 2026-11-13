@@ -1,0 +1,55 @@
+== merman, its default (Interactive) profile
+brackets.mmd             exit 0   user   0.00s  rss     9 MiB  err 11.9 ms Diagram parse error (flowchart-v2): Unterminated node label (missing `)]`)
+chain-1000.mmd           exit 0   user   0.00s  rss    10 MiB  err 3.4 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+chain-10000.mmd          exit 0   user   0.00s  rss    11 MiB  err 6.9 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+chain-3000.mmd           exit 0   user   0.00s  rss    10 MiB  err 3.8 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+complete-160.mmd         exit 0   user   0.00s  rss    10 MiB  err 4.0 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+complete-40.mmd          exit 0   user   0.00s  rss    10 MiB  err 2.3 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+complete-80.mmd          exit 0   user   0.00s  rss    10 MiB  err 2.6 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+edges-1mib.mmd           exit 0   user   0.01s  rss    12 MiB  err 12.4 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge g
+garbage-flowchart.mmd    exit 0   user   0.00s  rss     9 MiB  err 6.0 ms Diagram parse error (flowchart-v2): Unexpected character at 13
+garbage.mmd              exit 0   user   0.00s  rss     9 MiB  err 5.8 ms No Mermaid diagram type detected
+label-100000.mmd         exit 0   user   0.01s  rss    23 MiB  ok 38.4 ms 2234398 bytes
+label-1000000.mmd        exit 0   user   0.13s  rss    83 MiB  ok 136.0 ms 22139983 bytes
+nested-1000.mmd          exit 0   user   0.00s  rss    11 MiB  err 2.8 ms Diagram parse error (flowchart-v2): Flowchart edge limit exceeded: this edge gr
+nested-200.mmd           exit 0   user   0.10s  rss    18 MiB  err 99.9 ms resource limit `max_layout_work_units` exceeded during layout_model: actual=14
+nested-50.mmd            exit 0   user   0.02s  rss    17 MiB  ok 21.5 ms 159111 bytes
+sequence-2000.mmd        exit 0   user   0.01s  rss    15 MiB  ok 17.0 ms 861766 bytes
+sequence-20000.mmd       exit 0   user   0.11s  rss    61 MiB  ok 123.4 ms 8335111 bytes
+== ariel-rs
+brackets.mmd             exit 0   user   0.00s  rss     5 MiB  ok 8.1 ms 205824 bytes
+chain-1000.mmd           exit 0   user   0.13s  rss    26 MiB  ok 136.8 ms 1105468 bytes
+./hostile.sh: line 5: 92434 Abort trap: 6           /usr/bin/time -l timeout 60 "$bin" "$f" "$out/x.svg" > "$out/o" 2> "$out/e"
+chain-10000.mmd          exit 134 user   1.06s  rss   158 MiB  
+chain-3000.mmd           exit 0   user   0.74s  rss    63 MiB  ok 753.9 ms 3345228 bytes
+complete-160.mmd         exit 124 user  59.10s  rss  3497 MiB  
+complete-40.mmd          exit 0   user   4.02s  rss   157 MiB  ok 4052.7 ms 1409900 bytes
+complete-80.mmd          exit 124 user  59.68s  rss  1168 MiB  
+edges-1mib.mmd           exit 0   user   1.23s  rss   116 MiB  ok 1247.2 ms 42559118 bytes
+garbage-flowchart.mmd    exit 0   user   0.00s  rss     7 MiB  ok 5.7 ms 66955 bytes
+garbage.mmd              exit 0   user   0.00s  rss     2 MiB  err 0.0 ms unknown render error: Unrecognized diagram type.
+label-100000.mmd         exit 0   user   0.00s  rss     4 MiB  ok 3.2 ms 106686 bytes
+label-1000000.mmd        exit 0   user   0.02s  rss    14 MiB  ok 28.1 ms 1006701 bytes
+nested-1000.mmd          exit 124 user  59.85s  rss   101 MiB  
+nested-200.mmd           exit 0   user  39.65s  rss    11 MiB  ok 39709.2 ms 432898 bytes
+nested-50.mmd            exit 0   user   0.20s  rss     5 MiB  ok 201.1 ms 110522 bytes
+sequence-2000.mmd        exit 0   user   0.00s  rss     6 MiB  ok 6.3 ms 892454 bytes
+sequence-20000.mmd       exit 0   user   0.05s  rss    36 MiB  ok 59.7 ms 8815503 bytes
+== mermaid-rs-renderer
+brackets.mmd             exit 0   user   0.01s  rss    19 MiB  ok 23.6 ms 201114 bytes
+chain-1000.mmd           exit 0   user   4.11s  rss    13 MiB  ok 4122.4 ms 832085 bytes
+chain-10000.mmd          exit 0   user  46.96s  rss    60 MiB  ok 47019.9 ms 8390680 bytes
+chain-3000.mmd           exit 0   user  10.53s  rss    27 MiB  ok 10544.1 ms 2510582 bytes
+complete-160.mmd         exit 124 user  59.83s  rss   645 MiB  
+complete-40.mmd          exit 124 user  59.35s  rss    22 MiB  
+complete-80.mmd          exit 124 user  59.75s  rss   127 MiB  
+edges-1mib.mmd           exit 124 user  51.74s  rss   134 MiB  
+garbage-flowchart.mmd    exit 0   user   0.00s  rss     4 MiB  err 0.3 ms unexpected token '<l' at 196:1; expected node identifier
+garbage.mmd              exit 0   user   0.00s  rss     3 MiB  err 0.1 ms unexpected token '<l' at 195:1; expected node identifier
+label-100000.mmd         exit 0   user   0.02s  rss     9 MiB  ok 23.7 ms 281912 bytes
+label-1000000.mmd        exit 0   user   0.21s  rss    41 MiB  ok 217.5 ms 2801921 bytes
+nested-1000.mmd          exit 0   user  46.70s  rss   231 MiB  ok 46834.7 ms 1674162 bytes
+nested-200.mmd           exit 0   user   0.69s  rss    17 MiB  ok 694.5 ms 331824 bytes
+nested-50.mmd            exit 0   user   0.19s  rss     8 MiB  ok 199.4 ms 82386 bytes
+sequence-2000.mmd        exit 0   user   6.99s  rss     9 MiB  ok 7018.1 ms 1714743 bytes
+sequence-20000.mmd       exit 124 user  59.90s  rss    20 MiB  

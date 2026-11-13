@@ -1,0 +1,14 @@
+# Standalone, its own workspace: not part of clv's build. A Mermaid diagram to SVG through
+# merman, for ADR-0030: `cargo build --release -j 2` here, then `target/release/t-merman <in.mmd> <out.svg>`,
+# or `batch <dir>`.
+[package]
+name = "t-merman"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+serde_json = "1"
+merman = { version = "=0.10.0", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"] }
+[profile.release]
+debug = false

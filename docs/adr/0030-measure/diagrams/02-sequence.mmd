@@ -1,0 +1,17 @@
+sequenceDiagram
+    autonumber
+    participant V as Viewer
+    participant W as Worker
+    participant K as Kernel
+    V->>W: HELLO (protocol, version)
+    W-->>V: HELLO
+    loop Each diagram
+        V->>W: Mermaid text
+        W->>K: setrlimit(RLIMIT_CPU)
+        alt Within its caps
+            W-->>V: SVG
+        else Past them
+            K-->>W: SIGXCPU
+            Note over V,W: The diagram fails, the next starts a new worker
+        end
+    end

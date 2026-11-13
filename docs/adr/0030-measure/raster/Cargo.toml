@@ -1,0 +1,12 @@
+# Standalone: an SVG drawn as clv's SVG backend draws it (resvg at clv's pin, the system's fonts), for
+# ADR-0030: `target/release/raster <in.svg> <out.png> [scale]`.
+[package]
+name = "raster"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+resvg = "=0.49.0"
+[profile.release]
+debug = false

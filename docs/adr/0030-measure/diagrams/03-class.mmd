@@ -1,0 +1,18 @@
+classDiagram
+    class Backend {
+        <<trait>>
+        +name() str
+        +opens(path, head) bool
+        +open(input, options) Opened
+        +draws_pictures() bool
+    }
+    class Mermaid {
+        -cache: Cache
+        -worker: Option~Link~
+        +open(input, options) Opened
+    }
+    class Svg
+    Backend <|.. Mermaid
+    Backend <|.. Svg
+    Mermaid --> Svg : hands its SVG to
+    Mermaid "1" *-- "0..1" Link : holds

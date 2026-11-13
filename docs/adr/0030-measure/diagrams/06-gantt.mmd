@@ -1,0 +1,11 @@
+gantt
+    title Spec-0008
+    dateFormat YYYY-MM-DD
+    section Spike
+    Choose the crate      :done, s1, 2026-11-13, 1d
+    Measure the caps      :active, s2, after s1, 1d
+    section Backend
+    Worker and cache      :b1, after s2, 2d
+    Lists and documents   :b2, after b1, 2d
+    section Docs
+    Usage and architecture :d1, after b1, 1d

@@ -1,0 +1,12 @@
+flowchart TD
+    A[Open a file] --> B{Which backend opens it?}
+    B -->|SVG| C[resvg draws it]
+    B -->|PDF| D[pdfcraft renders it]
+    B -->|Markdown| E[wordcraft lays it out]
+    subgraph Pictures [A document's pictures]
+        E --> F[Stand-ins measured]
+        F --> G((Drawn when shown))
+    end
+    C --> H[(Pages in the terminal)]
+    D --> H
+    G --> H

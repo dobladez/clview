@@ -1,0 +1,12 @@
+---
+title: Styled, with front matter
+---
+%%{init: {"theme": "forest"}}%%
+flowchart LR
+    classDef warn fill:#fdd,stroke:#c00,stroke-width:2px
+    A([Start]) --> B[/Read/] --> C[\Parse\] --> D{{Decide}}
+    D -- yes --> E>Flag]:::warn
+    D -. no .-> F[[Subroutine]]
+    E ==> G[(Store)]
+    F --> G
+    click A "https://example.com" "A link"

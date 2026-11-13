@@ -1,0 +1,14 @@
+erDiagram
+    DOCUMENT ||--o{ PICTURE : "refers to"
+    DOCUMENT ||--o{ BLOCK : contains
+    BLOCK }o--|| FORMAT : "written in"
+    PICTURE }o--|| BACKEND : "drawn by"
+    FORMAT }|--|| BACKEND : "listed by"
+    DOCUMENT {
+        string path
+        int pages
+    }
+    BLOCK {
+        string language
+        string text
+    }

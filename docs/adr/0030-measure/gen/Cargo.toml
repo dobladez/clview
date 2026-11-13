@@ -1,0 +1,8 @@
+# Standalone: the hostile diagrams for ADR-0030, synthetic: `target/release/gen <dir>`, and those made
+# to cost merman the most within its limits, `target/release/gen within <dir>`.
+[package]
+name = "gen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]

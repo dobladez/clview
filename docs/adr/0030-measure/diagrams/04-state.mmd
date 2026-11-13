@@ -1,0 +1,16 @@
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Starting : a diagram wanted
+    Starting --> Serving : HELLO answered
+    Serving --> Serving : SVG answered
+    Serving --> Idle : 2 s with nothing asked
+    Serving --> Dead : killed past a cap
+    Dead --> Paused : three in a row
+    Dead --> Starting : the next diagram
+    Paused --> Idle : 60 s later
+    state Serving {
+        [*] --> Parsing
+        Parsing --> Layout
+        Layout --> Writing
+        Writing --> [*]
+    }

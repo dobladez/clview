@@ -1,0 +1,13 @@
+# Standalone, its own workspace: not part of clv's build. A Mermaid diagram to SVG through
+# mermaid-rs-renderer, for ADR-0030: `cargo build --release -j 2` here, then `target/release/t-mermaid-rs-renderer <in.mmd> <out.svg>`,
+# or `batch <dir>`.
+[package]
+name = "t-mermaid-rs-renderer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
+[profile.release]
+debug = false
