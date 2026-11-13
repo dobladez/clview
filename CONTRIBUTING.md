@@ -200,7 +200,11 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`.
 - **`tests/it/mermaid.rs`**: Mermaid diagrams through the viewer: which `.mmd` files it opens and
   which it leaves to MultiMarkdown, what merman draws of one, its limits and messages, the costliest
-  diagrams merman accepts drawn under the worker's caps, and that nothing else names merman. The
+  diagrams merman accepts drawn under the worker's caps, a list's diagrams opened as their tiles are
+  wanted, and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
+  starts the worker only once its tile is wanted, and a document's diagram is turned into SVG once
+  however it is laid out, watched with `ps`; in `tests/it/wordcraft.rs`, a diagram as a document's
+  picture. The
   worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
   die) and the cache of what it answered are unit-tested in `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as

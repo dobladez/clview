@@ -219,9 +219,41 @@ fn the_costliest_diagrams_merman_accepts_are_drawn_under_the_caps() {
     let out = view(&dir, &["--protocol", "kitty"]);
     let stderr = text(&out.stderr);
     assert!(!stderr.contains("merman took too") && !stderr.contains("merman failed"), "{stderr}");
+    // Each tile opened as it is printed: what fails is said at the end, by its page.
     assert!(stderr.contains("z-nested-crossing.mmd: merman: resource limit"), "{stderr}");
     // Drawn by merman, its 496 edges' arrowheads are past the SVG backend's own limits.
     assert!(stderr.contains("complete-32.mmd: it comes to more than 128 MiB once what its uses, markers and references repeat"), "{stderr}");
-    assert!(stderr.ends_with("clv: 2 files left out: complete-32.mmd, …\n"), "{stderr}");
+    assert!(!out.status.success());
     assert_eq!(images(&out.stdout).len(), 6, "{stderr}");
+}
+
+/// A list's diagram is opened when its tile is wanted: `--pages 1` never reaches a broken one past
+/// it; printed whole, the broken one costs its own tile, its place kept, and says why at the end, by
+/// its page.
+#[test]
+fn a_lists_diagram_is_opened_when_its_tile_is_wanted_and_a_broken_one_costs_its_tile() {
+    let dir = tmp("mermaid-later", "diagrams");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(data("flow.mmd"), dir.join("a.mmd")).unwrap();
+    std::fs::copy(data("broken.mmd"), dir.join("b.mmd")).unwrap();
+    std::fs::copy(data("sequence.mermaid"), dir.join("c.mermaid")).unwrap();
+    let out = view(&dir, &["--protocol", "kitty", "--pages", "1"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 1);
+    let out = view(&dir, &["--protocol", "kitty"]);
+    assert_eq!(names(&out.stdout), [" a.mmd b.mmd c.mermaid"], "its place kept");
+    assert_eq!(images(&out.stdout).len(), 2, "the others shown");
+    let stderr = text(&out.stderr);
+    assert!(!out.status.success() && stderr.starts_with("clv: page 2: b.mmd: merman: "), "{stderr}");
+}
+
+/// In text cells, a diagram is what the SVG backend makes of its drawing: its ink in characters.
+#[test]
+fn a_diagram_in_text_cells() {
+    for protocol in ["ascii", "blocks"] {
+        let out = view(&data("flow.mmd"), &["--protocol", protocol]);
+        assert!(out.status.success() && out.stderr.is_empty(), "{protocol}: {}", text(&out.stderr));
+        let shown = text(&out.stdout);
+        assert!(shown.lines().count() > 5 && shown.chars().filter(|c| !c.is_whitespace()).count() > 100, "{protocol}: {shown}");
+    }
 }

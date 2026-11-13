@@ -105,3 +105,42 @@ timing; alone, and in the next full run, it passed.
 
 **Manual check pending:** in kitty, `clv tests/data/flow.mmd` (asked of the owner through the team
 lead). The task's box stays unticked until it is confirmed.
+
+## Task 3: A diagram in a list and in a document
+
+As planned: `deferred` (no settings) and `draws_pictures`, and nothing more of the cache, which
+task 2 already made answer every opening of the same bytes.
+
+**Tests:**
+
+- `tests/it/view_pager.rs` watches the workers with `ps` (`descendants_running`). A worker lives 2 s
+  past its last answer, so one that drew a diagram just now is still there: checking right after a
+  step's pages are drawn tells whether that step turned the diagram into SVG, without racing.
+  `a_lists_diagram_starts_a_worker_only_when_its_tile_is_wanted` has twelve PDFs at one to a row
+  before the diagram, so its tile isn't among those wanted first. It then opens the tile and copies
+  it (`c`), with no worker again: the page is drawn from the cache.
+  `a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at` pages through a
+  Markdown document with the diagram twice in it (`n`, `n`, `g`) and lays it out again (`40]`,
+  `]`).
+- A list's diagram that fails is said at the end by its page (`clv: page 2: b.mmd: merman: …`), as
+  a list's PDFs are, once it defers; before, it was left out at listing.
+- Text cells: `--protocol ascii` and `blocks` print `flow.mmd`.
+- A wait in the pager test first sliced the output from the status line's words, losing the
+  `  page ` before them, so no step ever matched; and at width 40 the pager shows two pages to a
+  row (`pages 1–2/5`). `rendered` takes both forms.
+
+**Each test seen failing:**
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `view_pager::a_lists_diagram_starts_a_worker_only_when_its_tile_is_wanted` | `deferred` → `None` | a worker before the diagram's tile was wanted |
+| `mermaid::a_lists_diagram_is_opened_when_its_tile_is_wanted_and_a_broken_one_costs_its_tile` | the same | `--pages 1` opened the broken diagram at listing, and said so |
+| `wordcraft::a_mermaid_diagram_is_a_picture` | `draws_pictures` → `false` | no red, no blue on the page |
+| `mermaid::a_diagram_in_text_cells` | the backend out of `BACKENDS` | refused |
+| `view_pager::a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at` | both cache lookups taken out | a worker after the next page was drawn |
+
+**Manual check pending:** in kitty, a list of `.mmd` files with their words in the tiles (a user
+journey's and a kanban's without); a Markdown file's `![](x.mmd)`, `]` and `+`; the same inside a
+private `tmux -L` server.
+
+**Gates:** the five, each feature alone and `pdf,svg`, all passing.

@@ -1184,6 +1184,106 @@ fn a_lists_tiles_start_no_worker_for_a_drawings_labels_and_opening_one_does() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The Mermaid workers among `view`'s processes, while they live: a worker draws a diagram, and lives
+/// 2 s past its last answer, so one that drew a diagram just now is still among them.
+#[cfg(feature = "mermaid")]
+fn mermaid_workers(view: &Session) -> Vec<u32> {
+    descendants_running(view.child.id(), "--worker mermaid")
+}
+
+/// Wait until no Mermaid worker is left among `view`'s processes: gone once idle.
+#[cfg(feature = "mermaid")]
+fn no_mermaid_worker(view: &Session, why: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    while !mermaid_workers(view).is_empty() {
+        assert!(Instant::now() < deadline, "{why}: the worker outlived its idle time");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A list's diagram is turned into SVG only once its tile is wanted: no worker while the tiles
+/// wanted are PDFs, then one for the diagram's, gone once idle. Opened from the list and copied, it is
+/// what was drawn for its tile: no worker again.
+#[cfg(feature = "mermaid")]
+#[test]
+fn a_lists_diagram_starts_a_worker_only_when_its_tile_is_wanted() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-mermaid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in 0..12 {
+        std::fs::write(dir.join(format!("a{n:02}.pdf")), crate::fixtures::letter("Before", 1)).unwrap();
+    }
+    let flow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd");
+    std::fs::copy(flow, dir.join("z.mmd")).unwrap();
+    let terminal = Terminal { clipboard: Some(true), ..PLAIN };
+    let mut view = Session::start_on(terminal, &dir, &["--protocol", "kitty", "--per-row", "1"], 100, 48);
+    view.wait_until("the list", |t| bar(t).contains(" a00.pdf ") && drawn(t, "1/13"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(mermaid_workers(&view).is_empty(), "a worker before the diagram's tile is wanted");
+    view.press("G");
+    let mut seen = std::collections::BTreeSet::new();
+    let deadline = Instant::now() + PATIENCE;
+    while !drawn(&view.text(), "13/13") {
+        assert!(Instant::now() < deadline, "the diagram's tile isn't drawn");
+        seen.extend(mermaid_workers(&view));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    seen.extend(mermaid_workers(&view));
+    assert_eq!(seen.len(), 1, "one worker for the diagram's tile: {seen:?}");
+    no_mermaid_worker(&view, "the tile drawn");
+    let before = view.text().len();
+    view.press("\r");
+    view.wait_until("z opened", |t| t.get(before..).is_some_and(|t| drawn(t, "page 1/1")));
+    view.press("c");
+    view.wait_until("copied", |t| t.contains("copied z.mmd, "));
+    assert!(mermaid_workers(&view).is_empty(), "the diagram drawn again for its page or its copy");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Whether `text` has a status line saying the pages on screen with nothing left to render:
+/// `  page 2/3 ` or `  pages 1–2/5 `, not `… page 2/3`.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+fn rendered(text: &str) -> bool {
+    ["    page ", "    pages "].iter().any(|start| {
+        text.match_indices(start).any(|(at, found)| {
+            let rest = &text[at + found.len()..];
+            let place: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '/' || *c == '–').collect();
+            place.contains('/') && rest[place.len()..].starts_with(' ')
+        })
+    })
+}
+
+/// A Markdown document's diagram is turned into SVG once: rendered page after page, and laid out
+/// again at another width, the document finds it drawn, and starts no worker.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at() {
+    if !pty_works() {
+        return;
+    }
+    let path = crate::view::tmp("pager-mermaid-document", "flow.md");
+    let flow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd");
+    std::fs::copy(flow, path.with_file_name("flow.mmd")).unwrap();
+    let words: String = (1..=40).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
+    std::fs::write(&path, format!("# A flow\n\n![a flow](flow.mmd)\n\n{words}![the flow again](flow.mmd)\n")).unwrap();
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 40);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    no_mermaid_worker(&view, "page 1 drawn");
+    // Each step's own words on the status line, then a page with nothing left to render.
+    for (keys, said) in [("n", "page 2/"), ("n", "page 3/"), ("40]", "width 40"), ("g", "pages 1–2/"), ("]", "width 44")] {
+        let before = view.text().len();
+        view.press(keys);
+        view.wait_until(keys, |t| t.get(before..).is_some_and(|t| t.contains(said) && rendered(t)));
+        assert!(mermaid_workers(&view).is_empty(), "{keys}: the diagram turned into SVG again");
+    }
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// What the status line last said, each run of spaces made one: from the last time it was written,
 /// with the screen or by itself.
 pub(crate) fn last_bar(text: &str) -> String {

@@ -390,6 +390,22 @@ fn a_drawing_or_a_pdfs_page_is_a_picture() {
     assert_eq!(view(&write(dir.join("b.md"), b"![two](figure.pdf)"), &["--protocol", "kitty"]).status.code(), Some(0));
 }
 
+/// A Mermaid diagram is a picture too, drawn by the backend that shows it: `flow.mmd`'s red node and
+/// its blue one on the page.
+#[cfg(feature = "mermaid")]
+#[test]
+fn a_mermaid_diagram_is_a_picture() {
+    let dir = directory("word-mermaid");
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd"), dir.join("flow.mmd")).unwrap();
+    for (name, document) in [("a.md", "One ![a flow](flow.mmd) two"), ("a.html", "<p>One <img src=\"flow.mmd\" alt=\"a flow\"> two</p>")] {
+        let path = write(dir.join(name), document.as_bytes());
+        let out = view(&path, &["--protocol", "kitty"]);
+        assert!(out.status.success() && out.stderr.is_empty(), "{document}: {}", text(&out.stderr));
+        let page = &images(&out.stdout)[0].png;
+        assert!(found(page, [255, 0, 0]).1.is_some() && found(page, [0, 0, 255]).1.is_some(), "{document}");
+    }
+}
+
 /// The size to show a picture at is its own, or smaller to fit the column and the page, always
 /// keeping its shape.
 #[cfg(feature = "image")]

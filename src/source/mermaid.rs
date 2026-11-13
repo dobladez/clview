@@ -21,7 +21,7 @@ use merman::model::resources::{InputResourcePolicy, ResourceProfile};
 use merman::{OperationControl, RenderOutput, RenderRequest, Renderer, SemanticParser, SvgRequest};
 
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
-use super::{Again, BACKENDS, Backend, Format, HEAD, Input, Opened};
+use super::{Again, BACKENDS, Backend, Deferred, Format, HEAD, Input, Opened};
 use crate::args::{OptionSpec, Parsed};
 
 /// Mermaid diagrams, turned into SVG by merman.
@@ -54,6 +54,17 @@ impl Backend for Mermaid {
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
         opens(path, head)
+    }
+
+    /// A document may show a diagram as a picture: what merman draws holds no file and refers to no
+    /// picture, and is drawn once however often the document opens it ([`Cache`]).
+    fn draws_pictures(&self) -> bool {
+        true
+    }
+
+    /// It turns the whole diagram into SVG, in a worker, to open it: a list's tile opens it when wanted.
+    fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
+        Some(Deferred { settings: &[] })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {

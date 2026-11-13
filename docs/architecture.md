@@ -202,7 +202,7 @@ checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pa
 
 A backend whose `open` costs more than a list should spend on a file the reader may never come to says
 so, going by the file's name and first bytes (`Backend::deferred`), with what a list needs unopened:
-the settings it has. Documents, PDFs, drawings and spreadsheets defer. Images don't, as
+the settings it has. Documents, PDFs, drawings, Mermaid diagrams and spreadsheets defer. Images don't, as
 their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
 defers promises pages, never a container
 ([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
@@ -286,7 +286,9 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   or merman's refusal or the worker's death, but not a want of a worker (`TooMany`, the pause,
   which may pass). It holds 4,096 diagrams and 64 MiB of them and their SVG, letting go of those
   used longest ago first. So a diagram is turned into SVG once however often it is opened: a list's
-  tile, a document's picture, sized then drawn, and read again on every relayout. The SVG is held
+  tile (the backend defers, `Backend::deferred`, so a list starts no worker until a tile is wanted),
+  then its page, and a document's picture (it `draws_pictures`), sized then drawn, and read again on
+  every relayout. The SVG is held
   in an `Input` whose `Again` copies it from the cache's `Arc` for the SVG backend's renders, which
   read it again. Before it is kept, `on_white` puts a white `<rect>` over its viewBox (its viewport
   without one) as the first child of its `<svg>`, finding that start tag's `>` outside quotes within

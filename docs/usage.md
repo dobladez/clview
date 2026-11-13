@@ -242,7 +242,7 @@ take it: `--password` to the PDFs among them, and it is refused only when none o
 Opening a file reads what its backend needs to know its pages: an image's header, but a PDF's whole
 file, a document's whole layout, a spreadsheet printed. So a list shows as soon as each file's first
 bytes are read (518 Markdown files, in about a tenth of a second on an M3 Max), and a PDF, a document,
-a drawing or a spreadsheet is opened only when its tile nears the screen, its tile empty until then,
+a drawing, a Mermaid diagram or a spreadsheet is opened only when its tile nears the screen, its tile empty until then,
 while the keys keep working. Enter on one still opening says `opening notes.md…` until it can go in,
 Esc stops waiting, and `c` on one says it is still opening. Printed, each is opened as it is reached.
 Pictures and archives are opened as the list is listed, as that costs little.
@@ -586,7 +586,8 @@ A diagram past merman's own limits ([limits](#limits)) is refused with merman's 
 milliseconds; past the worker's CPU time or memory, the worker is killed and that diagram fails,
 saying which, and the next starts another. After three killed in a row, no diagram is drawn for a
 minute. What a diagram is drawn to is kept while clv runs, so a diagram opened again is not drawn
-again.
+again: its tile in a list, then its page; a document's picture, sized, drawn, and laid out again at
+another width or font size.
 
 ### Documents
 
@@ -622,7 +623,7 @@ top of its quote. What HTML's own CSS says of its text comes first
 ([ADR-0016](adr/0016-how-markdown-and-html-look.md)).
 
 The pictures Markdown and HTML refer to are drawn by whatever shows them: anything `clv` shows as an
-image, an SVG drawing, or a PDF's first page, at its own size, or smaller to fit the column and the
+image, an SVG drawing, a Mermaid diagram (`![a flow](flow.mmd)`), or a PDF's first page, at its own size, or smaller to fit the column and the
 page. They are read when a page they are on first shows, so opening a document, or a list of them,
 reads none.
 
