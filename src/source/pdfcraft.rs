@@ -72,6 +72,10 @@ fn is_pdf(head: &[u8]) -> bool {
     head.get(..1024).unwrap_or(head).windows(5).any(|w| w == b"%PDF-")
 }
 
+/// The most pages a PDF may have to be opened. A page tree may name one page over and over, six
+/// bytes a name, so a file of a few megabytes can have millions; real documents stay far below.
+const MAX_PAGES: usize = 100_000;
+
 /// An open PDF: the display copy the renderers read, and each page's size as shown.
 pub(super) struct Pdf {
     bytes: Arc<Vec<u8>>,
@@ -86,6 +90,11 @@ impl Pdf {
         let info = display.info.map_err(|e| format!("{path}: {e}"))?;
         if info.pages.is_empty() {
             return Err(format!("{path}: no pages to show"));
+        }
+        // Each page the tree names costs some 2 KB to parse, again for the renderer: refused here,
+        // that second parse is never paid (a million pages: 3.7 s and 3.4 GB to open otherwise).
+        if info.pages.len() > MAX_PAGES {
+            return Err(format!("{path}: {} pages, and the most clv opens is {MAX_PAGES}", info.pages.len()));
         }
         Ok(Self {
             bytes: display.bytes,

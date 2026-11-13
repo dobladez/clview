@@ -124,6 +124,31 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
     assert!(text(&out.stderr).contains(said), "{}", text(&out.stderr));
 }
 
+/// A page tree naming one page `pages` times: under a megabyte for a hundred thousand pages.
+fn one_page_named(pages: usize) -> Vec<u8> {
+    let kids = vec!["3 0 R"; pages].join(" ");
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 200 300] >>"),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+    ])
+}
+
+/// A PDF of 100,000 pages opens; one more is refused, saying how many it has, before the renderer
+/// parses it again.
+#[test]
+fn a_pdf_of_more_than_a_hundred_thousand_pages_is_refused() {
+    for (pages, opens) in [(100_000, true), (100_001, false)] {
+        let file = tmp("many-pages", &format!("{pages}.pdf"));
+        std::fs::write(&file, one_page_named(pages)).unwrap();
+        let out = view(&file, &["--pages", "1", "--protocol", "ascii"]);
+        assert_eq!(out.status.success(), opens, "{pages}: {}", text(&out.stderr));
+        if !opens {
+            assert!(text(&out.stderr).contains("100001 pages, and the most clv opens is 100000"), "{}", text(&out.stderr));
+        }
+    }
+}
+
 /// Only this backend, its tests, the line that lists it among the backends and the lines that
 /// declare its modules name pdfcraft: the rest of the code would read the same with another PDF
 /// renderer.
