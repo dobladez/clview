@@ -64,8 +64,8 @@ const PAPER: Setting = Setting {
         help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
         alias: None,
     },
-    help: "Markdown and HTML light on dark, or dark on light",
-    missing: "only Markdown and HTML go dark",
+    help: "light on dark, or dark on light",
+    does: "go dark",
     effect: Effect::Redraw,
     sets_width: false,
 };
@@ -91,8 +91,8 @@ const WIDTH: Setting = Setting {
         help: "Markdown and HTML laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
     },
-    help: "Markdown and HTML 4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
-    missing: "only Markdown and HTML reflow",
+    help: "4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
+    does: "reflow",
     effect: Effect::Relayout,
     sets_width: true,
 };
@@ -110,8 +110,8 @@ const FONT: Setting = Setting {
     auto: None,
     keys: Keys::Zoom,
     option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "Markdown and HTML text at N% of its size (50-400)", alias: None },
-    help: "Markdown and HTML text larger, or smaller; 150+ sets 150%, 0+ 100%",
-    missing: "only Markdown and HTML have a font size",
+    help: "text larger, or smaller; 150+ sets 150%, 0+ 100%",
+    does: "have a font size",
     effect: Effect::Relayout,
     sets_width: false,
 };
@@ -135,8 +135,8 @@ const MARGIN: Setting = Setting {
         help: "Markdown and HTML side margins of N characters of code (0-20)",
         alias: None,
     },
-    help: "Markdown and HTML margins a character narrower, or wider; 5} sets 5, 0} back to 3",
-    missing: "only Markdown and HTML have margins",
+    help: "margins a character narrower, or wider; 5} sets 5, 0} back to 3",
+    does: "have margins",
     effect: Effect::Relayout,
     sets_width: false,
 };
@@ -161,8 +161,8 @@ const FENCES: Setting = Setting {
         help: "Markdown and HTML's fenced blocks drawn as pictures (```mermaid), or shown as code",
         alias: None,
     },
-    help: "Markdown and HTML's blocks drawn, or as code",
-    missing: "only Markdown and HTML draw their blocks",
+    help: "fenced blocks drawn, or as code",
+    does: "draw their blocks",
     effect: Effect::Relayout,
     sets_width: false,
 };
@@ -211,11 +211,14 @@ fn font_within(percent: u32) -> u32 {
     percent.clamp(numbers.least, numbers.most.max(numbers.least))
 }
 
-/// The settings a document of `kind` has: paper, width, font size, margins and fenced blocks, for
-/// Markdown and HTML.
+/// The settings Markdown and HTML have: paper, width, font size, margins and fenced blocks. Their
+/// formats list them ([`MARKDOWN`], [`HTML`]), for the viewer to say which formats have a setting.
+const MARKED_UP: &[&str] = &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name];
+
+/// The settings a document of `kind` has: those of Markdown and HTML ([`MARKED_UP`]), for them.
 fn settings_of(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name],
+        Kind::Markdown | Kind::Html => MARKED_UP,
         _ => &[],
     }
 }
@@ -532,10 +535,10 @@ const ODT: Format = Format::of("OpenDocument text", &["odt", "ott"]);
 const RTF: Format = Format::of("RTF", &[]);
 
 /// Markdown, by its name alone, since nothing in how it starts says so.
-const MARKDOWN: Format = Format::of("Markdown", &["md", "markdown", "mdown", "mkd"]);
+const MARKDOWN: Format = Format::of("Markdown", &["md", "markdown", "mdown", "mkd"]).having(MARKED_UP);
 
 /// HTML, by how it starts, or by its name where that doesn't say (a fragment of a page).
-const HTML: Format = Format::of("HTML", &["html", "htm", "xhtml"]);
+const HTML: Format = Format::of("HTML", &["html", "htm", "xhtml"]).having(MARKED_UP);
 
 /// What an OpenDocument text says it is, in its first file: a document or a template.
 const ODT_TYPE: &[u8] = b"application/vnd.oasis.opendocument.text";
@@ -2159,6 +2162,34 @@ mod tests {
             assert_eq!(Kind::of(path, b"{\\rtf1\\ansi Hello}"), Some(Kind::Rtf), "{path}");
         }
         assert_eq!(Kind::of("notes.rtf", b"plain text"), None, "named so, it isn't one");
+    }
+
+    /// Each format lists the settings its documents have ([`settings_of`]), which is what the viewer
+    /// says of the format: a document's settings are decided by its kind when it is opened, so the two
+    /// are held together here. Every kind is of a format the backend lists, every format is some
+    /// kind's, and the settings the backend declares are those Markdown and HTML have.
+    #[test]
+    fn a_format_lists_the_settings_its_documents_have() {
+        let format_of = |kind: Kind| match kind {
+            Kind::Package | Kind::Compound => WORD,
+            Kind::Odt => ODT,
+            Kind::Rtf => RTF,
+            Kind::Markdown => MARKDOWN,
+            Kind::Html => HTML,
+        };
+        let kinds = [Kind::Package, Kind::Compound, Kind::Odt, Kind::Rtf, Kind::Markdown, Kind::Html];
+        let formats = Wordcraft.formats();
+        for kind in kinds {
+            let format = format_of(kind);
+            assert_eq!(settings_of(kind), format.settings, "{kind:?}, listed as {}", format.name);
+            assert!(formats.contains(&format), "{} isn't listed", format.name);
+        }
+        for format in &formats {
+            assert!(kinds.iter().any(|kind| format_of(*kind) == *format), "{} is no kind's", format.name);
+        }
+        let declared: Vec<&str> = Wordcraft.settings().iter().map(|setting| setting.name).collect();
+        assert_eq!(declared, MARKED_UP);
+        assert_eq!((settings_of(Kind::Markdown), settings_of(Kind::Rtf).len()), (MARKED_UP, 0));
     }
 
     #[test]

@@ -160,10 +160,22 @@ its files are shown, each a `Setting` with its named values and what each says, 
 (`Numbers`: least, most, step, and the unit a number is said with, `%` or nothing), its default,
 where a count of 0 sends it (`zero`: `0]` is `window`, `0+` 100%), `auto` by the terminal's
 background, its keys (`Keys::Cycle`, `Keys::Step`, or `Keys::Zoom`, the viewer's own zoom keys, below),
-its option, its line in `?`, its message for a file that hasn't it, and its `Effect`: `Redraw`, the
+its option, two phrases to be said after formats' names, what its keys do (`help`: `light on dark, or
+dark on light`) and what the files that have it do (`does`: `go dark`), and its `Effect`: `Redraw`, the
 pages drawn again with the value, or `Relayout`, the document laid out again at it
-([Relayout](#relayout)). The documents' backend declares three, `paper` (`d`, `--theme`, a redraw),
-`width` (`[` and `]`, `--width`, a relayout) and `font` (`+` and `-`, `--font`, a relayout). Which a file has is its source's
+([Relayout](#relayout)). A format lists the settings its files have, by name (`Format::settings`,
+through `Format::having`, as it lists its fences), and that is all the viewer knows of which files
+have a setting before one is shown: `view::having` joins the names of the formats that list each, in
+the backends' order, and the pager says a setting's phrases after them (`pager::Settings`), its line
+in `?` (`Markdown and HTML light on dark, or dark on light`) and what its key says on a file without
+it (`only Markdown and HTML go dark`). No backend writes a sentence about formats, and the viewer
+names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
+checks that a format lists only settings its backend declares and that every setting is listed by
+one; the documents' backend, which decides a document's settings by its kind when it opens
+(`settings_of`), holds its formats' lists to that (`a_format_lists_the_settings_its_documents_have`).
+The documents' backend declares five, `paper` (`d`, `--theme`, a redraw),
+`width` (`[` and `]`, `--width`), `font` (`+` and `-`, `--font`), `margin` (`{` and `}`, `--margin`)
+and `fences` (`s`, `--fences`), those four relayouts. Which a file has is its source's
 (`Source::settings`; a list's, `Joined`'s, those of any of its files). Where a setting's values sit
 for a file depends on the room it is shown in, so the source says (`Source::bounds`, a `Bounds`): where
 its named value sits among its numbers (`named_at`: `window`, at the characters a line of the
@@ -176,7 +188,7 @@ and asks the terminal for its background only when what is shown has a setting w
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
 request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
 pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
-says the setting's message if what is shown hasn't it; a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
+says which formats have the setting if what is shown hasn't it (`Settings::only`); a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
 value; `Step` keys to the next among the steps down or up (`stepped`): the multiples of the step from
 the least up to the most here (the setting's, or the room's where that is under it), and the named
 value set among them (`Bounds::named_at`), after the number equal to it (`window` at 94 in a window

@@ -197,8 +197,12 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let settings =
-        Rc::new(Settings { declared: super::settings(opener.backends), values: std::cell::Cell::new(terminal.values), changed: Default::default() });
+    let settings = Rc::new(Settings {
+        declared: super::settings(opener.backends),
+        having: super::having(opener.backends),
+        values: std::cell::Cell::new(terminal.values),
+        changed: Default::default(),
+    });
     // The window's room; the count to a row a document is laid out in is the reader's ([`Nav::columns`]).
     let room = Room { per_row: None, ..room };
     let mut level = Level::new(0, shown, zoom, false, settings.clone(), room);
@@ -502,11 +506,36 @@ struct Filter {
 #[derive(Debug, Default)]
 struct Settings {
     declared: Vec<&'static Setting>,
+    /// The formats whose files have each, by its name, said together ([`super::having`]): what is
+    /// said of a setting names them, the viewer knowing no format itself.
+    having: Vec<(&'static str, String)>,
     values: std::cell::Cell<Values>,
     /// A value changed since the last draw: every page sent goes, whichever level draws next. Kept
     /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`d`
     /// then `u`, read together) doesn't lose it.
     changed: std::cell::Cell<bool>,
+}
+
+/// What a setting's keys say on a file that hasn't it, where no format is said to have it: the
+/// backends' own tests keep a build from getting here.
+const NOT_HERE: &str = "not for this file";
+
+impl Settings {
+    /// The formats whose files have `setting`, said together, if any lists it.
+    fn formats(&self, setting: &Setting) -> Option<&str> {
+        self.having.iter().find(|(name, _)| *name == setting.name).map(|(_, formats)| formats.as_str())
+    }
+
+    /// What `setting`'s keys say on a file that hasn't it: the formats that have, and what they do
+    /// ([`Setting::does`]), `only Markdown and HTML go dark`.
+    fn only(&self, setting: &Setting) -> String {
+        self.formats(setting).map_or_else(|| NOT_HERE.to_owned(), |formats| format!("only {formats} {}", setting.does))
+    }
+
+    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), after the formats they do it to.
+    fn help(&self, setting: &Setting) -> String {
+        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{formats} {}", setting.help))
+    }
 }
 
 /// The relayout settings `source` has (`has`) and is laid out at a value of that isn't the default, or
@@ -706,17 +735,17 @@ impl Nav {
     /// What `?` shows here: the viewer's keys, then the settings' this build declares, whatever is
     /// shown, then how to leave. One `+ -` line: the zoom's, or on a document that has a setting on
     /// those keys ([`Keys::Zoom`]), that setting's in its place.
-    fn help_lines(&self) -> Vec<(String, &'static str)> {
+    fn help_lines(&self) -> Vec<(String, String)> {
         let keys = if self.list { LIST_HELP } else { PAGE_HELP };
         let leave = if self.nested { BACK_HELP } else { QUIT_HELP };
         let zoomed = self.zoom_setting();
-        let settings =
-            self.settings.declared.iter().filter(|setting| setting.keys != Keys::Zoom).map(|setting| (setting_keys(setting), setting.help));
-        let fixed = |lines: &[(&str, &'static str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), *what)).collect::<Vec<_>>();
+        let line = |setting: &Setting| (setting_keys(setting), self.settings.help(setting));
+        let settings = self.settings.declared.iter().filter(|setting| setting.keys != Keys::Zoom).map(|setting| line(setting));
+        let fixed = |lines: &[(&str, &str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), (*what).to_owned())).collect::<Vec<_>>();
         let reflows = self.reflows();
         let keys = fixed(keys).into_iter().map(|(chars, what)| match zoomed {
-            Some(setting) if chars == "+ -" => (setting_keys(setting), setting.help),
-            _ if reflows && chars == COLUMNS_HELP.0 => (chars, COLUMNS_HELP.1),
+            Some(setting) if chars == "+ -" => line(setting),
+            _ if reflows && chars == COLUMNS_HELP.0 => (chars, COLUMNS_HELP.1.to_owned()),
             _ => (chars, what),
         });
         keys.chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
@@ -1007,7 +1036,8 @@ impl Nav {
 
     /// A key none of the viewer's took: a setting's, if this build declares one with it. A number
     /// typed before it is used up by a setting with numbers, whatever happens, and left as it is by
-    /// one without. On what hasn't the setting, its message is said and nothing changes; a relayout
+    /// one without. On what hasn't the setting, which formats have it is said ([`Settings::only`]) and
+    /// nothing changes; a relayout
     /// setting's in a list, or with `--pages`, says why nothing changes either. Otherwise its value
     /// changes and the reader is told what it is now: a redraw setting's pages are made again, and a
     /// document whose layout isn't at a relayout setting's value is laid out again when it is on screen
@@ -1028,7 +1058,7 @@ impl Nav {
         let key = char;
         let count = setting.numbers.and_then(|_| (!self.typed.is_empty()).then(|| std::mem::take(&mut self.typed)));
         if !self.has.contains(&setting.name) {
-            self.message = Some(setting.missing.into());
+            self.message = Some(settings.only(setting));
             return Step::Continue;
         }
         if setting.effect == Effect::Relayout && (self.list || self.picked) {
@@ -2947,14 +2977,14 @@ mod tests {
         keys: Keys::Cycle('d'),
         option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "", alias: None },
         help: "pale or deep",
-        missing: "only some go deep",
+        does: "go deep",
         effect: Effect::Redraw,
         sets_width: false,
     };
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
     fn declaring(nav: Nav, has: bool) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE], values: std::cell::Cell::default(), changed: Default::default() });
+        let settings = Rc::new(Settings { declared: vec![&SHADE], having: vec![(SHADE.name, "Ink and Wash".into())], ..Default::default() });
         Nav { settings, has: if has { vec![SHADE.name] } else { Vec::new() }, ..nav }
     }
 
@@ -2977,7 +3007,12 @@ mod tests {
         }
         let mut nav = declaring(reader(0, 12, 40, 40), false);
         press(&mut nav, &[Key::Char('d')]);
-        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only some go deep".to_owned()), false));
+        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only Ink and Wash go deep".to_owned()), false));
+        // A setting no format is said to have: said without one.
+        let mut nav = Nav { settings: Rc::new(Settings { declared: vec![&SHADE], ..Default::default() }), ..reader(0, 12, 40, 40) };
+        press(&mut nav, &[Key::Char('d')]);
+        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some(NOT_HERE.to_owned()), false));
+        assert!(nav.help_lines().contains(&("d".into(), "pale or deep".into())), "its line in `?` as it is: {:?}", nav.help_lines());
         let mut nav = declaring(reader(0, 12, 40, 40), true);
         press(&mut nav, &[Key::Char('4'), Key::Char('d')]);
         assert_eq!((nav.typed.as_str(), shade(&nav)), ("4", Some(Value::Named("deep"))), "the number is still there");
@@ -3014,7 +3049,7 @@ mod tests {
         zero: Value::Named("window"),
         keys: Keys::Step('[', ']'),
         help: "narrower or wider",
-        missing: "only some are as wide",
+        does: "are as wide",
         effect: Effect::Relayout,
         sets_width: true,
         ..SHADE
@@ -3028,7 +3063,7 @@ mod tests {
 
     /// [`declaring_both`], the width's values sitting as `bounds` say.
     fn declaring_in(nav: Nav, has: &[&'static str], bounds: Bounds) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], values: std::cell::Cell::default(), changed: Default::default() });
+        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], having: vec![(WIDTH.name, "some".into())], ..Default::default() });
         let bounds = if has.contains(&WIDTH.name) { vec![(WIDTH.name, bounds)] } else { Vec::new() };
         Nav { settings, has: has.to_vec(), bounds, ..nav }
     }
@@ -3115,7 +3150,7 @@ mod tests {
             press(&mut other, &chars("72]"));
             assert_eq!(other.zoom, Zoom::PerRow(3), "a width key leaves the zoom");
         }
-        assert!(nav.help_lines().contains(&(COLUMNS_HELP.0.to_owned(), COLUMNS_HELP.1)), "`?` says columns");
+        assert!(nav.help_lines().contains(&(COLUMNS_HELP.0.to_owned(), COLUMNS_HELP.1.to_owned())), "`?` says columns");
         let mut picked = Nav { picked: true, ..declaring_both(reader(0, 20, 40, 40), &["width"]) };
         assert!(!picked.help_lines().iter().any(|(_, what)| *what == COLUMNS_HELP.1), "with --pages, the zoom's");
         picked.grid(1, 1, 8);
@@ -3315,7 +3350,7 @@ mod tests {
         zero: Value::Number(100),
         keys: Keys::Zoom,
         help: "larger or smaller text",
-        missing: "only some have a font size",
+        does: "have a font size",
         effect: Effect::Relayout,
         ..SHADE
     };
@@ -3323,7 +3358,7 @@ mod tests {
     /// `nav` in a build that declares [`SHADE`], [`WIDTH`] and [`FONT`], showing what has `has` of them,
     /// the font's most in the room `most`.
     fn declaring_font(nav: Nav, has: &[&'static str], most: Option<u32>) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH, &FONT], values: std::cell::Cell::default(), changed: Default::default() });
+        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH, &FONT], ..Default::default() });
         let bounds = if has.contains(&FONT.name) { vec![(FONT.name, Bounds { named_at: None, most })] } else { Vec::new() };
         Nav { settings, has: has.to_vec(), bounds, ..nav }
     }
@@ -3364,9 +3399,9 @@ mod tests {
         nav.message = None;
         assert!(nav.status("a.md", 120, false).contains("+ - font ·"), "{:?}", nav.status("a.md", 120, false));
         let lines = nav.help_lines();
-        let plus: Vec<&(String, &str)> = lines.iter().filter(|(keys, _)| keys.starts_with("+ -")).collect();
+        let plus: Vec<&(String, String)> = lines.iter().filter(|(keys, _)| keys.starts_with("+ -")).collect();
         assert_eq!(plus.len(), 1, "{lines:?}");
-        assert_eq!((plus[0].0.as_str(), plus[0].1), ("+ -  150+", "larger or smaller text"));
+        assert_eq!((plus[0].0.as_str(), plus[0].1.as_str()), ("+ -  150+", "larger or smaller text"));
         assert!(!lines.iter().any(|(_, what)| *what == PAGE_HELP[6].1), "the zoom's line is gone");
         // Elsewhere, the zoom: a list, a document without the setting, pages picked by `--pages`.
         for mut nav in [declaring_font(list(9), &["font"], Some(170)), declaring_font(reader(4, 20, 40, 40), &["shade"], None)] {
@@ -3493,21 +3528,22 @@ mod tests {
         assert!(!nav.wants_rerender());
         assert_eq!((width(&nav), nav.typed.as_str()), ((None, Some("only some are as wide")), ""));
         // `?` gives a count's form too.
-        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "narrower or wider")));
+        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "some narrower or wider".into())));
     }
 
     /// `?` lists the keys of the settings this build declares, after the viewer's and before the
-    /// way out, whatever is shown.
+    /// way out, whatever is shown: what each does, after the formats it does it to.
     #[test]
     fn the_keys_list_the_settings_after_the_viewers() {
+        const SAID: &str = "Ink and Wash pale or deep";
         for nav in [declaring(reader(0, 3, 40, 40), false), declaring(list(3), true)] {
             let lines = nav.help_lines();
             let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();
-            assert_eq!(lines.get(at("pale or deep")).map(|(keys, _)| keys.as_str()), Some("d"));
-            assert!(at("pale or deep") > lines.iter().position(|(keys, _)| keys.starts_with("r  Ctrl-L")).unwrap());
-            assert!(at("pale or deep") < at("quit"));
+            assert_eq!(lines.get(at(SAID)).map(|(keys, _)| keys.as_str()), Some("d"));
+            assert!(at(SAID) > lines.iter().position(|(keys, _)| keys.starts_with("r  Ctrl-L")).unwrap());
+            assert!(at(SAID) < at("quit"));
         }
-        assert!(!reader(0, 3, 40, 40).help_lines().iter().any(|(_, said)| *said == "pale or deep"));
+        assert!(!reader(0, 3, 40, 40).help_lines().iter().any(|(_, said)| said.contains("pale or deep")));
     }
 
     /// The viewer's keys are those [`VIEWER_KEYS`] lists: any other character does nothing to where
@@ -3940,8 +3976,8 @@ mod tests {
         assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
         // Without the pages to a row where there isn't room for them.
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[1])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list")));
-        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit")));
+        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list".into())));
+        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit".into())));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
 

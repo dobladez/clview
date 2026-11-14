@@ -372,6 +372,33 @@ pub(super) fn settings(backends: &[&dyn Backend]) -> Vec<&'static Setting> {
     settings
 }
 
+/// The formats whose files have each setting `backends` declare, by the setting's name: the names of
+/// the formats that list it ([`crate::source::Format::settings`]), in the backends' order, each once,
+/// said together (`Markdown and HTML`). All the viewer knows of which files have a setting before one
+/// is shown, and all it says of them. A setting no format lists isn't in it.
+pub(super) fn having(backends: &[&dyn Backend]) -> Vec<(&'static str, String)> {
+    let mut having: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    for format in backends.iter().flat_map(|backend| backend.formats()) {
+        for &setting in format.settings {
+            match having.iter_mut().find(|(name, _)| *name == setting) {
+                Some((_, formats)) if formats.contains(&format.name) => {}
+                Some((_, formats)) => formats.push(format.name),
+                None => having.push((setting, vec![format.name])),
+            }
+        }
+    }
+    having.into_iter().map(|(setting, formats)| (setting, together(&formats))).collect()
+}
+
+/// `names` said together: `a`, `a and b`, `a, b and c`; nothing for none.
+fn together(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Where a setting starts: a value, or by the terminal's background.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Start {
@@ -1717,6 +1744,26 @@ mod tests {
         let built: [&dyn Backend; 2] = [&PDF, &DOCUMENTS];
         assert!(usage(&built).contains("   for PDFs:\n     --theme auto|light|dark"), "listed with its backend's options");
         assert_eq!(settings(&[&DOCUMENTS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper"], "once");
+    }
+
+    /// Which formats have a setting is what their backends list, said together in the backends' order,
+    /// each format once: two backends that declare a setting of one name share it, and the formats of
+    /// both are said. A setting no format lists is said of none.
+    #[test]
+    fn the_formats_that_have_a_setting_are_those_their_backends_list() {
+        use crate::source::tests::{Having, PDF};
+        const TINT: Setting = crate::source::tests::cycled("tint", 't', "--tint");
+        static DIAGRAMS: Having = Having(std::slice::from_ref(&PAPER), &[("Diagram", &["paper"])]);
+        static DOCUMENTS: Having =
+            Having(&[PAPER, TINT], &[("Print", &[]), ("Marked", &["paper", "tint"]), ("Hyper", &["paper"]), ("Marked", &["paper"])]);
+        static UNLISTED: Having = Having(std::slice::from_ref(&TINT), &[("Plain", &[])]);
+        let said = |backends: &[&dyn Backend]| having(backends);
+        assert_eq!(said(&[&PDF, &DOCUMENTS]), [("paper", "Marked and Hyper".to_owned()), ("tint", "Marked".to_owned())]);
+        assert_eq!(said(&[&DIAGRAMS, &PDF, &DOCUMENTS]), [("paper", "Diagram, Marked and Hyper".to_owned()), ("tint", "Marked".to_owned())]);
+        assert_eq!(said(&[&DOCUMENTS, &DIAGRAMS]).first(), Some(&("paper", "Marked, Hyper and Diagram".to_owned())), "in the backends' order");
+        assert_eq!(said(&[&DIAGRAMS]), [("paper", "Diagram".to_owned())]);
+        assert!(said(&[&PDF, &UNLISTED]).is_empty() && said(&[]).is_empty());
+        assert_eq!(settings(&[&DIAGRAMS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper", "tint"], "one setting, shared");
     }
 
     /// Among others or in a container, a backend's file may wait until its tile is wanted, its

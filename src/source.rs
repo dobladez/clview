@@ -196,6 +196,13 @@ pub(crate) struct Deferred {
 /// ([`Backend::settings`]), as it declares its options: Markdown on dark paper. The viewer holds one
 /// value of it for the whole run, steps it by its keys, and sends it with every render
 /// ([`Request::values`]); the backend decides what it draws from it.
+///
+/// A setting is known by its name alone. Two backends that declare one of the same name share it:
+/// one value, one set of keys and one option for the whole run, whichever backend's file is shown,
+/// each backend drawing its own files by it as it likes. So they declare it alike, but for their
+/// option's help, which `--help` lists under each; the viewer takes the rest from the first to
+/// declare it. Which formats have it, their backends say ([`Format::settings`]), and the viewer says
+/// nothing of a setting but what is declared: it knows no format.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Setting {
     /// What it is called, in [`Values`] and in what the reader is told (`width 72`).
@@ -216,10 +223,14 @@ pub(crate) struct Setting {
     pub(crate) keys: Keys,
     /// The command-line option that sets it, taken whatever the files are.
     pub(crate) option: OptionSpec,
-    /// What its keys do, as `?` lists them.
+    /// What its keys do to the files that have it, as `?` lists them after the names of the formats
+    /// that do ([`Format::settings`]): `light on dark, or dark on light`, listed as `Markdown and HTML
+    /// light on dark, or dark on light`.
     pub(crate) help: &'static str,
-    /// What its keys say on a file that hasn't it.
-    pub(crate) missing: &'static str,
+    /// What the files that have it do, said of their formats: `go dark`. Its keys say so on a file
+    /// that hasn't it, after the names of the formats that have ([`Format::settings`]): `only
+    /// Markdown and HTML go dark`.
+    pub(crate) does: &'static str,
     /// What a change of its value takes.
     pub(crate) effect: Effect,
     /// Whether its numbers say how wide a page is, as a count of pages to a row does on a document laid
@@ -269,7 +280,7 @@ pub(crate) struct Auto {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Keys {
     /// One, going to the next named value, after the last the first.
-    #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting"))]
+    #[cfg_attr(not(any(feature = "word", feature = "mermaid", test)), expect(dead_code, reason = "only documents and diagrams have a setting"))]
     Cycle(char),
     /// Two, going a step down and a step up among the numbers, and the named value set among them
     /// ([`Bounds::named_at`]).
@@ -360,10 +371,15 @@ pub(crate) struct Format {
     /// again. So it keeps what it made of a text, as Mermaid's backend keeps each diagram's SVG, and
     /// answers the same text again from that.
     pub(crate) fences: &'static [&'static str],
+    /// The settings its files have, by name, of those its backend declares ([`Backend::settings`]):
+    /// what the viewer says of a setting names the formats that list it, in the backends' order
+    /// (`only Markdown and HTML go dark`). What a file has is still its source's to say
+    /// ([`Source::settings`]): this is what is said of the format. Empty for most formats.
+    pub(crate) settings: &'static [&'static str],
 }
 
 impl Format {
-    /// The format called `name`, which goes by `extensions`, and lists no fence.
+    /// The format called `name`, which goes by `extensions`, and lists no fence and no setting.
     #[cfg_attr(
         not(any(
             feature = "pdf",
@@ -379,7 +395,13 @@ impl Format {
         expect(dead_code, reason = "only a backend lists formats")
     )]
     pub(crate) const fn of(name: &'static str, extensions: &'static [&'static str]) -> Self {
-        Self { name, extensions, fences: &[] }
+        Self { name, extensions, fences: &[], settings: &[] }
+    }
+
+    /// This format, its files having the settings `settings` ([`Format::settings`]).
+    #[cfg_attr(not(any(feature = "mermaid", feature = "word", test)), expect(dead_code, reason = "only diagrams and documents have settings"))]
+    pub(crate) const fn having(self, settings: &'static [&'static str]) -> Self {
+        Self { settings, ..self }
     }
 
     /// This format, a document's fenced blocks in the languages `fences` drawn as pictures of it
@@ -1281,10 +1303,91 @@ pub(crate) mod tests {
             keys: Keys::Cycle(key),
             option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "", alias: None },
             help: "",
-            missing: "not this one",
+            does: "do this",
             effect: Effect::Redraw,
             sets_width: false,
         }
+    }
+
+    /// A backend that declares `settings`, and lists a format for each of `formats`: its name, and the
+    /// settings its files have.
+    pub(crate) struct Having(pub(crate) &'static [Setting], pub(crate) &'static [(&'static str, &'static [&'static str])]);
+
+    impl Backend for Having {
+        fn name(&self) -> &'static str {
+            "having"
+        }
+        fn shows(&self) -> &'static str {
+            "what has settings"
+        }
+        fn formats(&self) -> Vec<Format> {
+            self.1.iter().map(|(name, settings)| Format::of(name, &[]).having(settings)).collect()
+        }
+        fn credits(&self) -> &[&'static str] {
+            &[]
+        }
+        fn options(&self) -> &'static [OptionSpec] {
+            &[]
+        }
+        fn settings(&self) -> &'static [Setting] {
+            self.0
+        }
+        fn opens(&self, _path: &str, _head: &[u8]) -> bool {
+            false
+        }
+        fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
+            Err(format!("{}: never opened", input.path))
+        }
+    }
+
+    /// What is wrong with what `backends` say of their settings: a format that lists one its backend
+    /// doesn't declare, a setting no format of its backend lists, or one two backends declare
+    /// otherwise than alike, their option's help apart.
+    fn wrong_settings(backends: &[&dyn Backend]) -> Vec<String> {
+        let alike = |setting: &Setting| format!("{:?}", Setting { option: OptionSpec { help: "", ..setting.option }, ..*setting });
+        let mut seen: Vec<(&str, String)> = Vec::new();
+        let mut wrong = Vec::new();
+        for backend in backends {
+            let (declared, formats) = (backend.settings(), backend.formats());
+            for format in &formats {
+                for name in format.settings.iter().filter(|name| !declared.iter().any(|setting| setting.name == **name)) {
+                    wrong.push(format!("{}: {} lists {name}, which its backend doesn't declare", backend.name(), format.name));
+                }
+            }
+            for setting in declared {
+                if !formats.iter().any(|format| format.settings.contains(&setting.name)) {
+                    wrong.push(format!("{}: no format lists {}", backend.name(), setting.name));
+                }
+                match seen.iter().find(|(name, _)| *name == setting.name) {
+                    Some((_, known)) if *known != alike(setting) => wrong.push(format!("{}: {} is declared otherwise", backend.name(), setting.name)),
+                    Some(_) => {}
+                    None => seen.push((setting.name, alike(setting))),
+                }
+            }
+        }
+        wrong
+    }
+
+    /// A format lists only settings its backend declares, every setting declared is listed by a format
+    /// of its backend, so that what the viewer says of it names one, and a setting two backends declare
+    /// is the same in both, but for their option's help: the viewer takes the first's.
+    #[test]
+    fn a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend() {
+        assert_eq!(wrong_settings(BACKENDS), Vec::<String>::new());
+        // What it would say.
+        const PAPER: Setting = cycled("paper", 'd', "--theme");
+        const HELPED: Setting = Setting { option: OptionSpec { help: "its own", ..PAPER.option }, ..PAPER };
+        static INKS: Having = Having(&[PAPER], &[("Ink", &["paper"]), ("Plain", &[])]);
+        static WASHES: Having = Having(&[HELPED], &[("Wash", &["paper"])]);
+        static UNLISTED: Having = Having(&[PAPER], &[("Ink", &[])]);
+        static UNDECLARED: Having = Having(&[], &[("Ink", &["paper"])]);
+        static OTHERWISE: Having = Having(&[Setting { does: "do that", ..PAPER }], &[("Wash", &["paper"])]);
+        static SAYS: Having = Having(&[Setting { help: "another line", ..PAPER }], &[("Wash", &["paper"])]);
+        assert!(wrong_settings(&[&INKS, &WASHES, &PDF]).is_empty(), "one setting in two backends, each with its option's help");
+        assert_eq!(wrong_settings(&[&UNLISTED]).len(), 1, "no format lists it");
+        assert_eq!(wrong_settings(&[&UNDECLARED]).len(), 1, "listed, and not declared");
+        assert_eq!(wrong_settings(&[&INKS, &OTHERWISE]).len(), 1, "what its files do, said otherwise");
+        assert_eq!(wrong_settings(&[&INKS, &SAYS]).len(), 1, "its line in `?`, said otherwise");
     }
 
     /// What is wrong with the keys `backends` give their settings: one that is the viewer's, one that

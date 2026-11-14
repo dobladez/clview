@@ -1341,7 +1341,7 @@ fn s_shows_a_documents_blocks_as_code_and_draws_them_again() {
     assert!(shows_flow(&page));
     view.wait_until("said", |t| last_bar(t).contains(" blocks drawn "));
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" s Markdown and HTML's blocks drawn, or as code"));
+    view.wait_until("listed", |t| bar(t).contains(" s Markdown and HTML fenced blocks drawn, or as code"));
     // Any key leaves the keys; the next one quits.
     view.press("qq");
     assert!(view.finish().success());
