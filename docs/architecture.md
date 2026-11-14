@@ -578,12 +578,15 @@ on how the fenced blocks before it are shown, one paragraph as a picture and a p
 code, so the anchor is its number with each block counted as one, and which of a block's paragraphs
 it is (`Blocks::place`, `Blocks::index`): the same place whether `s` has the blocks drawn or as
 code. The blocks are found in the document as it was read (`blocks_of`): a paragraph holding a
-block's picture, and the paragraphs holding the mark of a block shown as code, an invisible
-`<a id>` that `marked_lines` puts at the start of each of its lines, in Markdown's code block
-(`code_block`) and in HTML's `<pre>` (`pre_marked`), named with what is afresh for the reading as
-a block's key is (`Pictures::coded`). wordcraft's importer keeps such an anchor as a bookmark and
-lays it out as nothing; the marks add no paragraph and leave none out
-(`a_marked_block_makes_the_paragraphs_it_made_and_each_holds_its_mark`). The old level
+block's picture, and for a block shown as code the paragraphs from the first to the last that hold
+its mark, an invisible `<a id>` named with what is afresh for the reading as a block's key is
+(`Pictures::coded`), which wordcraft's importer keeps as a bookmark and lays out as nothing. A
+block shown as code is written by clv from its text (`code_lines`, in Markdown's `code_block` and
+in the `<pre>` HTML's scanner leaves): its lines from the first with anything on it to the last,
+each ended by a line feed, escaped, the mark at the start of the first and of the last. So the
+count never depends on how the importer splits what a document wrote, entities and carriage
+returns among it, only on those two lines each being a paragraph
+(`a_block_shown_as_code_is_known_whole_however_its_lines_end`). The old level
 goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
 pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
 wanted dropped. A failure keeps the old level, says why through `printable`, once, puts the shared value

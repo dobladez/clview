@@ -747,8 +747,8 @@ impl Blocks {
 }
 
 /// The fenced blocks of `laid`, among its body's paragraphs ([`Blocks`]): the paragraph that holds a
-/// block's picture, and the paragraphs that hold the marker of a block shown as code, from the first
-/// to the last ([`marked_lines`]). Neither is anything a document can write itself.
+/// block's picture, and the paragraphs from the first to the last that hold the marker of a block
+/// shown as code ([`code_lines`]). Neither is anything a document can write itself.
 fn blocks_of(laid: &Laid) -> Blocks {
     let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
     let mut blocks: Vec<(u32, u32)> = Vec::new();
@@ -1489,10 +1489,12 @@ fn blocks_drawn<'h>(html: &'h str, pictures: &Pictures<'_>, fit: (f32, f32)) -> 
                     out.push_str(html.get(written..from).unwrap_or_default());
                     out.push_str(&format!("<p><img src=\"{key}\" alt=\"\"></p>"));
                 }
-                // As code, its lines marked as one block's, the `<pre>` otherwise as it was.
+                // As code: its text, marked as one block's, in the `<pre>` it was in. Written from the
+                // text, not kept as it was, so that its lines are clv's to count ([`code_lines`]).
                 None => {
                     out.push_str(html.get(written..at).unwrap_or_default());
-                    pre_marked(html, at, &pictures.coded(), &mut out);
+                    out.push_str(&code_lines(&text, &pictures.coded()));
+                    out.push_str("</pre>");
                 }
             }
             (written, at) = (end, end);
@@ -1679,28 +1681,6 @@ fn past_end_tag(html: &str, at: usize, name: &str) -> usize {
     html.len()
 }
 
-/// What the `<pre>` whose content starts at `at` in `html` holds, through its `</pre>`, written to
-/// `out` as it is but for a mark named `marker` on each of its lines ([`marked_lines`]); a `<br>`
-/// ends a line as a line's end does. For a `<pre>` that [`pre_text`] reads, so one that is closed.
-fn pre_marked(html: &str, mut at: usize, marker: &str, out: &mut String) {
-    let mut lines = Lines::default();
-    while let Some((piece, next)) = Piece::at(html, at) {
-        let from = at;
-        at = next;
-        match piece {
-            Piece::Text(run) => {
-                marked_lines(run, marker, &mut lines, out);
-                continue;
-            }
-            Piece::End(name) if name.eq_ignore_ascii_case("pre") => return out.push_str(html.get(from..at).unwrap_or_default()),
-            Piece::Start(tag) if tag.is("br") => lines.ends(true, marker, out),
-            Piece::Start(tag) if !tag.self_closed && SKIPPED.iter().any(|name| tag.is(name)) => at = past_end_tag(html, at, tag.name),
-            Piece::Start(_) | Piece::End(_) | Piece::Other => {}
-        }
-        out.push_str(html.get(from..at).unwrap_or_default());
-    }
-}
-
 /// The text of the `<pre>` whose content starts at `at` in `html`, tags dropped, entities decoded and
 /// a `<br>` a line's end, and where `html` goes on past its `</pre>`. `None` for one never closed, or
 /// with another `<pre>` in it.
@@ -1763,8 +1743,8 @@ fn markdown_as_html(text: &str, pictures: &Pictures<'_>, fit: (f32, f32)) -> Str
             (Some((info, text)), Event::End(TagEnd::CodeBlock)) => {
                 match language_of(&info).and_then(|language| pictures.fenced(language, &text, fit)) {
                     Some(key) => [Some(Event::Html(format!("<p><img src=\"{key}\" alt=\"\"></p>\n").into())), None, None],
-                    // As code, its lines marked as one block's, for a place in it to be found again
-                    // where it is drawn.
+                    // As code, marked as one block's, for a place in it to be found again where it is
+                    // drawn.
                     None => [Some(Event::Html(code_block(&text, &pictures.coded()).into())), None, None],
                 }
             }
@@ -1781,85 +1761,40 @@ fn markdown_as_html(text: &str, pictures: &Pictures<'_>, fit: (f32, f32)) -> Str
     numbers_in_their_footnotes(&out.replace("<table>", "<table border=\"1\">"))
 }
 
-/// A fenced block's `text` as the HTML of a code block, each of its lines marked `marker`
-/// ([`marked_lines`]): what pulldown-cmark writes of it, but for the marks, and for its language's
-/// class, which wordcraft's importer drops.
+/// A fenced block's `text` as the HTML of a code block, marked `marker` ([`code_lines`]): what
+/// pulldown-cmark writes of it, but for the marks, for its language's class, which wordcraft's
+/// importer drops, and for blank lines at its end.
 fn code_block(text: &str, marker: &str) -> String {
-    let escaped = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-    let mut out = String::from("<pre><code>");
-    marked_lines(&escaped, marker, &mut Lines::default(), &mut out);
-    out.push_str("</code></pre>\n");
+    format!("<pre><code>{}</code></pre>\n", code_lines(text, marker))
+}
+
+/// `text`, a fenced block's, as what a `<pre>` holds of a block shown as code: its lines, from the
+/// first with anything on it to the last, with an invisible anchor named `marker` at the start of
+/// each of those two (`<a id>`, which wordcraft's importer keeps as a bookmark and lays out as
+/// nothing). The block's paragraphs are then those from the one with the first mark to the one with
+/// the second ([`blocks_of`]), however many the importer makes of what is between.
+///
+/// Written from the text alone, so that nothing of it is the document's to shape: every line's end
+/// is a line feed (a carriage return, alone or before one, is a line's end, as the importer reads
+/// it), and the only entities are the three written here. Blank lines before the first line make no
+/// paragraph in the importer and are left out; so are those after the last, which would make
+/// paragraphs past the second mark. A block with nothing on any line is nothing.
+fn code_lines(text: &str, marker: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = text.split('\n').collect();
+    let (Some(first), Some(last)) = (lines.iter().position(|line| !line.is_empty()), lines.iter().rposition(|line| !line.is_empty())) else {
+        return String::new();
+    };
+    let mark = format!("<a id=\"{marker}\"></a>");
+    let mut out = String::new();
+    for (at, line) in lines.iter().enumerate().skip(first).take(last.saturating_sub(first).saturating_add(1)) {
+        if at == first || at == last {
+            out.push_str(&mark);
+        }
+        out.push_str(&line.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"));
+        out.push('\n');
+    }
     out
-}
-
-/// Where the text of a `<pre>` is, as its lines are marked ([`marked_lines`]).
-#[derive(Default)]
-struct Lines {
-    /// Whether text has come: blank lines before any make no paragraph.
-    used: bool,
-    /// Whether the line being read has its mark.
-    marked: bool,
-}
-
-impl Lines {
-    /// The mark of the line being read, written to `out` unless it has it: an invisible anchor named
-    /// `marker`, `<a id>`, which wordcraft's importer keeps as a bookmark and lays out as nothing.
-    fn mark(&mut self, marker: &str, out: &mut String) {
-        if !std::mem::replace(&mut self.marked, true) {
-            out.push_str(&format!("<a id=\"{marker}\"></a>"));
-        }
-    }
-
-    /// Text of the line being read comes: marked first.
-    fn text(&mut self, marker: &str, out: &mut String) {
-        self.mark(marker, out);
-        self.used = true;
-    }
-
-    /// The line being read ends. Blank, it is a paragraph of its own once text has come, or always
-    /// where a `<br>` ends it (`always`): marked then. Another line starts.
-    fn ends(&mut self, always: bool, marker: &str, out: &mut String) {
-        if self.used || always {
-            self.mark(marker, out);
-        }
-        self.marked = false;
-    }
-}
-
-/// `text`, a run of a `<pre>`'s text as HTML, written to `out` with a mark named `marker`
-/// ([`Lines::mark`]) at the start of each line that makes a paragraph in wordcraft's importer: each
-/// line with text, and each blank one once text has come, but for what follows the last line's end.
-/// So every paragraph of a block shown as code holds its block's marker, and the block makes the
-/// paragraphs it would without them.
-fn marked_lines(text: &str, marker: &str, lines: &mut Lines, out: &mut String) {
-    let mut rest = Some(text);
-    while let Some(text) = rest {
-        let (line, after) = match text.split_once('\n') {
-            Some((line, after)) => (line, Some(after)),
-            None => (text, None),
-        };
-        // A carriage return alone is no text: the importer takes it with the line's end. A blank
-        // line's mark comes before it, or the importer would read the two as two lines' ends.
-        let blank = line.trim_end_matches('\r').is_empty();
-        match (blank, after.is_some()) {
-            (false, ended) => {
-                lines.text(marker, out);
-                out.push_str(line);
-                if ended {
-                    lines.ends(false, marker, out);
-                }
-            }
-            (true, true) => {
-                lines.ends(false, marker, out);
-                out.push_str(line);
-            }
-            (true, false) => out.push_str(line),
-        }
-        if after.is_some() {
-            out.push('\n');
-        }
-        rest = after;
-    }
 }
 
 /// The language a fenced block is written in: the first word of its info string (` ```mermaid title="x" `
@@ -3198,8 +3133,9 @@ mod tests {
             assert!(html.contains("<pre><code") && !html.contains("<img"), "{block}: {html}");
             assert_eq!(html, as_html(block), "{block}");
         }
-        // One its backend refuses too, but for the invisible marks on its lines, by which its
-        // paragraphs are known as one block's, and for its language's class, which nothing reads.
+        // One its backend refuses too, but for the invisible marks on its first and last lines, by
+        // which its paragraphs are known as one block's, and for its language's class, which nothing
+        // reads.
         for block in ["```sketch\nflowchart <LR>\n  a & b\n```\n\nAfter", "```sketch\n```", "- One\n\n  ```sketch\n  no\n\n  sketch\n  ```\n"] {
             let html = drawn(block);
             assert!(html.contains("<pre><code>") && !html.contains("<img"), "{block}: {html}");
@@ -3208,7 +3144,12 @@ mod tests {
         let html = drawn("```sketch\nflowchart <LR>\n\n  a & b\n```\n");
         let mark = html.split_once("<pre><code>").and_then(|(_, rest)| rest.split_once("flowchart")).map(|(mark, _)| mark.to_owned()).unwrap();
         assert!(mark.starts_with("<a id=\"fenced:") && mark.contains(":code:") && mark.ends_with("\"></a>"), "{mark}");
-        assert_eq!(html, format!("<pre><code>{mark}flowchart &lt;LR&gt;\n{mark}\n{mark}  a &amp; b\n</code></pre>\n"), "a mark a line");
+        assert_eq!(html, format!("<pre><code>{mark}flowchart &lt;LR&gt;\n\n{mark}  a &amp; b\n</code></pre>\n"), "its first line and its last");
+        // Blank lines around it are no lines of it, a line's end is a line feed however it was
+        // written, and a block of one line has one mark.
+        assert_eq!(code_lines("\n\r\none\r\rtwo \r\n\n\n", "m"), "<a id=\"m\"></a>one\n\n<a id=\"m\"></a>two \n");
+        assert_eq!(code_lines("  one", "m"), "<a id=\"m\"></a>  one\n");
+        assert_eq!((code_lines("", "m"), code_lines("\n\r\n\n", "m")), (String::new(), String::new()));
         assert_eq!(drawn("```sketch\n40 20").matches("<img ").count(), 1, "a block never closed ends with the document, as code would");
         assert_eq!(
             (language_of("mermaid"), language_of("  mermaid\ttitle"), language_of(""), language_of("   ")),
@@ -3245,7 +3186,7 @@ mod tests {
         plain + rest
     }
 
-    /// `html` without the marks of its blocks shown as code ([`marked_lines`]).
+    /// `html` without the marks of its blocks shown as code ([`code_lines`]).
     fn markless(html: &str) -> String {
         let mut rest = html;
         let mut plain = String::new();
@@ -3368,22 +3309,20 @@ mod tests {
         ] {
             assert_eq!(scanned(html).1, 1, "{html}");
         }
-        // One its backend refuses stays as it is but for the invisible marks on its lines, by which
-        // its paragraphs are known as one block's: each line that makes a paragraph, whatever tags it
-        // is in, a `<br>` a line's end too, and none before the text starts or after it ends.
+        // One its backend refuses stays code, its `<pre>` as it was, holding its text as clv writes it:
+        // the tags in it dropped, its lines' ends line feeds, the blank lines around it left out, and
+        // an invisible mark on its first line and on its last, by which its paragraphs are known as
+        // one block's.
         let pictures = Pictures::among(None, &DRAWING);
         let marked = |html: &str| blocks_drawn(html, &pictures, FIT).into_owned();
-        let out = marked("<p>a</p><pre class=\"language-sketch\">\n\n<b>flow</b>chart LR\r\n\r\n  a <i>--&gt;\nb</i><br><br/>c\n</pre><p>d</p>");
-        let mark = out.split_once("<b>").and_then(|(_, after)| after.split_once("flow")).map(|(mark, _)| mark.to_owned()).unwrap();
-        assert!(mark.starts_with("<a id=\"fenced:") && mark.ends_with(":code:0\"></a>"), "{mark}");
-        assert_eq!(
-            out,
-            format!(
-                "<p>a</p><pre class=\"language-sketch\">\n\n<b>{mark}flow</b>chart LR\r\n{mark}\r\n{mark}  a <i>--&gt;\n{mark}b</i><br>{mark}<br/>{mark}c\n</pre><p>d</p>"
-            )
+        let out = marked(
+            "<p>a</p><pre class=\"language-sketch\">\n\n<b>flow</b>chart LR\r\n\r\n  a <i>--&gt;\nb</i><br><br/>c &amp;amp; d\n\n</pre><p>e</p>",
         );
+        let mark = out.split_once("\">").and_then(|(_, after)| after.split_once("flow")).map(|(mark, _)| mark.to_owned()).unwrap();
+        assert!(mark.starts_with("<a id=\"fenced:") && mark.ends_with(":code:0\"></a>"), "{mark}");
+        assert_eq!(out, format!("<p>a</p><pre class=\"language-sketch\">{mark}flowchart LR\n\n  a --&gt;\nb\n\n{mark}c &amp;amp; d\n</pre><p>e</p>"));
         assert_eq!(marked("<pre class=\"language-sketch\"></pre>"), "<pre class=\"language-sketch\"></pre>", "nothing to mark");
-        assert!(marked("<pre lang=sketch>no</pre>").contains(":code:2\"></a>no</pre>"), "each block its own");
+        assert!(marked("<pre lang=sketch>no</pre>").contains(":code:2\"></a>no\n</pre>"), "each block its own");
         // One its backend refuses is counted, for the first page to say; one that says nothing isn't.
         let pictures = Pictures::among(None, &DRAWING);
         let _ = blocks_drawn("<pre lang=sketch>no sketch</pre><pre>40 20</pre><pre lang=svg>40 20</pre>", &pictures, FIT);
@@ -3437,46 +3376,61 @@ mod tests {
         assert_eq!((past_end_tag("a</script", 0, "script"), past_end_tag("a</scrip>", 0, "script"), past_end_tag("", 3, "script")), (9, 9, 0));
     }
 
-    /// The marks on a code block's lines add no paragraph and leave none out: read by wordcraft's
-    /// importer, a block makes the paragraphs it made without them, each with its block's mark, and
-    /// what is around it none. However its lines end, begin, or are broken.
+    /// A block shown as code is known whole in the document wordcraft's importer reads: its paragraphs
+    /// are those from the first marked to the last, and what is around it is outside them. However
+    /// the document wrote its lines' ends: line feeds, carriage returns alone or before one, `&#10;`
+    /// and its like, a `<br>`, an element that starts a paragraph; and whatever blank lines it has.
+    /// And they are the lines the importer made of the block as it was, where it is only text.
     #[test]
-    fn a_marked_block_makes_the_paragraphs_it_made_and_each_holds_its_mark() {
+    fn a_block_shown_as_code_is_known_whole_however_its_lines_end() {
+        let pictures = Pictures::among(None, &DRAWING);
+        // The body's paragraphs: each one's text, and whether it holds a mark of a block shown as code.
         let paragraphs = |html: &str| {
             let document = wordcraft_formats::html::import_with(html, &|_| None);
-            let marked = |para: &Paragraph| para.objects.iter().any(|object| matches!(object, InlineObject::BookmarkStart { name } if name == "m"));
+            let marked = |para: &Paragraph| {
+                para.objects.iter().any(|object| matches!(object, InlineObject::BookmarkStart { name } if name.contains(":code:")))
+            };
             let paths = document.para_paths(StoryRef::Body);
             paths.iter().filter_map(|path| document.para(StoryRef::Body, path)).map(|para| (para.plain_text(), marked(para))).collect::<Vec<_>>()
         };
-        for text in [
-            "one",
-            "one\n",
-            "one\ntwo\n",
-            "\n\none\n\n\ntwo\n\n\n",
-            "one\r\n\r\ntwo\r\n",
-            "  \n one \n\t\n",
-            "one<br>two<br><br>three",
-            "<br>one\n<br>\ntwo",
-            "<span>one\ntwo</span>\n<b>three</b> four\n",
-            "a &lt; b\n\n&amp;\n",
-            "\n",
-            "",
+        for (text, lines) in [
+            ("one", &["one"][..]),
+            ("one\ntwo\n", &["one", "two"]),
+            ("flowchart LR&#10;A --&gt; B&#10;", &["flowchart LR", "A --> B"]),
+            ("one&#xA;&#10;two&#10;&#10;", &["one", "", "two"]),
+            ("one\rtwo\r\rthree\r", &["one", "two", "", "three"]),
+            ("one\r\n\r\ntwo\r\n", &["one", "", "two"]),
+            ("\n\none\n\n\ntwo\n\n\n", &["one", "", "", "two"]),
+            ("  \n one \n\t\n", &["  ", " one ", "\t"]),
+            ("one<br>two<br><br>three<br>", &["one", "two", "", "three"]),
+            ("<br>one\n<br>\ntwo", &["one", "", "", "two"]),
+            ("<span>one\ntwo</span>\n<b>three</b> four\n", &["one", "two", "three four"]),
+            ("<code class=\"x\">one<div>two</div><p>three</p></code>", &["onetwothree"]),
+            ("a &lt; b\n\n&amp;\n", &["a < b", "", "&"]),
         ] {
-            let mut marked = String::new();
-            pre_marked(&format!("{text}</pre>"), 0, "m", &mut marked);
-            let (plain, with) =
-                (paragraphs(&format!("<p>Before</p><pre>{text}</pre><p>After</p>")), paragraphs(&format!("<p>Before</p><pre>{marked}<p>After</p>")));
-            let texts = |paragraphs: &[(String, bool)]| paragraphs.iter().map(|(text, _)| text.clone()).collect::<Vec<_>>();
-            assert_eq!(texts(&with), texts(&plain), "{text:?}: {marked:?}");
-            let marks: Vec<bool> = with.iter().map(|(_, marked)| *marked).collect();
-            let mut expected = vec![true; marks.len()];
-            expected[0] = false;
-            *expected.last_mut().unwrap() = false;
-            assert_eq!(marks, expected, "{text:?}: {marked:?}");
+            let html = format!("<p>Before</p><pre lang=\"sketch\">{text}</pre><p>After</p>");
+            let read = paragraphs(&blocks_drawn(&html, &pictures, FIT));
+            let texts: Vec<&str> = read.iter().map(|(text, _)| text.as_str()).collect();
+            assert_eq!(texts, [&["Before"][..], lines, &["After"]].concat(), "{text:?}");
+            let (first, last) = (read.iter().position(|(_, marked)| *marked), read.iter().rposition(|(_, marked)| *marked));
+            assert_eq!((first, last), (Some(1), Some(lines.len())), "{text:?}: from its first paragraph to its last");
+        }
+        // Where the block is only text, those are the paragraphs it made as the document wrote it.
+        for text in [
+            "flowchart LR&#10;A --&gt; B&#10;",
+            "one\rtwo\r\rthree\r",
+            "one\r\n\r\ntwo\r\n",
+            "one&#xA;&#10;two",
+            "\n\none\n\n\ntwo\n",
+            "a &lt; b\n\n&amp;",
+        ] {
+            let html = format!("<p>Before</p><pre lang=\"sketch\">{text}</pre><p>After</p>");
+            let texts = |paragraphs: Vec<(String, bool)>| paragraphs.into_iter().map(|(text, _)| text).collect::<Vec<_>>();
+            assert_eq!(texts(paragraphs(&blocks_drawn(&html, &pictures, FIT))), texts(paragraphs(&html)), "{text:?}");
         }
         // Markdown's block, written whole: the same.
-        let block = code_block("one\n\n<two> & three\n", "m");
-        assert_eq!(paragraphs(&block), [("one".to_owned(), true), (String::new(), true), ("<two> & three".to_owned(), true)]);
+        let read = paragraphs(&code_block("\none\n\n<two> & three\n\n", "fenced:0:code:0"));
+        assert_eq!(read, [("one".to_owned(), true), (String::new(), false), ("<two> & three".to_owned(), true)]);
     }
 
     /// A place in a document is a paragraph's number with each fenced block before it counted as one,
@@ -3504,7 +3458,8 @@ mod tests {
     /// The reader's place is kept when `s` turns a document's blocks to code and back: the paragraph
     /// after a block of three lines is itself in either layout, not a line of the block's code; a line
     /// of the code is found at the picture, and the picture at the code's first line. In Markdown and
-    /// in HTML, past a block that is code either way because its backend refuses it.
+    /// in HTML, whose block ends its lines with `&#10;`, a carriage return alone and a `<br>`; and past
+    /// a block that is code either way because its backend refuses it.
     #[test]
     fn a_place_is_kept_when_blocks_turn_to_code_and_back() {
         static DRAWING: [&dyn Backend; 1] = [&SKETCHES];
@@ -3517,7 +3472,7 @@ mod tests {
         );
         let paragraphs = |words: Vec<String>| words.iter().map(|text| format!("<p>{text}</p>")).collect::<String>();
         let html = format!(
-            "<!doctype html>{}<pre><code class=\"language-sketch\">40\n\n20\n</code></pre>{}<pre lang=\"sketch\">not\none</pre><p>Last.</p>",
+            "<!doctype html>{}<pre><code class=\"language-sketch\">40&#10;\r20\r\n</code></pre>{}<pre lang=\"sketch\">not<br>one</pre><p>Last.</p>",
             paragraphs(words("Before")),
             paragraphs(words("After"))
         );
@@ -3558,9 +3513,9 @@ mod tests {
     }
 
     proptest! {
-        /// Whatever HTML holds and wherever it is cut, the scanner never panics, gives back HTML no
-        /// longer than what it was given but for its pictures, and gives it back as it was when
-        /// nothing in it is drawn.
+        /// Whatever HTML holds and wherever it is cut, the scanner never panics, gives back HTML
+        /// bounded by what it was given, and gives it back as it was where no block is in a language
+        /// a backend lists.
         #[test]
         fn the_scanner_never_panics_wherever_html_is_cut(
             parts in proptest::collection::vec(
@@ -3585,12 +3540,12 @@ mod tests {
             let html = &whole[..end];
             let pictures = Pictures::among(None, &DRAWING);
             let out = blocks_drawn(html, &pictures, FIT);
-            let drawn = out.matches("<p><img src=\"fenced:").count();
-            // But for the marks on the lines of a block left as code, and nothing else.
-            let out = markless(&out);
-            prop_assert!(out.len() <= html.len() + drawn * 64, "{html:?} to {out:?}");
-            if drawn == 0 {
-                prop_assert_eq!(&*out, html);
+            // No longer than it was but for its pictures, and for a block left as code, written from
+            // its text: two marks, and each character an entity at most.
+            let coded = out.matches(":code:").count();
+            prop_assert!(out.len() <= html.len() * 5 + (out.matches("<p><img src=\"fenced:").count() + coded) * 64, "{html:?} to {out:?}");
+            if !html.contains("sketch") {
+                prop_assert!(matches!(out, Cow::Borrowed(_)), "{html:?} to {out:?}");
             }
             let (mut at, mut steps) = (0, 0);
             while let Some((_, next)) = Piece::at(html, at) {

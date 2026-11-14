@@ -299,6 +299,36 @@ so every paragraph after a block changed its number with `s`, and the reader lan
   naming Mermaid. It holds on the test's own thread only: a document's text read on its queue's
   thread sees the backends built, which the test reads around.
 
+## Codex review, round 2 (2026-11-14)
+
+**[P2] A block counted short where its lines end otherwise than in a line feed.** It held, and was
+a gap in round 1's fix: the marks were put where the scanner saw a line feed, and the importer also
+ends a line at `&#10;` and at a carriage return alone, so `<pre lang="mermaid">flowchart LR&#10;A
+--&gt; B&#10;</pre>` got one mark for two paragraphs, and the reader landed one paragraph off
+after it.
+
+- **The fix, on the reviewer's advice:** a block's boundaries are marked, not its lines, and
+  nothing mirrors how the importer splits what a document wrote. A block shown as code is now
+  written by clv from its text (`code_lines`), which the scanner had read already: its lines from
+  the first with anything on it to the last, each ended by a line feed, escaped, with a mark at
+  the start of the first and of the last. Both are lines with text, so each is a paragraph, and the
+  block's paragraphs are those from one to the other, whatever is between. Round 1's `marked_lines`,
+  `Lines` and `pre_marked` are gone.
+- **Why not marks around the block as the document wrote it:** an anchor makes a paragraph of its
+  own wherever none is open (after a line's end, before an element that starts one), which would
+  add an empty line to the page; and a mark by the first or last text leaves out the empty
+  paragraphs a `<br>` makes before or after it. Writing the text out leaves no such place.
+- **What a reader could notice:** a block shown as code, in HTML, is its text: tags inside its
+  `<pre>` are dropped, so a span's own colour is too, and in Markdown and HTML alike blank lines
+  at the block's end are left out (those at its start never showed). Said in usage.
+- **Tests, each seen failing:** `a_place_is_kept_when_blocks_turn_to_code_and_back`, its HTML
+  block now written with `&#10;`, a carriage return alone, CRLF and a `<br>`: on round 1's code,
+  the block counted `(30, 1)` for `(30, 3)`. `a_block_shown_as_code_is_known_whole_however_its_lines_end`,
+  thirteen ways of ending lines read back through the importer, with the carriage returns' line
+  ends taken out of `code_lines`: the block known to its first paragraph alone. The property test
+  now holds a bound on what the scanner writes, and that HTML with no listed language comes back
+  as it was.
+
 ## What is left
 
 - Every task's code, tests and docs are committed, and each task's box is open: all four end

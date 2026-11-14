@@ -68,8 +68,9 @@ What constrains how:
    effect is a relayout, as `width`'s is: a picture and its code take other room, so the pages
    fall otherwise. It is the document's: one block alone can't be turned. The reader's place is
    kept by a paragraph's number with each block counted as one, since a block is one paragraph
-   drawn and a paragraph a line as code; the lines of a block shown as code are known by an
-   invisible anchor on each, named afresh as a block's key is.
+   drawn and a paragraph a line as code. A block shown as code is written by clv from its text,
+   with an invisible anchor on its first line and on its last, named afresh as a block's key is:
+   its paragraphs are those between the two, however the importer splits lines.
 9. **A block follows its document's paper, told through the request.** `Request` has `on_dark`:
    set for a picture a document shows on dark paper, whose colour is `Request::dark`. A backend
    with a dark form of what it draws draws that, with nothing behind it; one with none draws as
