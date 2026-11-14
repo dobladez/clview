@@ -129,7 +129,8 @@ That GitHub page, saved as it came (405 KB, ten `mermaid` blocks), shown by clv:
 | Sequence diagram, pie, gantt chart | the same | the same |
 
 [Spec-0009](../specs/0009-draw-fenced-blocks-as-pictures.md) had taken a theme not to change a
-diagram's size. It does, by up to a tenth.
+diagram's size. It does, by up to a tenth. The owner chose the dark drawing shrunk to fit
+(Decision 10) over the alternatives below, on 2026-11-13.
 
 **What a document's blocks cost to open,** measured 2026-11-13 on an Apple M3 Max (14 cores,
 36 GiB), macOS 26.6.2, Rust 1.95.0, with `target/debug/clv` (its dependencies at `opt-level = 2`):

@@ -121,6 +121,12 @@ bytes hold it to minutes. Pictures by path cost the same, but they take as many 
 - A bound in time (the blocks sized until so many seconds are spent, the rest left as code) or in
   text (so many MiB of blocks drawn a document) would hold it; either makes what a document shows
   depend on more than the document.
+- What waits is sizing, not drawing. A picture is drawn, to pixels, only when its page first
+  shows; but the document is laid out whole to open, to know its pages, and the layout needs each
+  picture's size. A diagram's size is known only once merman has laid it out, so every block is
+  turned into SVG, and that SVG opened, before the first page shows. Sizing blocks as their pages
+  are reached would need a layout around a size not yet known, laid out again as each comes: pages
+  that move under the reader, as a list's tiles do before they are opened.
 - merman's own work on such a diagram is 0.2 s
   ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)), of some 4 s a block
   a reading: the rest comes after it, its SVG of 9.7 MB opened by the SVG backend, and all of it

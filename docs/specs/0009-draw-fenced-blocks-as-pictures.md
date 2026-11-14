@@ -218,7 +218,9 @@ too, where pictures by path can't be reached.
   paper; a fourth task. `d` for drawings outside blocks left to README's Plans.
 - 2026-11-13 — Mermaid's ADR is ADR-0031 now, renumbered by Spec-0008: Spec-0007's took 0030.
 - 2026-11-13 — Implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)).
-- 2026-11-13 — Revised while implementing, both for the owner to confirm ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)):
+- 2026-11-13 — Revised while implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)):
   HTML's blocks are known by four ways of saying a language, not `language-x` alone, as real output
-  showed (the open question on the scanner); and a block on dark paper is fitted into its light
-  drawing's room, since the dark theme does change a diagram's size, by up to a tenth.
+  showed (the open question on the scanner), for the owner to confirm; and a block on dark paper is
+  fitted into its light drawing's room, since the dark theme does change a diagram's size, by up to
+  a tenth, which the owner chose over a relayout on `d`
+  ([ADR-0032](../adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).

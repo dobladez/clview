@@ -196,7 +196,8 @@ the owner the moment it showed, with three ways on: fit the dark drawing into th
 lay the document out again on `d`, or stretch it. The first is built, as the one that keeps every
 decision the spec made (a redraw, Mermaid's own dark theme, on the paper's colour) and gives up
 only the assumption; the spec's requirement and task 4's Verify are revised to say so, in its
-Changelog, **for the owner to confirm**.
+Changelog. **The owner chose it**, the dark drawing shrunk to fit, when asked; ADR-0032 has the
+measurement, the choice and the two ways not taken.
 
 **Decided here:**
 
@@ -216,7 +217,7 @@ Changelog, **for the owner to confirm**.
 - **A diagram's own theme stays its own** on dark paper: `dark` is merman's site theme, which a
   diagram's `%%{init}%%` overrides, as on a web page whose theme is dark. A diagram themed for
   white is then dark ink on dark paper. Forcing the dark theme would throw away the colours a
-  diagram chose. Also for the owner to confirm.
+  diagram chose. The owner agreed to it as recorded.
 - **What a document holds of a block is for one paper** (`Held::for_dark`): the other paper's
   takes its place, as a page's takes a tile's, so the 256 MiB hold one PNG a block. A failure is
   kept by paper, so a block that fails in the dark theme is still tried on light paper.
@@ -260,8 +261,10 @@ build and gave it the light SVG; alone, it failed.
 - Every task's code, tests and docs are committed, and each task's box is open: all four end
   with a manual check in kitty (the third in tmux too), which only the owner can do. The spec
   stays `Implementing` until they are confirmed.
-- For the owner to confirm: the four ways HTML says a block's language (task 2), the dark drawing
-  fitted into the light one's room, and a diagram's own theme kept on dark paper (task 4).
-- In the backlog: a bound on what a document's blocks cost in all.
+- For the owner to confirm: the four ways HTML says a block's language (task 2). Confirmed by the
+  owner: the dark drawing fitted into the light one's room, and a diagram's own theme kept on dark
+  paper (task 4).
+- In the backlog, the owner's word being to leave it for later: a bound on what a document's
+  blocks cost in all, and with it why every block is sized before the first page shows.
 - Noticed, left alone: in a list, `s` says `open a document to reflow it`, the viewer's words for
   every relayout setting, which fit a width better than blocks.
