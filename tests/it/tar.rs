@@ -33,7 +33,7 @@ fn header(name: &str, size: u64) -> [u8; 512] {
 }
 
 /// A tar of `files`, by name and contents.
-fn tar(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn tar(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
     for (name, data) in files {
         out.extend(header(name, data.len() as u64));
@@ -44,7 +44,7 @@ fn tar(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn gzip(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     encoder.write_all(bytes).unwrap();
     encoder.finish().unwrap()

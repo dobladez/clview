@@ -3675,3 +3675,106 @@ fn open_with_no_desktop_or_no_opener_says_so() {
     let path = empty.display().to_string();
     said(desktop(&path), &format!("one.pdf isn't opened: there is no {program} to open it with"));
 }
+
+/// What showing the folder `real` runs on this system, as the fake openers note it: `open -R` on
+/// macOS, revealed in Finder; elsewhere `xdg-open` through `setsid`, as for a file.
+fn opening_folder(dir: &Path, real: &Path) -> Vec<Vec<String>> {
+    match cfg!(target_os = "macos") {
+        true => vec![vec!["open".to_owned(), "-R".to_owned(), real.display().to_string()]],
+        false => opening(dir, real),
+    }
+}
+
+/// Wait until the status line has said `said` since `from` bytes of output.
+fn said_since(view: &Session, from: usize, said: &str) {
+    view.wait_until(said, |t| t.get(from..).is_some_and(|t| t.contains(said)));
+}
+
+/// In a list, `o` opens the tile chosen: a file opened when its tile was wanted, one that turned
+/// out broken (the app may read it), a file compressed alone as the compressed file it is, a
+/// folder (revealed on macOS); not an archive, nor its files or folders. A file gone into keeps
+/// its path, opened at once or when its tile was wanted.
+#[cfg(feature = "tar")]
+#[test]
+fn open_in_a_list_opens_the_tile_chosen_and_refuses_an_archives() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-open-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("e")).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("A", 2)).unwrap();
+    std::fs::write(dir.join("b-broken.pdf"), b"%PDF-1.7\nnot a PDF after all\n").unwrap();
+    std::fs::write(dir.join("c.pdf.gz"), crate::tar::gzip(&crate::fixtures::letter("C", 1))).unwrap();
+    let inner = crate::tar::tar(&[("x.pdf", crate::fixtures::letter("X", 1)), ("f/", Vec::new()), ("f/y.pdf", crate::fixtures::letter("Y", 1))]);
+    std::fs::write(dir.join("d.tar"), inner).unwrap();
+    std::fs::write(dir.join("e/z.pdf"), crate::fixtures::letter("Z", 1)).unwrap();
+    let real = |name: &str| std::fs::canonicalize(dir.join(name)).unwrap();
+    let fakes = openers("list", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let mut view = Session::start_on(desktop(&path), &dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/5"));
+    view.press("?");
+    view.wait_until("the keys", |t| t.contains("open it in the desktop's app: a file in its app, a folder in the file manager"));
+    let mut expected = Vec::new();
+    for (keys, said, launched) in [
+        (" o", "opened a.pdf", opening(&fakes, &real("a.pdf"))),
+        ("lo", "opened b-broken.pdf", opening(&fakes, &real("b-broken.pdf"))),
+        ("lo", "opened c.pdf.gz", opening(&fakes, &real("c.pdf.gz"))),
+        ("lo", "d.tar/: it is an archive's folder, not one of its own to show", Vec::new()),
+        ("lo", "opened e/", opening_folder(&fakes, &real("e"))),
+    ] {
+        let from = view.text().len();
+        view.press(keys);
+        said_since(&view, from, said);
+        expected.extend(launched);
+        assert_eq!(wait_launched(&fakes, expected.len()), expected, "{said}");
+    }
+    // Into the tar: its file and its folder have none of their own.
+    let from = view.text().len();
+    view.press("h\r");
+    view.wait_until("in the tar", |t| t.get(from..).is_some_and(|t| bar(t).contains(" d.tar/f/ 1/2 ")));
+    for (keys, said) in [
+        ("o", "d.tar/f/: it is an archive's folder, not one of its own to show"),
+        ("lo", "d.tar/x.pdf: it is in an archive, with no file of its own to open"),
+    ] {
+        let from = view.text().len();
+        view.press(keys);
+        said_since(&view, from, said);
+    }
+    // Back, then into a.pdf, opened when its tile was wanted, and c.pdf.gz, opened at once.
+    for (keys, name, real) in [("\x1bg\r", "a.pdf", real("a.pdf")), ("\x1bll\r", "c.pdf.gz", real("c.pdf.gz"))] {
+        let from = view.text().len();
+        view.press(keys);
+        view.wait_until(name, |t| t.get(from..).is_some_and(|t| t.contains("  page 1/")));
+        let from = view.text().len();
+        view.press("o");
+        said_since(&view, from, &format!("opened {name}"));
+        expected.extend(opening(&fakes, &real));
+        assert_eq!(wait_launched(&fakes, expected.len()), expected, "{name}");
+    }
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A document laid out again keeps its file: `o` after `40]` opens it as before.
+#[cfg(feature = "word")]
+#[test]
+fn open_a_document_laid_out_again() {
+    if !pty_works() {
+        return;
+    }
+    let markdown = long_markdown("open-relaid", "long.md");
+    let fakes = openers("relaid", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let terminal = Terminal { term: Some("xterm-kitty"), ..desktop(&path) };
+    let mut view = Session::start_on(terminal, &markdown, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("40]");
+    view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
+    view.press("o");
+    view.wait_until("opened", |t| t.contains("opened long.md"));
+    assert_eq!(wait_launched(&fakes, 1), opening(&fakes, &std::fs::canonicalize(&markdown).unwrap()));
+    view.press("q");
+    assert!(view.finish().success());
+}

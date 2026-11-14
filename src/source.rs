@@ -681,7 +681,15 @@ pub(crate) trait Container {
     /// reading of itself under way stopped: the reader left it, or stopped going into it. Asked
     /// again, it reads itself again.
     fn release(&self) {}
+    /// Its own folder on disk, real ([`real`]), for the file manager to show; or why it has none.
+    /// None for an archive or a folder in one, by default.
+    fn on_disk(&self) -> Result<PathBuf, String> {
+        Err(ARCHIVES_FOLDER.into())
+    }
 }
+
+/// Why a container has no folder of its own to show: it is an archive, or a folder in one.
+const ARCHIVES_FOLDER: &str = "it is an archive's folder, not one of its own to show";
 
 /// How far a container has got reading itself before it lists ([`Container::ready`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

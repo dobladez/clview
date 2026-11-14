@@ -59,3 +59,26 @@ surprises, and what a later reader would want.
   at 100, as the copy tests do.
 - The layering test (`the_viewer_names_no_backend`) caught a doc comment in `launch.rs` naming
   `source::BACKENDS`; reworded.
+
+## Task 2: `o` in a list
+
+- **`Container::on_disk`** returns a `Result` (the real path, or why none), not an `Option`, its
+  default the archives' message; `dir.rs` resolves its path with `source::real` and checks it is
+  still a directory. The message was first `it is an archive or a folder in one, with no folder of
+  its own to show`, too long for a 100-column status line beside the place: now `it is an archive's
+  folder, not one of its own to show`.
+- **The list's tests use the tar backend**, its `tar` and `gzip` helpers made `pub(crate)` in
+  `tests/it/tar.rs` (a file not in the task's *Files:*), since `flate2` is named only by the tar and
+  SVG backends and their tests; a plain tar needs no crate. A broken tile is a PDF that isn't one:
+  PDFs are opened when their tiles are wanted, so it keeps its tile.
+- **tar's names** (`gz`, `bz2`, `xz`, and `tar`) came with task 1, which gave every format its
+  names; this task tests them on a file compressed alone.
+- **Seen failing**, each reverted as in task 1:
+  - `Pager::replace` making its `Pages` with no file: `view_pager::open_a_document_laid_out_again`;
+  - `go_on_into` (a tile opened when wanted, gone into) with no file, and the list's `o` not a key,
+    a directory with no folder of its own, an archive's folder given its path, `gz` not a gzip's
+    name: `view_pager::open_in_a_list_opens_the_tile_chosen_and_refuses_an_archives`, each;
+  - the list's `o` not a key: `o_opens_the_file_from_the_page_the_reader_is_on_or_the_tile_chosen`.
+- **Left open**: its manual check (in kitty on macOS, `clv tests/data`, `o` on a PDF's tile opens
+  Preview, on a folder Finder shows it) waits for the owner, so its box stays unticked; no test may
+  launch a real app.

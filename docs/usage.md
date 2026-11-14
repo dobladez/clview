@@ -129,6 +129,7 @@ In a list:
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
+| `o` | open the tile's file in the app the desktop opens it with, or its folder in the file manager ([Opening in another app](#opening-in-another-app)) |
 | `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
 | `[`, `]`, `{`, `}`, `s` | nothing: only a document opened from the list is laid out again, and they say so |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
@@ -220,7 +221,11 @@ while `clv` runs, unless a clipboard manager keeps it.
 
 `o` opens the file you are reading in the app the desktop opens it with, as a double click in the
 file manager would: a PDF in Preview to fill in, a Word document in Word to edit, a photo in an
-editor. On whatever page you are, the file is opened as a whole. `clv` hands it to the system's
+editor. On whatever page you are, the file is opened as a whole; gone into from a list, or laid out
+again, it is the same file. In a list, `o` opens the tile chosen: a file, even one `clv` couldn't
+show, since its app may; a folder in the file manager (on macOS, shown in Finder, never opened,
+since Finder takes some folders for apps). A file compressed alone (`report.pdf.gz`) opens as the
+compressed file it is, in the desktop's archive tool. `clv` hands it to the system's
 opener (`open` on macOS, `xdg-open` on Linux and the BSDs) and doesn't wait for it: the status line
 says `opening report.pdf…`, then `opened report.pdf`, or why not in the opener's words
 (`report.pdf: xdg-open lacks a tool it needs (3)`); after five seconds without a word it says the
@@ -234,7 +239,8 @@ opened only if its real name, links followed, says a format `clv` showed it as: 
 either is a document.
 
 What has no file of its own isn't opened, and the status line says why: what came through a pipe
-or `/dev/stdin`, even redirected from a file. Nor is anything over SSH, where the app would open on
+or `/dev/stdin`, even redirected from a file, and a file or a folder in an archive, or the
+archive's own. Nor is anything over SSH, where the app would open on
 the far machine ([On this machine or over SSH](#on-this-machine-or-over-ssh)), nor on Linux or a BSD
 without a desktop session (neither `DISPLAY` nor `WAYLAND_DISPLAY`; inside tmux, as the pane has
 them), nor where the opener isn't on `PATH`.

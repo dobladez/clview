@@ -1047,7 +1047,9 @@ names no format for it, nor any backend:
   carries them through a tile gone into (`GoingInto`) and a document laid out again
   (`Pager::replace`), each of which makes its `Pages` anew. `Format::names` is a format's
   `extensions` unless it says others (`Format::named_by`): a PDF, known by how it starts, has
-  `pdf`; a file compressed alone, `gz`, `bz2` and `xz`.
+  `pdf`; a file compressed alone, `gz`, `bz2` and `xz`. In a list, a tile's folder is
+  `Container::on_disk`: a directory's real path (`dir.rs`), and for an archive or a folder in one,
+  by default, why it has none.
 - **The launchers.** `launch::LAUNCHERS` lists them as `source::BACKENDS` lists backends, the first
   that applies used: `Open` (macOS's `open`, `-R` for a folder) and `XdgOpen` (Linux and the BSDs
   with `DISPLAY` or `WAYLAND_DISPLAY`, through `setsid` where `PATH` has it). Each decides from a

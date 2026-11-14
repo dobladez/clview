@@ -4,7 +4,7 @@
 //! is followed; a link to a directory is not, so no loop of links goes on forever.
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use super::{Container, Input, Listed, Listing};
@@ -44,6 +44,15 @@ impl Container for Directory {
     fn open(&self, name: &str) -> Result<Input, String> {
         let path = Path::new(&self.path).join(name);
         Input::open(path.to_str().ok_or_else(|| format!("{}: the name isn't UTF-8", path.display()))?)
+    }
+
+    /// Its real path, a directory's.
+    fn on_disk(&self) -> Result<PathBuf, String> {
+        let real = super::real(&self.path)?;
+        match std::fs::metadata(&real).is_ok_and(|m| m.is_dir()) {
+            true => Ok(real),
+            false => Err("it is no longer a directory".into()),
+        }
     }
 }
 

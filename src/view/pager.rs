@@ -163,6 +163,7 @@ const LIST_HELP: &[(&str, &str)] = &[
     (", .  3.", "one more tile to a row, or one fewer; 3. sets 3, 0. auto"),
     ("r  Ctrl-L", "render again"),
     ("c", "copy its picture to the clipboard"),
+    ("o", "open it in the desktop's app: a file in its app, a folder in the file manager"),
 ];
 /// The `, .` line on a document laid out for its room, where they are columns.
 const COLUMNS_HELP: (&str, &str) = (", .  3.", "one more column, or one fewer, down to one; 3. sets 3, 0. auto");
@@ -869,7 +870,7 @@ impl Nav {
             Key::Char('u') => return Step::Back,
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
             Key::Char('c') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
-            Key::Char('o') if !self.list => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
+            Key::Char('o') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
             _ if self.list => return self.list_key(key),
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
@@ -2412,14 +2413,29 @@ impl Pager<'_> {
     }
 
     /// `o`: open the file whose pages these are in the app the desktop opens it with, the reader
-    /// on page `_page` ([`launch::Launches`]), unless it has no file of its own on disk, or its real
-    /// name doesn't say what it was shown as.
-    fn launch(&mut self, _page: usize) {
-        let said = match &self.level.on_disk {
-            Err(why) => format!("{}: {why}", self.level.name),
+    /// on page `page`; in a list, tile `page`'s file, opened or not, broken or not, since the app
+    /// may read it, or its folder in the file manager ([`launch::Launches`]). Not a file with no
+    /// file of its own on disk, nor one whose real name doesn't say what it was shown as, nor an
+    /// archive's folder.
+    fn launch(&mut self, page: usize) {
+        let now = Instant::now();
+        let (name, on_disk) = match self.level.items.get(page) {
+            None => (self.level.name.clone(), &self.level.on_disk),
+            Some(Item::Container { name, container }) => {
+                let name = format!("{}{name}", self.level.name);
+                self.level.nav.message = Some(match container.on_disk() {
+                    Ok(path) => self.launches.start(&name, &path, true, now),
+                    Err(why) => format!("{name}: {why}"),
+                });
+                return;
+            }
+            Some(Item::File(Pages { name, on_disk, .. }) | Item::Later { name, on_disk, .. }) => (format!("{}{name}", self.level.name), on_disk),
+        };
+        let said = match on_disk {
+            Err(why) => format!("{name}: {why}"),
             // Its real name, which may not be the one it was given by.
             Ok(OnDisk { path, named: Err(why) }) => format!("{}: {why}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
-            Ok(OnDisk { path, named: Ok(()) }) => self.launches.start(&self.level.name, path, false, Instant::now()),
+            Ok(OnDisk { path, named: Ok(()) }) => self.launches.start(&name, path, false, now),
         };
         self.level.nav.message = Some(said);
     }
@@ -4102,13 +4118,18 @@ mod tests {
         assert_eq!((press(&mut nav, &[Key::Char('c')]), nav.help), (Step::Continue, false));
     }
 
-    /// `o` opens the file whose pages these are, from whatever page; nothing else moves. With the
-    /// keys on screen, it only goes back.
+    /// `o` opens the file whose pages these are, from whatever page; in a list, the tile chosen,
+    /// which the pager tells a folder's from a file's. Nothing else moves. With the keys on screen,
+    /// it only goes back.
     #[test]
-    fn o_opens_the_file_from_the_page_the_reader_is_on() {
+    fn o_opens_the_file_from_the_page_the_reader_is_on_or_the_tile_chosen() {
         let mut nav = reader(4, 10, 40, 40);
         assert_eq!(press(&mut nav, &[Key::Char('o')]), Step::Launch(4));
         assert_eq!(page(&nav), 4);
+        let mut chosen = tiles(10, 3, 2);
+        press(&mut chosen, &[Key::Right, Key::Down]);
+        assert_eq!((press(&mut chosen, &[Key::Char('o')]), chosen.at), (Step::Launch(4), 4));
+        assert_eq!(press(&mut list(0), &[Key::Char('o')]), Step::Continue);
         press(&mut nav, &[Key::Char('?')]);
         assert_eq!((press(&mut nav, &[Key::Char('o')]), nav.help), (Step::Continue, false));
     }
