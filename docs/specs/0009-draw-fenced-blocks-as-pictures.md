@@ -1,6 +1,6 @@
 # Spec-0009: Draw a document's fenced blocks as pictures
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-13
 - **Related:** [Spec-0008](0008-show-mermaid-diagrams.md) (Mermaid's backend and its cache), which
   must be Done first; [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)
@@ -213,3 +213,4 @@ too, where pictures by path can't be reached.
 - 2026-11-13 — The owner's: a drawn block follows its document's `d`, Mermaid's dark theme on dark
   paper; a fourth task. `d` for drawings outside blocks left to README's Plans.
 - 2026-11-13 — Mermaid's ADR is ADR-0031 now, renumbered by Spec-0008: Spec-0007's took 0030.
+- 2026-11-13 — Implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)).
