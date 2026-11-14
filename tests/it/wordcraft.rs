@@ -915,8 +915,16 @@ fn a_word_documents_body_is_searched_a_hyphenated_word_a_cell_and_a_field() {
     let [(top, bottom)] = bands[..] else { panic!("{bands:?}") };
     let xs = |y: u32| (0..page.width()).filter(|x| page.get_pixel(*x, y).0 == OWN_TINT).collect::<Vec<u32>>();
     let (head, tail) = (xs(top), xs(bottom));
+    // Where the word breaks, and so how wide its head and tail are, depends on the fonts the system
+    // has (Liberation Serif where Times New Roman is missing): the head must end in the right half
+    // and the tail start in the left, not lie wholly within them.
     let middle = page.width() / 2;
-    assert!(head.iter().all(|x| *x > middle) && tail.iter().all(|x| *x < middle), "tinted on both lines: {bands:?}");
+    let (Some(head_end), Some(tail_start)) = (head.last(), tail.first()) else { panic!("no tint on a line: {bands:?}") };
+    assert!(
+        *head_end > middle && *tail_start < middle,
+        "tinted on both lines: {bands:?}, the head to {head_end} and the tail from {tail_start} of {}",
+        page.width()
+    );
     view.press("/\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fcelled\r");
     view.wait_until("a cell's word", |t| last_bar(t).contains(" /celled 1/1 "));
     let (_, page) = next_image(&view, "the cell tinted", tinted);
