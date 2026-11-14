@@ -180,7 +180,7 @@ fn diagrams_in_a_directory_are_tiles() {
     assert_eq!(images(&out.stdout).len(), 2);
 }
 
-/// The diagrams made to cost merman the most within its limits (ADR-0030's `gen within`), each one
+/// The diagrams made to cost merman the most within its limits (ADR-0031's `gen within`), each one
 /// limit's worst: drawn in the worker within its CPU time and heap, one after another, a list's
 /// tiles (the densest then past the SVG backend's limits); and past one of merman's limits (its
 /// layout's work), refused with its message, not killed.

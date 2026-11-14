@@ -265,7 +265,7 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   the pictures it refers to as tiles too (`picture::Promise::draw`), drawn again for a page.
 - **A Mermaid diagram** is turned into SVG by merman when it opens, and opened as that SVG by the
   backend that opens it, found the way any file's backend is, not by name, as a spreadsheet's PDF is
-  ([ADR-0030](adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)). It is read through
+  ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)). It is read through
   `Input::at_most`, which stops past `MAX_SOURCE` (1 MiB, merman's own limit), so a named pipe is
   never read whole, and refused if it isn't UTF-8. merman works in a worker process,
   `clv --worker mermaid` (`mermaid::DIAGRAMS`, in `source::WORKERS`): one `DRAW` request a diagram,
@@ -293,7 +293,7 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   read it again. Before it is kept, `on_white` puts a white `<rect>` over its viewBox (its viewport
   without one) as the first child of its `<svg>`, finding that start tag's `>` outside quotes within
   4 KiB and reading only the tag's `viewBox`, since merman's SVG has no background and an SVG is shown
-  on the terminal's ([ADR-0030](adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)).
+  on the terminal's ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)).
 - **A document** goes through wordcraft's readers, layout and renderer, not its engine, whose PDF
   export needs patches. It is read and laid out to open, and keeps only where its bytes are, its
   pages' sizes and which body paragraphs each page has; its renderer or pool reads and lays it out

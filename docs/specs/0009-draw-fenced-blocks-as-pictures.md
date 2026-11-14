@@ -3,7 +3,7 @@
 - **Status:** Ready
 - **Date:** 2026-11-13
 - **Related:** [Spec-0008](0008-show-mermaid-diagrams.md) (Mermaid's backend and its cache), which
-  must be Done first; [ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)
+  must be Done first; [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)
   (merman, its limits and its cache's bounds); [ADR-0013](../adr/0013-a-documents-pictures-are-drawn-by-the-backends.md) (a
   document's pictures, drawn by the backends);
   [ADR-0014](../adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) (Markdown
@@ -209,6 +209,7 @@ too, where pictures by path can't be reached.
 ## Changelog
 
 - 2026-11-13 — Ready (spec-new), blocked by Spec-0008.
-- 2026-11-13 — Reconciled with Spec-0008's spike: ADR-0030 linked, merman's 1 MiB named (spec-update).
+- 2026-11-13 — Reconciled with Spec-0008's spike: ADR-0031 linked, merman's 1 MiB named (spec-update).
 - 2026-11-13 — The owner's: a drawn block follows its document's `d`, Mermaid's dark theme on dark
   paper; a fourth task. `d` for drawings outside blocks left to README's Plans.
+- 2026-11-13 — Mermaid's ADR is ADR-0031 now, renumbered by Spec-0008: Spec-0007's took 0030.

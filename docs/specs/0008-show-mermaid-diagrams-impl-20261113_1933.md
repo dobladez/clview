@@ -6,8 +6,8 @@ surprises, and what a later reader would want.
 ## Task 2: A Mermaid file shown
 
 **Files beyond the plan's:** `tests/it/view.rs` (`--help`'s row and the list of what clv shows, which
-name every backend), `tests/data/README.md` (the fixtures), `docs/adr/README.md` (ADR-0030's row),
-`docs/adr/0030-measure/worker.sh` (measuring through clv's own worker, below). `.github/workflows/ci.yml`
+name every backend), `tests/data/README.md` (the fixtures), `docs/adr/README.md` (ADR-0031's row),
+`docs/adr/0031-measure/worker.sh` (measuring through clv's own worker, below). `.github/workflows/ci.yml`
 is unchanged: since 071da53, CI builds each push with all features (`mermaid` among them, its
 costliest diagrams run on Linux there), and each feature alone is a local gate, which
 `CONTRIBUTING.md` now lists `mermaid` in.
@@ -47,7 +47,7 @@ costliest diagrams run on Linux there), and each feature alone is a local gate, 
   costliest accepted diagram peaks at 0.23 s of CPU and 232 MiB, and 24 further hostile diagrams for
   the kinds the spike left out (packet, block, architecture, sankey, kanban, quadrant, radar,
   treemap, git graph, ER, class, timeline, `%%{init}%%` spacing and wrapping) were drawn under
-  0.32 s or refused by merman's resource limits in milliseconds (ADR-0030's Evidence has the list).
+  0.32 s or refused by merman's resource limits in milliseconds (ADR-0031's Evidence has the list).
   So the Verify items "one past the CPU cap and one past the heap cap each failing, and the next
   drawn" and "three killed in a row pausing the worker" can't be met by real diagrams through the
   binary. Asked the owner (through the team lead), who chose unit tests with a fake worker that
@@ -71,7 +71,7 @@ costliest diagrams run on Linux there), and each feature alone is a local gate, 
   left of and above 0 (`-50 -10 …`), a timeline's, a journey's and a styled flowchart's too, so a
   rect at a default origin would leave a strip transparent: the integration test checks every pixel
   of `flow.mmd` and `sequence.mermaid` opaque and their corners white. The spec's
-  Theme line, ADR-0030's Decision and usage say so.
+  Theme line, ADR-0031's Decision and usage say so.
 
 **Each test seen failing**, its fix reverted (the file copied aside, changed, the test run, copied
 back, `cmp`):
@@ -151,3 +151,17 @@ journey's and a kanban's without); a Markdown file's `![](x.mmd)`, `]` and `+`; 
 private `tmux -L` server.
 
 **Gates:** the five, each feature alone and `pdf,svg`, all passing.
+
+## Rebased onto main (2026-11-13)
+
+`main` moved while this was implemented: Spec-0007 Done, README's Plans a line each, and the owner's
+rule that the quality gates are only the build that ships. Rebased; CONTRIBUTING keeps `main`'s gates
+paragraph (no `mermaid` among features built alone) and merman's lines in the Rules, the pinned crates
+and Tests; README keeps `main`'s Plans and this branch's lines on what clv shows.
+
+Spec-0007 had accepted an ADR-0030 of its own on `main` (a document's text from the pool's layout),
+while the Mermaid spike's ADR-0030 sat there Proposed and unlisted: two files numbered 0030. The
+Mermaid one, which this branch accepts and lists, is renumbered ADR-0031, with its `measure/` folder
+and every link to them (Spec-0008 and Spec-0009, their notes, the code's comments, CONTRIBUTING,
+architecture, `Cargo.toml`); Spec-0007's keeps 0030.
+

@@ -1,7 +1,7 @@
 //! Mermaid diagrams (`.mmd`, `.mermaid`), turned into SVG by merman, a pure-Rust Mermaid (its
 //! parser, its Cytoscape layout and its SVG), and shown by whichever backend opens that SVG, the
 //! SVG backend, never named here: this one draws nothing itself. The one file that names merman
-//! ([ADR-0030](../../docs/adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)).
+//! ([ADR-0031](../../docs/adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)).
 //!
 //! A diagram is untrusted, and what laying it out costs can't be bounded from its size, so merman
 //! works in a worker process of clv's own ([`DIAGRAMS`]), capped on CPU time and heap, after its own
@@ -179,14 +179,14 @@ const REFUSED: u8 = 3;
 const MALFORMED: u8 = 1;
 
 /// The CPU seconds a diagram may take in the worker: about ten times the costliest diagram merman
-/// accepts (ADR-0030). The viewer waits [`WALL`] times as long.
+/// accepts (ADR-0031). The viewer waits [`WALL`] times as long.
 const DRAW_CPU: u64 = 2;
 
 /// How long merman works on a diagram before it stops itself, with its own message: before the
 /// kernel stops the worker at [`DRAW_CPU`].
 const DEADLINE: Duration = Duration::from_millis(1_500);
 
-/// The most the worker's heap holds: twice the costliest diagram merman accepts (ADR-0030).
+/// The most the worker's heap holds: twice the costliest diagram merman accepts (ADR-0031).
 const MAX_HEAP: usize = 512 << 20;
 
 /// The most edges a diagram may have: Mermaid's own limit.

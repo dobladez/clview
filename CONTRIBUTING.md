@@ -44,8 +44,8 @@ without its default features: not ELK's layout (EPL-2.0), nor what reads the sys
 the clock. Only `src/source/mermaid.rs` and `tests/it/mermaid.rs` name it, and it reaches the SVG
 backend only by asking which backend opens the SVG it draws, never by name. The caps of the worker
 it runs in rest on what its costliest diagrams cost at the pin
-([ADR-0030](docs/adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)): when it moves,
-measure them again with `docs/adr/0030-measure/` (`gen within`, `gen worst`, through `clv --worker
+([ADR-0031](docs/adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)): when it moves,
+measure them again with `docs/adr/0031-measure/` (`gen within`, `gen worst`, through `clv --worker
 mermaid`), and run `tests/it/mermaid.rs`, whose costliest diagrams must still be drawn under them.
 
 **Moving Blitz** (the SVG backend's HTML labels, `src/source/svg/html.rs`): every `=` pin in

@@ -71,10 +71,10 @@ stylo = { version = "=0.22.0", optional = true }
 # usvg builds it already.
 svgtypes = { version = "0.16", optional = true }
 # Mermaid diagrams, turned into SVG in Rust by merman (its parser, its Cytoscape layout and its
-# SVG), in a worker process of clv's own: `source/mermaid.rs`, ADR-0030. Without its default
+# SVG), in a worker process of clv's own: `source/mermaid.rs`, ADR-0031. Without its default
 # features: not ELK's layout (EPL-2.0), nor what reads the system's fonts or the clock, nor its
 # PNG, PDF, ASCII or math. Pinned, for its limits and its layout's cost, which the worker's caps
-# rest on: measured again with docs/adr/0030-measure/ when it moves.
+# rest on: measured again with docs/adr/0031-measure/ when it moves.
 merman = { version = "=0.10.0", default-features = false, features = ["all-diagrams", "svg", "layout-cytoscape"], optional = true }
 # Tar archives and compressed files, read in Rust: gzip through flate2 (zlib-rs), bzip2 through
 # libbz2-rs-sys, xz through lzma-rust2 (the decoders the zip backend already builds), with a tar

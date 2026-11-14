@@ -4,7 +4,7 @@
 - **Date:** 2026-11-13
 - **Related:** [Spec-0009](0009-draw-fenced-blocks-as-pictures.md) (a document's fenced blocks drawn as pictures), which builds on this and on
   its cache of what diagrams were turned into;
-  [ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md) (merman, its
+  [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md) (merman, its
   config and the caps: the spike's, Proposed until this ships);
   [ADR-0026](../adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md) and
   [ADR-0027](../adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md) (the workers this
@@ -22,7 +22,7 @@ A Mermaid diagram is text that a browser turns into a drawing: today clv opens n
 no backend takes it. This spec adds a backend for Mermaid files, behind a `mermaid` feature: it tells
 a diagram by its name (`.mmd`, `.mermaid`) and that it is text, turns it into SVG through merman, a
 pure-Rust Mermaid crate (chosen by a time-boxed spike among merman, mermaid-rs-renderer and ariel-rs,
-and recorded in [ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)), and
+and recorded in [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)), and
 hands that SVG to whichever backend opens it, the SVG backend, never by name. The crate's work runs
 in a worker process of clv's own, capped on CPU time and heap as the SVG labels' is
 ([ADR-0026](../adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)),
@@ -89,7 +89,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
     `worker.rs`, listed in `WORKERS`): **2 s of CPU time a diagram, 6 s on the clock** (`worker.rs`'s
     deadline, three times the CPU's, the backstop), **512 MiB of heap** for the process, about ten
     times the CPU and twice the heap of the costliest diagram merman accepts
-    ([ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)). Past a cap, the
+    ([ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)). Past a cap, the
     worker is killed and that diagram fails, saying which.
   - **One worker serves the backend's diagrams in turn**: held by the backend behind a lock, so
     diagrams opened at once (a pool's threads, a list's tiles) wait their turn; started when one is
@@ -110,7 +110,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
     `Input::bytes` whole; past it, refused before anything parses it. Not UTF-8, refused.
   - The worker is given the diagram's text alone, and nothing it does reads another file or the
     network: merman built without the features that read the system's fonts or the clock, nor ELK,
-    and nothing on its render path reads a file, the environment or the network (ADR-0030); its
+    and nothing on its render path reads a file, the environment or the network (ADR-0031); its
     environment cleared as `worker.rs` clears it.
   - Its SVG answer is held to 64 MiB, the SVG backend's own limit on a file (the largest seen, 22 MB,
     from a 1 MB label), and then to that backend's limits; why it failed, to 256 bytes, cut at a
@@ -137,7 +137,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 - **Kinds of diagram merman doesn't draw**, and parity with mermaid.js past what it gives: its
   differences go in usage only where they would mislead.
 - **Edges routed as mermaid.js 12 routes them**: that is ELK's, under EPL-2.0, left out; edges bend
-  as merman's Cytoscape layout bends them (ADR-0030).
+  as merman's Cytoscape layout bends them (ADR-0031).
 - **Diagrams past merman's limits** (500 edges, 16,000 items, 128 levels): refused, as mermaid.js
   refuses past 500 edges.
 - **Math in labels (KaTeX), and icons from the web** (`fa:`, `icon` shapes): nothing is fetched
@@ -165,22 +165,22 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   `system-timing`, `png`, `pdf`, `ascii`, `math`), with its comment.
 - `tests/it/mermaid.rs` (new, listed in `tests/it/main.rs`); fixtures in `tests/data/`
   (`flow.mmd`, `sequence.mermaid`, a MultiMarkdown `notes.mmd`, `broken.mmd`), each in its README;
-  hostile diagrams written by the tests (`docs/adr/0030-measure/gen` shows which).
+  hostile diagrams written by the tests (`docs/adr/0031-measure/gen` shows which).
 - `.github/workflows/ci.yml`, `CONTRIBUTING.md` — `mermaid` among the features built alone; the rule
   naming where merman may be named; Tests; merman's pin among the pinned crates, its caps measured
-  again with `docs/adr/0030-measure/` when it moves.
+  again with `docs/adr/0031-measure/` when it moves.
 - `docs/usage.md` — a "Mermaid diagrams" section under Which files it shows (the kinds drawn, the
   differences that mislead, edges' routing, a user journey's tile); the row for `.mmd` and `.mermaid`
   in its table of what tells a file; Limits' rows (a diagram's size, merman's limits, the worker's
   caps, the pause after kills, the cache, Mermaid's worker among the six). `docs/architecture.md` —
   Backends' table and How each opens (the cache, the service, why a picture's opening costs nothing
-  twice). `CHANGELOG.md`, `README.md` (what it shows). ADR-0030 turned Accepted and listed in
+  twice). `CHANGELOG.md`, `README.md` (what it shows). ADR-0031 turned Accepted and listed in
   `docs/adr/README.md`, in the commit that adds merman.
 
 **Patterns to follow:**
 
 - merman's site config, its resource profile and its deadline:
-  `docs/adr/0030-measure/candidates/merman/src/main.rs`.
+  `docs/adr/0031-measure/candidates/merman/src/main.rs`.
 - Bytes made by one backend handed to another without its name: `src/source/gridcraft.rs` `open`,
   through `Input::held` and the first other backend in `BACKENDS` that `opens` them. Legitimate: the
   rule that only `main.rs` names `BACKENDS` is the core's
@@ -195,7 +195,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 **Decided:**
 
 - merman 0.10.0, its features and its config as above
-  ([ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)).
+  ([ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)).
 - merman's limits first (`Constrained`, 500 edges, a 1.5 s deadline); the worker's caps past them
   (2 s of CPU, 6 s on the clock, 512 MiB).
 - One worker for the backend, serving diagrams in turn behind a lock, started again after a kill,
@@ -212,11 +212,11 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 🔴 blocks it · 🟡 to keep in mind.
 
 - ✅ **Which crate, at what caps** (it blocked this) — resolved: merman, at the caps above
-  ([ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md)); the owner's word
+  ([ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)); the owner's word
   given 2026-11-13.
 - ✅ **Whose fonts measure the text** — resolved: merman sizes boxes for Mermaid 12's font
   and resvg draws in the system's Arial; labels fit their boxes, but for a sequence note too long for
-  its box, which mermaid.js draws overflowing the same way (ADR-0030).
+  its box, which mermaid.js draws overflowing the same way (ADR-0031).
 - ✅ **The kinds `.mmd` is told by** — resolved: `merman::diagram_header_facts()`.
 - 🟡 **The caps off the spike's machine** — measured on macOS as peak resident set, not as the
   `cap` allocator counts the heap, and not on Linux: task 2 draws the costliest diagrams merman
@@ -233,16 +233,16 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   caps, the cache's bounds and the pause from those. *Files:* the ADR and its `measure/` directory.
   *Verify:* the ADR's commands give its numbers again; the owner's word on the crate; `spec-update`
   lifts this to Ready with the numbers. Done:
-  [ADR-0030](../adr/0030-mermaid-diagrams-through-merman-in-a-worker-process.md) (Proposed) and
-  `docs/adr/0030-measure/`, the PNGs drawn through resvg 0.49 in a program of its own, not in kitty;
+  [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md) (Proposed) and
+  `docs/adr/0031-measure/`, the PNGs drawn through resvg 0.49 in a program of its own, not in kitty;
   the owner's word on 2026-11-13.
 - [x] **A Mermaid file shown** — the feature and merman, `mermaid.rs`'s opening, its worker's
   both sides, its service and its cache, `BACKENDS`, `WORKERS`; usage, architecture, the changelog,
-  CONTRIBUTING, CI, and ADR-0030 Accepted and listed. *Verify:* `cargo test -j 2 --test it mermaid`:
+  CONTRIBUTING, CI, and ADR-0031 Accepted and listed. *Verify:* `cargo test -j 2 --test it mermaid`:
   `flow.mmd` drawn (ink where its nodes are) and `sequence.mermaid`; `notes.mmd` and a `.mmd` whose
   diagram starts past 1024 bytes left unopened; `-` and `/dev/stdin` refused; `broken.mmd`'s message,
   printable and short; `flow.mmd` on white, opaque over its viewBox; a diagram past 1 MiB, one not
-  UTF-8, one past 500 edges (merman's message); the costliest diagrams merman accepts (ADR-0030's
+  UTF-8, one past 500 edges (merman's message); the costliest diagrams merman accepts (ADR-0031's
   `gen within` and `gen worst`) drawn under the caps, and one past merman's limits refused with its
   message; unit tests in `mermaid.rs` with a fake worker that dies (that diagram alone fails, its
   failure kept, the next starts another, three in a row pause the service for 60 s), for the cache
@@ -275,7 +275,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 - 2026-11-13 — Back to Draft after a review (Codex): the spike settles the crate and the numbers;
   added the cache, the worker's service and its failures, the input's bounds, `.mmd`'s head within
   1024 bytes, tiles' words, and a third task.
-- 2026-11-13 — Ready: the spike's findings (ADR-0030), merman approved by the owner; the numbers
+- 2026-11-13 — Ready: the spike's findings (ADR-0031), merman approved by the owner; the numbers
   marked *(spike)* filled in, merman's limits and labels' config added, ELK's routing and diagrams
   past merman's limits out of scope (spec-update).
 - 2026-11-13 — Implementing ([notes](0008-show-mermaid-diagrams-impl-20261113_1933.md)).
@@ -285,3 +285,5 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   is", which is transparent); a kanban board's cards are HTML labels too.
 - 2026-11-13 — "Each feature alone" out of task 2's Verify and the Done line: the owner's rule, the
   quality gates are now the build that ships alone, other feature sets left to CI's nightly run.
+- 2026-11-13 — Mermaid's ADR renumbered ADR-0031 (with `0031-measure/`): Spec-0007's ADR-0030,
+  accepted on `main` while this was implemented, took 0030 first in the index.

@@ -1,4 +1,4 @@
-# Standalone: the hostile diagrams for ADR-0030, synthetic: `target/release/gen <dir>`, and those made
+# Standalone: the hostile diagrams for ADR-0031, synthetic: `target/release/gen <dir>`, and those made
 # to cost merman the most within its limits, `target/release/gen within <dir>`.
 [package]
 name = "gen"

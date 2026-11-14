@@ -1,4 +1,4 @@
-# ADR-0030: Mermaid diagrams through merman, in a worker process capped at 2 s and 512 MiB
+# ADR-0031: Mermaid diagrams through merman, in a worker process capped at 2 s and 512 MiB
 
 - **Status:** Accepted
 - **Date:** 2026-11-13
@@ -58,12 +58,12 @@ without its words.
 ## Evidence
 
 Measured 2026-11-13 on an Apple M3 Max (14 cores, 36 GiB), macOS 26.6.2, Rust 1.95.0, with the
-crates in [`0030-measure/`](0030-measure/): each a crate of its own, in its own workspace, outside
+crates in [`0031-measure/`](0031-measure/): each a crate of its own, in its own workspace, outside
 clv's build, built with `cargo build --release -j 2`. `candidates/<crate>` turns a diagram into SVG
 (`t-<crate> <in.mmd> <out.svg>`, or `batch <dir>` for every `.mmd` in one process), merman with the
 config and profile above; `raster` draws an SVG as clv's SVG backend does (resvg 0.49, clv's pin,
 the system's fonts, at 1.5×); `gen <dir>`, `gen within <dir>` and `gen worst <dir>` write the
-hostile diagrams; `hostile.sh <bin> <dir>` runs each through `/usr/bin/time -l` and `timeout 60`, what [`hostile-results.txt`](0030-measure/hostile-results.txt) holds for the first set.
+hostile diagrams; `hostile.sh <bin> <dir>` runs each through `/usr/bin/time -l` and `timeout 60`, what [`hostile-results.txt`](0031-measure/hostile-results.txt) holds for the first set.
 mermaid.js is mermaid-cli 12.2.0 (`npx @mermaid-js/mermaid-cli`, `mmdc -i x.mmd -o x.png -s 1.5 -b white`),
 the reference.
 
@@ -81,7 +81,7 @@ the reference.
 | `%%{init}%%`, front matter | both | both | refuses the diagram that has both ("Unrecognized diagram type") |
 | Labels | `<text>` when asked (`htmlLabels` false) | `<text>` | `<text>` |
 
-**Twelve real diagrams** ([`0030-measure/diagrams/`](0030-measure/diagrams/)): a flowchart with a
+**Twelve real diagrams** ([`0031-measure/diagrams/`](0031-measure/diagrams/)): a flowchart with a
 subgraph, sequence, class, state with a composite state, ER, gantt, pie, mindmap, timeline, Unicode
 and long labels, a styled flowchart with front matter and `init`, and a user journey.
 
@@ -132,7 +132,7 @@ under one limit:
 | A mindmap 120 deep; 10,000 points of a chart; 15,000 long labels | refused: 128 levels, 16,000 items, 1 MiB of text | | |
 
 **Through clv's own worker** (2026-11-13, at the commit that adds merman, debug build, its
-dependencies optimised as `Cargo.toml` says): [`worker.sh`](0030-measure/worker.sh)` <clv> <dir>/*.mmd`
+dependencies optimised as `Cargo.toml` says): [`worker.sh`](0031-measure/worker.sh)` <clv> <dir>/*.mmd`
 gives each diagram to `clv --worker mermaid` as one request, its caps armed. The `gen within` set:
 at most 0.23 s of CPU (300 classes of 50 members, 0.21 s) and 232 MiB at peak (15,000 nodes, 247 MiB
 resident); `gen worst`'s 15,000 labelled nodes and the 100-deep subgraphs refused by merman (its
@@ -183,6 +183,6 @@ other (496 edges, 1.2 MB of SVG) comes to more than its 128 MiB once its arrowhe
     list show them not.
 - **Follow-ups:** [Spec-0008](../specs/0008-show-mermaid-diagrams.md) lifted to Ready with these
   numbers; merman's pin moved as clv's other pinned crates are, its caps measured again with
-  [`0030-measure/`](0030-measure/).
+  [`0031-measure/`](0031-measure/).
 - **Revisit when:** merman changes its limits or its layout's cost; ELK comes under a licence clv
   can carry without notices; a diagram kind clv's readers need is one merman doesn't parse.
