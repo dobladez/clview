@@ -18,8 +18,8 @@ works today. A version's section becomes the notes of its
   own held to its time and memory, so the keys never wait on it and a page made to cost too much
   is left unread, the status line saying which. `/` only said that it filters lists. A picture or
   a drawing says it has no text to search.
-- Mermaid diagrams (`.mmd`, `.mermaid`): each one page, drawn by merman as Mermaid 12 draws it, as
-  sharp as a drawing. A `.mmd` that is MultiMarkdown is left alone. merman runs in a process of its
+- Mermaid diagrams (`.mmd`, `.mermaid`): each one page, drawn by merman as Mermaid 12 draws it, on
+  white and as sharp as a drawing. A `.mmd` that is MultiMarkdown is left alone. merman runs in a process of its
   own held to its time and memory, and a diagram is drawn once however often it is opened: a list's
   tile, then its page, or a Markdown or HTML document's picture (`![a flow](flow.mmd)`).
 

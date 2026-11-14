@@ -77,3 +77,33 @@ is no one to ask, as when printing.
   pdfcraft's page-tree walk, which clv can't count on. The other is a capped worker process that
   counts the pages first, as a search reads a PDF's text, at the cost of parsing every PDF once
   more.
+
+### Words in a user journey's and a kanban board's tiles
+
+A user journey's sections and tasks, and a kanban board's cards, are HTML labels (`<foreignObject>`)
+even with merman's `htmlLabels` off, so a list's tile, which starts no HTML labels' worker, shows
+those diagrams without their words ([Mermaid diagrams](usage.md#mermaid-diagrams)). merman has a
+best-effort fallback, `foreign_object_label_fallback_svg_text`, that writes a `<foreignObject>`'s
+text as SVG `<text>` for rasterizers: run on a diagram's SVG, it could give their tiles words.
+
+- It isn't Mermaid's look: what it draws differs from the labels Blitz lays out when the diagram is
+  opened. The diagram's page would still be drawn from the SVG as merman wrote it.
+- Spec-0008 decided labels as SVG `<text>` through `htmlLabels` alone; this would be a second
+  path, for tiles only.
+
+### Dense diagrams the SVG backend refuses
+
+Some diagrams merman accepts are refused by the SVG backend's own limits: 32 nodes each linked to
+every other (496 edges, 1.2 MB of SVG) comes to more than 128 MiB once what its markers
+(arrowheads) repeat is counted, as
+[ADR-0003](adr/0003-bound-what-a-drawing-costs-before-usvg-and-resvg-spend-it.md) counts a marker
+for each vertex it marks; 24 nodes (276 edges) draw. Is that counting too strict for Mermaid's
+markers, a small path at each edge's end? Measuring what usvg actually spends on such a drawing
+would say.
+
+### A tar member's head without unpacking it whole
+
+Past 8,192 headers, tar reads a member's head, for the backend that opens it, by unpacking the
+member whole, up to 512 MiB (Codex, round 2 of
+[Spec-0008](specs/0008-show-mermaid-diagrams.md)). A prefix read would do: from the disk, from the
+spill, or from the decompressor stopped after the head.

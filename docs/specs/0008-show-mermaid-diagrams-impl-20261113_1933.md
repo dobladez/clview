@@ -146,9 +146,10 @@ task 2 already made answer every opening of the same bytes.
 | `mermaid::a_diagram_in_text_cells` | the backend out of `BACKENDS` | refused |
 | `view_pager::a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at` | both cache lookups taken out | a worker after the next page was drawn |
 
-**Manual check pending:** in kitty, a list of `.mmd` files with their words in the tiles (a user
-journey's and a kanban's without); a Markdown file's `![](x.mmd)`, `]` and `+`; the same inside a
-private `tmux -L` server.
+**Manual check:** confirmed by the owner on 2026-11-13, in kitty and inside a private `tmux -L mmd`
+server: the list of `docs/adr/0031-measure/diagrams`, its tiles with their words, the journey's
+drawn once opened (Enter); a Markdown file's `![a flow](flow.mmd)` kept through `]` and `+`. Task 3
+ticked then.
 
 **Gates:** the five, each feature alone and `pdf,svg`, all passing.
 
@@ -208,4 +209,22 @@ Round 1's fixes held. One finding fixed, one dismissed by the team lead (to the 
 |---|---|---|
 | `it mermaid::a_gzip_named_as_a_diagram_is_unpacked_only_to_the_most_a_diagram_may_be` (2 MiB gzipped, its CRC wrong; and exactly 1 MiB, drawn) | `alone` without its `Bounded` | not refused as more than 1 MiB: unpacked to the end, its checksum failed |
 | `tar::tests::a_file_compressed_alone_read_to_a_bound_is_unpacked_only_within_it` (gzip, bzip2, xz; a wrong CRC) | `unpack_within` without its `take` | the wrong CRC reached, an error |
+
+Codex's round 3 had no material findings: the review ended after three rounds.
+
+## Done (2026-11-13)
+
+- The quality gates, the build that ships (`fmt`, `clippy --all-targets`, `test`), pass at the last
+  commit.
+- Tests, each seen failing with its fix reverted: the tables under each task and each Codex round
+  above name them.
+- Manual, confirmed by the owner: each kind of diagram in kitty beside mermaid.js's (the twelve in
+  `docs/adr/0031-measure/diagrams`), a list's tiles, a Markdown file's `![](x.mmd)`, and inside tmux.
+- The docs: `CHANGELOG.md`'s line, usage's Mermaid section, Limits and table of what tells a file,
+  architecture's Backends, How each opens and the archives' bounded reads, ADR-0031 Accepted and
+  listed, README's examples and what it shows through. README's Plans keeps its Mermaid bullet until
+  Spec-0009 is Done, as the spec says.
+- Discoveries, in `docs/backlog.md`'s "Not yet planned": words for user-journey and kanban tiles
+  through merman's `<foreignObject>` fallback; dense diagrams the SVG backend's marker counting
+  refuses; a tar member's head read without unpacking it whole (Codex round 2's dismissed finding).
 

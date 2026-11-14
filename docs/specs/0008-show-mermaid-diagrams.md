@@ -5,7 +5,7 @@
 - **Related:** [Spec-0009](0009-draw-fenced-blocks-as-pictures.md) (a document's fenced blocks drawn as pictures), which builds on this and on
   its cache of what diagrams were turned into;
   [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md) (merman, its
-  config and the caps: the spike's, Proposed until this ships);
+  config and the caps: the spike's, Accepted with this);
   [ADR-0026](../adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md) and
   [ADR-0027](../adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md) (the workers this
   one follows); [ADR-0013](../adr/0013-a-documents-pictures-are-drawn-by-the-backends.md) (a
@@ -251,7 +251,7 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   allocator's kills, since nothing merman accepts reaches the caps; nothing else naming
   merman; `the_extensions_a_backend_lists_are_the_names_it_opens_by`. Manual: in
   kitty, `clv tests/data/flow.mmd`.
-- [ ] **A diagram in a list and in a document** — `deferred` and `draws_pictures`, and what they
+- [x] **A diagram in a list and in a document** — `deferred` and `draws_pictures`, and what they
   need of the cache. *Files:* `src/source/mermaid.rs`, `tests/it/mermaid.rs`, `tests/it/view_pager.rs`,
   `tests/it/wordcraft.rs`, usage. *Verify:* `cargo test -j 2 --test it mermaid`: a list of diagrams
   starts no worker until a tile is wanted, then one; `![](flow.mmd)` in Markdown drawn, and its
