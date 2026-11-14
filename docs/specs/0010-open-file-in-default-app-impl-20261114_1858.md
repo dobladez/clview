@@ -80,9 +80,10 @@ surprises, and what a later reader would want.
     a directory with no folder of its own, an archive's folder given its path, `gz` not a gzip's
     name: `view_pager::open_in_a_list_opens_the_tile_chosen_and_refuses_an_archives`, each;
   - the list's `o` not a key: `o_opens_the_file_from_the_page_the_reader_is_on_or_the_tile_chosen`.
-- **Left open**: its manual check (in kitty on macOS, `clv tests/data`, `o` on a PDF's tile opens
-  Preview, on a folder Finder shows it) waits for the owner, so its box stays unticked; no test may
-  launch a real app.
+- **Its manual check** (in kitty on macOS, `clv tests/data`, `o` on a PDF's tile opens Preview, on
+  a folder Finder shows it) waited for the owner, since no test may launch a real app; confirmed
+  by the owner on 2026-11-14, with the Done list's: a file's pages, a list's file, a folder, an
+  archive's file refused, a `.png` linked to a `.command` refused, and over `ssh localhost` refused.
 
 ## Codex review fixes
 

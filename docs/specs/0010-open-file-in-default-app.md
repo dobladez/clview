@@ -1,6 +1,6 @@
 # Spec-0010: Open a file in the desktop's default app
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-14
 - **Related:** [ADR-0009](../adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md)
   (`c`'s system clipboard, used only on this machine, the pattern this follows);
@@ -177,7 +177,7 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
   --bin clv launch` (which launcher applies for given environments, their arguments, an exit status
   in words, a launch reaped after the 5 s, the fourth one refused, with `true`, `false` and `sleep`
   as openers), `cargo test -j 2 --bin clv named`, and `cargo test -j 2 --test it view_pager::open`.
-- [ ] **`o` in a list** — a tile's file, one still opening and a broken one, a folder (revealed on
+- [x] **`o` in a list** — a tile's file, one still opening and a broken one, a folder (revealed on
   macOS), an archive's file and folder refused, a file compressed alone; the path kept going into a
   tile and laid out again. *Files:* `src/view/mod.rs`, `src/view/pager.rs`, `src/source.rs`,
   `src/source/dir.rs`, `src/source/later.rs`, `src/source/tar.rs`, `tests/it/view_pager.rs`, `docs/`.
@@ -189,7 +189,7 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: name them (in the
   [notes](0010-open-file-in-default-app-impl-20261114_1858.md)).
-- [ ] Manual: in kitty on macOS, `o` on a file's pages, a list's file, a folder, an archive's file
+- [x] Manual: in kitty on macOS, `o` on a file's pages, a list's file, a folder, an archive's file
   (refused), a `.png` linked to a `.command` (refused), and over `ssh localhost` (refused).
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
@@ -202,3 +202,4 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 - 2026-11-14 — Implementing ([notes](0010-open-file-in-default-app-impl-20261114_1858.md)).
 - 2026-11-14 — After a Codex review of task 1: `xdg-open` never runs without `setsid`, `o`
   refused instead (the 🟡 on `setsid` missing).
+- 2026-11-14 — Done.
