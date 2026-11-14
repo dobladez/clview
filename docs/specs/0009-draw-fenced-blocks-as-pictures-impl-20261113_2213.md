@@ -329,6 +329,33 @@ after it.
   now holds a bound on what the scanner writes, and that HTML with no listed language comes back
   as it was.
 
+## Codex review, round 3 (2026-11-14)
+
+**[P2] A block drawn for light paper shown on a dark page when its dark drawing fails.** It held.
+The failure was recorded, but the light PNG stayed in what the document holds, `settled` took a
+failure for settled, and the page rendered with the light picture, white behind it, on dark paper;
+and later dark pages never drew again, so it stayed.
+
+- **The fix, in `Promised::hold`:** a picture that could not be drawn for the page's paper, now or
+  before, and is held as drawn for the other paper (`Held::for_the_other`), is let go of, back to
+  its stand-in. `settled` no longer takes such a failure for settled while the other paper's
+  picture is held, and `Laid::drawn_pictures` calls `hold` when a page isn't settled even with
+  nothing drawn, which is how a return to the failed paper gets its stand-in back. On the other
+  paper the block is drawn again as ever.
+- **Kept, not retried:** a failure stays for as long as the document is laid out as it is, each
+  paper's apart, which is what a picture by path does (`Held::failed`, "not tried again"). `d`
+  doesn't try again; a relayout does (a width, the window's size, `s`), since it reads the
+  document afresh. Chosen to follow the picture by path, as asked; a failure that would pass
+  later (no worker to be had) waits for the next layout too.
+- **A tile's picture is left as it was:** a page whose own drawing fails still shows one drawn for
+  a tile, on the same paper, as before this spec. Only the other paper's is never shown.
+- **Tests, each seen failing:** `a_fenced_block_that_fails_for_one_paper_is_its_stand_in_there`
+  (`picture.rs`) and `a_page_never_shows_a_block_as_drawn_for_the_other_paper` (`wordcraft.rs`,
+  through a rendered page), with a test block that can't be drawn for dark paper (`40 20 day`).
+  With nothing let go of in `hold`: red on the first dark page. With a failure settled whatever is
+  held, or `hold` called only when something was drawn: red on the dark page after a turn to
+  light and back.
+
 ## What is left
 
 - Every task's code, tests and docs are committed, and each task's box is open: all four end

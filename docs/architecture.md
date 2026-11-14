@@ -364,7 +364,11 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   other's place, as a page's takes a tile's. Since pages render side by side and may want
   different papers or have a picture let go of, a page checks under the document's read lock that
   its pictures are held as it wants them (`Promised::settled`) and draws over if not, at most
-  `MAX_DRAWS` times. A picture drawn for dark paper is never put on white (`thin_and_near_black`
+  `MAX_DRAWS` times. A block that can't be drawn for a page's paper shows its stand-in there, never
+  the picture drawn for the other paper: `Promised::hold` lets go of one held for the other paper
+  (`Held::for_the_other`) when the failure comes, and each time a page on the failed paper finds it
+  held again, which `settled` tells and `drawn_pictures` then calls `hold` for with nothing drawn.
+  A failure is kept for each paper while the layout lives, as a picture by path's is. A picture drawn for dark paper is never put on white (`thin_and_near_black`
   is for ink made for white paper). Mermaid's side: `open` gives a `Diagram`, the light SVG's
   source with the diagram's text, whose renderer (`OnPaper`) answers a request with `on_dark` from
   the dark SVG, asked of the worker as `DRAW_DARK`, merman's site theme `dark`, with no white

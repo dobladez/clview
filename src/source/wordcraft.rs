@@ -875,7 +875,9 @@ impl Laid {
             // Nothing locked while they are drawn, which may take a while; then, under one lock, held
             // and in the document at once, or another page could find one drawn and render its stand-in.
             let drawn = self.pictures.draw(&on_page, tile, dark);
-            if !drawn.is_empty() {
+            // Nothing drawn, there may still be one to let go of: one that failed for this paper
+            // before, held meanwhile as drawn for the other.
+            if !drawn.is_empty() || !self.pictures.settled(&on_page, tile, dark.is_some()) {
                 let mut document = self.document.write().unwrap_or_else(PoisonError::into_inner);
                 let changes = self.pictures.hold(drawn, &on_page, tile, dark.is_some());
                 document.media.extend(changes);
@@ -3509,6 +3511,40 @@ mod tests {
             assert_eq!(found(&coded, &anchor(&drawn, 30)), 30, "{name}: the picture, at the code's first line");
             assert_eq!(found(&coded, &anchor(&drawn, 62)), 64, "{name}: a line of a block that is code either way");
         }
+        super::super::picture::AMONG.set(None);
+    }
+
+    /// A page shows a block as drawn for its own paper, or its stand-in, never the picture drawn for
+    /// the other paper. A block that can't be drawn for dark paper is drawn on a light page; on a dark
+    /// one it is a grey box, and the page says so, though the light picture was held a moment before,
+    /// and again each time the reader turns back to dark. Nor is a block drawn for dark paper shown on
+    /// a light page.
+    #[test]
+    fn a_page_never_shows_a_block_as_drawn_for_the_other_paper() {
+        static DRAWING: [&dyn Backend; 1] = [&SKETCHES];
+        super::super::picture::AMONG.set(Some(&DRAWING));
+        const NOT_DRAWN: &str = "a picture it refers to could not be drawn";
+        let dark = Paper::Dark([30, 30, 30]);
+        // What a page shows of its block: red as drawn for light paper, blue for dark, neither for
+        // its stand-in; and whether the page says a picture could not be drawn.
+        let shown = |frame: &Frame| {
+            assert_eq!(frame.error, None);
+            let has = |colour: [u8; 3]| frame.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[..3] == colour);
+            (has([255, 0, 0]), has([0, 0, 255]), frame.warnings.iter().any(|warning| warning == NOT_DRAWN))
+        };
+        const LIGHT: (bool, bool, bool) = (true, false, false);
+        let failing = paged("day.md", b"Before.\n\n```sketch\n40 20 day\n```\n\nAfter.\n");
+        let mut renderer = failing.renderer().unwrap();
+        let mut page = |paper: Paper| shown(&renderer.render(paper.asked(0, 2.0)));
+        assert_eq!(page(Paper::Printed), LIGHT, "drawn for light paper");
+        assert_eq!(page(dark), (false, false, true), "its stand-in on dark paper, said");
+        assert_eq!(page(dark), (false, false, true), "and it stays");
+        assert_eq!(page(Paper::Printed), LIGHT, "drawn again for light paper");
+        assert_eq!(page(dark), (false, false, true), "back on dark paper, its stand-in again");
+        let both = paged("both.md", b"Before.\n\n```sketch\n40 20\n```\n\nAfter.\n");
+        let mut renderer = both.renderer().unwrap();
+        let mut page = |paper: Paper| shown(&renderer.render(paper.asked(0, 2.0)));
+        assert_eq!([page(dark), page(Paper::Printed), page(dark)], [(false, true, false), LIGHT, (false, true, false)], "each paper its own");
         super::super::picture::AMONG.set(None);
     }
 

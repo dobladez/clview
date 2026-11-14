@@ -345,6 +345,12 @@ impl Held {
     fn shows(&self, key: &str, tile: bool, dark: bool) -> bool {
         self.drawn.iter().any(|(drawn, _)| drawn == key) && (tile || !self.as_tiles.contains(key)) && self.for_dark.contains(key) == dark
     }
+
+    /// Whether the picture `key` is held as drawn for the other paper than `dark`: nothing a page on
+    /// this one may show.
+    fn for_the_other(&self, key: &str, dark: bool) -> bool {
+        self.drawn.iter().any(|(drawn, _)| drawn == key) && self.for_dark.contains(key) != dark
+    }
 }
 
 impl Promised {
@@ -406,14 +412,18 @@ impl Promised {
     }
 
     /// Whether every picture of `on_page` that is promised is held as a page wants it, a `tile` or
-    /// not, on `dark` paper or not, or could not be drawn for it. The caller holds the document's lock
-    /// for reading: then what the document holds is what this says, since nothing is held or let go of
+    /// not, on `dark` paper or not; or could not be drawn for that paper, and isn't held as drawn for
+    /// the other, so that the document has its stand-in. The caller holds the document's lock for
+    /// reading: then what the document holds is what this says, since nothing is held or let go of
     /// but under that lock for writing ([`Promised::hold`]).
     pub(super) fn settled(&self, on_page: &[&str], tile: bool, dark: bool) -> bool {
         let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         on_page.iter().filter(|key| self.by_key.contains_key(**key)).all(|key| {
             let for_dark = self.for_dark(key, dark);
-            held.failed.contains(&((*key).to_owned(), for_dark)) || held.shows(key, tile, for_dark)
+            match held.failed.contains(&((*key).to_owned(), for_dark)) {
+                true => !held.for_the_other(key, for_dark),
+                false => held.shows(key, tile, for_dark),
+            }
         })
     }
 
@@ -423,6 +433,11 @@ impl Promised {
     /// is in the document. So a page that finds a picture drawn and goes to render finds it held, not
     /// its stand-in, since it must wait for that lock to read the document; unless another page had it
     /// let go of or drawn otherwise meanwhile, which [`Promised::settled`] tells.
+    ///
+    /// One that could not be drawn for this page's paper, now or before, and is held as drawn for the
+    /// other, is let go of, back to its stand-in: a page shows the picture drawn for its paper or the
+    /// stand-in, never the other paper's. A failure is kept for as long as the document is laid out as
+    /// it is, each paper's apart, as a picture by path's is: not tried again until it is laid out again.
     pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str], tile: bool, dark: bool) -> Vec<(String, Png)> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let mut changes = Vec::new();
@@ -454,6 +469,21 @@ impl Promised {
                 }
                 Err(_) => {
                     held.failed.insert((key.to_owned(), for_dark));
+                }
+            }
+        }
+        for key in on_page {
+            let for_dark = self.for_dark(key, dark);
+            if !(held.failed.contains(&((*key).to_owned(), for_dark)) && held.for_the_other(key, for_dark)) {
+                continue;
+            }
+            let Some(at) = held.drawn.iter().position(|(drawn, _)| drawn == key) else { continue };
+            if let Some((key, size)) = held.drawn.remove(at) {
+                held.as_tiles.remove(&key);
+                held.for_dark.remove(&key);
+                held.bytes = held.bytes.saturating_sub(size);
+                if let Some(promise) = self.by_key.get(&key) {
+                    changes.push((key, promise.stand_in.clone()));
                 }
             }
         }
@@ -948,6 +978,46 @@ mod tests {
         assert_eq!(shown(None), Some(("rId1".to_owned(), RED)), "and back");
         let held = promised.held.lock().unwrap();
         assert_eq!((held.drawn.len(), held.for_dark.len(), held.bytes), (1, 0, held.drawn[0].1));
+    }
+
+    /// A block that can't be drawn for one paper shows its stand-in there, never the picture drawn
+    /// for the other paper: let go of when the failure comes, and again each time a page on the paper
+    /// it failed for finds the other's held. On the other paper it is drawn as ever. The failure is
+    /// kept: not tried again.
+    #[test]
+    fn a_fenced_block_that_fails_for_one_paper_is_its_stand_in_there() {
+        let paper = Some([30, 30, 30]);
+        let pictures = Pictures::among(None, &DRAWING);
+        let stand_in = pictures.fenced("sketch", "40 20 day", FIT).and_then(|key| pictures.measured(&key, FIT)).expect("sized");
+        let promised = pictures.promised_in(&BTreeMap::from([("rId1".to_owned(), stand_in.clone())]));
+        let page = ["rId1"];
+        // What a page does, on light paper or dark: how many it tried to draw, and what the document
+        // should then hold of the block, if that changes.
+        let shown = |dark: Option<[u8; 3]>| {
+            let drawn = promised.draw(&page, false, dark);
+            let tried = drawn.len();
+            let changes = promised.hold(drawn, &page, false, dark.is_some());
+            assert!(changes.len() <= 1 && promised.settled(&page, false, dark.is_some()), "settled for its own paper");
+            assert_eq!(promised.failed(&page, dark.is_some()), dark.is_some(), "failed for dark paper alone");
+            (tried, changes.into_iter().next().map(|(_, held)| held))
+        };
+        let (tried, light) = shown(None);
+        assert_eq!((tried, light.as_deref().map(|png| colour_of(png))), (1, Some([255, 0, 0])), "drawn for light paper");
+        assert!(!promised.settled(&page, false, true), "nothing for a page on dark paper yet");
+        let (tried, dark) = shown(paper);
+        assert!(tried == 1 && dark.is_some_and(|held| Arc::ptr_eq(&held, &stand_in)), "its stand-in, the light picture let go of");
+        let held = || {
+            let held = promised.held.lock().unwrap();
+            (held.drawn.len(), held.bytes)
+        };
+        assert_eq!(held(), (0, 0));
+        assert_eq!(shown(paper), (0, None), "not tried again, and the stand-in stays");
+        let (tried, light) = shown(None);
+        assert_eq!((tried, light.as_deref().map(|png| colour_of(png))), (1, Some([255, 0, 0])), "drawn again for light paper");
+        assert!(!promised.settled(&page, false, true), "held for light: nothing a page on dark paper may show");
+        let (tried, dark) = shown(paper);
+        assert!(tried == 0 && dark.is_some_and(|held| Arc::ptr_eq(&held, &stand_in)), "back to its stand-in, with nothing drawn");
+        assert_eq!(shown(paper), (0, None));
     }
 
     /// A picture by path is one picture, whatever paper its page is on: drawn once, its backend never

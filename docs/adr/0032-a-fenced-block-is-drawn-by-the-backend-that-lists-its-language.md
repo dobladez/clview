@@ -78,7 +78,9 @@ What constrains how:
    one paper at a time, drawn again for the other. Mermaid answers with its own dark theme,
    merman's site theme `dark`, with no white behind it, each theme's SVG kept apart in its cache;
    never the light drawing's colours inverted. `d` stays a redraw: the document is laid out once,
-   around the light drawing.
+   around the light drawing. A block that can't be drawn for one paper is its stand-in there,
+   never the other paper's drawing, and isn't tried again until the document is laid out again,
+   as a picture by path that fails isn't.
 10. **The dark drawing in the light one's room.** Mermaid's dark theme lays some diagrams out
     larger than its default (Evidence), so the dark drawing is rendered at the scale that fits the
     light one's size, its shape kept, in the middle of a frame that size. A dark diagram is at most

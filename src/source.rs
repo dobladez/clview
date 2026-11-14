@@ -1088,7 +1088,8 @@ pub(crate) mod tests {
 
     /// A backend that lists the fences `fences`, and draws pictures or not: a block whose text is two
     /// numbers, `40 20`, opens to one page that size, drawn opaque red, or opaque blue for dark paper
-    /// ([`Request::on_dark`]); any other text is refused.
+    /// ([`Request::on_dark`]); with `day` after them, `40 20 day`, it can't be drawn for dark paper.
+    /// Any other text is refused.
     pub(crate) struct Sketches {
         pub(crate) fences: &'static [&'static str],
         pub(crate) pictures: bool,
@@ -1116,9 +1117,11 @@ pub(crate) mod tests {
         fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
             let path = input.path.clone();
             let text = String::from_utf8(input.bytes()?).map_err(|e| e.to_string())?;
-            let mut sides = text.split_whitespace().map(str::parse::<f32>);
-            match (sides.next(), sides.next(), sides.next()) {
-                (Some(Ok(width)), Some(Ok(height)), None) => Ok(Opened::Pages(Box::new(Sketch(width, height)))),
+            let words: Vec<&str> = text.split_whitespace().collect();
+            let side = |word: Option<&&str>| word.and_then(|word| word.parse::<f32>().ok());
+            match (side(words.first()), side(words.get(1)), words.get(2..)) {
+                (Some(width), Some(height), Some([])) => Ok(Opened::Pages(Box::new(Sketch(width, height, false)))),
+                (Some(width), Some(height), Some(["day"])) => Ok(Opened::Pages(Box::new(Sketch(width, height, true)))),
                 _ => Err(format!("{path}: not a sketch")),
             }
         }
@@ -1127,8 +1130,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// What [`Sketches`] opens: a page of a size, drawn opaque red, or blue for dark paper.
-    struct Sketch(f32, f32);
+    /// What [`Sketches`] opens: a page of a size, drawn opaque red, or blue for dark paper, unless it
+    /// is one that can't be drawn for it.
+    struct Sketch(f32, f32, bool);
 
     impl Source for Sketch {
         fn pages(&self) -> usize {
@@ -1141,15 +1145,18 @@ pub(crate) mod tests {
             false
         }
         fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
-            Ok(Box::new(Sketch(self.0, self.1)))
+            Ok(Box::new(Sketch(self.0, self.1, self.2)))
         }
         fn pool(&self, _threads: usize) -> Box<dyn Pool> {
-            Box::new(Sketch(self.0, self.1))
+            Box::new(Sketch(self.0, self.1, self.2))
         }
     }
 
     impl Render for Sketch {
         fn render(&mut self, request: Request) -> Frame {
+            if request.on_dark && self.2 {
+                return Frame::failed(request, "a sketch for the day".into());
+            }
             let side = |points: f32| ((points * request.scale).ceil() as u32).clamp(1, 4096);
             let (width, height) = (side(self.0), side(self.1));
             let colour = if request.on_dark { [0, 0, 255, 255] } else { [255, 0, 0, 255] };
