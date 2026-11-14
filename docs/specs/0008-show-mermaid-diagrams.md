@@ -1,6 +1,6 @@
 # Spec-0008: Show Mermaid diagrams
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-13
 - **Related:** [Spec-0009](0009-draw-fenced-blocks-as-pictures.md) (a document's fenced blocks drawn as pictures), which builds on this and on
   its cache of what diagrams were turned into;
@@ -263,11 +263,11 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
-- [ ] Manual: in kitty, a diagram of each kind merman draws, beside mermaid.js's; a list's tiles; a
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them.
+- [x] Manual: in kitty, a diagram of each kind merman draws, beside mermaid.js's; a list's tiles; a
   Markdown file's `![](x.mmd)`; inside tmux.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
@@ -287,3 +287,4 @@ once marked *(spike)*), and the owner approved merman as a dependency, on 2026-1
   quality gates are now the build that ships alone, other feature sets left to CI's nightly run.
 - 2026-11-13 — Mermaid's ADR renumbered ADR-0031 (with `0031-measure/`): Spec-0007's ADR-0030,
   accepted on `main` while this was implemented, took 0030 first in the index.
+- 2026-11-13 — Done.
