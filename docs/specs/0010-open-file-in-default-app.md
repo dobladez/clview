@@ -1,6 +1,6 @@
 # Spec-0010: Open a file in the desktop's default app
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-14
 - **Related:** [ADR-0009](../adr/0009-copy-a-page-through-the-terminals-clipboard-protocol-else-the-systems.md)
   (`c`'s system clipboard, used only on this machine, the pattern this follows);
@@ -197,3 +197,4 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 - 2026-11-14 — Revised after a Codex review: the real path checked, every macOS folder revealed,
   WSL left for later, no pipes, `setsid`, the opener reaped however long it runs, the path kept
   through a level's life, two tasks.
+- 2026-11-14 — Implementing ([notes](0010-open-file-in-default-app-impl-20261114_1858.md)).
