@@ -1261,9 +1261,278 @@ fn markdown(bytes: &[u8], pictures: &Pictures<'_>, page: wordcraft_doc::SectionP
     marked_up(|b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes, as_html, pictures, page)
 }
 
-/// The HTML in `bytes`, where a tag or, in a `pre`, a line may, on `page`.
+/// The HTML in `bytes`, where a tag or, in a `pre`, a line may, on `page`. A `<pre>` that says it is
+/// written in a language a backend draws is a picture of its text ([`blocks_drawn`]).
 fn html(bytes: &[u8], pictures: &Pictures<'_>, page: wordcraft_doc::SectionProps) -> Result<wordcraft_doc::Document, String> {
-    marked_up(|b| matches!(b, b'<' | b'\r' | b'\n'), bytes, wordcraft_formats::html::decode, pictures, page)
+    let fit = (page.text_width(), page.text_height());
+    let as_html = |bytes: &[u8]| {
+        let text = wordcraft_formats::html::decode(bytes);
+        match blocks_drawn(&text, pictures, fit) {
+            Cow::Owned(drawn) => drawn,
+            Cow::Borrowed(_) => text,
+        }
+    };
+    marked_up(|b| matches!(b, b'<' | b'\r' | b'\n'), bytes, as_html, pictures, page)
+}
+
+/// `html` with each `<pre>` that says it is written in a language a backend draws, and which that
+/// backend can size, written as a picture of its text among `pictures`, to fit in `fit`: the scanner
+/// of HTML's fenced blocks, which wordcraft's importer can't be asked for, since it drops the class
+/// that says the language. Every other `<pre>` stays as it is, one its backend refuses too.
+///
+/// A `<pre>` says its language as what writes HTML from Markdown says it: its own `lang` attribute
+/// (GitHub's pages); a class `language-x`, or `x` itself, of its own or of the `<code>` it starts
+/// with (CommonMark's renderers and highlighters; pandoc, and Mermaid's own `<pre class="mermaid">`);
+/// or a class `highlight-source-x` of the `<div>` right around it (GitHub's highlighted blocks). Its
+/// text is what it holds with the tags dropped and the entities decoded, a `<br>` a line's end.
+///
+/// The text is cut into tags as wordcraft's importer cuts it, so that what is a `<pre>` here is one
+/// there: comments, and the elements whose text it leaves out (`<script>`, `<style>`, `<textarea>`,
+/// [`SKIPPED`]), hold none. A `<pre>` never closed, or with another in it, stays as it is. One pass,
+/// and at most one more over a `<pre>`'s own text; the marks of the document are bounded before this
+/// ([`marked_up`]).
+fn blocks_drawn<'h>(html: &'h str, pictures: &Pictures<'_>, fit: (f32, f32)) -> Cow<'h, str> {
+    let drawn = |language: &'h str| pictures.draws(language).then_some(language);
+    let of_class = |class: &'h str| class.split_ascii_whitespace().find_map(|token| drawn(token.strip_prefix("language-").unwrap_or(token)));
+    let of_div = |class: &'h str| class.split_ascii_whitespace().find_map(|token| token.strip_prefix("highlight-source-").and_then(drawn));
+    let mut out = String::new();
+    // What of `html` is written to `out`, where the next piece starts, and the language the `<div>`
+    // just read says for a `<pre>` right after it, with where its tag ended.
+    let (mut written, mut at) = (0usize, 0usize);
+    let mut around: Option<(&str, usize)> = None;
+    while let Some((piece, next)) = Piece::at(html, at) {
+        let from = at;
+        at = next;
+        let tag = match piece {
+            Piece::Start(tag) => tag,
+            Piece::Text(_) => continue,
+            Piece::End(_) | Piece::Other => {
+                around = None;
+                continue;
+            }
+        };
+        let before = around.take();
+        if tag.self_closed {
+            continue;
+        }
+        if tag.is("div") {
+            around = tag.class.and_then(of_div).map(|language| (language, at));
+        } else if SKIPPED.iter().any(|name| tag.is(name)) {
+            at = past_end_tag(html, at, tag.name);
+        } else if tag.is("pre") {
+            let own = || tag.lang.map(str::trim).and_then(drawn).or_else(|| tag.class.and_then(of_class));
+            let code = || match Piece::at(html, past_blank(html, at)) {
+                Some((Piece::Start(code), _)) if code.is("code") => code.class.and_then(of_class),
+                _ => None,
+            };
+            let right_after = |end: usize| html.get(end..from).is_some_and(|between| between.bytes().all(|b| b.is_ascii_whitespace()));
+            let div = || before.filter(|(_, end)| right_after(*end)).map(|(language, _)| language);
+            let Some(language) = own().or_else(code).or_else(div) else { continue };
+            let Some((text, end)) = pre_text(html, at) else { continue };
+            let Some(key) = pictures.fenced(language, &text, fit) else { continue };
+            out.push_str(html.get(written..from).unwrap_or_default());
+            out.push_str(&format!("<p><img src=\"{key}\" alt=\"\"></p>"));
+            (written, at) = (end, end);
+        }
+    }
+    if written == 0 {
+        return Cow::Borrowed(html);
+    }
+    out.push_str(html.get(written..).unwrap_or_default());
+    Cow::Owned(out)
+}
+
+/// The elements whose text wordcraft's importer leaves out, tags and all, up to their end tag.
+const SKIPPED: [&str; 5] = ["script", "style", "noscript", "template", "textarea"];
+
+/// A piece of HTML, as wordcraft's importer cuts it.
+enum Piece<'h> {
+    /// Text, its entities not yet decoded.
+    Text(&'h str),
+    /// A start tag.
+    Start(StartTag<'h>),
+    /// An end tag, by its name as written.
+    End(&'h str),
+    /// A comment, a doctype or a processing instruction.
+    Other,
+}
+
+/// A start tag: its name as written, and of its attributes the first `class` and the first `lang`,
+/// as written too, their entities not decoded.
+struct StartTag<'h> {
+    name: &'h str,
+    class: Option<&'h str>,
+    lang: Option<&'h str>,
+    /// Ended by `/>`.
+    self_closed: bool,
+}
+
+impl StartTag<'_> {
+    /// Whether it is a `name` element, in any case.
+    fn is(&self, name: &str) -> bool {
+        self.name.eq_ignore_ascii_case(name)
+    }
+}
+
+/// Whether `byte` may be in a tag's name.
+fn in_name(byte: &u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-')
+}
+
+/// Where `needle` is in `text` from `from` on, as a place in `text`.
+fn found(text: &str, from: usize, needle: &str) -> Option<usize> {
+    text.get(from..)?.find(needle).map(|at| from.saturating_add(at))
+}
+
+/// Past the blank space at `at` in `html`.
+fn past_blank(html: &str, at: usize) -> usize {
+    let blank = html.as_bytes().get(at..).unwrap_or_default().iter().take_while(|b| b.is_ascii_whitespace()).count();
+    at.saturating_add(blank)
+}
+
+impl<'h> Piece<'h> {
+    /// The piece of `html` that starts at `at`, and where the next one starts; `None` at its end.
+    fn at(html: &'h str, at: usize) -> Option<(Self, usize)> {
+        let rest = html.get(at..).filter(|rest| !rest.is_empty())?;
+        let end = html.len();
+        let past = |found: Option<usize>, length: usize| found.map_or(end, |found| found.saturating_add(length));
+        if !rest.starts_with('<') {
+            let next = found(html, at, "<").unwrap_or(end);
+            return Some((Self::Text(html.get(at..next).unwrap_or_default()), next));
+        }
+        if rest.starts_with("<!-->") {
+            return Some((Self::Other, at.saturating_add(5)));
+        }
+        if rest.starts_with("<!--->") {
+            return Some((Self::Other, at.saturating_add(6)));
+        }
+        if rest.starts_with("<!--") {
+            return Some((Self::Other, past(found(html, at.saturating_add(4), "-->"), 3)));
+        }
+        if rest.starts_with("<!") || rest.starts_with("<?") {
+            return Some((Self::Other, past(found(html, at, ">"), 1)));
+        }
+        if let Some(name) = rest.strip_prefix("</") {
+            let length = name.bytes().take_while(in_name).count();
+            let Some(name) = name.get(..length).filter(|name| !name.is_empty()) else {
+                return Some((Self::Text("</"), at.saturating_add(2)));
+            };
+            return Some((Self::End(name), past(found(html, at, ">"), 1)));
+        }
+        if !rest.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic) {
+            return Some((Self::Text("<"), at.saturating_add(1)));
+        }
+        let (tag, length) = start_tag(rest);
+        Some((Self::Start(tag), at.saturating_add(length).min(end)))
+    }
+}
+
+/// The start tag `rest` starts with, a `<` and a letter, and how long it is: to the `>` that ends it
+/// outside its attributes' quotes, or all of `rest` where none does.
+fn start_tag(rest: &str) -> (StartTag<'_>, usize) {
+    let bytes = rest.as_bytes();
+    let at = |i: usize| bytes.get(i).copied();
+    let blank = |mut i: usize| {
+        while at(i).is_some_and(|b| b.is_ascii_whitespace()) {
+            i = i.saturating_add(1);
+        }
+        i
+    };
+    let named = bytes.get(1..).unwrap_or_default().iter().take_while(|b| in_name(b)).count();
+    let mut i = named.saturating_add(1);
+    let mut tag = StartTag { name: rest.get(1..i).unwrap_or_default(), class: None, lang: None, self_closed: false };
+    loop {
+        i = blank(i);
+        match (at(i), at(i.saturating_add(1))) {
+            (None, _) => break,
+            (Some(b'>'), _) => {
+                i = i.saturating_add(1);
+                break;
+            }
+            (Some(b'/'), Some(b'>')) => {
+                tag.self_closed = true;
+                i = i.saturating_add(2);
+                break;
+            }
+            (Some(b'/'), _) => {
+                i = i.saturating_add(1);
+                continue;
+            }
+            _ => {}
+        }
+        let start = i;
+        while at(i).is_some_and(|b| !b.is_ascii_whitespace() && !matches!(b, b'=' | b'>' | b'/')) {
+            i = i.saturating_add(1);
+        }
+        let attribute = rest.get(start..i).unwrap_or_default();
+        if attribute.is_empty() {
+            i = i.saturating_add(1);
+            continue;
+        }
+        i = blank(i);
+        let mut value = "";
+        if at(i) == Some(b'=') {
+            i = blank(i.saturating_add(1));
+            match at(i) {
+                Some(quote @ (b'"' | b'\'')) => {
+                    let start = i.saturating_add(1);
+                    let end = found(rest, start, if quote == b'"' { "\"" } else { "'" }).unwrap_or(rest.len());
+                    value = rest.get(start..end).unwrap_or_default();
+                    i = end.saturating_add(1);
+                }
+                _ => {
+                    let start = i;
+                    while at(i).is_some_and(|b| !b.is_ascii_whitespace() && b != b'>') {
+                        i = i.saturating_add(1);
+                    }
+                    value = rest.get(start..i).unwrap_or_default();
+                }
+            }
+        }
+        if attribute.eq_ignore_ascii_case("class") && tag.class.is_none() {
+            tag.class = Some(value);
+        } else if attribute.eq_ignore_ascii_case("lang") && tag.lang.is_none() {
+            tag.lang = Some(value);
+        }
+    }
+    (tag, i.min(rest.len()))
+}
+
+/// Past the end tag of the `name` element whose text starts at `at` in `html`, tags in it no tags:
+/// past the `>` of the first `</name` followed by blank space, a `>` or a `/`; the end of `html`
+/// where there is none.
+fn past_end_tag(html: &str, at: usize, name: &str) -> usize {
+    let bytes = html.as_bytes();
+    let mut from = at;
+    while let Some(rest) = bytes.get(from..).filter(|rest| !rest.is_empty()) {
+        let ends = |window: &[u8]| window.strip_prefix(b"</").is_some_and(|after| after.eq_ignore_ascii_case(name.as_bytes()));
+        let Some(start) = rest.windows(name.len().saturating_add(2)).position(ends) else { break };
+        let after = from.saturating_add(start).saturating_add(name.len()).saturating_add(2);
+        if bytes.get(after).is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/')) {
+            return found(html, after, ">").map_or(html.len(), |end| end.saturating_add(1));
+        }
+        from = from.saturating_add(start).saturating_add(2);
+    }
+    html.len()
+}
+
+/// The text of the `<pre>` whose content starts at `at` in `html`, tags dropped, entities decoded and
+/// a `<br>` a line's end, and where `html` goes on past its `</pre>`. `None` for one never closed, or
+/// with another `<pre>` in it.
+fn pre_text(html: &str, mut at: usize) -> Option<(String, usize)> {
+    let mut text = String::new();
+    while let Some((piece, next)) = Piece::at(html, at) {
+        at = next;
+        match piece {
+            Piece::Text(run) => text.push_str(&wordcraft_formats::html::unescape(run)),
+            Piece::End(name) if name.eq_ignore_ascii_case("pre") => return Some((text, at)),
+            Piece::Start(tag) if tag.is("pre") => return None,
+            Piece::Start(tag) if tag.is("br") => text.push('\n'),
+            Piece::Start(tag) if !tag.self_closed && SKIPPED.iter().any(|name| tag.is(name)) => at = past_end_tag(html, at, tag.name),
+            Piece::Start(_) | Piece::End(_) | Piece::Other => {}
+        }
+    }
+    None
 }
 
 /// `text`, Markdown, as HTML for wordcraft's importer to read
@@ -2665,6 +2934,247 @@ mod tests {
             (language_of("mermaid"), language_of("  mermaid\ttitle"), language_of(""), language_of("   ")),
             (Some("mermaid"), Some("mermaid"), None, None)
         );
+    }
+
+    /// The pictures of the scanner's tests: a ` ```sketch ` block of two numbers is drawn, that size.
+    static SKETCHES: crate::source::tests::Sketches = crate::source::tests::Sketches { fences: &["sketch"], pictures: true };
+    static DRAWING: [&dyn Backend; 1] = [&SKETCHES];
+    const FIT: (f32, f32) = (468.0, 648.0);
+
+    /// `html` as the scanner leaves it, and how many pictures it made of its blocks.
+    fn scanned(html: &str) -> (String, usize) {
+        let pictures = Pictures::among(None, &DRAWING);
+        let out = blocks_drawn(html, &pictures, FIT).into_owned();
+        let drawn = out.matches("<p><img src=\"fenced:").count();
+        for key in out.split("<p><img src=\"").skip(1).filter_map(|rest| rest.split_once("\" alt=\"\"></p>")).map(|(key, _)| key) {
+            assert!(pictures.measured(key, FIT).is_some(), "{key} in {out}");
+        }
+        (out, drawn)
+    }
+
+    /// `out` with each picture's key, afresh each time, left out.
+    fn keyless(out: &str) -> String {
+        let mut rest = out;
+        let mut plain = String::new();
+        while let Some((before, after)) = rest.split_once("<img src=\"fenced:") {
+            plain.push_str(before);
+            plain.push_str("<img src=\"KEY");
+            rest = after.split_once('"').map_or("", |(_, rest)| rest);
+            plain.push('"');
+        }
+        plain + rest
+    }
+
+    /// A `<pre>` that says it is written in a language a backend draws is written as a picture of its
+    /// text, however what writes HTML from Markdown says the language: a `language-x` class of its
+    /// `<code>` or of its own, GitHub's `lang` and its `highlight-source-x` around highlighted spans,
+    /// pandoc's class of the language itself. Tags and attributes in any case, quoted or not.
+    #[test]
+    fn the_scanner_draws_a_pre_that_says_its_language() {
+        let picture = "<p><img src=\"KEY\" alt=\"\"></p>";
+        for (html, left) in [
+            ("<pre><code class=\"language-sketch\">40 20\n</code></pre>", picture.to_owned()),
+            ("<pre class=\"language-sketch\">40 20</pre>", picture.to_owned()),
+            ("<p>One</p>\n<pre>\n  <code class='hljs language-sketch'>40 20</code></pre><p>Two</p>", format!("<p>One</p>\n{picture}<p>Two</p>")),
+            ("<PRE><CODE CLASS=language-sketch>40 20</CODE></PRE >after", format!("{picture}after")),
+            ("<pre title=\"a>b\" class=\"x language-sketch y\">40 20</pre>", picture.to_owned()),
+            // GitHub's page, for a block it draws itself: the text it keeps under its own drawing.
+            (
+                "<div class=\"render-plaintext-hidden\" dir=\"auto\">\n  <pre lang=\"sketch\" aria-label=\"Raw sketch code\">40 20\n</pre>\n</div>",
+                format!("<div class=\"render-plaintext-hidden\" dir=\"auto\">\n  {picture}\n</div>"),
+            ),
+            // GitHub's Markdown API, for a language it highlights, and for one it doesn't.
+            (
+                "<div class=\"highlight highlight-source-sketch\"><pre class=\"notranslate\"><span class=\"pl-c1\">40</span> <span class=\"pl-c1\">20</span></pre></div>",
+                format!("<div class=\"highlight highlight-source-sketch\">{picture}</div>"),
+            ),
+            ("<pre lang=\"sketch\" class=\"notranslate\"><code class=\"notranslate\">40 20\n</code></pre>", picture.to_owned()),
+            // pandoc 3.
+            (
+                "<div class=\"sourceCode\" id=\"cb1\"><pre\nclass=\"sourceCode sketch\"><code class=\"sourceCode sketch\"><span id=\"cb1-1\"><a href=\"#cb1-1\" aria-hidden=\"true\" tabindex=\"-1\"></a><span class=\"dv\">40</span> <span class=\"dv\">20</span></span></code></pre></div>",
+                format!("<div class=\"sourceCode\" id=\"cb1\">{picture}</div>"),
+            ),
+            ("<pre class=\"sketch\">40 20</pre>", picture.to_owned()),
+        ] {
+            let (out, drawn) = scanned(html);
+            assert_eq!((keyless(&out), drawn), (left, 1), "{html}");
+        }
+        let (out, drawn) = scanned("<pre lang=sketch>40 20</pre> and <pre><code class=\"language-sketch\">20 40</code></pre>");
+        assert!(drawn == 2 && out.contains(":0\"") && out.contains(":1\""), "{out}");
+    }
+
+    /// A block's text is what its `<pre>` holds as a browser shows it: tags dropped, nested ones too,
+    /// entities decoded, a `<br>` a line's end, what a comment or a `<script>` holds left out.
+    #[test]
+    fn the_scanner_reads_a_blocks_text_without_its_tags() {
+        let text = |html: &str| pre_text(html, 0).map(|(text, end)| (text, html.get(end..).unwrap_or("?").to_owned()));
+        let read = |html: &str, said: &str| assert_eq!(text(html), Some((said.to_owned(), "rest".to_owned())), "{html}");
+        read("a --&gt; b &amp; c &#x41;&#66; &copy; &nosuch; &</pre>rest", "a --> b & c AB © &nosuch; &");
+        read("<code class=\"x\"><span><b>a</b> <i>-</i></span>\n  b</code></PRE\n>rest", "a -\n  b");
+        read("a<br>b<BR/>c<!-- no --><script>d</pre></script>e<style></style></pre >rest", "a\nb\nce");
+        read("1 < 2 </ 3 <3</pre>rest", "1 < 2 </ 3 <3");
+        read("caf\u{e9} \u{1F600}<span title=\"</pre>\">!</span></pre>rest", "caf\u{e9} \u{1F600}!");
+        for open in ["a", "a</pr>", "a<pre>b</pre>", "a<!-- </pre>", "a<textarea></pre>", "a<span title=\"</pre>", ""] {
+            assert_eq!(text(open), None, "{open}");
+        }
+        // Entities are decoded after the tags are found: an escaped tag is text.
+        let (out, drawn) = scanned("<pre class=\"language-sketch\">4&#48; <b>2</b>&#x30;</pre>");
+        assert_eq!((keyless(&out).as_str(), drawn), ("<p><img src=\"KEY\" alt=\"\"></p>", 1));
+        assert_eq!(scanned("<pre class=\"language-sketch\">40 20&lt;/pre&gt;</pre>").1, 0, "its text is no sketch");
+    }
+
+    /// Every other `<pre>` stays exactly as it is: one that says no language or one no backend
+    /// draws, one in a comment or in an element whose text is no markup, one never closed, one
+    /// with another in it, and one its backend refuses.
+    #[test]
+    fn the_scanner_leaves_every_other_pre_as_it_is() {
+        for html in [
+            "<pre>40 20</pre>",
+            "<pre><code>40 20</code></pre>",
+            "<pre><code class=\"language-svg\">40 20</code></pre>",
+            "<pre class=\"language-sketches sketchy lang-sketch\">40 20</pre>",
+            "<pre lang=\"en\">40 20</pre>",
+            "<pre data-lang=\"sketch\" id=\"sketch\" title=\"class=language-sketch\">40 20</pre>",
+            "<code class=\"language-sketch\">40 20</code>",
+            "<div class=\"language-sketch\"><pre>40 20</pre></div>",
+            "<pre>text <code class=\"language-sketch\">40 20</code></pre>",
+            "<pre><span><code class=\"language-sketch\">40 20</code></span></pre>",
+            "<div class=\"highlight highlight-source-sketch\"><p>One</p><pre>40 20</pre></div>",
+            "<div class=\"highlight highlight-source-sketch\">One <pre>40 20</pre></div>",
+            "<div class=\"highlight highlight-source-sketch\"></div><pre>40 20</pre>",
+            "<div class=\"highlight highlight-text-sketch\"><pre>40 20</pre></div>",
+            "<!-- <pre class=\"language-sketch\">40 20</pre> -->",
+            "<!-- never closed <pre class=\"language-sketch\">40 20</pre>",
+            "<script>var a = '<pre class=\"language-sketch\">40 20</pre>';</script>",
+            "<style>/* <pre class=\"language-sketch\">40 20</pre> */</style>",
+            "<textarea><pre class=\"language-sketch\">40 20</pre></textarea>",
+            "<TEXTAREA><pre class=\"language-sketch\">40 20</pre></textarea >",
+            "<noscript><pre class=\"language-sketch\">40 20</pre></noscript>",
+            "<template><pre class=\"language-sketch\">40 20</pre></template>",
+            "<script><pre class=\"language-sketch\">40 20</pre>",
+            "<a title=\"<pre class='language-sketch'>40 20</pre>\">a</a>",
+            "<a title=\"never closed <pre class='language-sketch'>40 20</pre>",
+            "<pre class=\"language-sketch\">40 20",
+            "<pre class=\"language-sketch\">40 20</pr>",
+            "<pre class=\"language-sketch\">40 20<pre>inner</pre></pre>",
+            "<pre class=\"language-sketch\"/>40 20</pre>",
+            "<pre class=\"language-sketch\">flowchart LR</pre>",
+            "<pre class=\"language-sketch\"></pre>",
+            "<pre class=\"language-sketch",
+            "<pre",
+            "<",
+            "",
+        ] {
+            let pictures = Pictures::among(None, &DRAWING);
+            let out = blocks_drawn(html, &pictures, FIT);
+            assert!(matches!(out, Cow::Borrowed(_)) && out == html, "{html}: {out}");
+        }
+        // A block in what is skipped doesn't hide the one after it; nor does one that fails.
+        for html in [
+            "<!-- <pre> --><pre lang=sketch>40 20</pre>",
+            "<script>'<pre>'</script><pre lang=sketch>40 20</pre>",
+            "<pre lang=sketch>no sketch</pre><pre lang=sketch>40 20</pre>",
+            "<pre lang=sketch>outer<pre lang=sketch>40 20</pre></pre>",
+            "<pre>code</pre><pre lang=sketch>40 20</pre>",
+        ] {
+            assert_eq!(scanned(html).1, 1, "{html}");
+        }
+        // One its backend refuses is counted, for the first page to say; one that says nothing isn't.
+        let pictures = Pictures::among(None, &DRAWING);
+        let _ = blocks_drawn("<pre lang=sketch>no sketch</pre><pre>40 20</pre><pre lang=svg>40 20</pre>", &pictures, FIT);
+        assert_eq!(pictures.promised_in(&Default::default()).undrawn(), 1);
+    }
+
+    /// The scanner cuts HTML into pieces as wordcraft's importer does: the same tags, the same text.
+    #[test]
+    fn the_scanner_cuts_html_as_the_importer_does() {
+        let pieces = |html: &str| {
+            let (mut at, mut seen) = (0, Vec::new());
+            while let Some((piece, next)) = Piece::at(html, at) {
+                assert!(next > at && next <= html.len(), "{html}: {at} to {next}");
+                seen.push(match piece {
+                    Piece::Text(text) => format!("text {text}"),
+                    Piece::Start(tag) => {
+                        format!("start {} class {:?} lang {:?}{}", tag.name, tag.class, tag.lang, if tag.self_closed { " closed" } else { "" })
+                    }
+                    Piece::End(name) => format!("end {name}"),
+                    Piece::Other => "other".to_owned(),
+                });
+                at = next;
+            }
+            seen
+        };
+        assert_eq!(
+            pieces("a<b class=x>c</b ><!-- d --><!DOCTYPE html><?xml?><br/>< e</><Pre\tLANG='f' class = \"g h\" class=i lang>j"),
+            [
+                "text a",
+                "start b class Some(\"x\") lang None",
+                "text c",
+                "end b",
+                "other",
+                "other",
+                "other",
+                "start br class None lang None closed",
+                "text <",
+                "text  e",
+                "text </",
+                "text >",
+                "start Pre class Some(\"g h\") lang Some(\"f\")",
+                "text j",
+            ]
+        );
+        assert_eq!(pieces("<!--><!--->a<!-- b"), ["other", "other", "text a", "other"]);
+        assert_eq!(pieces("<a / b=\"c\"d=e />f"), ["start a class None lang None closed", "text f"]);
+        assert_eq!(pieces("<a class=b/>f"), ["start a class Some(\"b/\") lang None", "text f"], "an unquoted value takes its slash");
+        assert_eq!(pieces("<a class=\"never closed>b"), ["start a class Some(\"never closed>b\") lang None"]);
+        assert_eq!(pieces("</a b"), ["end a"]);
+        assert_eq!(past_end_tag("a</scripts></SCRIPT x>b", 0, "script"), 22);
+        assert_eq!((past_end_tag("a</script", 0, "script"), past_end_tag("a</scrip>", 0, "script"), past_end_tag("", 3, "script")), (9, 9, 0));
+    }
+
+    proptest! {
+        /// Whatever HTML holds and wherever it is cut, the scanner never panics, gives back HTML no
+        /// longer than what it was given but for its pictures, and gives it back as it was when
+        /// nothing in it is drawn.
+        #[test]
+        fn the_scanner_never_panics_wherever_html_is_cut(
+            parts in proptest::collection::vec(
+                prop_oneof![
+                    Just("<pre>".to_owned()), Just("</pre>".to_owned()), Just("<pre lang=sketch>".to_owned()),
+                    Just("<pre class=\"language-sketch\">".to_owned()), Just("<code class='language-sketch'>".to_owned()),
+                    Just("<div class=\"highlight highlight-source-sketch\">".to_owned()), Just("40 20".to_owned()),
+                    Just("<!--".to_owned()), Just("-->".to_owned()), Just("<script>".to_owned()), Just("</script>".to_owned()),
+                    Just("<textarea>".to_owned()), Just("</textarea>".to_owned()), Just("<br>".to_owned()), Just("&lt;".to_owned()),
+                    Just("\"".to_owned()), Just("'".to_owned()), Just("<".to_owned()), Just(">".to_owned()), Just("/".to_owned()),
+                    Just("=".to_owned()), Just(" ".to_owned()), Just("\u{e9}\u{1F600}".to_owned()), "\\PC{0,6}",
+                ],
+                0..24,
+            ),
+            cut in any::<proptest::sample::Index>(),
+        ) {
+            let whole = parts.concat();
+            let mut end = cut.index(whole.len() + 1);
+            while !whole.is_char_boundary(end) {
+                end -= 1;
+            }
+            let html = &whole[..end];
+            let pictures = Pictures::among(None, &DRAWING);
+            let out = blocks_drawn(html, &pictures, FIT);
+            let drawn = out.matches("<p><img src=\"fenced:").count();
+            prop_assert!(out.len() <= html.len() + drawn * 64, "{html:?} to {out:?}");
+            if drawn == 0 {
+                prop_assert_eq!(&*out, html);
+            }
+            let (mut at, mut steps) = (0, 0);
+            while let Some((_, next)) = Piece::at(html, at) {
+                prop_assert!(next > at && next <= html.len());
+                at = next;
+                steps += 1;
+            }
+            prop_assert!(at == html.len() && steps <= html.len());
+            let _ = pre_text(html, end / 2);
+            let _ = past_end_tag(html, end / 2, "script");
+        }
     }
 
     /// The pager's way: pages rendering side by side on a pool's threads, each drawing its pictures

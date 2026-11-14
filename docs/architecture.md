@@ -340,6 +340,16 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   can be one. Every reading opens each block again, so the listing backend keeps what it made of a
   text (Mermaid's cache), as `Format::fences` asks
   ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+  HTML's blocks are found by a scanner of clv's own, `blocks_drawn`, over the text before wordcraft
+  imports it, since the importer drops the class that says a `<pre>`'s language and can't be given
+  a hook at its pin. It cuts the text into pieces as the importer's lexer does (`Piece::at`,
+  `start_tag`: the same tags, the same quotes, the same comments), skips what the importer skips
+  whole (`SKIPPED`, to `past_end_tag`), reads a `<pre>`'s language from its `lang`, its class, its
+  first `<code>`'s class or the `highlight-source-x` of the `<div>` right before it, and its text
+  with `pre_text` (tags dropped, `html::unescape` on each run of text), and writes the same
+  `<img src="KEY">` in its place when `Pictures::fenced` sizes it. One pass, and one more over the
+  text of a `<pre>` that says a drawn language, which stops at the next `<pre>`: within the marks
+  `marked_up` has counted before it runs.
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`

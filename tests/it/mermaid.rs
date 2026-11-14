@@ -462,3 +462,88 @@ fn a_mermaid_block_past_the_most_pictures_a_document_has_stays_code() {
     let (_, said) = pages_at(&written("mermaid-many", "all.md", block.repeat(1024)), &["--pages", "1"]);
     assert!(said.is_empty(), "{said}");
 }
+
+/// `text` as HTML's text: its `&`, `<` and `>` as entities.
+#[cfg(feature = "word")]
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// A `<pre>` of HTML that says it is Mermaid's is drawn as its diagram, its entities decoded (the
+/// flow's `-->` is `--&gt;` there): by its `<code>`'s `language-mermaid`, as Markdown's renderers
+/// write it, by GitHub's `lang`, and by pandoc's class. One that says another language, or none,
+/// stays code, as does one in a comment.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_in_html_is_drawn_as_its_diagram() {
+    let flow = escaped(&flow());
+    assert!(flow.contains("--&gt;"));
+    let page = |block: &str| format!("<!doctype html>\n<html><body>\n<h1>A flow</h1>\n<p>Before.</p>\n{block}\n<p>After.</p>\n</body></html>\n");
+    for block in [
+        format!("<pre><code class=\"language-mermaid\">{flow}</code></pre>"),
+        format!("<pre class=\"language-mermaid\">{flow}</pre>"),
+        format!("<pre lang=\"mermaid\" aria-label=\"Raw mermaid code\">{flow}</pre>"),
+        format!(
+            "<div class=\"sourceCode\" id=\"cb1\"><pre\nclass=\"sourceCode mermaid\"><code class=\"sourceCode mermaid\">{flow}</code></pre></div>"
+        ),
+    ] {
+        let (pages, said) = pages_of("mermaid-html", "a.html", &page(&block));
+        assert!(said.is_empty(), "{block}: {said}");
+        assert!(pages.len() == 1 && shows_flow(&pages[0]), "{block}");
+    }
+    for block in [
+        format!("<pre><code class=\"language-text\">{flow}</code></pre>"),
+        format!("<pre>{flow}</pre>"),
+        format!("<!-- <pre lang=\"mermaid\">{flow}</pre> -->"),
+    ] {
+        let (pages, said) = pages_of("mermaid-html", "code.html", &page(&block));
+        assert!(said.is_empty(), "{block}: {said}");
+        assert!(spread(&pages[0], [255, 0, 0]).is_none(), "{block}");
+    }
+    // A broken one is the code it was, and the first page says so.
+    let broken = escaped(&std::fs::read_to_string(data("broken.mmd")).unwrap());
+    let document = |language: &str| page(&format!("<pre><code class=\"language-{language}\">{broken}</code></pre>"));
+    let (drawn, said) = pages_of("mermaid-html", "broken.html", &document("mermaid"));
+    assert_eq!(said, "warning: page 1: one of its blocks could not be drawn, and is shown as its code\n");
+    let (code, _) = pages_of("mermaid-html", "broken.html", &document("text"));
+    assert!(drawn[0] == code[0], "not the code block it would have been");
+}
+
+/// HTML says what it is by how it starts, so its blocks are drawn through a pipe; and an epub's
+/// chapter, XHTML held in a zip, draws its own, where its pictures by path can't be reached.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub() {
+    let block = format!("<pre><code class=\"language-mermaid\">{}</code></pre>", escaped(&flow()));
+    let mut child = Command::new(BIN)
+        .args(["/dev/stdin", "--protocol", "kitty"])
+        .env("TERM", "dumb")
+        .env_remove("TMUX")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(format!("<!doctype html>\n<h1>A flow</h1>\n{block}\n").as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    let pages = images(&out.stdout);
+    assert!(pages.len() == 1 && shows_flow(&image::load_from_memory(&pages[0].png).unwrap().into_rgba8()), "through a pipe");
+    #[cfg(feature = "zip")]
+    {
+        let chapter = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head><title>One</title></head>\n<body>\n<h1>Chapter one</h1>\n{block}\n</body>\n</html>\n"
+        );
+        let book = tmp("mermaid-epub", "book.epub");
+        let mut zip = ::zip::ZipWriter::new(std::fs::File::create(&book).unwrap());
+        let stored = ::zip::write::SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+        zip.start_file("chapter-1.xhtml", ::zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(chapter.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        let (tiles, said) = pages_at(&book, &[]);
+        assert!(said.is_empty(), "{said}");
+        assert!(tiles.len() == 1 && shows_flow(&tiles[0]), "an epub's chapter");
+    }
+}

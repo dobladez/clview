@@ -641,7 +641,26 @@ code: a ` ```mermaid ` block as its [diagram](#mermaid-diagrams), as on GitHub. 
 first word after the fence, in any case (` ```Mermaid title="A flow" `), and `clv --help` lists the
 ones this build draws. It goes by that word alone, never by what the block holds: a block in any other
 language stays code, ` ```svg ` included, as does one with no language, or one that is indented
-rather than fenced. A block is drawn as a picture is, at its own size or smaller to fit the column
+rather than fenced.
+
+In HTML, and so in an epub's chapters, such a block is a `<pre>` that says its language, as what
+writes HTML from Markdown says it:
+
+- a class `language-mermaid`, of the `<pre>` or of the `<code>` it starts with
+  (`<pre><code class="language-mermaid">`): CommonMark's renderers, highlight.js, Prism;
+- a class of the language alone (`<pre class="mermaid">`), there too: pandoc, and Mermaid's own way
+  in a web page;
+- the `<pre>`'s `lang="mermaid"`: GitHub's pages, which keep a diagram's text under their drawing
+  of it;
+- a class `highlight-source-mermaid` of the `<div>` right around the `<pre>`: GitHub's highlighted
+  blocks.
+
+Its text is what a browser would show of it: tags dropped, the `<span>`s of a highlighter among
+them, and entities decoded. A `<pre>` in a comment, or in a `<script>`, a `<style>` or a
+`<textarea>`, is no block, and one that is never closed, or holds another, stays code. A `<pre>`
+written as HTML inside Markdown stays code too.
+
+A block is drawn as a picture is, at its own size or smaller to fit the column
 and the page, when a page it is on first shows; and since its text comes with the document, it is
 drawn through a pipe and from an archive too, where a picture by path can't be reached. A block
 that can't be drawn (a broken diagram, or one past what its kind [may be](#limits)) shows as the

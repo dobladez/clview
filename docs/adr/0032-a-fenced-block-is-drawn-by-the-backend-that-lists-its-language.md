@@ -55,7 +55,14 @@ What constrains how:
    keyed from the system's randomness), then the block's number. A document can't know them, so it
    can't name a block's picture in an `<img>` of its own; and with a scheme's colon, a key is
    never a path (`local` refuses it), so one that isn't a block's reads no file.
-7. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
+7. **HTML's blocks by a scanner of clv's own.** Before wordcraft imports HTML, `blocks_drawn`
+   finds each `<pre>` that says a listed language and writes `<img src="KEY">` in its place. It
+   says it as what writes HTML from Markdown says it (Evidence): a class `language-x`, or `x`
+   alone, of the `<pre>` or of the `<code>` it starts with; the `<pre>`'s `lang="x"`; or a class
+   `highlight-source-x` of the `<div>` right around it. Said, never guessed, as in Markdown. The
+   scanner cuts the text as wordcraft's lexer does, so that what is a `<pre>` to one is to the
+   other. Markdown's own blocks never go through it: pulldown-cmark gives them whole.
+8. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
    text. Mermaid's cache answers without its worker
    ([ADR-0031](0031-mermaid-diagrams-through-merman-in-a-worker-process.md)); `Format::fences`
    says that a backend listing one keeps what it made the same way.
@@ -72,6 +79,21 @@ What wordcraft's importer does with an `<img>`, at its pin (`bbe3547`,
 `crates/formats/src/html/builder.rs`): a `data:` URL is decoded, any other `src` goes to the
 caller's loader, trimmed; with no picture back, the `alt` is shown as text. A `<code>` only sets
 the code font: its class is dropped.
+
+**How HTML written from Markdown says a block's language,** each asked for a ` ```mermaid ` block
+on 2026-11-13:
+
+| Written by | What it wrote |
+|---|---|
+| pulldown-cmark 0.13 (clv's own, and CommonMark's renderers alike) | `<pre><code class="language-mermaid">` |
+| GitHub, a README's page (`curl https://github.com/mermaid-js/mermaid/blob/develop/README.md`) | `<pre lang="mermaid" aria-label="Raw mermaid code">`, the text alone in it, in a `<div class="render-plaintext-hidden">` under the frame it draws the diagram in |
+| GitHub's Markdown API (`curl https://api.github.com/markdown -d '{"text":…,"mode":"gfm"}'`) | `<div class="highlight highlight-source-mermaid"><pre class="notranslate">`, the text in `<span class="pl-…">`s; for a language it doesn't highlight, `<pre lang="nolang" class="notranslate"><code class="notranslate">` |
+| pandoc 3.14 (its server, `https://pandoc.org/cgi-bin/pandoc-server.cgi`, `from` markdown `to` html) | `<div class="sourceCode" id="cb1"><pre class="sourceCode mermaid"><code class="sourceCode mermaid">`, each line a `<span id="cb1-1">` starting with an empty `<a>`, its words in `<span class="kw">`s |
+
+That GitHub page, saved as it came (405 KB, ten `mermaid` blocks), shown by clv: each
+`<pre lang="mermaid">` drawn as its diagram, in under a second. Mermaid's own way in a web page,
+`<pre class="mermaid">`, is from its documentation, as are highlight.js's and Prism's
+`language-x` classes.
 
 **What a document's blocks cost to open,** measured 2026-11-13 on an Apple M3 Max (14 cores,
 36 GiB), macOS 26.6.2, Rust 1.95.0, with `target/debug/clv` (its dependencies at `opt-level = 2`):
@@ -107,6 +129,11 @@ lines and marks are eleven diagrams of 15,000 nodes, and 64 MiB sixty labels of 
   again in an `<img>` of its own. Harmless as far as is known, since it is the document's own
   block; but a key the document can write is a name it shares with clv, and the next use of a key
   would have to remember that.
+- **Only `language-x`** in HTML, as the spec first had it: GitHub's own pages and pandoc's output,
+  the two most likely to be saved and read, say it otherwise.
+- **Running Markdown's HTML through the scanner too**, in place of reading pulldown-cmark's
+  events: one mechanism, but a block's text would go through HTML's escaping and back, and a
+  `<pre>` written as HTML inside Markdown would be drawn, which GitHub doesn't.
 - **A grey box for a broken block**, as for a picture that fails: the reader would lose the text
   of the diagram, which is what they have to fix it by.
 

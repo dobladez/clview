@@ -197,13 +197,16 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   nothing else names their libraries. A document searched in the pager, on a pseudo-terminal: a
   word hyphenated at a line's end, a table's cell, a field's result, a paragraph across a page
   break, one too long to search, and the tint on dark paper. What a document's text answers, and
-  that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`.
+  that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`; so is
+  the scanner of HTML's fenced blocks (`the_scanner_…`): which `<pre>` says a language and how,
+  a block's text, what is left alone, and a property test that it never panics wherever HTML is cut.
 - **`tests/it/mermaid.rs`**: Mermaid diagrams through the viewer: which `.mmd` files it opens and
   which it leaves to MultiMarkdown, what merman draws of one, its limits and messages, the costliest
   diagrams merman accepts drawn under the worker's caps, a list's diagrams opened as their tiles are
   wanted, a Markdown document's ` ```mermaid ` blocks drawn (through a pipe and in an archive too,
   a broken one as its code, a key the document writes itself no picture, and the 1,025th left as
-  code), and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
+  code), HTML's `<pre>` blocks the same, through `/dev/stdin` and in an epub's chapter, and that
+  nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
   starts the worker only once its tile is wanted, and a document's diagram is turned into SVG once
   however it is laid out, watched with `ps`; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The

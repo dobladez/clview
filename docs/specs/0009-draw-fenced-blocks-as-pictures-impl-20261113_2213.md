@@ -81,3 +81,60 @@ is, and what `tests/it/mermaid.rs` covers).
 **Verify:** the spec's `cargo test -j 2 --lib fence` is `cargo test -j 2 --bin clv fence` here (clv
 is a binary, as `project.md` says). The manual check, in kitty, is the owner's: the box stays open
 until it is confirmed.
+
+## Task 2: HTML's blocks
+
+**The open question, settled by trying** (🟡 "the HTML scanner on real output"): what writes HTML
+from Markdown was asked for a ` ```mermaid ` block, and what each wrote is in ADR-0032's Evidence.
+Only pulldown-cmark's, and the CommonMark renderers', is the `language-x` class the requirement
+names. So a `<pre>` says its language in four ways, all of them said and none guessed:
+
+- a class `language-x`, of the `<pre>` or of the `<code>` it starts with (the requirement's);
+- a class `x` alone, there too: pandoc (`<pre class="sourceCode mermaid">`), and Mermaid's own
+  `<pre class="mermaid">`;
+- the `<pre>`'s `lang="x"`: GitHub's pages, which the task's manual check reads. Without it that
+  check couldn't pass: a README's page has `<pre lang="mermaid" aria-label="Raw mermaid code">`
+  and no class at all;
+- a class `highlight-source-x` of the `<div>` right around the `<pre>`: GitHub's Markdown API.
+
+**This goes past the requirement as written** (a `language-x` class only): raised with the owner.
+Any of the last three comes out by taking its line out of `blocks_drawn`.
+
+**Decided here:**
+
+- **The scanner cuts HTML as wordcraft's lexer does**, read at its pin
+  (`crates/formats/src/html/lexer.rs`, `import.rs`): a tag's name, its attributes with their
+  quotes (an unquoted value takes a `/`, an unclosed quote runs to the end of the text), comments
+  (`<!-->` and `<!--->` are whole ones), `<!…>` and `<?…>`, an end tag to its `>`. What it skips
+  whole is the importer's list, `script`, `style`, `noscript`, `template` and `textarea`: two
+  more than the spec named. A `<pre>` to one is a `<pre>` to the other, so a picture is never
+  written where the importer would have seen text.
+- **A `<pre>` with another in it stays code**, as one never closed does: `pre_text` stops at the
+  inner one, which then has its own turn. That also keeps the scan linear: a `<pre>`'s text is
+  read once more only when it says a drawn language, and never past the next `<pre>`.
+- **A `<br>` in a block is a line's end**; a class or `lang` is read as written, its entities not
+  decoded (`class="language-&#109;ermaid"` is no Mermaid).
+- **Markdown's HTML doesn't go through the scanner:** its blocks come whole from pulldown-cmark,
+  and a `<pre>` written as HTML inside Markdown stays code.
+- **The picture** replaces the `<pre>` alone: a `<div>` around it stays (GitHub's, pandoc's).
+
+**Tried on the real thing:** GitHub's page of Mermaid's README, fetched with `curl` (405 KB, ten
+`mermaid` blocks), shown by `clv … --protocol kitty`: 29 pages in 0.9 s, no block left as code,
+the pie and the gantt chart looked at as PNGs. GitHub's "Loading" under each diagram is its own
+placeholder for the frame it draws in, which is text to clv.
+
+**Each test seen failing:**
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `a_mermaid_block_in_html_is_drawn_as_its_diagram`, `a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub` | `html` importing the text as it came | no flow on the page, nor in the tile |
+| `the_scanner_reads_a_blocks_text_without_its_tags` | a run of text taken without `unescape` | `a --&gt; b &amp; c …` |
+| `the_scanner_cuts_html_as_the_importer_does`, `the_scanner_never_panics_wherever_html_is_cut` | a start tag's length not held to the text's | a piece ending past the text; shrunk to `40 20`, `<pre>`, `<pre class="language-sketch">`, cut |
+| `the_scanner_leaves_every_other_pre_as_it_is` | `SKIPPED` not skipped; a `<div>`'s language kept past an end tag | a `<pre>` inside `<script>` drawn |
+| `the_scanner_draws_a_pre_that_says_its_language` | the `<pre>`'s `lang` not read | GitHub's `<pre lang>` left as it was |
+
+The reverted property test left a `proptest-regressions/` file, which the repository doesn't keep:
+removed.
+
+**Files beyond the plan's:** `CONTRIBUTING.md` (the tests), `docs/architecture.md`, ADR-0032,
+`CHANGELOG.md`.
