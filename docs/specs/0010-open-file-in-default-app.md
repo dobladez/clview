@@ -167,7 +167,7 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 
 ## Tasks
 
-- [ ] **`o` on a file given on the command line** — the launchers (`open`, `xdg-open`) and the
+- [x] **`o` on a file given on the command line** — the launchers (`open`, `xdg-open`) and the
   launches on their threads; `Format.named` in every backend, `Input::on_disk`, `named_as`, the real
   path and its refusals (a mismatched name, a link to one, `/dev/stdin`, a pipe, over SSH, no
   desktop); `o` in a file's pages, `?`, the status line; ADR-0034, usage, architecture and the

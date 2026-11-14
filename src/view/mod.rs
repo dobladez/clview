@@ -10,6 +10,7 @@ mod fit;
 mod icon;
 mod keys;
 mod kitty;
+mod launch;
 mod pager;
 mod relayout;
 mod search;
@@ -772,7 +773,8 @@ pub(super) struct Shown {
 impl Shown {
     /// A list of `items`, every tile, its items' names following `name`.
     pub(super) fn list(items: Vec<Item>, name: String) -> Self {
-        Self { pages: Pages::all(Rc::new(tiles(&items)), name), items }
+        // Never opened in another app as a whole: its tiles each are, as what they are.
+        Self { pages: Pages::all(Rc::new(tiles(&items)), name, Err(String::new())), items }
     }
 
     /// Whether this is a list: it has items.
@@ -802,15 +804,31 @@ pub(super) struct Pages {
     pub(super) pages: Vec<usize>,
     /// Whether `--pages` picked them: pages as laid out, so the document isn't laid out again.
     pub(super) picked: bool,
+    /// The file on disk, for another app to open (`o`), or why there is none.
+    pub(super) on_disk: Place,
 }
 
 impl Pages {
-    /// All of `source`'s pages, in order, called `name`.
-    pub(super) fn all(source: Rc<dyn Source>, name: String) -> Self {
+    /// All of `source`'s pages, in order, called `name`, opened from `on_disk`.
+    pub(super) fn all(source: Rc<dyn Source>, name: String, on_disk: Place) -> Self {
         let pages = (0..source.pages()).collect();
-        Self { source, name, pages, picked: false }
+        Self { source, name, pages, picked: false, on_disk }
     }
 }
+
+/// A file of its own on disk, as another app opens it (the pager's `o`): its real path, absolute
+/// and every link followed ([`Input::on_disk`]), and whether its name says a format of the backend
+/// that showed it ([`crate::source::named_as`]), or why not. Kept from the moment it is opened, through
+/// all the levels its pages are shown in, since its `Input` is consumed by then.
+#[derive(Clone, Debug)]
+pub(super) struct OnDisk {
+    pub(super) path: std::path::PathBuf,
+    pub(super) named: Result<(), String>,
+}
+
+/// A file on disk, for another app to open, or why there is none: it is in an archive, it came
+/// through a pipe.
+pub(super) type Place = Result<OnDisk, String>;
 
 /// A tile of a list: a file, shown by its first page and opened to its pages, or a container (a
 /// directory), shown as a folder and opened to a list of its own.
@@ -820,6 +838,7 @@ pub(super) enum Item {
     Later {
         name: String,
         later: Rc<Later>,
+        on_disk: Place,
     },
     /// Its name ends with `/`.
     Container {
@@ -844,7 +863,7 @@ impl Item {
 fn tiles(items: &[Item]) -> Joined {
     let part = |item: &Item| match item {
         Item::File(p) => Part { name: p.name.clone(), source: p.source.clone(), pages: vec![p.pages.first().copied().unwrap_or(0)] },
-        Item::Later { name, later } => Part { name: name.clone(), source: later.clone(), pages: vec![0] },
+        Item::Later { name, later, .. } => Part { name: name.clone(), source: later.clone(), pages: vec![0] },
         Item::Container { name, container } => Part { name: name.clone(), source: Rc::new(Folder(container.badge())), pages: vec![0] },
     };
     Joined::new(items.iter().map(part).collect())
@@ -1060,11 +1079,13 @@ impl<'o, 'a> Opener<'o, 'a> {
         let Some((backend, input)) = chosen else { return Ok(None) };
         let path = input.path.clone();
         let room = if defer { self.preview } else { self.room };
+        // Asked before the input is consumed, which it is opened through.
+        let on_disk = input.on_disk().map(|path| OnDisk { named: crate::source::named_as(backend, &path), path });
         let input = match input.deferred_by(backend).filter(|_| defer) {
             Some(deferred) => match input.later() {
                 Ok(file) => {
                     let later = Later::new(file, path, deferred.settings, backend, self.owned.clone(), self.openers.clone(), room);
-                    return Ok(Some((backend, Item::Later { name: name.to_owned(), later: Rc::new(later) })));
+                    return Ok(Some((backend, Item::Later { name: name.to_owned(), later: Rc::new(later), on_disk })));
                 }
                 // A pipe, which can't be read twice.
                 Err(input) => input,
@@ -1076,7 +1097,7 @@ impl<'o, 'a> Opener<'o, 'a> {
             Opened::Pages(source) if source.pages() == 0 => return Err(format!("{path}: no pages to show")),
             Opened::Pages(source) => {
                 let source: Box<dyn Source> = source;
-                Item::File(Pages::all(Rc::from(source), name.to_owned()))
+                Item::File(Pages::all(Rc::from(source), name.to_owned(), on_disk))
             }
         };
         Ok(Some((backend, item)))

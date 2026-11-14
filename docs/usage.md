@@ -103,6 +103,7 @@ In a file's pages:
 | `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
+| `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
 | `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
@@ -214,6 +215,30 @@ copied. Ghostty and WezTerm have only a clipboard for text, so the page goes to 
 clipboard instead (the macOS pasteboard, X11), when the terminal runs on this machine; over SSH
 it can't reach yours, and the status line says so. On X11 the picture stays on the clipboard only
 while `clv` runs, unless a clipboard manager keeps it.
+
+### Opening in another app
+
+`o` opens the file you are reading in the app the desktop opens it with, as a double click in the
+file manager would: a PDF in Preview to fill in, a Word document in Word to edit, a photo in an
+editor. On whatever page you are, the file is opened as a whole. `clv` hands it to the system's
+opener (`open` on macOS, `xdg-open` on Linux and the BSDs) and doesn't wait for it: the status line
+says `opening report.pdf…`, then `opened report.pdf`, or why not in the opener's words
+(`report.pdf: xdg-open lacks a tool it needs (3)`); after five seconds without a word it says the
+file was handed over. Whatever the app writes stays off the screen, and quitting `clv` leaves it
+open. At most four are opened at a time.
+
+The desktop chooses the app by the file's name, while `clv` goes by what is in it; so a file is
+opened only if its real name, links followed, says a format `clv` showed it as: a PDF named
+`report.command`, or a `report.pdf` linked to it, would run as a script, and is refused
+(`report.command: its name doesn't say PDFs, so it isn't opened`). A `.md` shown as HTML is fine:
+either is a document.
+
+What has no file of its own isn't opened, and the status line says why: what came through a pipe
+or `/dev/stdin`, even redirected from a file. Nor is anything over SSH, where the app would open on
+the far machine ([On this machine or over SSH](#on-this-machine-or-over-ssh)), nor on Linux or a BSD
+without a desktop session (neither `DISPLAY` nor `WAYLAND_DISPLAY`; inside tmux, as the pane has
+them), nor where the opener isn't on `PATH`.
+[ADR-0034](adr/0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) has why.
 
 ## Several files
 
@@ -917,7 +942,9 @@ cross the network, so it compresses small and doesn't try temporary files. It go
 `SSH_CONNECTION`, `SSH_CLIENT` and `SSH_TTY`, and inside tmux by how the tmux client attached.
 `--compression fast` or `--compression small` overrides the guess, and sends PNGs even on this
 machine. A small PNG takes longer to make and a fast one takes more bytes; the pixels are the same
-either way.
+either way. The same guess says whether `c` may use this machine's clipboard
+([Copying a page](#copying-a-page)) and whether `o` opens a file in an app here: over SSH it
+doesn't, since the app would open on the far machine ([Opening in another app](#opening-in-another-app)).
 
 ## Inside tmux
 

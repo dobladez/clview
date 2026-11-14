@@ -178,15 +178,16 @@ impl Codec {
         }
     }
 
-    /// The format it is, as `--help` lists it: uncompressed, a plain tar.
+    /// The format it is, as `--help` lists it: uncompressed, a plain tar. A file compressed alone
+    /// goes by its compression's extension, which the desktop's archive tool takes.
     fn format(self) -> Format {
-        let name = match self {
-            Self::None => "tar",
-            Self::Gzip => "gzip",
-            Self::Bzip2 => "bzip2",
-            Self::Xz => "xz",
+        let (name, names): (_, &[_]) = match self {
+            Self::None => ("tar", &["tar"]),
+            Self::Gzip => ("gzip", &["gz"]),
+            Self::Bzip2 => ("bzip2", &["bz2"]),
+            Self::Xz => ("xz", &["xz"]),
         };
-        Format::of(name, &[])
+        Format::of(name, &[]).named_by(names)
     }
 
     /// `raw`, unpacked as it reads. Several compressed streams one after another (`pigz`, `pbzip2`,

@@ -30,6 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::clip;
+use super::launch;
 use crate::encode::PngEffort;
 use crate::source::{
     Bounds, Container, Effect, Frame, Handle, Keys, Later, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source, Texts, Value, Values,
@@ -43,8 +44,8 @@ use super::relayout::{self, Ended, Hold, Relayout};
 use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
-    FALLBACK_SIZE, Found, Item, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, QUIET, Shown, Terminal, cell_lines, chars, checked,
-    cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
+    FALLBACK_SIZE, Found, Item, OnDisk, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Shown, Terminal, cell_lines,
+    chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -128,7 +129,7 @@ const KEYS: [&str; 4] = [
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucgGbjknNphl +=-_,.r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucogGbjknNphl +=-_,.r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -147,6 +148,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("n  N p  3n", "with a search: the next match, or with N or p the one before; 3n the third on"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
+    ("o", "open the file in the app the desktop opens it with"),
 ];
 /// In a list:
 const LIST_HELP: &[(&str, &str)] = &[
@@ -243,6 +245,7 @@ pub(super) fn run(
         placed_at: None,
         on_glass: Vec::new(),
         copier: clip::Copier::new(terminal.local, terminal.effort, terminal.output.wrap()),
+        launches: launch::Launches::new(terminal.local),
         openers: opener.openers(),
         relayout: Relayout::new(),
         hold: Hold::default(),
@@ -276,6 +279,8 @@ pub(super) fn run(
         } else if pager.going_into.is_some() || pager.relayout.is_under_way() {
             POLL
         } else if let Some(wait) = pager.copier.wait() {
+            wait
+        } else if let Some(wait) = pager.launches.wait() {
             wait
         } else if !pager.wanted.is_empty() && !pager.hidden {
             POLL
@@ -347,6 +352,7 @@ pub(super) fn run(
                     Step::Leave | Step::Back => pager.back()?,
                     Step::Open(at) => pager.open(at, opener)?,
                     Step::ToClipboard(page) => pager.copy(page)?,
+                    Step::Launch(page) => pager.launch(page),
                     // Its text is read from here on, by the source, and let go of with the search.
                     Step::Search => {
                         let texts = pager.level.source.texts();
@@ -378,6 +384,7 @@ pub(super) fn run(
         // A layout that failed put the count to a row back: the bounds follow it before the draw.
         pager.refresh_bounds();
         redraw |= pager.copy_on()?;
+        redraw |= pager.launch_on();
         let (searched, moved) = pager.search_on();
         redraw |= moved;
         let lost = pager.lost_files()?;
@@ -408,6 +415,8 @@ enum Step {
     Open(usize),
     /// Copy this page of the source to the clipboard: in a list, this tile's picture.
     ToClipboard(usize),
+    /// Open the file in another app, the one the desktop opens it with, the reader on this page.
+    Launch(usize),
     /// This key again, once the bounds are asked again: it set the pages to a row back to `auto`
     /// first, and steps from the bounds of the room at `auto` ([`Nav::setting_key`]).
     Again(Key),
@@ -860,6 +869,7 @@ impl Nav {
             Key::Char('u') => return Step::Back,
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
             Key::Char('c') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
+            Key::Char('o') if !self.list => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
             _ if self.list => return self.list_key(key),
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
@@ -1665,6 +1675,8 @@ struct Level {
     name: String,
     /// The container it lists, gone into from a list: told when the reader leaves it.
     from: Option<Rc<dyn Container>>,
+    /// For a file's pages, the file on disk, for another app to open (`o`), or why there is none.
+    on_disk: Place,
 }
 
 impl Level {
@@ -1673,7 +1685,7 @@ impl Level {
     /// document laid out for its room is never wider than it: the width is one to a row there.
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>, room: Room) -> Self {
         let list = shown.is_list();
-        let Shown { pages: Pages { source, name, pages, picked }, items } = shown;
+        let Shown { pages: Pages { source, name, pages, picked, on_disk }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
         let mut nav = Nav { list, nested, hint: !(list && nested), names, settings, has, picked, ..Nav::new(pages, source.pages(), zoom) };
@@ -1683,7 +1695,7 @@ impl Level {
         let room = Room { per_row: nav.columns_in(&room), ..room };
         nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
         nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
-        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None }
+        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
@@ -1763,6 +1775,8 @@ struct Pager<'a> {
     on_glass: Vec<Vec<u8>>,
     /// Copies to the clipboard (`c`), and what the terminal said of its clipboard.
     copier: clip::Copier,
+    /// Files being opened in other apps (`o`).
+    launches: launch::Launches,
     /// The threads a list's files open on, which lay a document out again too.
     openers: Rc<Openers>,
     /// The document on screen being laid out again, if it is ([`Pager::relayout`]).
@@ -1791,6 +1805,8 @@ struct GoingInto {
     /// From the first list.
     name: String,
     later: Rc<Later>,
+    /// The file on disk, which its pages keep.
+    on_disk: Place,
 }
 
 /// A page ready to send.
@@ -2015,9 +2031,9 @@ impl Pager<'_> {
                 Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true, self.settings.clone(), self.room)
             }
             // It may not be open yet, or be the file that turns out not to open.
-            Some(Item::Later { name, later }) => {
+            Some(Item::Later { name, later, on_disk }) => {
                 let name = format!("{}{name}", self.level.name);
-                self.going_into = Some(GoingInto { name, later: later.clone() });
+                self.going_into = Some(GoingInto { name, later: later.clone(), on_disk: on_disk.clone() });
                 self.go_on_into()?;
                 return Ok(());
             }
@@ -2090,11 +2106,11 @@ impl Pager<'_> {
             let said = format!("opening {}…", going.name);
             return self.say(said).map(|()| false);
         };
-        let Some(GoingInto { name, .. }) = self.going_into.take() else { return Ok(false) };
+        let Some(GoingInto { name, on_disk, .. }) = self.going_into.take() else { return Ok(false) };
         match outcome {
             Ok(source) => {
                 self.level.nav.message = None;
-                let shown = Shown { pages: Pages::all(source, name), items: Vec::new() };
+                let shown = Shown { pages: Pages::all(source, name, on_disk), items: Vec::new() };
                 let level = Level::new(self.levels, shown, Zoom::Auto, true, self.settings.clone(), self.room);
                 self.enter(level);
             }
@@ -2302,7 +2318,7 @@ impl Pager<'_> {
         let place = self.place_on_screen().and_then(|anchor| source.find(&anchor));
         let search = self.level.nav.take_search();
         let source: Box<dyn Source> = source;
-        let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone()), items: Vec::new() };
+        let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone(), self.level.on_disk.clone()), items: Vec::new() };
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone(), self.room);
         self.levels = self.levels.wrapping_add(1);
         let last = level.nav.pages.len().saturating_sub(1);
@@ -2348,7 +2364,7 @@ impl Pager<'_> {
                 return Ok(());
             }
             // Its picture depends on its size, which waits for it to open.
-            Some(Item::Later { name, later }) => {
+            Some(Item::Later { name, later, .. }) => {
                 let (name, later) = (name.clone(), later.clone());
                 match later.outcome() {
                     Some(Ok(_)) => {
@@ -2393,6 +2409,24 @@ impl Pager<'_> {
     /// The terminal's answer about its clipboard: says whether the status line has news.
     fn copied(&mut self, answer: Key) -> bool {
         self.copier.answer(answer).map(|said| self.level.nav.message = Some(said)).is_some()
+    }
+
+    /// `o`: open the file whose pages these are in the app the desktop opens it with, the reader
+    /// on page `_page` ([`launch::Launches`]), unless it has no file of its own on disk, or its real
+    /// name doesn't say what it was shown as.
+    fn launch(&mut self, _page: usize) {
+        let said = match &self.level.on_disk {
+            Err(why) => format!("{}: {why}", self.level.name),
+            // Its real name, which may not be the one it was given by.
+            Ok(OnDisk { path, named: Err(why) }) => format!("{}: {why}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
+            Ok(OnDisk { path, named: Ok(()) }) => self.launches.start(&self.level.name, path, false, Instant::now()),
+        };
+        self.level.nav.message = Some(said);
+    }
+
+    /// Carry the launches on: says whether the status line has news.
+    fn launch_on(&mut self) -> bool {
+        self.launches.on(Instant::now()).map(|said| self.level.nav.message = Some(said)).is_some()
     }
 
     /// Write what a copy put in `out`, if anything.
@@ -4066,6 +4100,17 @@ mod tests {
         assert_eq!(press(&mut list(0), &[Key::Char('c')]), Step::Continue);
         press(&mut nav, &[Key::Char('?')]);
         assert_eq!((press(&mut nav, &[Key::Char('c')]), nav.help), (Step::Continue, false));
+    }
+
+    /// `o` opens the file whose pages these are, from whatever page; nothing else moves. With the
+    /// keys on screen, it only goes back.
+    #[test]
+    fn o_opens_the_file_from_the_page_the_reader_is_on() {
+        let mut nav = reader(4, 10, 40, 40);
+        assert_eq!(press(&mut nav, &[Key::Char('o')]), Step::Launch(4));
+        assert_eq!(page(&nav), 4);
+        press(&mut nav, &[Key::Char('?')]);
+        assert_eq!((press(&mut nav, &[Key::Char('o')]), nav.help), (Step::Continue, false));
     }
 
     #[test]

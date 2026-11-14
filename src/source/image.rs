@@ -31,11 +31,12 @@ impl Backend for Images {
         "images"
     }
 
-    /// Those it decodes, by their signature, or by their names where they have none.
+    /// Those it decodes, by their signature, or by their names where they have none; their files go
+    /// by the names the `image` crate gives each.
     fn formats(&self) -> Vec<super::Format> {
         let named = |format: ImageFormat| if NAMED.contains(&format) { format.extensions_str() } else { &[] };
-        let decoded = DECODED.iter().map(|&(format, name)| super::Format::of(name, named(format)));
-        decoded.chain([super::Format::of(JPEG_XL, &[])]).collect()
+        let decoded = DECODED.iter().map(|&(format, name)| super::Format::of(name, named(format)).named_by(format.extensions_str()));
+        decoded.chain([super::Format::of(JPEG_XL, &[]).named_by(&["jxl"])]).collect()
     }
 
     /// The `image` crate, and jxl-oxide for JPEG XL.

@@ -36,6 +36,7 @@ mod zip;
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::ops::{Deref, Range};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -377,6 +378,11 @@ pub(crate) struct Format {
     /// (`only Markdown and HTML go dark`). What a file has is still its source's to say
     /// ([`Source::settings`]): this is what is said of the format. Empty for most formats.
     pub(crate) settings: &'static [&'static str],
+    /// The extensions its files go by, in lowercase, without the dot: what the desktop picks the
+    /// app that opens one by, and so what a file's real name must end in for the viewer to hand it
+    /// to another app ([`named_as`]). Its [`extensions`](Format::extensions) unless said otherwise,
+    /// and never empty for a format a backend lists.
+    pub(crate) names: &'static [&'static str],
 }
 
 impl Format {
@@ -396,7 +402,13 @@ impl Format {
         expect(dead_code, reason = "only a backend lists formats")
     )]
     pub(crate) const fn of(name: &'static str, extensions: &'static [&'static str]) -> Self {
-        Self { name, extensions, fences: &[], settings: &[] }
+        Self { name, extensions, fences: &[], settings: &[], names: extensions }
+    }
+
+    /// This format, its files going by the extensions `names` ([`Format::names`]), not only those
+    /// it is told by.
+    pub(crate) const fn named_by(self, names: &'static [&'static str]) -> Self {
+        Self { names, ..self }
     }
 
     /// This format, its files having the settings `settings` ([`Format::settings`]).
@@ -543,6 +555,64 @@ impl Input {
             Rest::File(file) => Self { path, head, rest: Rest::File(file) }.bytes().map(Reopenable::Bytes),
             Rest::Held(again, _) => Ok(Reopenable::Again(again)),
         }
+    }
+}
+
+/// Why a file has no path of its own to be opened by: it is held in another (an archive).
+const HELD: &str = "it is in an archive, with no file of its own to open";
+/// Why a file has no path of its own to be opened by: it came through a pipe, or is a device.
+const NOT_A_FILE: &str = "it isn't a file of its own (a pipe or a device), so there is none to open";
+/// Why a file has no path of its own to be opened by: it is read through one of these
+/// ([`SYSTEM`]), as `/dev/stdin`, even redirected from a file, is.
+const THROUGH_SYSTEM: &str = "it is read through /dev or /proc, not from a file of its own, so there is none to open";
+/// Where what is read isn't a file of its own, but a way to one: `/dev/stdin`, `/dev/fd/0`,
+/// `/proc/self/fd/0`.
+const SYSTEM: &[&str] = &["/dev", "/proc"];
+
+impl Input {
+    /// The file's own path, for another app to open it by: real (absolute, every link followed), and
+    /// a regular file's; or why it has none. Held in another (an archive), not a regular file (a
+    /// pipe, a device), or given or resolved under `/dev` or `/proc` (`/dev/stdin`, even redirected
+    /// from a file), it has none. Asked as the file is opened: the reader may move it later, and
+    /// the opener then says it isn't there.
+    pub(crate) fn on_disk(&self) -> Result<PathBuf, String> {
+        let Rest::File(file) = &self.rest else { return Err(HELD.into()) };
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(NOT_A_FILE.into());
+        }
+        let real = real(&self.path)?;
+        match std::fs::metadata(&real).is_ok_and(|m| m.is_file()) {
+            true => Ok(real),
+            false => Err(NOT_A_FILE.into()),
+        }
+    }
+}
+
+/// `path` resolved ([`std::fs::canonicalize`]: absolute, every link followed), for another app to open
+/// it by; or why not: it isn't there, or it is given or resolves under `/dev` or `/proc`
+/// ([`SYSTEM`]), which only lead to files.
+pub(crate) fn real(path: &str) -> Result<PathBuf, String> {
+    let given = std::path::absolute(path).map_err(|e| format!("its path is no path ({e})"))?;
+    let real = std::fs::canonicalize(path).map_err(|e| format!("it can't be found again ({e})"))?;
+    let system = |path: &Path| SYSTEM.iter().any(|system| path.starts_with(system));
+    match system(&given) || system(&real) {
+        true => Err(THROUGH_SYSTEM.into()),
+        false => Ok(real),
+    }
+}
+
+/// Whether the file at `path`, its real path ([`real`]), goes by a name that one of `backend`'s
+/// formats' files go by ([`Format::names`]), in any case: any of them, not only the one it was
+/// read as, so a `.md` read as HTML still is. The desktop picks the app that opens a file by its
+/// name, so a file whose name says another kind of file isn't handed to it: a `photo.command` that
+/// starts as a PNG does, or a `photo.png` linked to it, would run as a script. Otherwise why not,
+/// in the backend's own words for what it shows.
+pub(crate) fn named_as(backend: &dyn Backend, path: &Path) -> Result<(), String> {
+    let extension = path.extension().and_then(|e| e.to_str());
+    let says = |format: &Format| extension.is_some_and(|e| format.names.iter().any(|name| e.eq_ignore_ascii_case(name)));
+    match backend.formats().iter().any(says) {
+        true => Ok(()),
+        false => Err(format!("its name doesn't say {}, so it isn't opened", backend.shows())),
     }
 }
 
@@ -1080,6 +1150,72 @@ pub(crate) mod tests {
         let format = |extensions| Format::of("a format", extensions);
         assert!(format(&["docx"]).named("a/b.DocX") && format(&["csv", "xlsx"]).named("b.tar.xlsx"));
         assert!(!format(&["docx"]).named("docx") && !format(&["docx"]).named("a.docx.gz") && !format(&[]).named("a.docx"));
+    }
+
+    #[test]
+    fn a_formats_files_are_named_by_its_extensions_unless_said_otherwise() {
+        let told = Format::of("a format", &["md", "markdown"]);
+        assert_eq!(told.names, ["md", "markdown"]);
+        let named = Format::of("PDF", &[]).named_by(&["pdf"]);
+        assert_eq!((named.names, named.extensions), (&["pdf"][..], &[][..]), "told by how it starts, named all the same");
+    }
+
+    /// Every format a backend of this build lists says what its files are named: a file is handed
+    /// to another app only if its name says one ([`named_as`]).
+    #[test]
+    fn named_every_backends_formats_say_what_their_files_are_named() {
+        for backend in BACKENDS {
+            for format in backend.formats() {
+                assert!(!format.names.is_empty(), "{}'s {}", backend.name(), format.name);
+                assert!(format.names.iter().all(|n| !n.is_empty() && !n.contains('.') && *n == n.to_lowercase()), "{:?}", format.names);
+            }
+        }
+    }
+
+    /// A real name agrees with what a backend shows when it ends in an extension of any of its
+    /// formats, in any case, the last extension alone counting; otherwise it is refused in the
+    /// backend's words.
+    #[test]
+    fn named_as_goes_by_the_real_names_last_extension_in_any_case() {
+        let sketches = Sketches { fences: &[], pictures: false };
+        for agrees in ["/a/b.sk", "/a/b.SKETCH", "/a/b.txt", "/a/b.pdf.sk", "/a b/-x 'q.Sk"] {
+            assert_eq!(named_as(&sketches, Path::new(agrees)), Ok(()), "{agrees}");
+        }
+        let refused = Err("its name doesn't say sketches, so it isn't opened".to_owned());
+        for not in ["/a/photo.command", "/a/b.sk.command", "/a/sk", "/a/.sk", "/a/b", "/a/b."] {
+            assert_eq!(named_as(&sketches, Path::new(not)), refused, "{not}");
+        }
+    }
+
+    /// A file's place on disk is its real path, every link followed, made absolute; a file in an
+    /// archive, a device, or one read through `/dev` (`/dev/fd/3`, as `/dev/stdin` is) has none.
+    #[test]
+    fn a_files_place_on_disk_is_its_real_path_and_only_a_regular_files() {
+        use std::os::fd::AsRawFd as _;
+        let dir = std::env::temp_dir().join(format!("clview-on-disk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/real.png"), b"\x89PNG").unwrap();
+        std::os::unix::fs::symlink(dir.join("sub/real.png"), dir.join("link.png")).unwrap();
+        let real = std::fs::canonicalize(dir.join("sub/real.png")).unwrap();
+        let on_disk = |path: &Path| Input::open(path.to_str().unwrap()).unwrap().on_disk();
+        assert_eq!(on_disk(&dir.join("link.png")), Ok(real.clone()));
+        assert_eq!(on_disk(&dir.join("sub/../sub/real.png")), Ok(real.clone()));
+        assert!(real.is_absolute());
+        // Through `/dev`, a regular file all the same: the way to a file, not the file's own path.
+        let open = File::open(&real).unwrap();
+        assert_eq!(on_disk(&PathBuf::from(format!("/dev/fd/{}", open.as_raw_fd()))), Err(THROUGH_SYSTEM.into()));
+        // A link to a device, or a device.
+        std::os::unix::fs::symlink("/dev/null", dir.join("null.png")).unwrap();
+        assert_eq!(on_disk(&dir.join("null.png")), Err(NOT_A_FILE.into()));
+        assert_eq!(on_disk(Path::new("/dev/null")), Err(NOT_A_FILE.into()));
+        let again: Again = Arc::new(|| Ok(Vec::new()));
+        assert_eq!(Input::held("a.zip/b.png".into(), Vec::new(), again).on_disk(), Err(HELD.into()));
+        // Removed after it was opened, it can't be found again.
+        let gone = Input::open(real.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&real).unwrap();
+        assert!(gone.on_disk().is_err_and(|e| e.starts_with("it can't be found again")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The extensions a backend lists are the names it opens a file by: each opens one whose first

@@ -1032,6 +1032,37 @@ a second, is no. The pager never waits for any of it:
 Quitting while an answer is due (the question, or a write's end) waits up to a second for it, so
 it doesn't land on the shell's command line.
 
+## Opening in another app (`launch.rs`)
+
+`o` hands the file whose pages are shown to the platform's opener
+([ADR-0034](adr/0034-open-a-file-through-the-platforms-opener-by-its-real-path.md)). The viewer
+names no format for it, nor any backend:
+
+- **Where the file is.** `Opener::file` asks `Input::on_disk` before the input is consumed: the
+  real path (`source::real`, `std::fs::canonicalize`) of a regular file of its own (`Rest::File`),
+  or why there is none (held in an archive, a pipe or a device, given or resolved under `/dev` or
+  `/proc`). With it, `source::named_as` says whether that path's extension is one of the
+  `Format::names` of the backend that opened it, in any case, or why not in the backend's words
+  (`Backend::shows`). Both are kept as the `OnDisk` of `Pages` and `Item::Later`, and `Level::on_disk`
+  carries them through a tile gone into (`GoingInto`) and a document laid out again
+  (`Pager::replace`), each of which makes its `Pages` anew. `Format::names` is a format's
+  `extensions` unless it says others (`Format::named_by`): a PDF, known by how it starts, has
+  `pdf`; a file compressed alone, `gz`, `bz2` and `xz`.
+- **The launchers.** `launch::LAUNCHERS` lists them as `source::BACKENDS` lists backends, the first
+  that applies used: `Open` (macOS's `open`, `-R` for a folder) and `XdgOpen` (Linux and the BSDs
+  with `DISPLAY` or `WAYLAND_DISPLAY`, through `setsid` where `PATH` has it). Each decides from a
+  `Here` it is given (the OS, the desktop session, `PATH`), finds its program on `PATH` itself, in
+  absolute directories, builds its `Command` with the path as one argument, and puts its exit
+  status in words. Every launcher is built on every platform, so each is tested anywhere.
+- **The launches** (`launch::Launches`, the pager's like its `Copier`): refused when the terminal
+  isn't `local`, or with 4 under way. The opener's stdin, stdout and stderr are null; `open`, and
+  `xdg-open` without `setsid`, get a process group of their own (`process_group(0)`), while `setsid`
+  is left out of one, since as a group's leader it forks and its exit status is lost. A thread,
+  started before the opener so that one is always there to wait for it, waits for it as long as it
+  runs. The pager polls `Launches::on` each time round its loop (every 50 ms while one is waited
+  for): `opened`, the launcher's words for its failure, or after 5 s (`SAID_WAIT`) that it was
+  handed over; after that, only a failure is said.
+
 ## Searching a file's text (`search.rs`, `pager.rs`)
 
 `/` in a file's pages searches its text

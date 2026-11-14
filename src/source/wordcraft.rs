@@ -531,8 +531,8 @@ const WORD: Format = Format::of("Word", &["docx", "docm", "dotx", "dotm", "doc",
 /// OpenDocument text, by its name where its first file doesn't say: a document or a template.
 const ODT: Format = Format::of("OpenDocument text", &["odt", "ott"]);
 
-/// RTF, by its first bytes alone.
-const RTF: Format = Format::of("RTF", &[]);
+/// RTF, by its first bytes alone; its files go by `.rtf`.
+const RTF: Format = Format::of("RTF", &[]).named_by(&["rtf"]);
 
 /// Markdown, by its name alone, since nothing in how it starts says so.
 const MARKDOWN: Format = Format::of("Markdown", &["md", "markdown", "mdown", "mkd"]).having(MARKED_UP);

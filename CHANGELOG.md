@@ -8,6 +8,10 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- `o` opens the file you are reading in the app the desktop opens it with (`open` on macOS,
+  `xdg-open` on Linux and the BSDs), without waiting for it, the status line saying how it went. A
+  file whose real name doesn't say what `clv` showed it as isn't opened, nor one with no file of its
+  own (through a pipe or `/dev/stdin`), nor anything over SSH.
 - A Mermaid diagram shown by itself follows the paper, as Markdown does: on a terminal with a dark
   background it is drawn in Mermaid's dark theme on the terminal's own colour, where it was a white
   rectangle; `d` turns it, in a list too, and `--theme auto|light|dark` says how it starts.

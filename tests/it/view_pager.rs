@@ -81,8 +81,10 @@ pub(crate) struct Session {
 /// `clv` names, as kitty does (and deletes them), the temporary directory `clv` gets, the
 /// cell size it answers when asked (the device attributes alone when `None`), whether it says it
 /// speaks the clipboard protocol when asked and answers a write as kitty does (`None`: it never
-/// answers), whether `clv` runs over SSH, the `TERM` it names (`None`: whatever the tests got), and
-/// the background colour it says when asked (the device attributes alone when `None`).
+/// answers), whether `clv` runs over SSH, the `TERM` it names (`None`: whatever the tests got),
+/// the background colour it says when asked (the device attributes alone when `None`), the `PATH`
+/// `clv` runs with (`None`: fake openers that do nothing, then `/bin` and `/usr/bin`, so that no test
+/// ever opens a real desktop app), and whether a desktop session is there (`DISPLAY`).
 #[derive(Clone, Copy)]
 struct Terminal<'a> {
     takes_files: bool,
@@ -92,10 +94,13 @@ struct Terminal<'a> {
     ssh: bool,
     term: Option<&'a str>,
     background: Option<&'a str>,
+    path: Option<&'a str>,
+    display: bool,
 }
 
 /// One that never reads files, as script(1) doesn't, and doesn't know its cell size.
-const PLAIN: Terminal = Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false, term: None, background: None };
+const PLAIN: Terminal =
+    Terminal { takes_files: false, tmpdir: None, cell: None, clipboard: None, ssh: false, term: None, background: None, path: None, display: false };
 
 /// One that doesn't speak the graphics protocol: whatever terminal the tests run in, and with xterm's
 /// 256 colours, which is what the environment says with no `COLORTERM`.
@@ -126,13 +131,31 @@ impl Session {
 
     /// `clv` as `command` runs it, a shell line, on a `cols` × `rows` pseudo-terminal of `terminal`.
     fn start_command(terminal: Terminal, command: &str, cols: u16, rows: u16) -> Self {
-        let mut script = script(&format!("stty rows {rows} cols {cols} && {command}"));
+        // Set in the line, not on script: script itself is found on the tests' own.
+        let path = terminal.path.map_or_else(|| format!("{}:/bin:/usr/bin", openers("guard", 0).display()), str::to_owned);
+        let quoted = path.replace('\'', r"'\''");
+        let mut script = script(&format!("stty rows {rows} cols {cols} && export PATH='{quoted}' && {command}"));
         if let Some(dir) = terminal.tmpdir {
             script.env("TMPDIR", dir);
         }
         // On this machine, whatever machine the tests run from: an SSH login would turn the files off.
-        for name in ["TMUX", "TMUX_PANE", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "KITTY_WINDOW_ID", "TERM_PROGRAM", "COLORTERM", "NO_COLOR"] {
+        for name in [
+            "TMUX",
+            "TMUX_PANE",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "SSH_TTY",
+            "KITTY_WINDOW_ID",
+            "TERM_PROGRAM",
+            "COLORTERM",
+            "NO_COLOR",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+        ] {
             script.env_remove(name);
+        }
+        if terminal.display {
+            script.env("DISPLAY", ":0");
         }
         if let Some(term) = terminal.term {
             script.env("TERM", term);
@@ -3490,4 +3513,165 @@ fn a_search_outlives_a_relayout_and_starts_over_on_another_text() {
     view.wait_until("started over", |t| last_bar(t).contains(" 1 per row ") && last_bar(t).contains(" /with 80 "));
     view.press("q");
     assert!(view.finish().success());
+}
+
+/// A directory of fake openers, `open`, `xdg-open` and `setsid`, each writing its name and its
+/// arguments to `launched` in the directory, a line each and an empty line after them: `open` and
+/// `xdg-open` then exit with `exit`, and `setsid` runs what it was given. Put first on the `PATH`
+/// `clv` runs with, before `/bin`, so that no test reaches a real desktop app.
+fn openers(test: &str, exit: i32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("clview-openers-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("launched");
+    let quoted = log.display().to_string().replace('\'', r"'\''");
+    for (name, then) in [("open", format!("exit {exit}")), ("xdg-open", format!("exit {exit}")), ("setsid", "exec \"$@\"".to_owned())] {
+        let program = dir.join(name);
+        std::fs::write(&program, format!("#!/bin/sh\nprintf '%s\\n' '{name}' \"$@\" '' >> '{quoted}'\n{then}\n")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dir
+}
+
+/// What the fake openers in `dir` were run with, in order: each one's name and arguments.
+fn launched(dir: &Path) -> Vec<Vec<String>> {
+    let log = std::fs::read_to_string(dir.join("launched")).unwrap_or_default();
+    log.split("\n\n").filter(|record| !record.is_empty()).map(|record| record.lines().map(str::to_owned).collect()).collect()
+}
+
+/// What opening `real` runs on this system, as the fake openers note it: `open` on macOS; elsewhere
+/// `xdg-open` through `setsid`.
+fn opening(dir: &Path, real: &Path) -> Vec<Vec<String>> {
+    let real = real.display().to_string();
+    match cfg!(target_os = "macos") {
+        true => vec![vec!["open".to_owned(), real]],
+        false => vec![vec!["setsid".to_owned(), dir.join("xdg-open").display().to_string(), real.clone()], vec!["xdg-open".to_owned(), real]],
+    }
+}
+
+/// A terminal on this machine with a desktop session, its `PATH` the fake openers in `dir` and `/bin`.
+fn desktop(path: &str) -> Terminal<'_> {
+    Terminal { path: Some(path), display: true, ..PLAIN }
+}
+
+/// Wait until the fake openers in `dir` were run `count` times; panics if they never are.
+fn wait_launched(dir: &Path, count: usize) -> Vec<Vec<String>> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let launched = launched(dir);
+        if launched.len() >= count {
+            return launched;
+        }
+        assert!(Instant::now() < deadline, "launched {launched:?}, not {count}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// `o` in a file's pages hands its real path to the opener, on whatever page, a link followed and
+/// a name with spaces as it is, then says it opened it; `?` lists it.
+#[test]
+fn open_a_files_pages_hands_its_real_path_to_the_opener() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-open-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("the docs")).unwrap();
+    let real = dir.join("the docs/-a 'quoted' report.pdf");
+    std::fs::write(&real, crate::fixtures::letter("Open me", 3)).unwrap();
+    let link = dir.join("link.pdf");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let real = std::fs::canonicalize(&real).unwrap();
+    let fakes = openers("pages", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let mut view = Session::start_on(desktop(&path), &link, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
+    view.press("?");
+    view.wait_until("the keys", |t| t.contains("open the file in the app the desktop opens it with"));
+    view.press(" no");
+    view.wait_until("page 2", |t| drawn(t, "page 2/3"));
+    view.wait_until("opened", |t| t.contains("opened link.pdf"));
+    assert!(bar(&view.text()).contains(" page 2/3 "), "on page 2");
+    assert_eq!(launched(&fakes), opening(&fakes, &real));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A file whose real name doesn't say the format it was shown as isn't opened, the desktop going
+/// by that name: a PDF named `.command`, or a `.pdf` linked to it. Nor is one read through
+/// `/dev/stdin`, from a file or a pipe, nor any over SSH. An opener's failure is said in its words.
+#[test]
+fn open_refuses_a_name_that_doesnt_say_its_format_stdin_and_ssh() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-open-refused-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("report.command");
+    std::fs::write(&script, crate::fixtures::letter("Not a script", 1)).unwrap();
+    let link = dir.join("report.pdf");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&script, &link).unwrap();
+    let fakes = openers("refused", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let quote = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', r"'\''"));
+    let refused = |terminal: Terminal, command: String, said: &str| {
+        let mut view = Session::start_command(terminal, &command, 200, 60);
+        view.wait_until("shown", |t| drawn(t, "page 1/1"));
+        view.press("o");
+        view.wait_until(said, |t| t.contains(said));
+        view.press("q");
+        assert!(view.finish().success());
+    };
+    let named = "report.command: its name doesn't say PDFs, so it isn't opened";
+    refused(desktop(&path), format!("exec '{BIN}' {} --pager", quote(&script)), named);
+    refused(desktop(&path), format!("exec '{BIN}' {} --pager", quote(&link)), named);
+    let stdin = "stdin: it is read through /dev or /proc, not from a file of its own, so there is none to open";
+    refused(desktop(&path), format!("exec '{BIN}' /dev/stdin --pager < {}", quote(&link)), stdin);
+    let pipe = "stdin: it isn't a file of its own (a pipe or a device), so there is none to open";
+    refused(desktop(&path), format!("cat {} | '{BIN}' /dev/stdin --pager", quote(&link)), pipe);
+    let pdf = fixture("open-ssh", 1);
+    let ssh = "one.pdf isn't opened: over SSH, its app would open on the machine clv runs on, not yours";
+    refused(Terminal { ssh: true, ..desktop(&path) }, format!("exec '{BIN}' {} --pager", quote(&pdf)), ssh);
+    assert_eq!(launched(&fakes), Vec::<Vec<String>>::new(), "nothing was opened");
+    // The opener says why it didn't, in its words.
+    let failing = openers("refused-failing", 1);
+    let path = format!("{}:/bin", failing.display());
+    let why = match cfg!(target_os = "macos") {
+        true => "one.pdf: open couldn't open it (1): it is gone, or no app opens it",
+        false => "one.pdf: xdg-open didn't take what it was given (1)",
+    };
+    refused(desktop(&path), format!("exec '{BIN}' {} --pager", quote(&pdf)), why);
+    assert_eq!(wait_launched(&failing, 1), opening(&failing, &std::fs::canonicalize(&pdf).unwrap()));
+}
+
+/// Where there is no opener, it says so and runs nothing: on Linux and the BSDs with no desktop
+/// session, and anywhere with no opener on `PATH`.
+#[test]
+fn open_with_no_desktop_or_no_opener_says_so() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("open-nowhere", 1);
+    let fakes = openers("nowhere", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let quote = |p: &Path| format!("'{}'", p.display().to_string().replace('\'', r"'\''"));
+    let said = |terminal: Terminal, said: &str| {
+        let mut view = Session::start_command(terminal, &format!("exec '{BIN}' {} --pager", quote(&pdf)), 200, 60);
+        view.wait_until("shown", |t| drawn(t, "page 1/1"));
+        view.press("o");
+        view.wait_until(said, |t| t.contains(said));
+        view.press("q");
+        assert!(view.finish().success());
+    };
+    if !cfg!(target_os = "macos") {
+        said(Terminal { display: false, ..desktop(&path) }, "one.pdf isn't opened: there is no desktop here to open it in");
+        assert!(launched(&fakes).is_empty());
+    }
+    // A PATH of an empty directory alone: not even `/bin`, which may hold the system's opener.
+    let empty = std::env::temp_dir().join(format!("clview-openers-none-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let path = empty.display().to_string();
+    said(desktop(&path), &format!("one.pdf isn't opened: there is no {program} to open it with"));
 }
