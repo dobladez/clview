@@ -201,7 +201,9 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
 - **`tests/it/mermaid.rs`**: Mermaid diagrams through the viewer: which `.mmd` files it opens and
   which it leaves to MultiMarkdown, what merman draws of one, its limits and messages, the costliest
   diagrams merman accepts drawn under the worker's caps, a list's diagrams opened as their tiles are
-  wanted, and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
+  wanted, a Markdown document's ` ```mermaid ` blocks drawn (through a pipe and in an archive too,
+  a broken one as its code, a key the document writes itself no picture, and the 1,025th left as
+  code), and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
   starts the worker only once its tile is wanted, and a document's diagram is turned into SVG once
   however it is laid out, watched with `ps`; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The

@@ -103,14 +103,14 @@ const ODS_TYPE: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
 /// An Excel workbook, by what it is named where its first bytes can't tell: a workbook, a
 /// template, with macros or without, in the format of 2007 on, its binary kind, and that of
 /// 97-2003.
-const EXCEL: Format = Format { name: "Excel", extensions: &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "xls", "xlt"] };
+const EXCEL: Format = Format::of("Excel", &["xlsx", "xlsm", "xltx", "xltm", "xlsb", "xls", "xlt"]);
 
 /// An OpenDocument spreadsheet, by its name where its first file doesn't say: a spreadsheet or a
 /// template.
-const ODS: Format = Format { name: "OpenDocument spreadsheet", extensions: &["ods", "ots"] };
+const ODS: Format = Format::of("OpenDocument spreadsheet", &["ods", "ots"]);
 
 /// Values separated by commas or tabs, by their name alone.
-const TEXT: Format = Format { name: "CSV", extensions: &["csv", "tsv", "tab"] };
+const TEXT: Format = Format::of("CSV", &["csv", "tsv", "tab"]);
 
 /// What kind of spreadsheet a file is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

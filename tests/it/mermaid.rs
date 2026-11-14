@@ -315,3 +315,150 @@ fn a_gzip_named_as_a_diagram_is_unpacked_only_to_the_most_a_diagram_may_be() {
     assert_eq!(exact.len(), 1 << 20);
     assert_eq!(printed(&written("mermaid-gzip", "exact.mmd", gzipped(&exact, false))).len(), 1);
 }
+
+// A document's fenced blocks: ` ```mermaid ` drawn as its diagram (Spec-0009).
+
+/// `flow.mmd`'s diagram, as a document's block holds it: its red node left of its blue one.
+#[cfg(feature = "word")]
+fn flow() -> String {
+    std::fs::read_to_string(data("flow.mmd")).unwrap()
+}
+
+/// What `clv` printed of the document at `path`, with `args`: its pages, and what it said.
+#[cfg(feature = "word")]
+fn pages_at(path: &Path, args: &[&str]) -> (Vec<image::RgbaImage>, String) {
+    let out = view(path, &[&["--protocol", "kitty"], args].concat());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    (images(&out.stdout).iter().map(|d| image::load_from_memory(&d.png).unwrap().into_rgba8()).collect(), text(&out.stderr))
+}
+
+/// [`pages_at`], for a document of `contents` named `name`.
+#[cfg(feature = "word")]
+fn pages_of(test: &str, name: &str, contents: &str) -> (Vec<image::RgbaImage>, String) {
+    pages_at(&written(test, name, contents), &[])
+}
+
+/// Whether `page` shows the flow drawn: its red node, left of its blue one.
+#[cfg(feature = "word")]
+fn shows_flow(page: &image::RgbaImage) -> bool {
+    match (spread(page, [255, 0, 0]), spread(page, [0, 0, 255])) {
+        (Some(red), Some(blue)) => red.1 < blue.0,
+        _ => false,
+    }
+}
+
+/// How many of `page`'s pixels are dark: text's ink.
+#[cfg(feature = "word")]
+fn ink(page: &image::RgbaImage) -> usize {
+    page.pixels().filter(|p| p.0[..3].iter().all(|&v| v < 128)).count()
+}
+
+/// A ` ```mermaid ` block in Markdown is drawn as its diagram, its language the first word of its
+/// info string in any case, behind backticks or tildes. A block no format lists stays code, an SVG's
+/// too, as does one that isn't fenced, or says its language otherwise.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_in_markdown_is_drawn_as_its_diagram() {
+    let flow = flow();
+    for (open, close) in [("```mermaid", "```"), ("```Mermaid title=\"A flow\"", "```"), ("~~~~ MERMAID", "~~~~")] {
+        let (pages, said) = pages_of("mermaid-block", "a.md", &format!("# A flow\n\nBefore.\n\n{open}\n{flow}{close}\n\nAfter.\n"));
+        assert!(said.is_empty(), "{open}: {said}");
+        assert!(pages.len() == 1 && shows_flow(&pages[0]), "{open}");
+    }
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60"><rect width="60" height="60" fill="rgb(255,0,0)"/></svg>"#;
+    let indented: String = flow.lines().map(|line| format!("    {line}\n")).collect();
+    let code = [
+        format!("```svg\n{svg}\n```\n"),
+        format!("```\n{flow}```\n"),
+        indented,
+        format!("```mmd\n{flow}```\n"),
+        format!("```text mermaid\n{flow}```\n"),
+    ];
+    for block in code {
+        let (pages, said) = pages_of("mermaid-block", "code.md", &format!("Before.\n\n{block}\nAfter.\n"));
+        assert!(said.is_empty(), "{block}: {said}");
+        let coloured = spread(&pages[0], [255, 0, 0]).or(spread(&pages[0], [0, 0, 255]));
+        assert!(coloured.is_none() && ink(&pages[0]) > 500, "{block}: {coloured:?}, {} dark pixels", ink(&pages[0]));
+    }
+}
+
+/// A block its backend can't draw (a broken diagram, one past the most a diagram may be) is the code
+/// block it would have been, exactly, and the first page says how many weren't drawn; the others are
+/// drawn.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_that_cant_be_drawn_shows_as_its_code_and_the_first_page_says_so() {
+    let (flow, broken) = (flow(), std::fs::read_to_string(data("broken.mmd")).unwrap());
+    let document = |language: &str| format!("```mermaid\n{flow}```\n\nThen one that is broken.\n\n```{language}\n{broken}```\n");
+    let (drawn, said) = pages_of("mermaid-undrawn", "a.md", &document("mermaid"));
+    assert_eq!(said, "warning: page 1: one of its blocks could not be drawn, and is shown as its code\n");
+    assert!(shows_flow(&drawn[0]), "the block before it is drawn");
+    let (code, said) = pages_of("mermaid-undrawn", "a.md", &document("text"));
+    assert!(said.is_empty(), "{said}");
+    assert!(drawn[0] == code[0], "not the code block it would have been");
+    let (_, said) = pages_of("mermaid-undrawn", "a.md", &format!("```mermaid\n{broken}```\n\n```mermaid\nno diagram\n```\n\n```mermaid\n```\n"));
+    assert_eq!(said, "warning: page 1: 3 of its blocks could not be drawn, and are shown as their code\n");
+    // Past 1 MiB, the most a diagram may be: code, its first page among many.
+    let large = written("mermaid-undrawn", "large.md", format!("```mermaid\nflowchart LR\n{}```\n", "%% padding\n".repeat(100_000)));
+    let (pages, said) = pages_at(&large, &["--pages", "1"]);
+    assert_eq!(said, "warning: page 1: one of its blocks could not be drawn, and is shown as its code\n");
+    assert!(ink(&pages[0]) > 500, "{} dark pixels", ink(&pages[0]));
+}
+
+/// A block's text travels in the document, so it is drawn where a picture by path can't be reached:
+/// in Markdown come through a pipe, and held in an archive.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_is_drawn_through_a_pipe_and_in_an_archive() {
+    let document = format!("# A flow\n\n```mermaid\n{}```\n", flow());
+    // Markdown is known by its name alone: a pipe named as one.
+    let pipe = tmp("mermaid-piped", "piped.md");
+    let _ = std::fs::remove_file(&pipe);
+    assert!(Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let (to, contents) = (pipe.clone(), document.clone());
+    let writer = std::thread::spawn(move || std::fs::write(to, contents).unwrap());
+    let (pages, said) = pages_at(&pipe, &[]);
+    writer.join().unwrap();
+    assert!(said.is_empty(), "{said}");
+    assert!(pages.len() == 1 && shows_flow(&pages[0]), "through a pipe");
+    #[cfg(feature = "zip")]
+    {
+        let archive = tmp("mermaid-piped", "docs.zip");
+        let mut zip = ::zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        zip.start_file("readme.md", ::zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(document.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        let (tiles, said) = pages_at(&archive, &[]);
+        assert!(said.is_empty(), "{said}");
+        assert!(tiles.len() == 1 && shows_flow(&tiles[0]), "in a zip");
+    }
+}
+
+/// A block's picture is known to the document by a key made afresh each time it is read, so an
+/// `<img>` the document writes itself, naming the key a block would have otherwise, is no picture: it
+/// shows its alt text, as one that names nothing here does.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_blocks_key_written_in_the_document_is_no_picture() {
+    let flow = flow();
+    let document = |src: &str| format!("```mermaid\n{flow}```\n\nThen <img src=\"{src}\" alt=\"what it says instead\"> and the end.\n");
+    let (forged, said) = pages_of("mermaid-forged", "a.md", &document("fenced:0000000000000000:0"));
+    assert!(said.is_empty(), "{said}");
+    let (nothing, said) = pages_of("mermaid-forged", "a.md", &document("https://example.com/nothing.png"));
+    assert!(said.is_empty(), "{said}");
+    assert!(shows_flow(&forged[0]) && forged[0] == nothing[0], "the block's picture, shown for a key the document wrote");
+}
+
+/// A document's blocks count among its 1,024 pictures: of 1,025, the last stays code, and the first
+/// page says so.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_past_the_most_pictures_a_document_has_stays_code() {
+    let block = "```mermaid\npie\n  \"a\" : 1\n```\n\n";
+    let path = written("mermaid-many", "many.md", block.repeat(1025));
+    let (pages, said) = pages_at(&path, &["--pages", "1"]);
+    assert_eq!(pages.len(), 1);
+    assert_eq!(said, "warning: page 1: one of its blocks could not be drawn, and is shown as its code\n");
+    let (_, said) = pages_at(&written("mermaid-many", "all.md", block.repeat(1024)), &["--pages", "1"]);
+    assert!(said.is_empty(), "{said}");
+}

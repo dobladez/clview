@@ -3,6 +3,11 @@
 //! Only what is on this machine, near the document: nothing is ever fetched
 //! ([ADR-0013](../../docs/adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
 //!
+//! A fenced block of the document is a picture too, when a backend lists the language it is
+//! written in ([`Pictures::fenced`]): drawn from the block's text, by that backend, as a picture by
+//! path is from its file, and so with no directory to find it in
+//! ([ADR-0032](../../docs/adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+//!
 //! A document is laid out around a stand-in for each picture ([`Pictures::measured`]), a PNG saying
 //! only the size to show it at, so that opening one reads no picture's pixels and a list of documents
 //! holds none. A picture is drawn when a page it is on first renders ([`Promised::draw`]), into the
@@ -13,7 +18,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{BACKENDS, Backend, Input, Opened, Request, Source, guarded, shown_by};
+use super::{Again, BACKENDS, Backend, Bounded, HEAD, Input, Opened, Request, Source, guarded, shown_by};
 use crate::args::Parsed;
 use crate::encode::{PngEffort, encode_png};
 
@@ -29,8 +34,13 @@ const MAX_SIDE: f32 = 1600.0;
 /// 2,000 pixels shows about three.
 const SHARPNESS: f32 = 3.0;
 
-/// The most pictures a document may refer to. Each is opened to learn its size.
+/// The most pictures a document may refer to, the fenced blocks it would draw among them. Each is
+/// opened to learn its size.
 const MAX_PICTURES: usize = 1024;
+
+/// What the key of a fenced block's picture starts with, before what is made afresh for each reading
+/// of a document ([`Pictures::fenced`]): as a URL's scheme, so that it is never a path ([`local`]).
+const FENCED: &str = "fenced:";
 
 /// The most a document holds of its pictures, as PNGs, before it lets go of those drawn longest ago:
 /// 256 MiB, some 50 photographs at [`MAX_SIDE`].
@@ -49,8 +59,19 @@ pub(super) struct Pictures<'a> {
     /// The directory the document is in, what its pictures' paths start from; none for one come
     /// through a pipe or held in an archive, whose pictures can't be reached.
     beside: Option<&'a Path>,
+    /// The backends asked which draws a fenced block: those built, but in the tests.
+    backends: &'a [&'static dyn Backend],
     /// By the name a document refers to it by: its stand-in, or none if it isn't shown.
     seen: RefCell<HashMap<String, Option<Png>>>,
+    /// A fenced block's stand-in, by the key the document's HTML is given for it.
+    blocks: RefCell<HashMap<String, Png>>,
+    /// What comes in each block's key, made afresh for this reading of the document: nothing the
+    /// document can know, so nothing it can write in an `<img src>` of its own.
+    afresh: u64,
+    /// How many fenced blocks it was asked to draw, drawn or not.
+    fences: Cell<usize>,
+    /// How many of them aren't drawn, and stay code.
+    undrawn: Cell<usize>,
     promises: RefCell<HashMap<Png, Promise>>,
     /// How many it refers to on this machine aren't shown.
     left_out: Cell<usize>,
@@ -58,19 +79,76 @@ pub(super) struct Pictures<'a> {
 
 impl<'a> Pictures<'a> {
     pub(super) fn beside(beside: Option<&'a Path>) -> Self {
-        Self { beside, seen: RefCell::default(), promises: RefCell::default(), left_out: Cell::new(0) }
+        Self::among(beside, BACKENDS)
+    }
+
+    /// [`Pictures::beside`], a fenced block drawn by one of `backends`.
+    pub(super) fn among(beside: Option<&'a Path>, backends: &'a [&'static dyn Backend]) -> Self {
+        Self {
+            beside,
+            backends,
+            seen: RefCell::default(),
+            blocks: RefCell::default(),
+            afresh: afresh(),
+            fences: Cell::new(0),
+            undrawn: Cell::new(0),
+            promises: RefCell::default(),
+            left_out: Cell::new(0),
+        }
+    }
+
+    /// How many pictures the document has asked for so far, by path or as fenced blocks, shown or not.
+    fn asked(&self) -> usize {
+        self.seen.borrow().len().saturating_add(self.fences.get())
+    }
+
+    /// Whether a fenced block written in `language` is drawn as a picture: a backend lists it.
+    pub(super) fn draws(&self, language: &str) -> bool {
+        super::fenced(language, self.backends).is_some()
+    }
+
+    /// The key of a picture of the fenced block `text`, written in `language`, to fit in `fit`: what
+    /// the document's HTML names in an `<img src>` of the block, for [`Pictures::measured`] to give
+    /// its stand-in. The backend that lists the language opens the text to size it, under a name of
+    /// its format (`block.mmd`), straight through its `open`: whether it would open a file of that
+    /// name is never asked. None for a language no backend lists; and for a block that isn't drawn,
+    /// which is counted ([`Promised::undrawn`]): one its backend can't open, or past the document's
+    /// [`MAX_PICTURES`]. The document shows either as its code.
+    pub(super) fn fenced(&self, language: &str, text: &str, fit: (f32, f32)) -> Option<String> {
+        let (backend, format) = super::fenced(language, self.backends)?;
+        let within = self.asked() < MAX_PICTURES;
+        self.fences.set(self.fences.get().saturating_add(1));
+        let measured = || {
+            let name = format.extensions.first().map_or_else(|| "block".to_owned(), |extension| format!("block.{extension}"));
+            self.promised(Origin::Block { backend, name, text: Arc::new(text.as_bytes().to_vec()) }, fit)
+        };
+        let Some(stand_in) = within.then(measured).flatten() else {
+            self.undrawn.set(self.undrawn.get().saturating_add(1));
+            return None;
+        };
+        let mut blocks = self.blocks.borrow_mut();
+        let key = format!("{FENCED}{:016x}:{}", self.afresh, blocks.len());
+        blocks.insert(key.clone(), stand_in);
+        Some(key)
     }
 
     /// A stand-in for the picture `reference` names, to fit in `fit` (width and height, in points),
     /// if it is one this build shows, on this machine. None otherwise, and the document shows what it
     /// says instead of it.
     pub(super) fn measured(&self, reference: &str, fit: (f32, f32)) -> Option<Png> {
+        // A fenced block's key, as `fenced` gave it: nothing the document can have written itself,
+        // and nothing `local` takes for a path.
+        if let Some(block) = self.blocks.borrow().get(reference) {
+            return Some(block.clone());
+        }
         let beside = self.beside?;
         let name = local(reference)?;
         if let Some(known) = self.seen.borrow().get(&name) {
             return known.clone();
         }
-        let stand_in = (self.seen.borrow().len() < MAX_PICTURES).then(|| self.promised(&beside.join(&name), fit)).flatten();
+        let path = beside.join(&name);
+        let promised = || self.promised(Origin::Path(path.to_str()?.to_owned()), fit);
+        let stand_in = (self.asked() < MAX_PICTURES).then(promised).flatten();
         if stand_in.is_none() {
             self.left_out.set(self.left_out.get().saturating_add(1));
         }
@@ -78,11 +156,10 @@ impl<'a> Pictures<'a> {
         stand_in
     }
 
-    /// The stand-in for the picture at `path`, and the promise to draw it.
-    fn promised(&self, path: &Path, fit: (f32, f32)) -> Option<Png> {
-        let path = path.to_str()?;
+    /// The stand-in for the picture drawn from `origin`, and the promise to draw it.
+    fn promised(&self, origin: Origin, fit: (f32, f32)) -> Option<Png> {
         let (size, natural) = caught(|| {
-            let source = opened(path)?;
+            let source = origin.opened()?;
             let size = source.size(0).ok_or("it has no first page")?;
             Ok((size, source.natural(0)))
         })
@@ -90,7 +167,7 @@ impl<'a> Pictures<'a> {
         let shown = shown(size, fit)?;
         let mut promises = self.promises.borrow_mut();
         let stand_in = Arc::new(stand_in(shown, promises.len()).ok()?);
-        promises.insert(stand_in.clone(), Promise { path: path.to_owned(), scale: scale(size, natural, shown), shown, stand_in: stand_in.clone() });
+        promises.insert(stand_in.clone(), Promise { origin, scale: scale(size, natural, shown), shown, stand_in: stand_in.clone() });
         Some(stand_in)
     }
 
@@ -105,14 +182,50 @@ impl<'a> Pictures<'a> {
     pub(super) fn promised_in(self, media: &BTreeMap<String, Png>) -> Promised {
         let promises = self.promises.into_inner();
         let by_key = media.iter().filter_map(|(key, held)| Some((key.clone(), promises.get(held)?.clone()))).collect();
-        Promised { by_key, left_out: self.left_out.get(), max_held: MAX_HELD, held: Mutex::default() }
+        Promised { by_key, left_out: self.left_out.get(), undrawn: self.undrawn.get(), max_held: MAX_HELD, held: Mutex::default() }
+    }
+}
+
+/// A number no document can know, made afresh each time: the hash of nothing under a key of std's
+/// `RandomState`, which is keyed from the system's randomness and never twice the same.
+fn afresh() -> u64 {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    std::collections::hash_map::RandomState::new().build_hasher().finish()
+}
+
+/// What a picture is drawn from.
+#[derive(Clone)]
+enum Origin {
+    /// A file near the document, by its path.
+    Path(String),
+    /// A fenced block of the document: its text, for the backend that lists its language to open
+    /// under `name`.
+    Block { backend: &'static dyn Backend, name: String, text: Arc<Vec<u8>> },
+}
+
+impl Origin {
+    /// The picture opened, by the backend that draws it.
+    fn opened(&self) -> Result<Box<dyn Source>, String> {
+        let (backend, name, text) = match self {
+            Self::Path(path) => return opened(path),
+            Self::Block { backend, name, text } => (backend, name, text),
+        };
+        let head = text.get(..HEAD as usize).unwrap_or(text.as_slice()).to_vec();
+        let (whole, within) = (text.clone(), text.clone());
+        let again: Again = Arc::new(move || Ok(whole.to_vec()));
+        // A backend that reads only so much of a file is given no copy of a longer text.
+        let bounded: Bounded = Arc::new(move |most| Ok((u64::try_from(within.len()).unwrap_or(u64::MAX) <= most).then(|| within.to_vec())));
+        match backend.open(Input::held_bounded(name.clone(), head, again, bounded), &Parsed::default())? {
+            Opened::Pages(source) => Ok(source),
+            Opened::Files(_) => Err("it holds files".into()),
+        }
     }
 }
 
 /// A picture to draw when it is wanted.
 #[derive(Clone)]
 struct Promise {
-    path: String,
+    origin: Origin,
     /// What to draw it at.
     scale: f32,
     /// The size in points to show it at.
@@ -126,7 +239,7 @@ impl Promise {
     /// out what a tile shouldn't cost (an SVG's HTML labels).
     fn draw(&self, tile: bool) -> Result<Vec<u8>, String> {
         caught(|| {
-            let source = opened(&self.path)?;
+            let source = self.origin.opened()?;
             let mut renderer = source.renderer()?;
             let request = Request { page: 0, scale: self.scale, tag: 0, tile, ..Default::default() };
             let frame = guarded(request, || renderer.render(request));
@@ -146,6 +259,7 @@ impl Promise {
 pub(super) struct Promised {
     by_key: HashMap<String, Promise>,
     left_out: usize,
+    undrawn: usize,
     max_held: usize,
     held: Mutex<Held>,
 }
@@ -168,6 +282,12 @@ impl Promised {
     /// this build shows.
     pub(super) fn left_out(&self) -> usize {
         self.left_out
+    }
+
+    /// How many fenced blocks the document would draw aren't drawn, and show as their code: those
+    /// their backend couldn't open, or past the most pictures a document has.
+    pub(super) fn undrawn(&self) -> usize {
+        self.undrawn
     }
 
     /// Whether any of the document's pictures is promised.
@@ -500,9 +620,9 @@ mod tests {
         std::fs::write(&path, png).unwrap();
         let promise = |key: &&str| {
             let stand_in = Arc::new(key.as_bytes().to_vec());
-            (key.to_string(), Promise { path: path.to_str().unwrap().to_owned(), scale: 1.0, shown: (1.0, 1.0), stand_in })
+            (key.to_string(), Promise { origin: Origin::Path(path.to_str().unwrap().to_owned()), scale: 1.0, shown: (1.0, 1.0), stand_in })
         };
-        Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, max_held, held: Mutex::default() }
+        Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, undrawn: 0, max_held, held: Mutex::default() }
     }
 
     #[cfg(feature = "image")]
@@ -598,5 +718,90 @@ mod tests {
         let pictures = Pictures::beside(None);
         assert!(pictures.measured("a.png", (468.0, 648.0)).is_none());
         assert_eq!(pictures.left_out.get(), 0);
+    }
+
+    use crate::source::tests::Sketches;
+
+    /// The backends of the tests of fenced blocks: one draws a ` ```sketch `, of a size its text
+    /// says, and one lists a fence but draws no pictures.
+    static SKETCHES: Sketches = Sketches { fences: &["sketch"], pictures: true };
+    static HOLDS: Sketches = Sketches { fences: &["held"], pictures: false };
+    static DRAWING: [&dyn Backend; 2] = [&HOLDS, &SKETCHES];
+
+    const FIT: (f32, f32) = (468.0, 648.0);
+
+    /// A fenced block in a language a backend lists is sized by that backend opening its text, with
+    /// no directory to find anything in, and drawn by it when its page wants it; in any other
+    /// language it is none of this module's, and one its backend refuses is counted as not drawn.
+    #[test]
+    fn a_fenced_block_is_a_picture_of_its_text_by_the_backend_that_lists_its_language() {
+        let pictures = Pictures::among(None, &DRAWING);
+        assert!(pictures.draws("sketch") && pictures.draws("SKETCH") && !pictures.draws("svg") && !pictures.draws("held"));
+        let key = pictures.fenced("Sketch", "400 200\n", FIT).expect("drawn");
+        let stand_in = pictures.measured(&key, FIT).expect("its stand-in");
+        assert_eq!(size_of(&stand_in), (400, 200));
+        assert_eq!(pictures.shown(&stand_in), Some((300.0, 150.0)), "a unit of it three quarters of a point");
+        let wide = pictures.fenced("sketch", "2000 1000", FIT).and_then(|key| pictures.measured(&key, FIT)).expect("drawn");
+        assert_eq!(pictures.shown(&wide), Some((468.0, 234.0)), "to the column");
+        assert_ne!(pictures.fenced("sketch", "400 200\n", FIT), Some(key), "a block is a picture of its own, whatever its text");
+        for language in ["svg", "", "held", "txt"] {
+            assert_eq!(pictures.fenced(language, "400 200", FIT), None, "{language:?}");
+        }
+        assert_eq!((pictures.fences.get(), pictures.undrawn.get()), (3, 0), "none of those is a block to draw");
+        assert_eq!(pictures.fenced("sketch", "flowchart LR", FIT), None, "its backend refuses it");
+        assert_eq!(pictures.fenced("sketch", "0 200", FIT), None, "no size to show it at");
+        assert_eq!((pictures.fences.get(), pictures.undrawn.get()), (5, 2));
+        // As the document holds it, by a key of its own: drawn from the block's text, at three pixels
+        // a point.
+        let media = BTreeMap::from([("rId1".to_owned(), stand_in.clone()), ("rId2".to_owned(), Arc::new(b"its own".to_vec()))]);
+        let promised = pictures.promised_in(&media);
+        assert_eq!((promised.undrawn(), promised.left_out(), promised.is_empty()), (2, 0, false));
+        let drawn = promised.draw(&["rId1", "rId2"], false);
+        let [(key, Ok(png))] = drawn.as_slice() else { panic!("{} drawn", drawn.len()) };
+        assert_eq!((*key, size_of(png)), ("rId1", (900, 450)));
+    }
+
+    /// The key a block's picture is known by holds what is made afresh for each reading of a document,
+    /// so nothing a document writes in an `<img src>` of its own is one: not the key it would have
+    /// were nothing made afresh, nor one of another reading. And a key is never a path.
+    #[test]
+    fn a_fenced_blocks_key_is_nothing_a_document_can_write() {
+        let pictures = Pictures::among(None, &DRAWING);
+        let key = pictures.fenced("sketch", "400 200", FIT).expect("drawn");
+        assert!(key.starts_with(FENCED) && key.ends_with(":0") && key.len() == FENCED.len() + 18, "{key}");
+        assert!(pictures.measured(&key, FIT).is_some());
+        for forged in
+            ["fenced:0000000000000000:0", "fenced:0", "fenced::0", "fenced:", "0", &key[..key.len() - 1], &format!("{key}0"), &key.to_uppercase()]
+        {
+            assert!(pictures.measured(forged, FIT).is_none(), "{forged}");
+        }
+        let again = Pictures::among(None, &DRAWING);
+        let other = again.fenced("sketch", "400 200", FIT).expect("drawn");
+        assert_ne!(other, key, "afresh each reading");
+        assert!(pictures.measured(&other, FIT).is_none() && again.measured(&key, FIT).is_none());
+        assert_eq!(local(&key), None, "never a path");
+        // With a directory to look in, a forged key is still no file's name.
+        let dir = std::env::temp_dir();
+        let beside = Pictures::among(Some(&dir), &DRAWING);
+        assert!(beside.measured("fenced:0000000000000000:0", FIT).is_none());
+        assert_eq!((beside.left_out.get(), beside.seen.borrow().len()), (0, 0), "not looked for");
+    }
+
+    /// Fenced blocks count among a document's pictures: past the most it has, a block isn't opened,
+    /// stays code, and is counted as not drawn; as is a picture by path after as many blocks.
+    #[test]
+    fn fenced_blocks_count_among_the_pictures_a_document_has() {
+        let dir = std::env::temp_dir();
+        let pictures = Pictures::among(Some(&dir), &DRAWING);
+        for n in 0..MAX_PICTURES - 1 {
+            assert!(pictures.fenced("sketch", "40 20", FIT).is_some(), "{n}");
+        }
+        assert!(pictures.measured("clview-no-such-picture.png", FIT).is_none());
+        assert_eq!((pictures.asked(), pictures.left_out.get()), (MAX_PICTURES, 1), "a picture by path counts too");
+        assert_eq!(pictures.fenced("sketch", "40 20", FIT), None, "one too many");
+        assert_eq!(pictures.fenced("sketch", "not a sketch", FIT), None);
+        assert_eq!((pictures.undrawn.get(), pictures.promises.borrow().len()), (2, MAX_PICTURES - 1));
+        assert_eq!(pictures.fenced("svg", "40 20", FIT), None);
+        assert_eq!(pictures.undrawn.get(), 2, "a language none lists is no block left undrawn");
     }
 }

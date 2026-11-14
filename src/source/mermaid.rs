@@ -29,7 +29,7 @@ pub(super) struct Mermaid;
 
 /// What it shows, by name alone: a `.mermaid` that is text, and a `.mmd` that starts as a diagram
 /// ([`Kind::of`]).
-const FORMAT: Format = Format { name: "Mermaid", extensions: &["mmd", "mermaid"] };
+const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["mermaid"]);
 
 impl Backend for Mermaid {
     fn name(&self) -> &'static str {

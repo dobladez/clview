@@ -344,9 +344,51 @@ pub(crate) struct Format {
     /// signature; a compound file may as well be a workbook), in lowercase, without the dot.
     /// Empty for a format known by how a file starts alone.
     pub(crate) extensions: &'static [&'static str],
+    /// The languages a document's fenced block of it is written in, in lowercase: ` ```mermaid ` in
+    /// Markdown, `<pre><code class="language-mermaid">` in HTML, which a document then shows as a
+    /// picture of the block rather than its code ([`fenced`]). Matched without regard to case against
+    /// the first word of the block's info string (` ```Mermaid title="x" ` is `mermaid`). Listed,
+    /// never taken from [`extensions`](Format::extensions) nor from how the text starts: a fence's
+    /// name may differ from an extension (` ```dot `, `.gv`), and a block of a format that lists none
+    /// stays code (` ```svg `). Empty for most formats: only a backend that
+    /// [draws pictures](Backend::draws_pictures) lists any, and no two list the same.
+    ///
+    /// A backend that lists one is opened with the block's text straight through [`Backend::open`],
+    /// never asked whether it [opens](Backend::opens) it, under a name ending in its format's first
+    /// extension. It is opened every time the document is read: to size the block, again for the
+    /// first render, again for every relayout and every time the picture is let go of and drawn
+    /// again. So it keeps what it made of a text, as Mermaid's backend keeps each diagram's SVG, and
+    /// answers the same text again from that.
+    pub(crate) fences: &'static [&'static str],
 }
 
 impl Format {
+    /// The format called `name`, which goes by `extensions`, and lists no fence.
+    #[cfg_attr(
+        not(any(
+            feature = "pdf",
+            feature = "image",
+            feature = "svg",
+            feature = "mermaid",
+            feature = "zip",
+            feature = "tar",
+            feature = "word",
+            feature = "sheet",
+            test
+        )),
+        expect(dead_code, reason = "only a backend lists formats")
+    )]
+    pub(crate) const fn of(name: &'static str, extensions: &'static [&'static str]) -> Self {
+        Self { name, extensions, fences: &[] }
+    }
+
+    /// This format, a document's fenced blocks in the languages `fences` drawn as pictures of it
+    /// ([`Format::fences`]).
+    #[cfg_attr(not(any(feature = "mermaid", test)), expect(dead_code, reason = "only diagrams are written in fenced blocks"))]
+    pub(crate) const fn fenced(self, fences: &'static [&'static str]) -> Self {
+        Self { fences, ..self }
+    }
+
     /// Whether `path` ends in one of its [`extensions`](Format::extensions), in any case.
     #[cfg_attr(
         not(any(feature = "svg", feature = "word", feature = "sheet", test)),
@@ -411,7 +453,10 @@ impl Input {
     }
 
     /// [`Input::held`], for a holder that can stop reading the file at a bound ([`Bounded`]).
-    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives stop early"))]
+    #[cfg_attr(
+        not(any(feature = "zip", feature = "tar", feature = "word", test)),
+        expect(dead_code, reason = "only archives, and a document's fenced blocks, stop early")
+    )]
     fn held_bounded(path: String, head: Vec<u8>, again: Again, bounded: Bounded) -> Self {
         Self { path, head, rest: Rest::Held(again, Some(bounded)) }
     }
@@ -506,6 +551,17 @@ pub(crate) fn choose<'b>(path: &str, backends: &[&'b dyn Backend]) -> Result<(&'
 pub(crate) fn shown_by<'b>(input: Input, backends: &[&'b dyn Backend]) -> Option<(&'b dyn Backend, Input)> {
     let backend = backends.iter().find(|backend| backend.opens(&input.path, &input.head)).copied();
     backend.map(|backend| (backend, input))
+}
+
+/// The first of `backends` that draws a fenced block written in `language` as a picture, and the
+/// format of its that lists it ([`Format::fences`]), in any case; `None` for a language none lists,
+/// whose blocks stay code. Only a backend that [draws pictures](Backend::draws_pictures) is asked.
+#[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have fenced blocks"))]
+pub(crate) fn fenced<'b>(language: &str, backends: &[&'b dyn Backend]) -> Option<(&'b dyn Backend, Format)> {
+    backends.iter().filter(|backend| backend.draws_pictures()).find_map(|backend| {
+        let lists = |format: &Format| format.fences.iter().any(|fence| fence.eq_ignore_ascii_case(language));
+        backend.formats().into_iter().find(lists).map(|format| (*backend, format))
+    })
 }
 
 /// Files held together, shown as a list: a directory's. Each file is opened from it, and each
@@ -865,7 +921,7 @@ pub(crate) mod tests {
             self.shows
         }
         fn formats(&self) -> Vec<Format> {
-            vec![Format { name: self.name, extensions: &[] }]
+            vec![Format::of(self.name, &[])]
         }
         fn credits(&self) -> &[&'static str] {
             std::slice::from_ref(&self.name)
@@ -986,7 +1042,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_name_is_matched_by_its_extension_in_any_case() {
-        let format = |extensions| Format { name: "a format", extensions };
+        let format = |extensions| Format::of("a format", extensions);
         assert!(format(&["docx"]).named("a/b.DocX") && format(&["csv", "xlsx"]).named("b.tar.xlsx"));
         assert!(!format(&["docx"]).named("docx") && !format(&["docx"]).named("a.docx.gz") && !format(&[]).named("a.docx"));
     }
@@ -1021,6 +1077,142 @@ pub(crate) mod tests {
                 assert!(tells(&name.to_uppercase()), "{}: .{}", backend.name(), name.to_uppercase());
             }
         }
+    }
+
+    /// A backend that lists the fences `fences`, and draws pictures or not: a block whose text is two
+    /// numbers, `40 20`, opens to one page that size, drawn opaque red; any other text is refused.
+    pub(crate) struct Sketches {
+        pub(crate) fences: &'static [&'static str],
+        pub(crate) pictures: bool,
+    }
+
+    impl Backend for Sketches {
+        fn name(&self) -> &'static str {
+            "sketches"
+        }
+        fn shows(&self) -> &'static str {
+            "sketches"
+        }
+        fn formats(&self) -> Vec<Format> {
+            vec![Format::of("Plain", &["txt"]), Format::of("Sketch", &["sk", "sketch"]).fenced(self.fences)]
+        }
+        fn credits(&self) -> &[&'static str] {
+            &[]
+        }
+        fn options(&self) -> &'static [OptionSpec] {
+            &[]
+        }
+        fn opens(&self, _path: &str, _head: &[u8]) -> bool {
+            false
+        }
+        fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
+            let path = input.path.clone();
+            let text = String::from_utf8(input.bytes()?).map_err(|e| e.to_string())?;
+            let mut sides = text.split_whitespace().map(str::parse::<f32>);
+            match (sides.next(), sides.next(), sides.next()) {
+                (Some(Ok(width)), Some(Ok(height)), None) => Ok(Opened::Pages(Box::new(Sketch(width, height)))),
+                _ => Err(format!("{path}: not a sketch")),
+            }
+        }
+        fn draws_pictures(&self) -> bool {
+            self.pictures
+        }
+    }
+
+    /// What [`Sketches`] opens: a page of a size, drawn opaque red.
+    struct Sketch(f32, f32);
+
+    impl Source for Sketch {
+        fn pages(&self) -> usize {
+            1
+        }
+        fn size(&self, page: usize) -> Option<(f32, f32)> {
+            (page == 0).then_some((self.0, self.1))
+        }
+        fn natural(&self, _page: usize) -> bool {
+            false
+        }
+        fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
+            Ok(Box::new(Sketch(self.0, self.1)))
+        }
+        fn pool(&self, _threads: usize) -> Box<dyn Pool> {
+            Box::new(Sketch(self.0, self.1))
+        }
+    }
+
+    impl Render for Sketch {
+        fn render(&mut self, request: Request) -> Frame {
+            let side = |points: f32| ((points * request.scale).ceil() as u32).clamp(1, 4096);
+            let (width, height) = (side(self.0), side(self.1));
+            let rgba = [255, 0, 0, 255].repeat(width as usize * height as usize);
+            Frame { request, width, height, rgba: Pixels::new(rgba), error: None, warnings: Vec::new(), again: false }
+        }
+    }
+
+    /// A pool no test asks.
+    impl Pool for Sketch {
+        fn set_queue(&self, _requests: Vec<Request>) {}
+        fn try_recv(&self) -> Option<Frame> {
+            None
+        }
+    }
+
+    /// What is wrong with the fences `backends` list: one listed by a backend that draws no pictures,
+    /// one that isn't a lowercase word, or one listed twice.
+    fn wrong_fences(backends: &[&dyn Backend]) -> Vec<String> {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut wrong = Vec::new();
+        for backend in backends {
+            for fence in backend.formats().iter().flat_map(|format| format.fences.iter().copied()) {
+                if !backend.draws_pictures() {
+                    wrong.push(format!("{} lists {fence}, and draws no pictures", backend.name()));
+                }
+                if fence.is_empty() || fence.chars().any(|c| c.is_whitespace() || c.is_uppercase()) {
+                    wrong.push(format!("{}: {fence:?} is no lowercase word", backend.name()));
+                }
+                match seen.iter().any(|other| other.eq_ignore_ascii_case(fence)) {
+                    true => wrong.push(format!("{fence} is listed twice")),
+                    false => seen.push(fence),
+                }
+            }
+        }
+        wrong
+    }
+
+    /// Only a backend that draws pictures lists fences, each a lowercase word, and no language is
+    /// listed twice among the backends built: a block is drawn by one backend, and a document can't
+    /// come to draw itself.
+    #[test]
+    fn a_fence_is_listed_once_and_only_by_a_backend_that_draws_pictures() {
+        assert_eq!(wrong_fences(BACKENDS), Vec::<String>::new());
+        // What it would say.
+        static DRAWS: Sketches = Sketches { fences: &["sketch", "sk"], pictures: true };
+        static HOLDS: Sketches = Sketches { fences: &["sketch"], pictures: false };
+        static SHOUTS: Sketches = Sketches { fences: &["Sketch"], pictures: true };
+        static WORDS: Sketches = Sketches { fences: &["a sketch", ""], pictures: true };
+        static NONE: Sketches = Sketches { fences: &[], pictures: false };
+        assert!(wrong_fences(&[&DRAWS, &NONE, &PDF]).is_empty());
+        assert_eq!(wrong_fences(&[&HOLDS]).len(), 1, "it draws no pictures");
+        assert_eq!(wrong_fences(&[&DRAWS, &DRAWS]).len(), 2, "each of the two, twice");
+        assert_eq!(wrong_fences(&[&DRAWS, &SHOUTS]).len(), 2, "twice whatever the case, and not lowercase");
+        assert_eq!(wrong_fences(&[&WORDS]).len(), 2, "two words, and none");
+    }
+
+    /// A fenced block's language finds the backend that lists it and the format it is of, in any
+    /// case; a language none lists finds none, nor one listed by a backend that draws no pictures.
+    #[test]
+    fn a_fences_language_finds_the_backend_that_draws_it() {
+        static DRAWS: Sketches = Sketches { fences: &["sketch", "sk"], pictures: true };
+        static HOLDS: Sketches = Sketches { fences: &["held"], pictures: false };
+        let backends: [&dyn Backend; 3] = [&PDF, &HOLDS, &DRAWS];
+        let found =
+            |language: &str| fenced(language, &backends).map(|(backend, format)| (backend.name(), format.name, format.extensions.first().copied()));
+        assert_eq!(found("sketch"), Some(("sketches", "Sketch", Some("sk"))));
+        assert_eq!(found("SK"), Some(("sketches", "Sketch", Some("sk"))), "in any case");
+        for language in ["", "sketches", "ske", "txt", "plain", "pdf-one", "held", "sketch "] {
+            assert_eq!(found(language), None, "{language:?}");
+        }
+        assert!(fenced("sketch", &[]).is_none());
     }
 
     /// A backend that declares `settings`, and opens what [`PDF`] does.

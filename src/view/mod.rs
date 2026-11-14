@@ -508,15 +508,25 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     } else {
         out.push_str(&format!("\n{SHOWN}\n"));
         for Listed { shows, credits, formats } in shown(backends) {
-            let named = formats.iter().map(|format| match format.extensions {
-                [] => format.name.to_string(),
-                extensions => format!("{} (.{})", format.name, extensions.join(" .")),
-            });
+            let named = formats.iter().map(listed);
             wrapped(&mut out, &format!("{}{}:", capitalized(shows), by(&credits)), &named.collect::<Vec<_>>());
         }
     }
     out.push_str(&format!("\n{MANUAL}\n{REPORT}\n"));
     out
+}
+
+/// `format` as `--help` lists it: its name, then the extensions it goes by and the languages a
+/// document's fenced block of it is written in, if it has any: ``Mermaid (.mmd .mermaid, ```mermaid)``.
+fn listed(format: &crate::source::Format) -> String {
+    let extensions = format.extensions.iter().map(|extension| format!(".{extension}")).collect::<Vec<_>>().join(" ");
+    let fences = format.fences.iter().map(|fence| format!("```{fence}")).collect::<Vec<_>>().join(" ");
+    match (extensions.is_empty(), fences.is_empty()) {
+        (true, true) => format.name.to_string(),
+        (false, true) => format!("{} ({extensions})", format.name),
+        (true, false) => format!("{} ({fences})", format.name),
+        (false, false) => format!("{} ({extensions}, {fences})", format.name),
+    }
 }
 
 /// The options `backend` takes: its own, then its settings'.
@@ -1909,7 +1919,7 @@ mod tests {
             }
         }
         const fn format(name: &'static str, extensions: &'static [&'static str]) -> Format {
-            Format { name, extensions }
+            Format::of(name, extensions)
         }
         const LOCKED: Fake = Fake { name: "locked", shows: "locked PDFs", magic: b"%PDF-", options: &[PASSWORD], holds: false };
         const PICTURES: Lists = Lists(
@@ -1957,6 +1967,9 @@ mod tests {
             "{help}"
         );
         assert!(!help.contains("lib-c"), "{help}");
+        // The languages of the fenced blocks a format draws, after its extensions.
+        assert_eq!(listed(&format("Diagram", &["dg", "diagram"]).fenced(&["dg"])), "Diagram (.dg .diagram, ```dg)");
+        assert_eq!(listed(&format("Sums", &[]).fenced(&["sum", "calc"])), "Sums (```sum ```calc)");
         assert_eq!([by(&[]), by(&["a"]), by(&["a", "b"]), by(&["a", "b", "c"])], ["", ", by a", ", by a and b", ", by a, b and c"]);
         assert!(shown.lines().all(|line| line.chars().count() <= HELP_WIDTH), "{help}");
         // An item longer than a line has one to itself.

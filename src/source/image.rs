@@ -34,8 +34,8 @@ impl Backend for Images {
     /// Those it decodes, by their signature, or by their names where they have none.
     fn formats(&self) -> Vec<super::Format> {
         let named = |format: ImageFormat| if NAMED.contains(&format) { format.extensions_str() } else { &[] };
-        let decoded = DECODED.iter().map(|&(format, name)| super::Format { name, extensions: named(format) });
-        decoded.chain([super::Format { name: JPEG_XL, extensions: &[] }]).collect()
+        let decoded = DECODED.iter().map(|&(format, name)| super::Format::of(name, named(format)));
+        decoded.chain([super::Format::of(JPEG_XL, &[])]).collect()
     }
 
     /// The `image` crate, and jxl-oxide for JPEG XL.

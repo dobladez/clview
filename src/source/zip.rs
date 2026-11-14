@@ -34,7 +34,7 @@ impl Backend for Zip {
     }
 
     fn formats(&self) -> Vec<Format> {
-        vec![Format { name: "zip", extensions: &[] }]
+        vec![Format::of("zip", &[])]
     }
 
     fn credits(&self) -> &[&'static str] {

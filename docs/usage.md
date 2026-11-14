@@ -441,8 +441,9 @@ Printing (`--no-pager`, or a single page) has no search.
 
 A file is shown by the first backend that opens it, going by how the file starts, and by its name
 only where that can't tell. `clv --help` ends with the formats this build shows, under what each
-backend shows and the libraries it shows them through, and the extensions of those that go by their
-name, so a build without a backend lists none of its formats. Before them come the options a
+backend shows and the libraries it shows them through, the extensions of those that go by their
+name, and the languages of the [fenced blocks](#documents) a document shows as pictures of them
+(`Mermaid (.mmd .mermaid, ```mermaid)`), so a build without a backend lists none of its formats. Before them come the options a
 backend takes besides the ones above, under it; a backend that takes none has no heading. An option
 that only another backend takes is refused, since it would do nothing for the file.
 
@@ -586,8 +587,8 @@ A diagram past merman's own limits ([limits](#limits)) is refused with merman's 
 milliseconds; past the worker's CPU time or memory, the worker is killed and that diagram fails,
 saying which, and the next starts another. After three killed in a row, no diagram is drawn for a
 minute. What a diagram is drawn to is kept while clv runs, so a diagram opened again is not drawn
-again: its tile in a list, then its page; a document's picture, sized, drawn, and laid out again at
-another width or font size.
+again: its tile in a list, then its page; a document's picture or ` ```mermaid ` block, sized, drawn,
+and laid out again at another width or font size.
 
 ### Documents
 
@@ -634,6 +635,19 @@ through a pipe or from an archive has no directory, so none of its pictures can 
 included. A picture in a `data:` URL is drawn, if it is a PNG, JPEG, GIF, WebP or BMP. The first page
 says how many pictures on this machine were left out, and a page says if one of its own can't be drawn,
 a grey box in its place ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+
+A fenced block of Markdown written in a language `clv` draws shows as a picture of it, not as its
+code: a ` ```mermaid ` block as its [diagram](#mermaid-diagrams), as on GitHub. The language is the
+first word after the fence, in any case (` ```Mermaid title="A flow" `), and `clv --help` lists the
+ones this build draws. It goes by that word alone, never by what the block holds: a block in any other
+language stays code, ` ```svg ` included, as does one with no language, or one that is indented
+rather than fenced. A block is drawn as a picture is, at its own size or smaller to fit the column
+and the page, when a page it is on first shows; and since its text comes with the document, it is
+drawn through a pipe and from an archive too, where a picture by path can't be reached. A block
+that can't be drawn (a broken diagram, or one past what its kind [may be](#limits)) shows as the
+code it is, and the first page says how many weren't drawn. Its text isn't
+[searched](#searching-a-documents-text) once it is a picture
+([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
 
 Markdown and HTML have no paper of their own, so on a terminal with a dark background they go light
 on dark, the page exactly the terminal's colour, so that it is no rectangle at all. `d` turns them to
@@ -925,7 +939,8 @@ limit, it does as the last column says. How large a page is drawn is under
 | A PDF's pages | 100,000 | refused, saying how many it has; a page tree may name one page over and over, so a file of a few megabytes can have millions, and each costs some 2 KB to open |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
-| A document's pictures, in Markdown or HTML | 1,024 referred to; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
+| A document's pictures, in Markdown or HTML | 1,024 referred to, the fenced blocks it draws among them; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning, a block as its code; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
+| A fenced block drawn as a picture | what a file of its kind may be: a Mermaid diagram's 1 MiB, and merman's limits | it stays code, and the first page says how many did |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |
 | An xlsx's sheets, unpacked, together | 128 MiB, which would take some 850 MB once read (one of 97 MiB took 649 MB) | refused |

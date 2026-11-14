@@ -1262,14 +1262,32 @@ fn rendered(text: &str) -> bool {
 #[cfg(all(feature = "mermaid", feature = "word"))]
 #[test]
 fn a_documents_diagram_is_turned_into_svg_once_whatever_it_is_laid_out_at() {
+    drawn_once("flow.md", "![a flow](flow.mmd)", "![the flow again](flow.mmd)");
+}
+
+/// So is a ` ```mermaid ` block's, which the document hands to Mermaid's backend again every time it
+/// is read: to open, for its first render, and for each layout.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn a_documents_mermaid_block_is_turned_into_svg_once_whatever_it_is_laid_out_at() {
+    let flow = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd")).unwrap();
+    let block = format!("```mermaid\n{flow}```");
+    drawn_once("blocks.md", &block, &block);
+}
+
+/// A Markdown document named `name`, showing `flow.mmd`'s diagram as `first` says and, pages later,
+/// as `again` does, read in the pager: once page 1 is drawn and Mermaid's worker gone, no step
+/// through its pages or to another width starts one.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+fn drawn_once(name: &str, first: &str, again: &str) {
     if !pty_works() {
         return;
     }
-    let path = crate::view::tmp("pager-mermaid-document", "flow.md");
+    let path = crate::view::tmp(&format!("pager-mermaid-{name}"), name);
     let flow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd");
     std::fs::copy(flow, path.with_file_name("flow.mmd")).unwrap();
     let words: String = (1..=40).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect();
-    std::fs::write(&path, format!("# A flow\n\n![a flow](flow.mmd)\n\n{words}![the flow again](flow.mmd)\n")).unwrap();
+    std::fs::write(&path, format!("# A flow\n\n{first}\n\n{words}{again}\n")).unwrap();
     let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 40);
     view.wait_until("page 1", |t| t.contains("  page 1/"));
     no_mermaid_worker(&view, "page 1 drawn");

@@ -36,7 +36,7 @@ impl Backend for Pdfcraft {
     }
 
     fn formats(&self) -> Vec<Format> {
-        vec![Format { name: "PDF", extensions: &[] }]
+        vec![Format::of("PDF", &[])]
     }
 
     fn credits(&self) -> &[&'static str] {

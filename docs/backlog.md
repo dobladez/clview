@@ -107,3 +107,21 @@ Past 8,192 headers, tar reads a member's head, for the backend that opens it, by
 member whole, up to 512 MiB (Codex, round 2 of
 [Spec-0008](specs/0008-show-mermaid-diagrams.md)). A prefix read would do: from the disk, from the
 spill, or from the decompressor stopped after the head.
+
+### A bound on what a document's blocks cost in all
+
+A Markdown document's ` ```mermaid ` blocks are each drawn within Mermaid's limits, and up to 1,024
+of them, but nothing bounds them together: a 2.6 MB file of eight diagrams of 15,000 nodes took
+67 s to show its first page, and one of 1,024 small diagrams 10 s
+([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)'s
+Evidence), where the costliest Markdown without blocks takes some 20 s. A document's marks and
+bytes hold it to minutes. Pictures by path cost the same, but they take as many files.
+
+- A bound in time (the blocks sized until so many seconds are spent, the rest left as code) or in
+  text (so many MiB of blocks drawn a document) would hold it; either makes what a document shows
+  depend on more than the document.
+- merman's own work on such a diagram is 0.2 s
+  ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)), of some 4 s a block
+  a reading: the rest comes after it, its SVG of 9.7 MB opened by the SVG backend, and all of it
+  twice, since eight such SVGs don't fit Mermaid's cache of 64 MiB. Where the time goes isn't
+  measured further yet.

@@ -44,7 +44,7 @@ pub(super) struct Svg;
 
 /// What it shows: a drawing, and one gzipped, each named so when its first bytes end before its
 /// root element ([`named_svg`]).
-const FORMATS: &[Format] = &[Format { name: "SVG", extensions: &["svg"] }, Format { name: "svgz", extensions: &["svgz"] }];
+const FORMATS: &[Format] = &[Format::of("SVG", &["svg"]), Format::of("svgz", &["svgz"])];
 
 impl Backend for Svg {
     fn name(&self) -> &'static str {

@@ -12,7 +12,9 @@
 //!
 //! Markdown is read by pulldown-cmark, into the HTML wordcraft's importer reads, the one that can be
 //! given pictures. The pictures both refer to are drawn by the backends that show them, through
-//! `source/picture.rs`, when a page they are on first renders.
+//! `source/picture.rs`, when a page they are on first renders. A fenced block written in a language
+//! a backend lists (` ```mermaid `) is such a picture, of its text
+//! ([ADR-0032](../../docs/adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -22,7 +24,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
 
-use pulldown_cmark::{BlockQuoteKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, NB_HYPHEN, OBJ, SOFT_HYPHEN, Wrap};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing};
 use wordcraft_doc::{Block, Paragraph, Pos, Rgb, StoryRef, TextColor};
@@ -485,19 +487,19 @@ const MAX_PIXELS: u64 = 64_000_000;
 
 /// A Word document, by what it is named where its first bytes can't tell: a document, a
 /// template, with macros or without, in either format, since Word opens each by what it holds.
-const WORD: Format = Format { name: "Word", extensions: &["docx", "docm", "dotx", "dotm", "doc", "dot"] };
+const WORD: Format = Format::of("Word", &["docx", "docm", "dotx", "dotm", "doc", "dot"]);
 
 /// OpenDocument text, by its name where its first file doesn't say: a document or a template.
-const ODT: Format = Format { name: "OpenDocument text", extensions: &["odt", "ott"] };
+const ODT: Format = Format::of("OpenDocument text", &["odt", "ott"]);
 
 /// RTF, by its first bytes alone.
-const RTF: Format = Format { name: "RTF", extensions: &[] };
+const RTF: Format = Format::of("RTF", &[]);
 
 /// Markdown, by its name alone, since nothing in how it starts says so.
-const MARKDOWN: Format = Format { name: "Markdown", extensions: &["md", "markdown", "mdown", "mkd"] };
+const MARKDOWN: Format = Format::of("Markdown", &["md", "markdown", "mdown", "mkd"]);
 
 /// HTML, by how it starts, or by its name where that doesn't say (a fragment of a page).
-const HTML: Format = Format { name: "HTML", extensions: &["html", "htm", "xhtml"] };
+const HTML: Format = Format::of("HTML", &["html", "htm", "xhtml"]);
 
 /// What an OpenDocument text says it is, in its first file: a document or a template.
 const ODT_TYPE: &[u8] = b"application/vnd.oasis.opendocument.text";
@@ -720,6 +722,12 @@ impl Laid {
         let mut notes = Vec::new();
         if first && self.pictures.left_out() > 0 {
             notes.push(format!("{} pictures it refers to are left out: missing, or not what {} shows", self.pictures.left_out(), crate::NAME));
+        }
+        match self.pictures.undrawn() {
+            _ if !first => {}
+            0 => {}
+            1 => notes.push("one of its blocks could not be drawn, and is shown as its code".into()),
+            undrawn => notes.push(format!("{undrawn} of its blocks could not be drawn, and are shown as their code")),
         }
         if self.pictures.is_empty() {
             return notes;
@@ -1248,7 +1256,8 @@ fn imported(extension: &str, bytes: &[u8]) -> Result<wordcraft_doc::Document, St
 /// The Markdown in `bytes`, where any punctuation or line may start a run, a cell or a paragraph, on
 /// `page`.
 fn markdown(bytes: &[u8], pictures: &Pictures<'_>, page: wordcraft_doc::SectionProps) -> Result<wordcraft_doc::Document, String> {
-    let as_html = |bytes: &[u8]| markdown_as_html(&wordcraft_formats::txt::decode(bytes));
+    let fit = (page.text_width(), page.text_height());
+    let as_html = |bytes: &[u8]| markdown_as_html(&wordcraft_formats::txt::decode(bytes), pictures, fit);
     marked_up(|b| b.is_ascii_punctuation() || matches!(b, b'\r' | b'\n'), bytes, as_html, pictures, page)
 }
 
@@ -1261,8 +1270,10 @@ fn html(bytes: &[u8], pictures: &Pictures<'_>, page: wordcraft_doc::SectionProps
 /// ([ADR-0014](../../docs/adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)):
 /// GitHub's tables, strikethrough, task lists, footnotes and alerts, with what it would leave out
 /// written otherwise, a table's grid, a task's checkbox and what an alert is, and front matter (`---`)
-/// left out.
-fn markdown_as_html(text: &str) -> String {
+/// left out. A fenced block written in a language a backend draws (` ```mermaid `) is a picture of
+/// its text among `pictures`, to fit in `fit`, or else the code it would have been: which, is known
+/// here, before any HTML of it is written.
+fn markdown_as_html(text: &str, pictures: &Pictures<'_>, fit: (f32, f32)) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
@@ -1270,6 +1281,8 @@ fn markdown_as_html(text: &str) -> String {
         | Options::ENABLE_GFM
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
     let mut alert = None;
+    // The fenced block being read, if a backend draws its language: its info string, and its text so far.
+    let mut fence: Option<(pulldown_cmark::CowStr<'_>, String)> = None;
     let events = Parser::new_ext(text, options).flat_map(|event| {
         // What an alert is goes on the line above its first paragraph's text, or else alone.
         let (before, after) = match (alert.take(), &event) {
@@ -1280,16 +1293,46 @@ fn markdown_as_html(text: &str) -> String {
         if let Event::Start(Tag::BlockQuote(Some(kind))) = &event {
             alert = Some(*kind);
         }
-        let event = match event {
-            Event::TaskListMarker(true) => Event::Text("☑ ".into()),
-            Event::TaskListMarker(false) => Event::Text("☐ ".into()),
-            other => other,
+        // A block to draw is gathered whole, then written as its picture, or as the code it is.
+        let [event, text, end] = match (fence.take(), event) {
+            (None, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))))
+                if language_of(&info).is_some_and(|language| pictures.draws(language)) =>
+            {
+                fence = Some((info, String::new()));
+                [None, None, None]
+            }
+            (Some((info, mut text)), Event::Text(more)) => {
+                text.push_str(&more);
+                fence = Some((info, text));
+                [None, None, None]
+            }
+            (Some((info, text)), Event::End(TagEnd::CodeBlock)) => {
+                match language_of(&info).and_then(|language| pictures.fenced(language, &text, fit)) {
+                    Some(key) => [Some(Event::Html(format!("<p><img src=\"{key}\" alt=\"\"></p>\n").into())), None, None],
+                    None => [
+                        Some(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))),
+                        Some(Event::Text(text.into())),
+                        Some(Event::End(TagEnd::CodeBlock)),
+                    ],
+                }
+            }
+            // Nothing but text comes in a code block: anything else would be passed on, the block's
+            // text so far left out.
+            (_, Event::TaskListMarker(true)) => [Some(Event::Text("☑ ".into())), None, None],
+            (_, Event::TaskListMarker(false)) => [Some(Event::Text("☐ ".into())), None, None],
+            (_, other) => [Some(other), None, None],
         };
-        [before, Some(event), after].into_iter().flatten()
+        [before, event, text, end, after].into_iter().flatten()
     });
     let mut out = String::with_capacity(text.len());
     pulldown_cmark::html::push_html(&mut out, events);
     numbers_in_their_footnotes(&out.replace("<table>", "<table border=\"1\">"))
+}
+
+/// The language a fenced block is written in: the first word of its info string (` ```mermaid title="x" `
+/// is `mermaid`), if it has one.
+fn language_of(info: &str) -> Option<&str> {
+    info.split_whitespace().next()
 }
 
 /// What an alert (`> [!NOTE]`) says it is, and its colour.
@@ -2137,7 +2180,7 @@ mod tests {
             table.expect("a table").grid.iter().sum()
         };
         let table = "| One | Two |\n|---|---|\n| Three | Four |\n";
-        let own = wordcraft_formats::html::import_with(&markdown_as_html(table), &|_| None);
+        let own = wordcraft_formats::html::import_with(&as_html(table), &|_| None);
         assert_eq!(grid(&own), 468.0, "the default page's");
         let window = || page_in(Width::Window, &ROOMLESS, 100, MARGIN_DEFAULT);
         assert!(near(grid(&markdown(table.as_bytes(), &nowhere, window()).unwrap()), 94.0 * CODE_WIDTH), "the room's");
@@ -2558,7 +2601,7 @@ mod tests {
     /// As written, an alert is a quote that starts with its tag.
     #[test]
     fn an_alert_says_what_it_is() {
-        let html = markdown_as_html("> [!WARNING]\n> Mind it\n\n> [!MAYBE]\n> Not one");
+        let html = as_html("> [!WARNING]\n> Mind it\n\n> [!MAYBE]\n> Not one");
         assert!(html.contains(">Warning</strong>") && !html.contains("[!WARNING]"), "{html}");
         assert!(html.contains("[!MAYBE]"), "{html}");
         // Right above its text, a line's height (about 17.5 points) from it, not a paragraph apart.
@@ -2567,8 +2610,61 @@ mod tests {
         assert!(text.top - kind.top < 2 * 20, "{lines:?}");
         // With no paragraph to go on, it still says.
         for alert in ["> [!TIP]\n> - One", "> [!TIP]"] {
-            assert!(markdown_as_html(alert).contains(">Tip</strong>"), "{alert}");
+            assert!(as_html(alert).contains(">Tip</strong>"), "{alert}");
         }
+    }
+
+    /// `markdown` as HTML, in a build that draws no fenced block.
+    fn as_html(markdown: &str) -> String {
+        markdown_as_html(markdown, &Pictures::among(None, &[]), (468.0, 648.0))
+    }
+
+    /// A fenced block written in a language a backend draws is written as a picture, named by a key
+    /// of the pictures', its info string's first word its language in any case, behind backticks or
+    /// tildes, in a list or a quote. Every other block is written as it always was: an indented one,
+    /// one with no language or one no backend lists, and one its backend refuses, known before any
+    /// HTML of it is written.
+    #[test]
+    fn a_fenced_block_a_backend_draws_is_written_as_its_picture() {
+        use crate::source::tests::Sketches;
+        static SKETCHES: Sketches = Sketches { fences: &["sketch"], pictures: true };
+        static DRAWING: [&dyn Backend; 1] = [&SKETCHES];
+        let pictures = Pictures::among(None, &DRAWING);
+        let drawn = |markdown: &str| markdown_as_html(markdown, &pictures, (468.0, 648.0));
+        let html = drawn("Before\n\n```sketch\n40 20\n```\n\nAfter\n");
+        let Some((before, rest)) = html.split_once("<p><img src=\"") else { panic!("{html}") };
+        let Some((key, after)) = rest.split_once("\" alt=\"\"></p>\n") else { panic!("{html}") };
+        assert_eq!((before, after), ("<p>Before</p>\n", "<p>After</p>\n"));
+        assert!(pictures.measured(key, (468.0, 648.0)).is_some(), "{key}");
+        for block in [
+            "```Sketch title=\"x\"\n40 20\n```",
+            "~~~~ SKETCH\n40 20\n~~~~",
+            "- One\n\n  ```sketch\n  40 20\n  ```\n",
+            "> [!TIP]\n> ```sketch\n> 40 20\n> ```",
+        ] {
+            let html = drawn(block);
+            assert!(html.contains("<img src=\"fenced:") && !html.contains("<pre>") && !html.contains("40 20"), "{block}: {html}");
+        }
+        assert!(drawn("> [!TIP]\n> ```sketch\n> 40 20\n> ```").contains(">Tip</strong></p><p><img "), "what an alert is, before its block");
+        // As code, exactly as a build that draws none writes it.
+        for block in [
+            "```svg\n<svg/>\n```",
+            "```\n40 20\n```",
+            "    40 20\n",
+            "```sketches\n40 20\n```",
+            "```a sketch\n40 20\n```",
+            "```sketch\nflowchart <LR>\n  a & b\n```\n\nAfter",
+            "```sketch\n```",
+        ] {
+            let html = drawn(block);
+            assert!(html.contains("<pre><code") && !html.contains("<img"), "{block}: {html}");
+            assert_eq!(html, as_html(block), "{block}");
+        }
+        assert_eq!(drawn("```sketch\n40 20").matches("<img ").count(), 1, "a block never closed ends with the document, as code would");
+        assert_eq!(
+            (language_of("mermaid"), language_of("  mermaid\ttitle"), language_of(""), language_of("   ")),
+            (Some("mermaid"), Some("mermaid"), None, None)
+        );
     }
 
     /// The pager's way: pages rendering side by side on a pool's threads, each drawing its pictures

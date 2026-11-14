@@ -67,7 +67,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source/worker.rs` | A worker process of clv's own for any backend (`clv --worker <name>`): frames over its pipes, one request at a time under a deadline, its CPU time and its heap capped by itself (`Worker::takes`, `Worker::heap`), killed past them, or from another thread while its answer is awaited (`Kill`); a payload its own or shared (`Link::request_shared`, a file's bytes written from where the viewer holds them); at most six alive, of every kind ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md), [ADR-0027](adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)) |
 | `src/source/threads.rs` | Render threads for a backend with nothing better |
 | `src/source/texts.rs` | The queue a backend's `Texts` keeps: a thread that answers what is wanted of its text with the backend's `Answer`, the answers held for the viewer while still listed ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)) |
-| `src/source/picture.rs` | The pictures a document refers to, drawn by the backends that show them |
+| `src/source/picture.rs` | The pictures a document refers to, and the fenced blocks it shows as pictures, drawn by the backends that show them |
 | `src/source/dir.rs` | A directory as a `Container`: its files and subdirectories, in name order (`-r` for its subdirectories' files instead) |
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
 | `src/source/later.rs` | A list's file not opened until its tile is wanted, and the threads that open them |
@@ -208,9 +208,15 @@ defers promises pages, never a container
 ([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
 
 A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
-messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name and
-the extensions that tell a file of it where its first bytes can't. `--help` lists them last, under
-what their backend shows, nothing about formats written in the viewer. A backend takes them from
+messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name, the
+extensions that tell a file of it where its first bytes can't, and its `fences`, the languages a
+document's fenced block of it is written in (Mermaid's `mermaid`), which only a backend that says
+`draws_pictures` lists, and no two the same (`a_fence_is_listed_once_and_only_by_a_backend_that_draws_pictures`).
+`source::fenced` finds the backend that lists a language, as `shown_by` finds the one that opens a
+file, so the documents' backend draws a block without naming who draws it
+([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)). `--help`
+lists the formats last, under what their backend shows, a format's fences after its extensions
+(`listed`), nothing about formats written in the viewer. A backend takes them from
 the tables its `opens` goes by (the image backend's `DECODED`, the extensions a document's or a
 workbook's kind is told by, `Codec`'s compressions in tar's), so what `--help` lists and what opens
 can't disagree; `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks
@@ -323,6 +329,17 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and
   replace their stand-ins in the document's `media`, under a lock that pages rendering share
   ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+  A fenced block whose language a backend lists (`source::fenced`) is such a picture, promised from
+  its text rather than a path (`picture::Origin`): `markdown_as_html` gathers a
+  `CodeBlock(Fenced(info))`'s text, asks `Pictures::fenced` to size it, by that backend's `open` of
+  the text as a held file (`block.mmd`), never its `opens`, and writes `<img src="KEY">` for it, or
+  the code block as before when it can't be sized, `Promised::undrawn` counting those for the first
+  page's note. `KEY` is `fenced:`, 64 bits made afresh for each reading (`afresh`, std's
+  `RandomState`), and the block's number: `Pictures::measured` gives a key's stand-in to wordcraft's
+  importer before it looks for a path, and nothing the document writes in an `<img src>` of its own
+  can be one. Every reading opens each block again, so the listing backend keeps what it made of a
+  text (Mermaid's cache), as `Format::fences` asks
+  ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`

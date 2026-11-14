@@ -426,7 +426,8 @@ fn help_and_version() {
     assert!(shown("PDFs", "PDF"), "{help}");
     assert_eq!(shown("Images", "PNG, JPEG, "), cfg!(feature = "image"), "{help}");
     assert_eq!(shown("SVG drawings", "SVG (.svg), svgz (.svgz)"), cfg!(feature = "svg"), "{help}");
-    assert_eq!(shown("Mermaid diagrams", "Mermaid (.mmd .mermaid)"), cfg!(feature = "mermaid"), "{help}");
+    // With the language of the fenced blocks a document shows as pictures of it.
+    assert_eq!(shown("Mermaid diagrams", "Mermaid (.mmd .mermaid, ```mermaid)"), cfg!(feature = "mermaid"), "{help}");
     assert_eq!(shown("Zip archives", "zip"), cfg!(feature = "zip"), "{help}");
     assert_eq!(shown("Tar archives and compressed files", "tar, gzip, "), cfg!(feature = "tar"), "{help}");
     assert_eq!(shown("Documents", "Word (.docx "), cfg!(feature = "word"), "{help}");

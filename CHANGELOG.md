@@ -22,6 +22,11 @@ works today. A version's section becomes the notes of its
   white and as sharp as a drawing. A `.mmd` that is MultiMarkdown is left alone. merman runs in a process of its
   own held to its time and memory, and a diagram is drawn once however often it is opened: a list's
   tile, then its page, or a Markdown or HTML document's picture (`![a flow](flow.mmd)`).
+- A ` ```mermaid ` block in Markdown shows as its diagram, as on GitHub, where it showed as code:
+  drawn as a document's pictures are, and through a pipe or from an archive too, since its text
+  comes with the document. A block that can't be drawn stays code, and the first page says how
+  many did. `clv --help` lists the languages drawn, beside each format's extensions; a block in any
+  other stays code, ` ```svg ` included.
 
 ### Changed
 

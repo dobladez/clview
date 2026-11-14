@@ -186,7 +186,7 @@ impl Codec {
             Self::Bzip2 => "bzip2",
             Self::Xz => "xz",
         };
-        Format { name, extensions: &[] }
+        Format::of(name, &[])
     }
 
     /// `raw`, unpacked as it reads. Several compressed streams one after another (`pigz`, `pbzip2`,
