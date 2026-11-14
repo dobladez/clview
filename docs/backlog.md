@@ -40,7 +40,9 @@ by name on a key of its own, so `/` means one thing everywhere.
 ### A config file
 
 For customization and remembering settings, a Mermaid theme of the reader's choosing among them;
-and the positions of files opened before.
+and the positions of files opened before. The command `o` opens a file with, in place of the
+desktop's default app (`zathura`, say), would be one of them
+([Spec-0010](specs/0010-open-file-in-default-app.md)).
 
 ### More pictures and archives
 
@@ -136,3 +138,40 @@ bytes hold it to minutes. Pictures by path cost the same, but they take as many 
   a reading: the rest comes after it, its SVG of 9.7 MB opened by the SVG backend, and all of it
   twice, since eight such SVGs don't fit Mermaid's cache of 64 MiB. Where the time goes isn't
   measured further yet.
+
+### `O`: open a file in an app of the reader's choosing
+
+`o` opens a file in the desktop's default app ([Spec-0010](specs/0010-open-file-in-default-app.md));
+`O` could list the apps that open it and let the reader pick one, over the pages as `?`'s keys are.
+Neither `open` nor `xdg-open` lists them; the platforms keep the list:
+
+- macOS: Launch Services, through `NSWorkspace`'s `urlsForApplications(toOpen:)`. `osascript -l
+  JavaScript` reaches it without a dependency or `unsafe` (tried on 2026-11-14: Finder, QuickTime,
+  VS Code, Zed, VLC… for a folder); from Rust it would take the objc2 crates. `open -a <app>` or
+  `open -b <bundle id>` then opens with the one picked.
+- Linux and the BSDs: freedesktop's MIME-apps spec (`mimeapps.list`, and `mimeinfo.cache` in each
+  `applications/` directory), which `gio mime <type>` prints as registered and recommended apps on
+  most desktops; `xdg-mime query filetype` gives the type. The one picked opens through
+  `gio launch`, `gtk-launch <desktop id>`, or its desktop entry's `Exec` line with its `%f` and
+  `%u`.
+- WSL: no portable list.
+
+The launchers' trait leaves room for it: `apps(path)` and a command for the app picked, with
+defaults for a launcher that can't list. Apps that take a page (Skim, Zathura, Okular) could open
+at the page the reader is on.
+
+### Open an archive's file in another app
+
+`o` refuses a file that lives only in an archive ([Spec-0010](specs/0010-open-file-in-default-app.md)).
+It could unpack it to a temporary file and open that, but `clv` can't know when the app has read
+it: deleting it at exit may pull it from under the app, and keeping it leaves the reader's files in
+a temporary directory. `open -W` waits for the app on macOS; `xdg-open` has no such thing.
+
+### More openers, WSL among them
+
+`o` opens a file through `open` on macOS and `xdg-open` elsewhere
+([Spec-0010](specs/0010-open-file-in-default-app.md)); another platform or desktop is another
+launcher and its test. Candidates: `gio open`, `kde-open`, `exo-open`, `termux-open`, Haiku's `open`,
+and WSL's `wslview`. `wslview` hands the path on to PowerShell or `cmd.exe`, a parser of its own, so
+it waits for tests on a real WSL with names holding quotes, `$()`, backticks and `&`; `explorer.exe`
+with `wslpath -w` is the other way there, with parsing of its own to test too.
