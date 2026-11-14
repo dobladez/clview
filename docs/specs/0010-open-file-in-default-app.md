@@ -185,11 +185,12 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them (in the
+  [notes](0010-open-file-in-default-app-impl-20261114_1858.md)).
 - [ ] Manual: in kitty on macOS, `o` on a file's pages, a list's file, a folder, an archive's file
   (refused), a `.png` linked to a `.command` (refused), and over `ssh localhost` (refused).
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
