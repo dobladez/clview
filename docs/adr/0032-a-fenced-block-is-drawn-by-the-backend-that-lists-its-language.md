@@ -74,8 +74,10 @@ What constrains how:
 9. **A block follows its document's paper, told through the request.** `Request` has `on_dark`:
    set for a picture a document shows on dark paper, whose colour is `Request::dark`. A backend
    with a dark form of what it draws draws that, with nothing behind it; one with none draws as
-   ever. `picture.rs` sets it for a block's promise alone, and keeps what it holds of a block for
-   one paper at a time, drawn again for the other. Mermaid answers with its own dark theme,
+   ever. `picture.rs` sets it for a promise whose source has a dark form (`Source::dark_form`): a
+   block's, and, since 2026-11-14, a picture by path's, a `.mmd` a document shows; a photograph or
+   an SVG has none, and is drawn once for both papers, on white where its ink is made for white. It
+   keeps what it holds of such a picture for one paper at a time, drawn again for the other. Mermaid answers with its own dark theme,
    merman's site theme `dark`, with no white behind it, each theme's SVG kept apart in its cache;
    never the light drawing's colours inverted. `d` stays a redraw: the document is laid out once,
    around the light drawing. A block that can't be drawn for one paper is its stand-in there,

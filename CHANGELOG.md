@@ -30,7 +30,8 @@ works today. A version's section becomes the notes of its
   many did. `clv --help` lists the languages drawn, beside each format's extensions; a block in any
   other stays code, ` ```svg ` included. `s` shows a document's blocks as code, to read or search a
   diagram's source, and again draws them; `--fences code` starts that way. On dark paper a block is
-  drawn in Mermaid's dark theme, on the paper's colour, and `d` turns it with the page.
+  drawn in Mermaid's dark theme, on the paper's colour, and `d` turns it with the page; so is a
+  diagram a document shows by path (`![a flow](flow.mmd)`).
 
 ### Changed
 

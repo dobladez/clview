@@ -667,9 +667,9 @@ pub(crate) struct Request {
     /// For a picture a document shows on dark paper, of the colour [`Request::dark`]: a backend with a
     /// dark form of what it draws (a diagram's dark theme) draws that, with nothing behind it, so that
     /// the paper shows through, and at the size of its light form, since the document is laid out
-    /// around the picture once. A backend with no dark form draws as ever. Asked of a
-    /// [`Source::renderer`] alone, never of a pool, and only for a document's fenced blocks
-    /// ([`Format::fences`]): a file shown by itself, and a picture by path, are never asked so.
+    /// around the picture once. Asked of a [`Source::renderer`] alone, never of a pool, and only for
+    /// a document's picture whose source has a dark form ([`Source::dark_form`]), a fenced block's
+    /// ([`Format::fences`]) or a picture by path: a file shown by itself is never asked so.
     pub(crate) on_dark: bool,
 }
 
@@ -741,6 +741,11 @@ pub(crate) trait Source {
     /// document, a page as printed, white in its design. None by default.
     fn settings(&self) -> Vec<&'static str> {
         Vec::new()
+    }
+    /// Whether it has a dark form, drawn for a render [`Request::on_dark`] (a diagram's dark theme):
+    /// then a document that shows it as a picture asks for that on dark paper. None by default.
+    fn dark_form(&self) -> bool {
+        false
     }
     /// Find out page `page`'s true size, for a caller that may wait for it: printing. The pager never
     /// waits: until it is known, [`Source::size`] may be a stand-in ([`Later`]).
@@ -1143,6 +1148,9 @@ pub(crate) mod tests {
         }
         fn natural(&self, _page: usize) -> bool {
             false
+        }
+        fn dark_form(&self) -> bool {
+            true
         }
         fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
             Ok(Box::new(Sketch(self.0, self.1, self.2)))

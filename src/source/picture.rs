@@ -195,16 +195,16 @@ impl<'a> Pictures<'a> {
 
     /// The stand-in for the picture drawn from `origin`, and the promise to draw it.
     fn promised(&self, origin: Origin, fit: (f32, f32)) -> Option<Png> {
-        let (size, natural) = caught(|| {
+        let (size, natural, dark_form) = caught(|| {
             let source = origin.opened()?;
             let size = source.size(0).ok_or("it has no first page")?;
-            Ok((size, source.natural(0)))
+            Ok((size, source.natural(0), source.dark_form()))
         })
         .ok()?;
         let shown = shown(size, fit)?;
         let mut promises = self.promises.borrow_mut();
         let stand_in = Arc::new(stand_in(shown, promises.len()).ok()?);
-        promises.insert(stand_in.clone(), Promise { origin, scale: scale(size, natural, shown), shown, stand_in: stand_in.clone() });
+        promises.insert(stand_in.clone(), Promise { origin, scale: scale(size, natural, shown), shown, stand_in: stand_in.clone(), dark_form });
         Some(stand_in)
     }
 
@@ -276,13 +276,17 @@ struct Promise {
     shown: (f32, f32),
     /// What a document held until now, and holds again once it lets go of the picture.
     stand_in: Png,
+    /// Whether what it is drawn from has a dark form ([`Source::dark_form`]), as its source said
+    /// when it was measured.
+    dark_form: bool,
 }
 
 impl Promise {
-    /// Whether the picture is drawn for the paper it is shown on: a fenced block, which its backend
-    /// may draw otherwise on dark paper ([`Request::on_dark`]). A picture by path is one picture.
+    /// Whether the picture is drawn for the paper it is shown on: one whose source has a dark form,
+    /// drawn for dark paper ([`Request::on_dark`]), a fenced block's or a picture by path's. Any
+    /// other is one picture, on white where its ink is thin and near black.
     fn follows_paper(&self) -> bool {
-        matches!(self.origin, Origin::Block { .. })
+        self.dark_form
     }
 
     /// The picture, as a PNG; as a list's `tile` where the page is one, so that its backend leaves
@@ -374,7 +378,7 @@ impl Promised {
 
     /// Whether `key`, of what the document holds, is a fenced block's picture.
     pub(super) fn is_block(&self, key: &str) -> bool {
-        self.by_key.get(key).is_some_and(Promise::follows_paper)
+        self.by_key.get(key).is_some_and(|promise| matches!(promise.origin, Origin::Block { .. }))
     }
 
     /// Which of the document's blocks shown as code `name` is the marker of, if it is one
@@ -766,7 +770,10 @@ mod tests {
         std::fs::write(&path, png).unwrap();
         let promise = |key: &&str| {
             let stand_in = Arc::new(key.as_bytes().to_vec());
-            (key.to_string(), Promise { origin: Origin::Path(path.to_str().unwrap().to_owned()), scale: 1.0, shown: (1.0, 1.0), stand_in })
+            (
+                key.to_string(),
+                Promise { origin: Origin::Path(path.to_str().unwrap().to_owned()), scale: 1.0, shown: (1.0, 1.0), stand_in, dark_form: false },
+            )
         };
         Promised {
             by_key: keys.iter().map(promise).collect(),

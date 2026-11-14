@@ -93,7 +93,7 @@ High level, roughly in order; the details of each, and ideas not yet planned, ar
 - Plain text files (yes, not yet: ironic).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
-- `d` for drawings and a document's pictures too, not only Markdown and HTML.
+- `d` for drawings shown alone too, not only Markdown and HTML and their diagrams.
 - More documents: Org-mode, AsciiDoc and reStructuredText; ebooks (epub) as books.
 - A config file: customization, settings and positions remembered.
 - `/` as a search in lists too.

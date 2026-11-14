@@ -11,8 +11,9 @@
 //! answers is kept ([`Cache`]), by the diagram's bytes, so a diagram is turned into SVG once
 //! however often it is opened: a document's picture is opened to size it and again to draw it.
 //!
-//! A diagram a document shows on dark paper ([`Request::on_dark`], a fenced block's) is drawn again
-//! in Mermaid's dark theme, with nothing behind it ([`Theme`]); the cache keeps each theme's SVG.
+//! A diagram a document shows on dark paper ([`Request::on_dark`], a fenced block's or a picture by
+//! path's) is drawn again in Mermaid's dark theme, with nothing behind it ([`Theme`]); the cache
+//! keeps each theme's SVG.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
@@ -150,6 +151,11 @@ impl Source for Diagram {
 
     fn settings(&self) -> Vec<&'static str> {
         self.light.settings()
+    }
+
+    /// Mermaid's dark theme.
+    fn dark_form(&self) -> bool {
+        true
     }
 
     fn settle(&self, page: usize) {

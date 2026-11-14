@@ -694,8 +694,8 @@ where the dark theme lays a diagram out a little larger (a class diagram, a tent
 drawn that much smaller, in the middle of that room. A diagram's own theme (`%%{init: …}%%`) is its
 own on either paper. One that can't be drawn for a page's paper is a grey box there, the page
 saying so, never its drawing for the other paper; it isn't tried again until the document is laid
-out again. A diagram shown by path (`![a flow](flow.mmd)`) stays on white, as a `.mmd`
-file shown by itself does. A Word document, an RTF or a PDF is a page as printed, and stays so;
+out again. A diagram shown by path (`![a flow](flow.mmd)`) follows the paper the same way; a
+`.mmd` file shown by itself stays on white. A Word document, an RTF or a PDF is a page as printed, and stays so;
 `d` says so. What `c` copies is the page as it is shown
 ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 

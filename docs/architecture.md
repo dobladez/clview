@@ -356,15 +356,17 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   find a language to draw. A document's text for a search is told apart by how many blocks it shows
   as pictures (`fingerprint_of`, `Promised::fenced`), so a search kept across `s` starts over even
   where the paragraphs' count is the same.
-  A block follows its page's paper. `rendered` hands the paper to `Laid::drawn_pictures`, and a
-  promise from a block (`Promise::follows_paper`) is drawn with `Request::on_dark` set and the
+  A block follows its page's paper, and so does a picture by path whose source has a dark form
+  (`Source::dark_form`, a Mermaid diagram's), as its source said when it was measured.
+  `rendered` hands the paper to `Laid::drawn_pictures`, and a promise that follows its paper
+  (`Promise::follows_paper`) is drawn with `Request::on_dark` set and the
   paper's colour in `Request::dark`: the contract's way to tell a backend that a picture is on dark
   paper, which names no setting of the documents'. What a document holds of such a picture is for
   one paper at a time (`Held::for_dark`): a page on the other draws it again, and it takes the
   other's place, as a page's takes a tile's. Since pages render side by side and may want
   different papers or have a picture let go of, a page checks under the document's read lock that
   its pictures are held as it wants them (`Promised::settled`) and draws over if not, at most
-  `MAX_DRAWS` times. A block that can't be drawn for a page's paper shows its stand-in there, never
+  `MAX_DRAWS` times. A picture that can't be drawn for a page's paper shows its stand-in there, never
   the picture drawn for the other paper: `Promised::hold` lets go of one held for the other paper
   (`Held::for_the_other`) when the failure comes, and each time a page on the failed paper finds it
   held again, which `settled` tells and `drawn_pictures` then calls `hold` for with nothing drawn.

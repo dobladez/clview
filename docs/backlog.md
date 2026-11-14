@@ -8,12 +8,14 @@ ends not yet planned: not promised, and not in the Plans until they are. What `c
 
 ### `d` for drawings too
 
-An SVG or a Mermaid diagram shown alone, and a document's pictures by path, following the paper: an
-SVG on white or transparent, a diagram in Mermaid's default theme on white or its dark theme on the
-terminal's colour, a photograph as it is. A document's Mermaid blocks already do
-([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)): `Request::on_dark` tells a block's
-backend, and a picture by path could be told the same way. For a file shown alone the `paper`
-setting moves into the contract, so a backend reads it without naming the documents' backend.
+An SVG or a Mermaid diagram shown alone following the paper: an SVG on white or transparent, a
+diagram in Mermaid's default theme on white or its dark theme on the terminal's colour. A document's
+Mermaid blocks and diagrams by path already do
+([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)): `Request::on_dark` tells a picture's
+backend, for a source with a dark form (`Source::dark_form`). For a file shown alone the `paper`
+setting moves into the contract, so a backend reads it without naming the documents' backend: today
+the viewer asks the terminal's background only for a file with a setting that goes by it, and the
+light or dark it found is that setting's value alone.
 
 ### More diagram languages
 
