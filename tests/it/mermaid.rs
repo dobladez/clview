@@ -219,8 +219,12 @@ fn the_costliest_diagrams_merman_accepts_are_drawn_under_the_caps() {
     let out = view(&dir, &["--protocol", "kitty"]);
     let stderr = text(&out.stderr);
     assert!(!stderr.contains("merman took too") && !stderr.contains("merman failed"), "{stderr}");
-    // Each tile opened as it is printed: what fails is said at the end, by its page.
-    assert!(stderr.contains("z-nested-crossing.mmd: merman: resource limit"), "{stderr}");
+    // Each tile opened as it is printed: what fails is said at the end, by its page. merman refuses
+    // it with its own message: past a resource limit, or, on a machine slow enough to reach it first
+    // (CI's), past its deadline (ADR-0031); either way before the worker's caps.
+    let refused =
+        ["z-nested-crossing.mmd: merman: resource limit", "z-nested-crossing.mmd: merman: operation cancelled during layout: deadline_exceeded"];
+    assert!(refused.iter().any(|said| stderr.contains(said)), "{stderr}");
     // Drawn by merman, its 496 edges' arrowheads are past the SVG backend's own limits.
     assert!(stderr.contains("complete-32.mmd: it comes to more than 128 MiB once what its uses, markers and references repeat"), "{stderr}");
     assert!(!out.status.success());
