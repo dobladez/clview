@@ -246,8 +246,9 @@ fn in_the_room_of(room: Option<(f32, f32)>, dark: &dyn Source, request: Request)
 /// around it; as it is where its pixels aren't what it says they are.
 fn centred(frame: Frame, width: u32, height: u32) -> Frame {
     // Each a `u32`, and their product within `MAX_FRAME`, which the caller checked.
-    let (row, drawn_row) = (width as usize * 4, frame.width as usize * 4);
-    let (left, top) = ((width.saturating_sub(frame.width) / 2) as usize * 4, (height.saturating_sub(frame.height) / 2) as usize);
+    let (row, drawn_row) = ((width as usize).saturating_mul(4), (frame.width as usize).saturating_mul(4));
+    let left = ((width.saturating_sub(frame.width) / 2) as usize).saturating_mul(4);
+    let top = (height.saturating_sub(frame.height) / 2) as usize;
     if drawn_row == 0 || frame.rgba.len() != drawn_row.saturating_mul(frame.height as usize) {
         return frame;
     }
