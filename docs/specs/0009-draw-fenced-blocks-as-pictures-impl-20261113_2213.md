@@ -185,3 +185,83 @@ which restarts a search by itself. The one-line block was added for it.
 
 **Verify:** the pager's tests ran with their 60 s of patience cut to 8 s while they were seen
 failing, and put back. The manual check, in kitty and inside a private tmux, is the owner's.
+
+## Task 4: Blocks on the document's paper
+
+**An assumption of the spec was false.** It had `d` a redraw with no relayout because "a theme
+doesn't change a diagram's size, which the test checks". The test said otherwise: merman's dark
+theme lays a flowchart out 1% larger, an ER diagram 8% wider and a class diagram 10% wider and 3%
+taller; sequence diagrams, pies and gantt charts are the same (ADR-0032's Evidence). Raised with
+the owner the moment it showed, with three ways on: fit the dark drawing into the light one's room,
+lay the document out again on `d`, or stretch it. The first is built, as the one that keeps every
+decision the spec made (a redraw, Mermaid's own dark theme, on the paper's colour) and gives up
+only the assumption; the spec's requirement and task 4's Verify are revised to say so, in its
+Changelog, **for the owner to confirm**.
+
+**Decided here:**
+
+- **`Request::on_dark`**, a flag, beside `Request::dark`, the paper's colour: how a picture is
+  told it is on dark paper. It names no setting. Asked of a `Source::renderer` alone, which is how
+  `picture.rs` draws; a pool is never asked so, and Mermaid's hands its pool to the light drawing.
+- **Mermaid opens to a source of its own, `Diagram`**: the light SVG's source, the diagram's text
+  and its path. Everything is the light drawing's but a render with `on_dark`, which draws the
+  dark SVG, asked of the worker as `DRAW_DARK` when the first such request comes and kept in the
+  cache under its `Theme`. A `.mmd` shown by itself, in a list, or by path goes through the same
+  source and is never asked for dark.
+- **The dark drawing in the light one's room** (`in_the_room_of`, `centred`): rendered at the
+  request's scale times what fits the light drawing's size, never more than 1, then put in the
+  middle of a transparent frame the light one's size. No distortion, nothing on the page moves,
+  and a dark class diagram is a tenth smaller than its light twin. The contract says it: a dark
+  form comes "at the size of its light form".
+- **A diagram's own theme stays its own** on dark paper: `dark` is merman's site theme, which a
+  diagram's `%%{init}%%` overrides, as on a web page whose theme is dark. A diagram themed for
+  white is then dark ink on dark paper. Forcing the dark theme would throw away the colours a
+  diagram chose. Also for the owner to confirm.
+- **What a document holds of a block is for one paper** (`Held::for_dark`): the other paper's
+  takes its place, as a page's takes a tile's, so the 256 MiB hold one PNG a block. A failure is
+  kept by paper, so a block that fails in the dark theme is still tried on light paper.
+- **A picture drawn for dark paper is never put on white:** `thin_and_near_black` is for ink made
+  for white paper, and Mermaid's dark nodes (`#1f2020`) on nothing would have passed for it.
+- **A page checks its pictures under the read lock** (`Promised::settled`, at most `MAX_DRAWS`
+  rounds). With a picture drawn for one paper at a time, two pages rendering side by side for
+  different papers (a stale request after `d`) could each take the other's; and it also closes
+  the older gap where a picture is let go of between a page holding it and rendering.
+
+**A surprise in the tests:** in the unit tests a worker is a thread of the test process, and all of
+them share the six a viewer may have at once, the SVG backend's labels' among them. Two new tests
+that each kept a Mermaid worker idle for its two seconds made two SVG label tests fail (`too many`,
+so their labels were left out). The tests that draw several diagrams now take turns (`TURN`) and let
+go of their worker at the end, the older `what_the_worker_answers_…` included, and the new test
+puts what its own worker drew into the backend's cache before it opens a diagram, so that `open`
+starts none. The unit suite passed three runs in a row after.
+
+**Files beyond the plan's:** `src/view/mod.rs` and `src/source/wordcraft.rs`'s test (a `Request`
+written whole), `docs/architecture.md`, `docs/backlog.md` (the plan for `d` on drawings: blocks
+already do), `CHANGELOG.md`, `CONTRIBUTING.md`.
+
+**Each test seen failing:**
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `a_fenced_block_is_drawn_again_for_the_other_paper`, `a_mermaid_block_follows_its_documents_paper`, `d_draws_a_documents_block_again_for_its_paper_…` | `Promise::draw` never setting `on_dark` | red where blue was due; 44,811 white pixels on the dark page; the pager's page not dark |
+| `a_picture_by_path_is_the_same_on_either_paper`, `a_mermaid_picture_by_path_is_unchanged_on_dark_paper` | every promise following its paper | not held for light paper; no white behind the picture |
+| `the_cache_keeps_each_themes_svg_apart` | `Cache::get` not looking at the theme | the light SVG for dark |
+| `a_diagram_for_dark_paper_is_in_the_dark_theme_on_nothing_in_the_light_ones_room` | the site's `theme` not set; then `in_the_room_of` left out | no `#1f2020` in the flowchart; frames of 1221 × 366 and 1231 × 370 |
+| `a_frame_is_centred_in_a_larger_one` | `centred` putting the frame at the left | the pixels at the left |
+| `d_draws_…_and_lays_the_diagram_out_once_a_theme` | the cache not answering for the dark theme | a worker on the second turn to dark |
+
+The by-path test first passed with its fix reverted, because the cache's revert was in the same
+build and gave it the light SVG; alone, it failed.
+
+**Verify:** the manual check, in kitty with a dark background, is the owner's.
+
+## What is left
+
+- Every task's code, tests and docs are committed, and each task's box is open: all four end
+  with a manual check in kitty (the third in tmux too), which only the owner can do. The spec
+  stays `Implementing` until they are confirmed.
+- For the owner to confirm: the four ways HTML says a block's language (task 2), the dark drawing
+  fitted into the light one's room, and a diagram's own theme kept on dark paper (task 4).
+- In the backlog: a bound on what a document's blocks cost in all.
+- Noticed, left alone: in a list, `s` says `open a document to reflow it`, the viewer's words for
+  every relayout setting, which fit a width better than blocks.

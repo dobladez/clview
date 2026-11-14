@@ -1430,6 +1430,41 @@ fn a_search_reads_a_block_shown_as_code_and_not_one_drawn() {
     }
 }
 
+/// `d` on a document with a diagram draws its block again for the paper: in Mermaid's dark theme on
+/// a dark terminal's own colour, nothing white behind it, then in the default theme on white, and
+/// back. The diagram is laid out once a theme: turned to a paper it was on before, no worker starts.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn d_draws_a_documents_block_again_for_its_paper_and_lays_the_diagram_out_once_a_theme() {
+    if !pty_works() {
+        return;
+    }
+    let path = crate::view::tmp("pager-paper", "flow.md");
+    std::fs::write(&path, "```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi\n```\n").unwrap();
+    let on_dark = |page: &::image::RgbImage| {
+        let white = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v > 240)).count();
+        let light_ink = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v > 150)).count();
+        page.get_pixel(0, 0).0 == DARK_COLOUR && white == 0 && light_ink > 200
+    };
+    let on_light = |page: &::image::RgbImage| {
+        let dark_ink = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v < 128)).count();
+        page.get_pixel(0, 0).0 == [255; 3] && dark_ink > 200
+    };
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &path, &["--pager"], 100, 40);
+    let (mut shown, page) = next_image(&view, "on the terminal's dark", 0);
+    assert!(on_dark(&page), "in the dark theme, on the terminal's colour");
+    no_mermaid_worker(&view, "both themes laid out");
+    for (turn, dark) in [(1, false), (2, true), (3, false)] {
+        view.press("d");
+        let (next, page) = next_image(&view, "turned", shown);
+        assert!(if dark { on_dark(&page) } else { on_light(&page) }, "turn {turn}");
+        assert!(mermaid_workers(&view).is_empty(), "turn {turn}: the diagram laid out again");
+        shown = next;
+    }
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// What the status line last said, each run of spaces made one: from the last time it was written,
 /// with the screen or by itself.
 pub(crate) fn last_bar(text: &str) -> String {

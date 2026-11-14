@@ -10,6 +10,9 @@
 //! it dies, killed once idle, and not started for a while after a few killed in a row. What it
 //! answers is kept ([`Cache`]), by the diagram's bytes, so a diagram is turned into SVG once
 //! however often it is opened: a document's picture is opened to size it and again to draw it.
+//!
+//! A diagram a document shows on dark paper ([`Request::on_dark`], a fenced block's) is drawn again
+//! in Mermaid's dark theme, with nothing behind it ([`Theme`]); the cache keeps each theme's SVG.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
@@ -21,7 +24,10 @@ use merman::model::resources::{InputResourcePolicy, ResourceProfile};
 use merman::{OperationControl, RenderOutput, RenderRequest, Renderer, SemanticParser, SvgRequest};
 
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
-use super::{Again, BACKENDS, Backend, Deferred, Format, HEAD, Input, Opened};
+use super::{
+    Again, Anchor, BACKENDS, Backend, Bounds, Deferred, Format, Frame, HEAD, Input, Job, Opened, Pixels, Pool, Render, Request, Room, Source, Texts,
+    Values,
+};
 use crate::args::{OptionSpec, Parsed};
 
 /// Mermaid diagrams, turned into SVG by merman.
@@ -73,16 +79,185 @@ impl Backend for Mermaid {
         let Some(bytes) = input.at_most(MAX_SOURCE)? else {
             return Err(error(format!("the diagram is more than {} MiB", MAX_SOURCE >> 20)));
         };
-        let svg = drawn(&SERVICE, &CACHE, bytes).map_err(error)?;
-        let head = svg.get(..HEAD as usize).unwrap_or(&svg).to_vec();
-        let again: Again = Arc::new(move || Ok(svg.to_vec()));
-        let drawing = Input::held(path, head, again);
-        // Not this one: what merman draws is never a diagram.
-        let Some(backend) = BACKENDS.iter().filter(|b| b.name() != self.name()).find(|b| b.opens(&drawing.path, &drawing.head)) else {
-            return Err(format!("{}: a diagram is shown as the SVG merman draws, and no backend opens that", drawing.path));
-        };
-        backend.open(drawing, options)
+        let text = Arc::new(bytes);
+        let svg = drawn(&SERVICE, &CACHE, &text, Theme::Light).map_err(error)?;
+        Ok(match shown(&path, svg, options)? {
+            Opened::Pages(light) => Opened::Pages(Box::new(Diagram { light, text, path })),
+            files => files,
+        })
     }
+}
+
+/// `svg`, what merman drew of the diagram at `path`, opened by the backend that shows it, with
+/// `options`: found as any file's backend is, by how it starts, never by name.
+fn shown(path: &str, svg: Arc<Vec<u8>>, options: &Parsed<'_>) -> Result<Opened, String> {
+    let head = svg.get(..HEAD as usize).unwrap_or(&svg).to_vec();
+    let again: Again = Arc::new(move || Ok(svg.to_vec()));
+    let drawing = Input::held(path.to_owned(), head, again);
+    // Not this one: what merman draws is never a diagram.
+    let Some(backend) = BACKENDS.iter().filter(|b| b.name() != Mermaid.name()).find(|b| b.opens(&drawing.path, &drawing.head)) else {
+        return Err(format!("{}: a diagram is shown as the SVG merman draws, and no backend opens that", drawing.path));
+    };
+    backend.open(drawing, options)
+}
+
+/// How a diagram is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Theme {
+    /// In Mermaid's default theme, on white: a diagram shown by itself, as a picture by path, and as
+    /// a document's block on light paper.
+    Light,
+    /// In Mermaid's dark theme, with nothing behind it: a document's block on dark paper, which shows
+    /// through. A diagram's own `%%{init}%%` theme and colours still apply, as they do on a web page
+    /// whose theme is dark.
+    Dark,
+}
+
+/// A diagram, open: its SVG in Mermaid's default theme, opened by the backend that shows it, which
+/// shows it wherever it is shown by itself; and its text, for a document that shows it on dark paper
+/// to have it drawn again in the dark theme.
+struct Diagram {
+    light: Box<dyn Source + Send>,
+    text: Arc<Vec<u8>>,
+    path: String,
+}
+
+impl Diagram {
+    /// The diagram in the dark theme, opened by the backend that shows its SVG, or why not.
+    fn dark(&self) -> Result<Box<dyn Source + Send>, String> {
+        let error = |e: String| format!("{}: {e}", self.path);
+        let svg = drawn(&SERVICE, &CACHE, &self.text, Theme::Dark).map_err(error)?;
+        match shown(&self.path, svg, &Parsed::default())? {
+            Opened::Pages(dark) => Ok(dark),
+            Opened::Files(_) => Err(error("its SVG holds files".into())),
+        }
+    }
+}
+
+/// Everything is the light drawing's, as its backend shows it; but a render for dark paper.
+impl Source for Diagram {
+    fn pages(&self) -> usize {
+        self.light.pages()
+    }
+
+    fn size(&self, page: usize) -> Option<(f32, f32)> {
+        self.light.size(page)
+    }
+
+    fn natural(&self, page: usize) -> bool {
+        self.light.natural(page)
+    }
+
+    fn settings(&self) -> Vec<&'static str> {
+        self.light.settings()
+    }
+
+    fn settle(&self, page: usize) {
+        self.light.settle(page);
+    }
+
+    /// The light drawing's renderer, and for a request on dark paper the dark drawing's, drawn when
+    /// the first such request comes.
+    fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
+        Ok(Box::new(OnPaper { diagram: self, light: self.light.renderer()?, dark: None }))
+    }
+
+    fn pool(&self, threads: usize) -> Box<dyn Pool> {
+        self.light.pool(threads)
+    }
+
+    fn laid_at(&self) -> (Values, Option<Room>) {
+        self.light.laid_at()
+    }
+
+    fn relayout(&self, values: Values, room: Room) -> Option<Job> {
+        self.light.relayout(values, room)
+    }
+
+    fn largest_scale(&self, page: usize) -> Option<f32> {
+        self.light.largest_scale(page)
+    }
+
+    fn bounds(&self, setting: &str, room: Room, values: Values) -> Option<Bounds> {
+        self.light.bounds(setting, room, values)
+    }
+
+    fn anchor(&self, page: usize, y: f32) -> Option<Anchor> {
+        self.light.anchor(page, y)
+    }
+
+    fn find(&self, anchor: &Anchor) -> Option<(usize, f32)> {
+        self.light.find(anchor)
+    }
+
+    fn texts(&self) -> Option<Box<dyn Texts>> {
+        self.light.texts()
+    }
+}
+
+/// A diagram's renderer: the light drawing's, and the dark one's for a request on dark paper.
+struct OnPaper<'a> {
+    diagram: &'a Diagram,
+    light: Box<dyn Render + 'a>,
+    /// The dark drawing, once asked for, or why there is none.
+    dark: Option<Result<Box<dyn Source + Send>, String>>,
+}
+
+impl Render for OnPaper<'_> {
+    fn render(&mut self, request: Request) -> Frame {
+        if !request.on_dark {
+            return self.light.render(request);
+        }
+        let dark = self.dark.get_or_insert_with(|| self.diagram.dark());
+        let room = self.diagram.light.size(request.page);
+        let rendered = dark.as_ref().map_err(String::clone).and_then(|dark| in_the_room_of(room, &**dark, request));
+        rendered.unwrap_or_else(|why| Frame::failed(request, why))
+    }
+}
+
+/// The most pixels of the frame a dark drawing is put in the middle of: 64 million, 256 MiB.
+const MAX_FRAME: u64 = 64_000_000;
+
+/// `dark`, a diagram's dark drawing, rendered for `request` in the room its light drawing takes, of
+/// the size `room`: a document is laid out around the light one, and Mermaid's dark theme lays some
+/// diagrams out a little larger (a class diagram a tenth wider, ADR-0032). So it is drawn at the
+/// request's scale where it is no larger than that room, and smaller where it is, its shape kept;
+/// then put in the middle of a frame the light one's size, with nothing around it.
+fn in_the_room_of(room: Option<(f32, f32)>, dark: &dyn Source, request: Request) -> Result<Frame, String> {
+    let mut renderer = dark.renderer()?;
+    let (Some((room_w, room_h)), Some((w, h))) = (room, dark.size(request.page)) else { return Ok(renderer.render(request)) };
+    let fit = Some((room_w / w).min(room_h / h).min(1.0)).filter(|fit| fit.is_finite() && *fit > 0.0).unwrap_or(1.0);
+    let frame = renderer.render(Request { scale: request.scale * fit, ..request });
+    let frame = Frame { request, ..frame };
+    if frame.error.is_some() || frame.again {
+        return Ok(frame);
+    }
+    // The light drawing's frame, in whole pixels, and never smaller than what was drawn. The cast
+    // is of a number between 1 and 2^31.
+    let side = |points: f32, drawn: u32| ((f64::from(points) * f64::from(request.scale)).ceil().clamp(1.0, 2_147_483_648.0) as u32).max(drawn);
+    let (width, height) = (side(room_w, frame.width), side(room_h, frame.height));
+    if (width, height) == (frame.width, frame.height) || u64::from(width).saturating_mul(u64::from(height)) > MAX_FRAME {
+        return Ok(frame);
+    }
+    Ok(centred(frame, width, height))
+}
+
+/// `frame` in the middle of one `width` by `height` pixels, each at least its own, with nothing
+/// around it; as it is where its pixels aren't what it says they are.
+fn centred(frame: Frame, width: u32, height: u32) -> Frame {
+    // Each a `u32`, and their product within `MAX_FRAME`, which the caller checked.
+    let (row, drawn_row) = (width as usize * 4, frame.width as usize * 4);
+    let (left, top) = ((width.saturating_sub(frame.width) / 2) as usize * 4, (height.saturating_sub(frame.height) / 2) as usize);
+    if drawn_row == 0 || frame.rgba.len() != drawn_row.saturating_mul(frame.height as usize) {
+        return frame;
+    }
+    let mut pixels = vec![0u8; row.saturating_mul(height as usize)];
+    for (into, from) in pixels.chunks_exact_mut(row).skip(top).zip(frame.rgba.chunks_exact(drawn_row)) {
+        if let Some(into) = into.get_mut(left..left.saturating_add(drawn_row)) {
+            into.copy_from_slice(from);
+        }
+    }
+    Frame { width, height, rgba: Pixels::new(pixels), ..frame }
 }
 
 /// The largest diagram read: 1 MiB, merman's own limit on a diagram's text.
@@ -171,6 +346,9 @@ fn kinds() -> impl Iterator<Item = &'static str> {
 /// A diagram's text, to draw: the request.
 const DRAW: u8 = 1;
 
+/// A diagram's text, to draw in the dark theme: a request too.
+const DRAW_DARK: u8 = 4;
+
 /// Its SVG: an answer.
 const DRAWN: u8 = 2;
 
@@ -206,7 +384,7 @@ impl Worker for Diagrams {
 
     fn takes(&self, kind: u8) -> Option<(u64, usize)> {
         // Within MAX_SOURCE, which is 1 MiB.
-        (kind == DRAW).then_some((DRAW_CPU, MAX_SOURCE as usize))
+        matches!(kind, DRAW | DRAW_DARK).then_some((DRAW_CPU, MAX_SOURCE as usize))
     }
 
     fn heap(&self) -> usize {
@@ -214,20 +392,25 @@ impl Worker for Diagrams {
     }
 
     fn session(&self) -> Box<dyn Session> {
-        Box::new(Drawing(None))
+        Box::new(Drawing { light: None, dark: None })
     }
 }
 
-/// What the worker keeps between diagrams: merman's renderer, made for the first (some 40 ms).
-struct Drawing(Option<Renderer>);
+/// What the worker keeps between diagrams: merman's renderer for each theme, made for the first
+/// diagram drawn in it (some 40 ms).
+struct Drawing {
+    light: Option<Renderer>,
+    dark: Option<Renderer>,
+}
 
 impl Session for Drawing {
     fn answer(&mut self, kind: u8, payload: Vec<u8>) -> (u8, Vec<u8>) {
         let Ok(text) = String::from_utf8(payload) else { return (FAILED, vec![MALFORMED]) };
-        if kind != DRAW {
-            return (FAILED, vec![MALFORMED]);
-        }
-        let renderer = self.0.get_or_insert_with(renderer);
+        let renderer = match kind {
+            DRAW => self.light.get_or_insert_with(|| renderer(Theme::Light)),
+            DRAW_DARK => self.dark.get_or_insert_with(|| renderer(Theme::Dark)),
+            _ => return (FAILED, vec![MALFORMED]),
+        };
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| svg(renderer, &text)));
         match drawn.unwrap_or_else(|_| Err("merman failed on it".into())) {
             Ok(svg) if svg.len() > MAX_SVG => (REFUSED, format!("its SVG is more than {} MiB", MAX_SVG >> 20).into_bytes()),
@@ -239,14 +422,18 @@ impl Session for Drawing {
 
 /// merman's renderer, as clv draws with it: labels as SVG `<text>`, which a diagram's own
 /// configuration can't turn back into HTML, nor raise Mermaid's other secure settings (its limit on
-/// edges among them); within merman's `Constrained` limits.
-fn renderer() -> Renderer {
-    let config = serde_json::json!({
+/// edges among them); within merman's `Constrained` limits. In `theme`: Mermaid's default, or its
+/// dark one as the site's, which a diagram's own configuration may still change, as on a web page.
+fn renderer(theme: Theme) -> Renderer {
+    let mut config = serde_json::json!({
         "htmlLabels": false,
         "flowchart": { "htmlLabels": false },
         "maxEdges": MAX_EDGES,
         "secure": ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "htmlLabels"],
     });
+    if let (Theme::Dark, Some(config)) = (theme, config.as_object_mut()) {
+        config.insert("theme".into(), "dark".into());
+    }
     let parser = SemanticParser::new().with_site_config(MermaidConfig::from_value(config));
     Renderer::new().with_semantic_parser(parser).with_resource_policy(InputResourcePolicy::for_profile(ResourceProfile::Constrained))
 }
@@ -294,28 +481,32 @@ enum Failed {
     Passing(String),
 }
 
-/// The SVG `source` is drawn to, from `cache` or from `service`'s worker; or why not, for the reader.
-fn drawn(service: &'static Service, cache: &Cache, source: Vec<u8>) -> Result<Arc<Vec<u8>>, String> {
-    if std::str::from_utf8(&source).is_err() {
+/// The SVG `source` is drawn to in `theme`, from `cache` or from `service`'s worker; or why not, for
+/// the reader. In the light theme it is put on white; in the dark one it is left on nothing.
+fn drawn(service: &'static Service, cache: &Cache, source: &Arc<Vec<u8>>, theme: Theme) -> Result<Arc<Vec<u8>>, String> {
+    if std::str::from_utf8(source).is_err() {
         return Err("the diagram isn't UTF-8 text".into());
     }
-    if let Some(kept) = cache.get(&source) {
+    if let Some(kept) = cache.get(source, theme) {
         return kept;
     }
     // Its turn: diagrams opened at once wait for it here, and one drawn meanwhile is in the cache.
     let mut turn = service.turn();
-    if let Some(kept) = cache.get(&source) {
+    if let Some(kept) = cache.get(source, theme) {
         return kept;
     }
-    let source = Arc::new(source);
-    match service.ask(&mut turn, source.clone()) {
+    match service.ask(&mut turn, source.clone(), theme) {
         Ok(svg) => {
-            let svg = Arc::new(on_white(svg).into_bytes());
-            cache.put(&source, Ok(svg.clone()));
+            let svg = match theme {
+                Theme::Light => on_white(svg),
+                Theme::Dark => svg,
+            };
+            let svg = Arc::new(svg.into_bytes());
+            cache.put(source, theme, Ok(svg.clone()));
             Ok(svg)
         }
         Err(Failed::Kept(why)) => {
-            cache.put(&source, Err(why.clone()));
+            cache.put(source, theme, Err(why.clone()));
             Err(why)
         }
         Err(Failed::Passing(why)) => Err(why),
@@ -419,9 +610,9 @@ impl Service {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The worker's SVG for `source`, a diagram's UTF-8 text, in `state`, the turn held; a worker
-    /// started first if there is none.
-    fn ask(&'static self, state: &mut State, source: Arc<Vec<u8>>) -> Result<String, Failed> {
+    /// The worker's SVG for `source`, a diagram's UTF-8 text, drawn in `theme`, in `state`, the turn
+    /// held; a worker started first if there is none.
+    fn ask(&'static self, state: &mut State, source: Arc<Vec<u8>>, theme: Theme) -> Result<String, Failed> {
         if let Some(since) = state.paused {
             if since.elapsed() < PAUSE {
                 let why = format!("{MAX_KILLS} diagrams in a row were too much for merman: none is drawn for a minute after");
@@ -441,7 +632,11 @@ impl Service {
         }
         let Some(link) = state.link.as_mut() else { return Err(Failed::Passing(said(&Died::Unstarted("none started".into())))) };
         let wall = Duration::from_secs(DRAW_CPU.saturating_mul(u64::from(WALL)));
-        let asked = link.request_shared(DRAW, source, wall, MAX_SVG);
+        let kind = match theme {
+            Theme::Light => DRAW,
+            Theme::Dark => DRAW_DARK,
+        };
+        let asked = link.request_shared(kind, source, wall, MAX_SVG);
         let answer = match asked {
             Ok((DRAWN, svg)) => String::from_utf8(svg).map_err(|_| link.refuse()),
             Ok((REFUSED, why)) if why.len() <= MAX_WHY => match String::from_utf8(why) {
@@ -516,8 +711,8 @@ const MAX_CACHED_BYTES: usize = 64 << 20;
 /// The most diagrams the cache keeps.
 const MAX_CACHED: usize = 4_096;
 
-/// What the worker answered for each diagram, by its bytes: its SVG, or why it failed. At most
-/// `bytes` of diagrams and SVG and `most` diagrams, those used longest ago let go of first.
+/// What the worker answered for each diagram in each theme, by its bytes: its SVG, or why it failed.
+/// At most `bytes` of diagrams and SVG and `most` of them, those used longest ago let go of first.
 struct Cache {
     kept: Mutex<Kept>,
     bytes: usize,
@@ -535,6 +730,7 @@ struct Kept {
 
 struct Entry {
     hash: u64,
+    theme: Theme,
     source: Arc<Vec<u8>>,
     drawn: Result<Arc<Vec<u8>>, String>,
 }
@@ -555,27 +751,27 @@ impl Cache {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// What `source` came to, if it is kept: found by its hash, taken by its bytes.
-    fn get(&self, source: &[u8]) -> Option<Result<Arc<Vec<u8>>, String>> {
+    /// What `source` came to in `theme`, if it is kept: found by its hash, taken by its bytes.
+    fn get(&self, source: &[u8], theme: Theme) -> Option<Result<Arc<Vec<u8>>, String>> {
         let hash = hashed(source);
         let mut kept = self.lock();
-        let at = kept.entries.iter().position(|entry| entry.hash == hash && entry.source.as_slice() == source)?;
+        let at = kept.entries.iter().position(|entry| entry.hash == hash && entry.theme == theme && entry.source.as_slice() == source)?;
         let entry = kept.entries.remove(at);
         let drawn = entry.drawn.clone();
         kept.entries.push(entry);
         Some(drawn)
     }
 
-    /// `source` kept as having come to `drawn`, those used longest ago let go of to make room. One
-    /// larger than the whole cache isn't kept.
-    fn put(&self, source: &Arc<Vec<u8>>, drawn: Result<Arc<Vec<u8>>, String>) {
-        let entry = Entry { hash: hashed(source), source: source.clone(), drawn };
+    /// `source` kept as having come to `drawn` in `theme`, those used longest ago let go of to make
+    /// room. One larger than the whole cache isn't kept.
+    fn put(&self, source: &Arc<Vec<u8>>, theme: Theme, drawn: Result<Arc<Vec<u8>>, String>) {
+        let entry = Entry { hash: hashed(source), theme, source: source.clone(), drawn };
         let size = entry.bytes();
         if size > self.bytes {
             return;
         }
         let mut kept = self.lock();
-        if let Some(at) = kept.entries.iter().position(|e| e.hash == entry.hash && e.source == entry.source) {
+        if let Some(at) = kept.entries.iter().position(|e| e.hash == entry.hash && e.theme == theme && e.source == entry.source) {
             let old = kept.entries.remove(at);
             kept.bytes = kept.bytes.saturating_sub(old.bytes());
         }
@@ -598,6 +794,22 @@ fn hashed(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`drawn`], in the light theme.
+    fn light(service: &'static Service, cache: &Cache, source: Vec<u8>) -> Result<Arc<Vec<u8>>, String> {
+        drawn(service, cache, &Arc::new(source), Theme::Light)
+    }
+
+    impl Cache {
+        /// [`Cache::get`] and [`Cache::put`], in the light theme.
+        fn got(&self, source: &[u8]) -> Option<Result<Arc<Vec<u8>>, String>> {
+            self.get(source, Theme::Light)
+        }
+
+        fn keep(&self, source: &Arc<Vec<u8>>, drawn: Result<Arc<Vec<u8>>, String>) {
+            self.put(source, Theme::Light, drawn);
+        }
+    }
 
     /// A `.mmd` is a diagram by its first line, past what may come before it, and only by merman's
     /// kinds, in their case; a `.mermaid` by being text.
@@ -651,31 +863,37 @@ mod tests {
         let source = |s: &str| Arc::new(s.as_bytes().to_vec());
         let svg = |n: usize| Ok(Arc::new(vec![b'x'; n]));
         let (a, b, c, d) = (source("a"), source("b"), source("c"), source("d"));
-        cache.put(&a, svg(10));
-        cache.put(&b, Err("refused".into()));
-        cache.put(&c, svg(10));
-        assert_eq!(cache.get(&b), Some(Err("refused".into())), "a failure kept");
-        assert!(cache.get(&a).is_some(), "a used: b and c are older");
-        cache.put(&d, svg(10));
-        assert!(cache.get(&b).is_some() && cache.get(&c).is_none(), "three at most: c went, used longest ago");
-        cache.put(&c, svg(85));
-        assert!(cache.get(&c).is_some() && cache.get(&d).is_none() && cache.get(&a).is_none(), "100 bytes at most");
+        cache.keep(&a, svg(10));
+        cache.keep(&b, Err("refused".into()));
+        cache.keep(&c, svg(10));
+        assert_eq!(cache.got(&b), Some(Err("refused".into())), "a failure kept");
+        assert!(cache.got(&a).is_some(), "a used: b and c are older");
+        cache.keep(&d, svg(10));
+        assert!(cache.got(&b).is_some() && cache.got(&c).is_none(), "three at most: c went, used longest ago");
+        cache.keep(&c, svg(85));
+        assert!(cache.got(&c).is_some() && cache.got(&d).is_none() && cache.got(&a).is_none(), "100 bytes at most");
         assert_eq!(cache.lock().bytes, 86 + 8);
-        cache.put(&a, svg(100));
-        assert!(cache.get(&a).is_none() && cache.get(&c).is_some(), "larger than the cache: not kept");
-        cache.put(&c, svg(1));
-        assert_eq!(cache.get(&c).map(|kept| kept.map(|svg| svg.len())), Some(Ok(1)), "replaced");
+        cache.keep(&a, svg(100));
+        assert!(cache.got(&a).is_none() && cache.got(&c).is_some(), "larger than the cache: not kept");
+        cache.keep(&c, svg(1));
+        assert_eq!(cache.got(&c).map(|kept| kept.map(|svg| svg.len())), Some(Ok(1)), "replaced");
         assert_eq!(cache.lock().bytes, 2 + 8);
         // Found by its bytes, not its hash alone.
         let e = source("e");
-        cache.lock().entries.push(Entry { hash: hashed(&e), source: source("f"), drawn: svg(1) });
-        assert!(cache.get(&e).is_none());
+        cache.lock().entries.push(Entry { hash: hashed(&e), theme: Theme::Light, source: source("f"), drawn: svg(1) });
+        assert!(cache.got(&e).is_none());
     }
+
+    /// The tests that draw several diagrams through a real worker take turns, and let go of their
+    /// worker when they are done: in the tests a worker is a thread of this process, and every test's
+    /// share the six a viewer may have at once, the SVG backend's among them.
+    static TURN: Mutex<()> = Mutex::new(());
 
     /// A diagram is drawn once: asked again, it is the cache's. merman's refusal is kept too, but
     /// not a worker that couldn't be started, which may be later.
     #[test]
     fn what_the_worker_answers_is_kept_but_for_no_worker() {
+        let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
         static STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         static SERVICE: Service = Service::new(|| {
             STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -683,21 +901,22 @@ mod tests {
         });
         let cache = Cache::new(MAX_CACHED_BYTES, MAX_CACHED);
         let flow = b"flowchart LR\n  a --> b\n".to_vec();
-        let svg = drawn(&SERVICE, &cache, flow.clone()).unwrap();
+        let svg = light(&SERVICE, &cache, flow.clone()).unwrap();
         assert!(svg.starts_with(b"<svg"), "{:?}", String::from_utf8_lossy(&svg[..40]));
         SERVICE.turn().link = None;
-        assert!(Arc::ptr_eq(&drawn(&SERVICE, &cache, flow).unwrap(), &svg), "kept");
+        assert!(Arc::ptr_eq(&light(&SERVICE, &cache, flow).unwrap(), &svg), "kept");
         assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 1, "no worker asked");
         let broken = b"flowchart TD\n  A[[[ (((\n".to_vec();
-        let why = drawn(&SERVICE, &cache, broken.clone()).unwrap_err();
+        let why = light(&SERVICE, &cache, broken.clone()).unwrap_err();
         assert!(why.starts_with("merman: ") && why.len() <= MAX_WHY + 8, "{why}");
-        assert_eq!(cache.get(&broken), Some(Err(why)));
-        assert_eq!(drawn(&SERVICE, &cache, b"\xff".to_vec()), Err("the diagram isn't UTF-8 text".into()));
+        assert_eq!(cache.got(&broken), Some(Err(why)));
+        assert_eq!(light(&SERVICE, &cache, b"\xff".to_vec()), Err("the diagram isn't UTF-8 text".into()));
         static FULL: Service = Service::new(|| Err(Died::TooMany));
         let pie = b"pie\n  \"a\" : 1\n".to_vec();
-        let why = drawn(&FULL, &cache, pie.clone()).unwrap_err();
+        let why = light(&FULL, &cache, pie.clone()).unwrap_err();
         assert!(why.starts_with("too many of clv's worker processes at once"), "{why}");
-        assert_eq!(cache.get(&pie), None, "not kept");
+        assert_eq!(cache.got(&pie), None, "not kept");
+        SERVICE.turn().link = None;
     }
 
     /// The worker is killed once idle, 2 s after its last answer, and not before; the next diagram
@@ -707,7 +926,7 @@ mod tests {
         static SERVICE: Service = Service::new(|| worker::spawn(&DIAGRAMS));
         let cache = Cache::new(MAX_CACHED_BYTES, MAX_CACHED);
         let alive = || SERVICE.turn().link.is_some();
-        drawn(&SERVICE, &cache, b"flowchart LR\n  a --> b\n".to_vec()).unwrap();
+        light(&SERVICE, &cache, b"flowchart LR\n  a --> b\n".to_vec()).unwrap();
         let answered = Instant::now();
         assert!(alive());
         std::thread::sleep(Duration::from_millis(1_500));
@@ -717,7 +936,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(answered.elapsed() >= IDLE, "{:?}", answered.elapsed());
-        drawn(&SERVICE, &cache, b"flowchart LR\n  c --> d\n".to_vec()).unwrap();
+        light(&SERVICE, &cache, b"flowchart LR\n  c --> d\n".to_vec()).unwrap();
         assert_eq!(SERVICE.turn().started, 2);
     }
 
@@ -757,17 +976,17 @@ mod tests {
         let cache = Cache::new(MAX_CACHED_BYTES, MAX_CACHED);
         for n in 0..3 {
             let source = format!("pie\n  \"{n}\" : 1\n").into_bytes();
-            assert_eq!(drawn(&SERVICE, &cache, source.clone()), Err("merman failed on the diagram".into()));
-            assert_eq!(cache.get(&source), Some(Err("merman failed on the diagram".into())), "kept");
+            assert_eq!(light(&SERVICE, &cache, source.clone()), Err("merman failed on the diagram".into()));
+            assert_eq!(cache.got(&source), Some(Err("merman failed on the diagram".into())), "kept");
         }
         assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 3, "one a diagram");
-        let why = drawn(&SERVICE, &cache, b"pie\n".to_vec()).unwrap_err();
+        let why = light(&SERVICE, &cache, b"pie\n".to_vec()).unwrap_err();
         assert!(why.contains("none is drawn for a minute"), "{why}");
         assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 3, "paused");
-        assert_eq!(cache.get(b"pie\n"), None, "not kept: it may pass");
+        assert_eq!(cache.got(b"pie\n"), None, "not kept: it may pass");
         // Past the pause, a worker is started again.
         SERVICE.turn().paused = Instant::now().checked_sub(PAUSE);
-        assert_eq!(drawn(&SERVICE, &cache, b"pie\n".to_vec()), Err("merman failed on the diagram".into()));
+        assert_eq!(light(&SERVICE, &cache, b"pie\n".to_vec()), Err("merman failed on the diagram".into()));
         assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 4);
     }
 
@@ -791,6 +1010,149 @@ mod tests {
         }
         let late = format!("<svg {}>", "x".repeat(MAX_START_TAG));
         assert_eq!(on_white(late.clone()), late);
+    }
+
+    /// Each theme's SVG is kept apart: a diagram drawn for dark paper is no answer for light, nor
+    /// the other way, and each is counted in what the cache holds.
+    #[test]
+    fn the_cache_keeps_each_themes_svg_apart() {
+        let cache = Cache::new(100, 3);
+        let a = Arc::new(b"a".to_vec());
+        cache.put(&a, Theme::Light, Ok(Arc::new(vec![b'l'; 10])));
+        assert_eq!(cache.get(&a, Theme::Dark), None);
+        cache.put(&a, Theme::Dark, Err("refused in the dark".into()));
+        assert_eq!(cache.get(&a, Theme::Light).map(|kept| kept.map(|svg| svg.len())), Some(Ok(10)));
+        assert_eq!(cache.get(&a, Theme::Dark), Some(Err("refused in the dark".into())));
+        let held = || {
+            let kept = cache.lock();
+            (kept.entries.len(), kept.bytes)
+        };
+        assert_eq!(held(), (2, 11 + 20));
+        cache.put(&a, Theme::Dark, Ok(Arc::new(vec![b'd'; 5])));
+        assert_eq!(cache.get(&a, Theme::Dark).map(|kept| kept.map(|svg| svg.len())), Some(Ok(5)), "replaced, the light one as it was");
+        assert_eq!(held(), (2, 11 + 6));
+    }
+
+    /// A diagram drawn for dark paper is merman's in Mermaid's dark theme, with nothing behind it,
+    /// where the light one is on white; and kept, each theme drawn once. It is about as large as the
+    /// light one, never smaller and at most a seventh larger, whatever the kind of diagram: the dark
+    /// theme lays some out a little larger (a class diagram a tenth wider), which is why a dark
+    /// drawing is fitted into the light one's room ([`in_the_room_of`]).
+    ///
+    /// Opened, a diagram is the light drawing wherever it is shown by itself; a render asked for dark
+    /// paper is the dark one, with nothing behind it, in a frame the light one's size: the class
+    /// diagram is drawn smaller in the middle of it, its shape kept, so the frame's top and bottom
+    /// are clear and its width is used.
+    #[test]
+    fn a_diagram_for_dark_paper_is_in_the_dark_theme_on_nothing_in_the_light_ones_room() {
+        let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
+        static STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static SERVICE: Service = Service::new(|| {
+            STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            worker::spawn(&DIAGRAMS)
+        });
+        let cache = Cache::new(MAX_CACHED_BYTES, MAX_CACHED);
+        let size = |svg: &[u8]| {
+            let svg = std::str::from_utf8(svg).unwrap();
+            view_box(&svg[..start_tag_end(svg.as_bytes()).unwrap()]).map(|[_, _, width, height]| (width, height))
+        };
+        const FLOW: &str = "flowchart LR\n  a[Start] --> b{Choose}\n  b -->|yes| c[Finish]\n";
+        const CLASS: &str = "classDiagram\n  class Animal {\n    +name string\n    +speak()\n  }\n  Animal <|-- Dog\n";
+        let mut larger = false;
+        for diagram in [
+            FLOW,
+            "sequenceDiagram\n  Alice->>Bob: Hello\n  Note over Bob: A note\n  Bob-->>Alice: Hi\n",
+            CLASS,
+            "stateDiagram-v2\n  [*] --> Still\n  Still --> Moving\n",
+            "pie title Pets\n  \"Dogs\" : 3\n  \"Cats\" : 1\n",
+            "gantt\n  dateFormat YYYY-MM-DD\n  section A\n  One :a, 2026-01-01, 3d\n",
+            "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n",
+        ] {
+            let source = Arc::new(diagram.as_bytes().to_vec());
+            let light = drawn(&SERVICE, &cache, &source, Theme::Light).unwrap();
+            let dark = drawn(&SERVICE, &cache, &source, Theme::Dark).unwrap();
+            let white = b"fill=\"white\"/>";
+            assert!(light.windows(white.len()).any(|w| w == white) && !dark.windows(white.len()).any(|w| w == white), "{diagram}");
+            assert_ne!(light, dark, "{diagram}");
+            // The dark theme's own background for a node, which the default theme never uses.
+            let fills = |svg: &[u8]| String::from_utf8_lossy(svg).to_lowercase().contains("#1f2020");
+            assert!(!fills(&light) && (fills(&dark) || !diagram.starts_with("flowchart")), "{diagram}");
+            let ((light_w, light_h), (dark_w, dark_h)) = (size(&light).unwrap(), size(&dark).unwrap());
+            let about = |light: f64, dark: f64| dark >= light && dark <= light * 8.0 / 7.0;
+            assert!(about(light_w, dark_w) && about(light_h, dark_h), "{diagram}: {light_w} × {light_h} and {dark_w} × {dark_h}");
+            larger |= (dark_w, dark_h) != (light_w, light_h);
+            assert!(Arc::ptr_eq(&drawn(&SERVICE, &cache, &source, Theme::Dark).unwrap(), &dark), "kept");
+            assert!(Arc::ptr_eq(&drawn(&SERVICE, &cache, &source, Theme::Light).unwrap(), &light), "kept");
+        }
+        assert!(larger, "none is larger in the dark theme: `in_the_room_of` has nothing left to fit");
+        assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 1, "one worker for both themes");
+        // A diagram's own theme is its own on dark paper too, as on a web page whose theme is dark.
+        let own = Arc::new(b"%%{init: {\"theme\": \"forest\"}}%%\nflowchart LR\n  a --> b\n".to_vec());
+        let plain = Arc::new(b"flowchart LR\n  a --> b\n".to_vec());
+        let dark = |source: &Arc<Vec<u8>>| drawn(&SERVICE, &cache, source, Theme::Dark).unwrap();
+        assert_ne!(dark(&own), dark(&plain));
+
+        // Opened as the backend opens it, from what this test's worker drew: put where `open` looks,
+        // so that no other worker is started for it.
+        let frames = |diagram: &'static str| {
+            let source = Arc::new(diagram.as_bytes().to_vec());
+            for theme in [Theme::Light, Theme::Dark] {
+                CACHE.put(&source, theme, drawn(&SERVICE, &cache, &source, theme));
+            }
+            let again: Again = Arc::new(move || Ok(diagram.as_bytes().to_vec()));
+            let input = Input::held("a.mermaid".into(), Vec::new(), again);
+            let Ok(Opened::Pages(diagram)) = Mermaid.open(input, &Parsed::default()) else { panic!("not pages") };
+            assert_eq!(diagram.pages(), 1);
+            let mut renderer = diagram.renderer().unwrap();
+            let light = renderer.render(Request { scale: 2.0, tag: 7, ..Request::default() });
+            let dark = renderer.render(Request { scale: 2.0, tag: 8, on_dark: true, dark: [30, 30, 30], ..Request::default() });
+            assert!(light.error.is_none() && dark.error.is_none(), "{:?} {:?}", light.error, dark.error);
+            assert_eq!((light.request.tag, dark.request.tag, dark.request.scale), (7, 8, 2.0), "the request as it was asked");
+            let sizes = ((light.width, light.height), (dark.width, dark.height));
+            assert!(light.width.abs_diff(dark.width) <= 1 && light.height.abs_diff(dark.height) <= 1, "{sizes:?}");
+            (light, dark)
+        };
+        let pixels = |frame: &Frame| frame.rgba.as_chunks::<4>().0.to_vec();
+        let (light, dark) = frames(FLOW);
+        assert_eq!((pixels(&light).first(), pixels(&dark).first()), (Some(&[255; 4]), Some(&[0; 4])), "white behind one, nothing behind the other");
+        assert!(pixels(&dark).iter().all(|pixel| *pixel != [255; 4]), "no white in the dark theme");
+        assert!(pixels(&dark).iter().any(|pixel| pixel[3] == 255 && pixel[0] > 150), "its ink is light");
+        let (light, dark) = frames(CLASS);
+        let (width, height) = (dark.width as usize, dark.height as usize);
+        let dark = pixels(&dark);
+        let column = |x: usize| (0..height).filter_map(|y| dark.get(y * width + x)).any(|pixel| pixel[3] != 0);
+        let row = |y: usize| (0..width).filter_map(|x| dark.get(y * width + x)).any(|pixel| pixel[3] != 0);
+        // A tenth wider and a thirty-third taller: fitted to the width, some 4% of the height clear at
+        // the top and the bottom, and its ink reaching the sides as the light one's does.
+        assert!(!row(0) && !row(height / 50) && !row(height - 1 - height / 50), "clear above and below");
+        assert!((0..height / 8).any(row) && (height - height / 8..height).any(row), "its height used");
+        assert!((0..width / 8).any(column) && (width - width / 8..width).any(column), "its width used");
+        assert!(pixels(&light).iter().all(|pixel| pixel[3] == 255), "the light one fills its own");
+        assert_eq!(STARTS.load(std::sync::atomic::Ordering::SeqCst), 1, "no worker but this test's");
+        SERVICE.turn().link = None;
+    }
+
+    /// A frame is put in the middle of a larger one, nothing around it; and left as it is where its
+    /// pixels aren't what its size says.
+    #[test]
+    fn a_frame_is_centred_in_a_larger_one() {
+        let frame = |width, height, rgba: Vec<u8>| Frame {
+            request: Request::default(),
+            width,
+            height,
+            rgba: Pixels::new(rgba),
+            error: None,
+            warnings: vec!["kept".into()],
+            again: false,
+        };
+        let centred = super::centred(frame(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]), 4, 3);
+        assert_eq!((centred.width, centred.height, centred.warnings.len()), (4, 3, 1));
+        let expected = [[0u8; 16].as_slice(), &[0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0], &[0; 16]].concat();
+        assert_eq!(&*centred.rgba, expected.as_slice());
+        let odd = super::centred(frame(2, 1, vec![1, 2, 3]), 4, 3);
+        assert_eq!((odd.width, odd.height, odd.rgba.len()), (2, 1, 3));
+        let none = super::centred(frame(0, 0, Vec::new()), 4, 3);
+        assert_eq!((none.width, none.height), (0, 0));
     }
 
     #[test]

@@ -22,7 +22,7 @@ use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, RwLockReadGuard, Weak};
 
 use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, NB_HYPHEN, OBJ, SOFT_HYPHEN, Wrap};
@@ -753,10 +753,21 @@ struct Laid {
     pictures: Promised,
 }
 
+/// How many times a page draws its pictures over, when another page had them let go of or drawn
+/// otherwise before it could render ([`Promised::settled`]): then it renders with what there is.
+const MAX_DRAWS: usize = 3;
+
 impl Laid {
-    /// `page`'s pictures drawn, for it to render (as a list's `tile`, or a page), and what the
-    /// reader should know of them.
-    fn drawn_pictures(&self, page: &Page, first: bool, tile: bool) -> Vec<String> {
+    /// `page`'s pictures drawn, for it to render (as a list's `tile`, or a page; on dark paper of the
+    /// colour `dark`, or on light), what the reader should know of them, and the document to render
+    /// it from, held for reading with those pictures in it.
+    fn drawn_pictures(
+        &self,
+        page: &Page,
+        first: bool,
+        tile: bool,
+        dark: Option<[u8; 3]>,
+    ) -> (Vec<String>, RwLockReadGuard<'_, wordcraft_doc::Document>) {
         let mut notes = Vec::new();
         if first && self.pictures.left_out() > 0 {
             notes.push(format!("{} pictures it refers to are left out: missing, or not what {} shows", self.pictures.left_out(), crate::NAME));
@@ -767,26 +778,34 @@ impl Laid {
             1 => notes.push("one of its blocks could not be drawn, and is shown as its code".into()),
             undrawn => notes.push(format!("{undrawn} of its blocks could not be drawn, and are shown as their code")),
         }
+        let read = || self.document.read().unwrap_or_else(PoisonError::into_inner);
         if self.pictures.is_empty() {
-            return notes;
+            return (notes, read());
         }
-        let on_page: Vec<String> = {
-            let document = self.document.read().unwrap_or_else(PoisonError::into_inner);
-            pictures_on(&document, page).into_iter().map(str::to_owned).collect()
-        };
+        let on_page: Vec<String> = pictures_on(&read(), page).into_iter().map(str::to_owned).collect();
         let on_page: Vec<&str> = on_page.iter().map(String::as_str).collect();
-        // Nothing locked while they are drawn, which may take a while; then, under one lock, held and
-        // in the document at once, or another page could find one drawn and render its stand-in.
-        let drawn = self.pictures.draw(&on_page, tile);
-        if !drawn.is_empty() {
-            let mut document = self.document.write().unwrap_or_else(PoisonError::into_inner);
-            let changes = self.pictures.hold(drawn, &on_page, tile);
-            document.media.extend(changes);
-        }
-        if self.pictures.failed(&on_page) {
+        let mut draws = 0usize;
+        let document = loop {
+            // Nothing locked while they are drawn, which may take a while; then, under one lock, held
+            // and in the document at once, or another page could find one drawn and render its stand-in.
+            let drawn = self.pictures.draw(&on_page, tile, dark);
+            if !drawn.is_empty() {
+                let mut document = self.document.write().unwrap_or_else(PoisonError::into_inner);
+                let changes = self.pictures.hold(drawn, &on_page, tile, dark.is_some());
+                document.media.extend(changes);
+            }
+            // Between that lock and this one, another page may have had one of these let go of, or
+            // drawn for its own paper: drawn over, a few times at most.
+            let document = read();
+            draws = draws.saturating_add(1);
+            if draws >= MAX_DRAWS || self.pictures.settled(&on_page, tile, dark.is_some()) {
+                break document;
+            }
+        };
+        if self.pictures.failed(&on_page, dark.is_some()) {
             notes.push("a picture it refers to could not be drawn".into());
         }
-        notes
+        (notes, document)
     }
 }
 
@@ -1165,17 +1184,17 @@ impl Document {
         if w > side || h > side || w.saturating_mul(h) > MAX_PIXELS {
             return Err(format!("{w} × {h} pixels is too large to render"));
         }
-        let warnings = laid.drawn_pictures(page, request.page == 0, request.tile);
+        let dark = settings_of(self.kind).contains(&PAPER.name) && request.values.get(PAPER.name) == Some(Value::Named(DARK));
+        let dark = dark.then_some(request.dark);
+        // With the page's paper: a fenced block is drawn for it.
+        let (warnings, document) = laid.drawn_pictures(page, request.page == 0, request.tile, dark);
         let mut options = RenderOptions::default();
         // A printed page: headers and footers dimmed only while the body is being edited.
         options.display.dim_header = false;
-        let dark = settings_of(self.kind).contains(&PAPER.name) && request.values.get(PAPER.name) == Some(Value::Named(DARK));
-        let dark = dark.then_some(request.dark);
         if let Some(paper) = dark {
             options.dark = true;
             options.dark_paper = grey_of(paper);
         }
-        let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
         let mut drawn = wordcraft_render::render_page(&document, page, request.scale, &options);
         if let Some(paper) = dark {
             on_paper(&mut drawn.pixels, paper);
@@ -2146,7 +2165,7 @@ mod tests {
                 Self::Dark(dark) => (DARK, dark),
             };
             assert!(values.set(PAPER.name, Value::Named(value)));
-            Request { page, scale, tag: 0, values, dark, tile: false }
+            Request { page, scale, tag: 0, values, dark, tile: false, on_dark: false }
         }
     }
 

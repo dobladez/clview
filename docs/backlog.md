@@ -10,9 +10,10 @@ ends not yet planned: not promised, and not in the Plans until they are. What `c
 
 An SVG or a Mermaid diagram shown alone, and a document's pictures by path, following the paper: an
 SVG on white or transparent, a diagram in Mermaid's default theme on white or its dark theme on the
-terminal's colour, a photograph as it is. A document's Mermaid blocks will already
-([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)). The `paper` setting moves into the
-contract for them, so a backend reads it without naming the documents' backend.
+terminal's colour, a photograph as it is. A document's Mermaid blocks already do
+([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)): `Request::on_dark` tells a block's
+backend, and a picture by path could be told the same way. For a file shown alone the `paper`
+setting moves into the contract, so a backend reads it without naming the documents' backend.
 
 ### More diagram languages
 

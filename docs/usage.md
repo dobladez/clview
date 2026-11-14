@@ -565,7 +565,8 @@ A Mermaid diagram is one page: [merman](https://github.com/Latias94/merman), a M
 turns it into SVG, as Mermaid 12 draws it in its default theme, and it is shown as an
 [SVG drawing](#svg-drawings) is, sharp at any size, `c` and text cells included, but on white: a
 drawing shows the terminal's background where it is transparent, and Mermaid's ink is made for
-white, as `mmdc -b white` draws it. merman draws every kind of diagram it parses: flowcharts,
+white, as `mmdc -b white` draws it. (A ` ```mermaid ` block of a [document](#documents) on dark
+paper is drawn in Mermaid's dark theme instead.) merman draws every kind of diagram it parses: flowcharts,
 sequence, class, state and entity-relationship diagrams, gantt charts, pies, mindmaps, timelines,
 user journeys, git graphs, requirement, C4, quadrant, XY, sankey, packet, block, architecture,
 kanban, radar and treemap diagrams, and the other kinds Mermaid has in beta. A diagram's own
@@ -683,7 +684,13 @@ on dark, the page exactly the terminal's colour, so that it is no rectangle at a
 dark on light and back, `--theme` says how they start, and a terminal that doesn't say what its
 background is gets them as printed, with `d` still going to a dark grey. Pictures stay as they are,
 but for thin near-black ink, a logo or a line drawing made for white paper, which would vanish on dark:
-it comes with white behind it. A Word document, an RTF or a PDF is a page as printed, and stays so;
+it comes with white behind it. A fenced block drawn as a diagram follows the paper: on dark paper it
+is drawn again in Mermaid's own dark theme, on the paper's colour with no white behind it, and `d`
+turns it with the page. It takes the room its light drawing took, so nothing on the page moves:
+where the dark theme lays a diagram out a little larger (a class diagram, a tenth wider), it is
+drawn that much smaller, in the middle of that room. A diagram's own theme (`%%{init: …}%%`) is its
+own on either paper. A diagram shown by path (`![a flow](flow.mmd)`) stays on white, as a `.mmd`
+file shown by itself does. A Word document, an RTF or a PDF is a page as printed, and stays so;
 `d` says so. What `c` copies is the page as it is shown
 ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 

@@ -572,3 +572,75 @@ fn a_mermaid_block_is_shown_as_code_with_fences_code() {
     let broken = written("mermaid-fences", "broken.md", format!("```mermaid\n{}```\n", std::fs::read_to_string(data("broken.mmd")).unwrap()));
     assert!(pages_at(&broken, &["--fences", "code"]).1.is_empty());
 }
+
+/// The extent of what on `page` isn't its paper, the colour at its corner: left, top, right, bottom.
+#[cfg(feature = "word")]
+fn inked(page: &image::RgbaImage) -> (u32, u32, u32, u32) {
+    let paper = *page.get_pixel(0, 0);
+    let ink: Vec<(u32, u32)> = page.enumerate_pixels().filter(|(_, _, pixel)| **pixel != paper).map(|(x, y, _)| (x, y)).collect();
+    let (xs, ys) = (ink.iter().map(|(x, _)| *x), ink.iter().map(|(_, y)| *y));
+    (xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap())
+}
+
+/// A block follows its document's paper. On dark paper it is drawn in Mermaid's dark theme, its
+/// ink light, on the paper's own colour with no white behind it; on light paper, in the default
+/// theme, its ink dark. Where the two themes lay a diagram out alike, the block is where it was
+/// and as large; where the dark theme lays it out larger (a class diagram), it is fitted into
+/// the same room, never past it, and the text after it stays where it was.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_follows_its_documents_paper() {
+    const PAPER: [u8; 4] = [0x1E, 0x1E, 0x1E, 255];
+    let white = |page: &image::RgbaImage| page.pixels().filter(|pixel| pixel.0[..3].iter().all(|v| *v > 240)).count();
+    let light_ink = |page: &image::RgbaImage| page.pixels().filter(|pixel| pixel.0[..3].iter().all(|v| *v > 150)).count();
+    let path = written("mermaid-paper", "flow.md", "```mermaid\nsequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi\n```\n");
+    let (dark, said) = pages_at(&path, &["--theme", "dark"]);
+    assert!(said.is_empty(), "{said}");
+    assert_eq!(dark[0].get_pixel(0, 0).0, PAPER, "the paper a terminal that doesn't say gets");
+    assert_eq!(white(&dark[0]), 0, "no white behind it, nor in it");
+    assert!(light_ink(&dark[0]) > 200, "light ink: {}", light_ink(&dark[0]));
+    let (light, _) = pages_at(&path, &["--theme", "light"]);
+    assert_eq!(light[0].get_pixel(0, 0).0, [255; 4]);
+    assert!(ink(&light[0]) > 200 && light_ink(&light[0]) > light[0].pixels().count() / 2, "dark ink on white: {}", ink(&light[0]));
+    // A sequence diagram is as large in either theme: its ink reaches as far.
+    let ((l, t, r, b), (dl, dt, dr, db)) = (inked(&light[0]), inked(&dark[0]));
+    assert!(
+        l.abs_diff(dl) <= 3 && t.abs_diff(dt) <= 3 && r.abs_diff(dr) <= 3 && b.abs_diff(db) <= 3,
+        "{:?} and {:?}",
+        inked(&light[0]),
+        inked(&dark[0])
+    );
+
+    // A class diagram is a tenth wider in the dark theme: within the light one's room, and what
+    // comes after it where it was.
+    let class = "```mermaid\nclassDiagram\n  class Animal {\n    +name string\n    +speak()\n  }\n  Animal <|-- Dog\n```\n\n---\n";
+    let path = written("mermaid-paper", "class.md", class);
+    let (dark, _) = pages_at(&path, &["--theme", "dark"]);
+    let (light, _) = pages_at(&path, &["--theme", "light"]);
+    assert_eq!(white(&dark[0]), 0);
+    let ((l, t, r, b), (dl, dt, dr, db)) = (inked(&light[0]), inked(&dark[0]));
+    assert!(dl + 3 >= l && dt + 3 >= t && dr <= r + 3, "{:?} past {:?}", (dl, dt, dr, db), (l, t, r, b));
+    assert!(b.abs_diff(db) <= 2, "the rule after it moved: {b} and {db}");
+}
+
+/// A picture by path stays as it was on dark paper: the diagram in Mermaid's default theme, on
+/// white, where it is on light paper.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_picture_by_path_is_unchanged_on_dark_paper() {
+    let path = written("mermaid-by-path", "a.md", "![a flow](flow.mmd)\n");
+    std::fs::copy(data("flow.mmd"), path.with_file_name("flow.mmd")).unwrap();
+    let (dark, _) = pages_at(&path, &["--theme", "dark"]);
+    let (light, _) = pages_at(&path, &["--theme", "light"]);
+    assert_eq!(dark[0].get_pixel(0, 0).0, [0x1E, 0x1E, 0x1E, 255]);
+    assert!(shows_flow(&dark[0]) && shows_flow(&light[0]));
+    let red = |page: &image::RgbaImage| spread(page, [255, 0, 0]).unwrap();
+    assert_eq!(red(&dark[0]), red(&light[0]), "where it was");
+    // White behind it: from the left of the picture to past its red node.
+    let whites: Vec<u32> = dark[0].enumerate_pixels().filter(|(_, _, pixel)| pixel.0 == [255; 4]).map(|(x, _, _)| x).collect();
+    assert!(
+        whites.len() > 1000 && (*whites.iter().min().unwrap() as f32) < red(&dark[0]).0 * dark[0].width() as f32,
+        "{} white pixels",
+        whites.len()
+    );
+}

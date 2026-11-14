@@ -664,6 +664,13 @@ pub(crate) struct Request {
     /// For a list's tile, or its copy: drawn as a tile, which may leave out what costs more than a
     /// list's tiles should (an SVG's HTML labels). Only the pager sets it.
     pub(crate) tile: bool,
+    /// For a picture a document shows on dark paper, of the colour [`Request::dark`]: a backend with a
+    /// dark form of what it draws (a diagram's dark theme) draws that, with nothing behind it, so that
+    /// the paper shows through, and at the size of its light form, since the document is laid out
+    /// around the picture once. A backend with no dark form draws as ever. Asked of a
+    /// [`Source::renderer`] alone, never of a pool, and only for a document's fenced blocks
+    /// ([`Format::fences`]): a file shown by itself, and a picture by path, are never asked so.
+    pub(crate) on_dark: bool,
 }
 
 /// Premultiplied RGBA, row by row, top to bottom: a backend's own buffer, read as bytes, so its
@@ -1080,7 +1087,8 @@ pub(crate) mod tests {
     }
 
     /// A backend that lists the fences `fences`, and draws pictures or not: a block whose text is two
-    /// numbers, `40 20`, opens to one page that size, drawn opaque red; any other text is refused.
+    /// numbers, `40 20`, opens to one page that size, drawn opaque red, or opaque blue for dark paper
+    /// ([`Request::on_dark`]); any other text is refused.
     pub(crate) struct Sketches {
         pub(crate) fences: &'static [&'static str],
         pub(crate) pictures: bool,
@@ -1119,7 +1127,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// What [`Sketches`] opens: a page of a size, drawn opaque red.
+    /// What [`Sketches`] opens: a page of a size, drawn opaque red, or blue for dark paper.
     struct Sketch(f32, f32);
 
     impl Source for Sketch {
@@ -1144,7 +1152,8 @@ pub(crate) mod tests {
         fn render(&mut self, request: Request) -> Frame {
             let side = |points: f32| ((points * request.scale).ceil() as u32).clamp(1, 4096);
             let (width, height) = (side(self.0), side(self.1));
-            let rgba = [255, 0, 0, 255].repeat(width as usize * height as usize);
+            let colour = if request.on_dark { [0, 0, 255, 255] } else { [255, 0, 0, 255] };
+            let rgba = colour.repeat(width as usize * height as usize);
             Frame { request, width, height, rgba: Pixels::new(rgba), error: None, warnings: Vec::new(), again: false }
         }
     }

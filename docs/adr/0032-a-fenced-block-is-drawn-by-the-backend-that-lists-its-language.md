@@ -67,7 +67,22 @@ What constrains how:
    ([ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)). Its
    effect is a relayout, as `width`'s is: a picture and its code take other room, so the pages
    fall otherwise. It is the document's: one block alone can't be turned.
-9. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
+9. **A block follows its document's paper, told through the request.** `Request` has `on_dark`:
+   set for a picture a document shows on dark paper, whose colour is `Request::dark`. A backend
+   with a dark form of what it draws draws that, with nothing behind it; one with none draws as
+   ever. `picture.rs` sets it for a block's promise alone, and keeps what it holds of a block for
+   one paper at a time, drawn again for the other. Mermaid answers with its own dark theme,
+   merman's site theme `dark`, with no white behind it, each theme's SVG kept apart in its cache;
+   never the light drawing's colours inverted. `d` stays a redraw: the document is laid out once,
+   around the light drawing.
+10. **The dark drawing in the light one's room.** Mermaid's dark theme lays some diagrams out
+    larger than its default (Evidence), so the dark drawing is rendered at the scale that fits the
+    light one's size, its shape kept, in the middle of a frame that size. A dark diagram is at most
+    a tenth smaller than its light twin, and nothing on the page moves.
+11. **A diagram's own theme stays its own.** The dark theme is the site's default, as on a web
+    page whose theme is dark: a diagram's `%%{init}%%` theme and colours still apply. One made
+    for white, on dark paper, is as hard to read as it is on such a page.
+12. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
    text. Mermaid's cache answers without its worker
    ([ADR-0031](0031-mermaid-diagrams-through-merman-in-a-worker-process.md)); `Format::fences`
    says that a backend listing one keeps what it made the same way.
@@ -99,6 +114,22 @@ That GitHub page, saved as it came (405 KB, ten `mermaid` blocks), shown by clv:
 `<pre lang="mermaid">` drawn as its diagram, in under a second. Mermaid's own way in a web page,
 `<pre class="mermaid">`, is from its documentation, as are highlight.js's and Prism's
 `language-x` classes.
+
+**A diagram's size in Mermaid's default theme and in its dark one,** merman 0.10.0, the
+`viewBox` of its SVG for a small diagram of each kind (2026-11-13,
+`a_diagram_for_dark_paper_is_in_the_dark_theme_on_nothing_and_about_as_large` in
+`src/source/mermaid.rs` holds the bounds):
+
+| Diagram | Default theme | Dark theme |
+|---|---|---|
+| Flowchart, three nodes | 610.74 × 183 | 615.56 × 185 |
+| Class diagram, two classes | 133.52 × 266 | 146.88 × 274 |
+| ER diagram, two entities | 123.20 × 271 | 132.80 × 275 |
+| State diagram | 152 × 196 | 152 × 200 |
+| Sequence diagram, pie, gantt chart | the same | the same |
+
+[Spec-0009](../specs/0009-draw-fenced-blocks-as-pictures.md) had taken a theme not to change a
+diagram's size. It does, by up to a tenth.
 
 **What a document's blocks cost to open,** measured 2026-11-13 on an Apple M3 Max (14 cores,
 36 GiB), macOS 26.6.2, Rust 1.95.0, with `target/debug/clv` (its dependencies at `opt-level = 2`):
@@ -139,6 +170,14 @@ lines and marks are eleven diagrams of 15,000 nodes, and 64 MiB sixty labels of 
 - **Running Markdown's HTML through the scanner too**, in place of reading pulldown-cmark's
   events: one mechanism, but a block's text would go through HTML's escaping and back, and a
   `<pre>` written as HTML inside Markdown would be drawn, which GitHub doesn't.
+- **The document laid out again on `d`**, each theme's diagrams at their own size: `d` would stop
+  being a redraw, the pages could fall otherwise on each paper, and where the reader is would
+  have to be found again, for a difference of a tenth at most.
+- **The dark drawing stretched into the light one's room**: a class diagram some 7% out of shape.
+- **The paper read from the documents' `paper` setting by name**: Mermaid's backend would name a
+  setting of another backend's. A flag on the request names nothing.
+- **Mermaid's dark theme forced over a diagram's own**: it would throw away the colours a diagram
+  chose, which mermaid.js doesn't.
 - **A grey box for a broken block**, as for a picture that fails: the reader would lose the text
   of the diagram, which is what they have to fix it by.
 
@@ -154,7 +193,9 @@ lines and marks are eleven diagrams of 15,000 nodes, and 64 MiB sixty labels of 
   ([ADR-0012](0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)), and as long
   again each time it is laid out, though the keys still work then; a document that refers to as many
   `.mmd` files by path already did. A block's text is kept with its promise while the document is
-  open, within the document's own size. Two blocks of the same text are two pictures.
+  open, within the document's own size. Two blocks of the same text are two pictures. A block on
+  dark paper may be up to a tenth smaller than on light, and is drawn again each time `d` turns the
+  page, from an SVG kept for each theme.
 - **Follow-ups:** other diagram languages, each a backend and a spec of its own
   ([README's Plans](../../README.md#plans)). A bound on what a document's blocks cost in all, in
   time or in text, if the minutes above turn out to matter

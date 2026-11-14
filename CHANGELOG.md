@@ -29,7 +29,8 @@ works today. A version's section becomes the notes of its
   comes with the document. A block that can't be drawn stays code, and the first page says how
   many did. `clv --help` lists the languages drawn, beside each format's extensions; a block in any
   other stays code, ` ```svg ` included. `s` shows a document's blocks as code, to read or search a
-  diagram's source, and again draws them; `--fences code` starts that way.
+  diagram's source, and again draws them; `--fences code` starts that way. On dark paper a block is
+  drawn in Mermaid's dark theme, on the paper's colour, and `d` turns it with the page.
 
 ### Changed
 

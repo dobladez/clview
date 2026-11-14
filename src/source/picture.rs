@@ -241,19 +241,28 @@ struct Promise {
 }
 
 impl Promise {
+    /// Whether the picture is drawn for the paper it is shown on: a fenced block, which its backend
+    /// may draw otherwise on dark paper ([`Request::on_dark`]). A picture by path is one picture.
+    fn follows_paper(&self) -> bool {
+        matches!(self.origin, Origin::Block { .. })
+    }
+
     /// The picture, as a PNG; as a list's `tile` where the page is one, so that its backend leaves
-    /// out what a tile shouldn't cost (an SVG's HTML labels).
-    fn draw(&self, tile: bool) -> Result<Vec<u8>, String> {
+    /// out what a tile shouldn't cost (an SVG's HTML labels); and for dark paper of the colour `dark`
+    /// where the page is on it and the picture follows its paper.
+    fn draw(&self, tile: bool, dark: Option<[u8; 3]>) -> Result<Vec<u8>, String> {
         caught(|| {
             let source = self.origin.opened()?;
             let mut renderer = source.renderer()?;
-            let request = Request { page: 0, scale: self.scale, tag: 0, tile, ..Default::default() };
+            let dark = dark.filter(|_| self.follows_paper());
+            let request = Request { page: 0, scale: self.scale, tile, on_dark: dark.is_some(), dark: dark.unwrap_or_default(), ..Default::default() };
             let frame = guarded(request, || renderer.render(request));
             if let Some(error) = frame.error {
                 return Err(error);
             }
-            // Decided once and for all: on white paper the white can't be seen.
-            match thin_and_near_black(&frame.rgba) {
+            // Decided once and for all: on white paper the white can't be seen. Not for what was
+            // drawn for dark paper, whose ink is that paper's.
+            match dark.is_none() && thin_and_near_black(&frame.rgba) {
                 true => encode_png(frame.width, frame.height, &on_white(&frame.rgba), PngEffort::Fast),
                 false => encode_png(frame.width, frame.height, &frame.rgba, PngEffort::Fast),
             }
@@ -280,9 +289,22 @@ struct Held {
     /// Those of `drawn` drawn as a list's tile, without what a tile leaves out: drawn again for
     /// a page.
     as_tiles: HashSet<String>,
+    /// Those of `drawn` drawn for dark paper, of the pictures that follow their paper: drawn again
+    /// for a page on light paper, as the others are for one on dark.
+    for_dark: HashSet<String>,
     bytes: usize,
-    /// Those that could not be drawn, not tried again.
-    failed: HashSet<String>,
+    /// Those that could not be drawn, not tried again: each with the paper it was to be drawn for,
+    /// if it follows its paper (dark, or not), so that one that fails for one paper is still tried
+    /// for the other.
+    failed: HashSet<(String, bool)>,
+}
+
+impl Held {
+    /// Whether the picture `key` is held as a page wants it: drawn, for a page rather than a tile
+    /// unless a `tile` wants it, and for the paper it is on (`dark`, where it follows its paper).
+    fn shows(&self, key: &str, tile: bool, dark: bool) -> bool {
+        self.drawn.iter().any(|(drawn, _)| drawn == key) && (tile || !self.as_tiles.contains(key)) && self.for_dark.contains(key) == dark
+    }
 }
 
 impl Promised {
@@ -309,34 +331,58 @@ impl Promised {
         self.by_key.is_empty()
     }
 
+    /// Whether the picture `key` is one drawn for dark paper on a page on dark paper (`dark`): one
+    /// that follows its paper. Any other is drawn the same on either.
+    fn for_dark(&self, key: &str, dark: bool) -> bool {
+        dark && self.by_key.get(key).is_some_and(Promise::follows_paper)
+    }
+
     /// Those of `on_page` (keys of what a document holds) not drawn yet, drawn, or why not; for a
-    /// list's `tile`, as tiles, and one drawn as a tile is drawn again for a page. Nothing is locked
-    /// meanwhile: other pages go on rendering, and another thread may draw one of these too.
-    pub(super) fn draw<'k>(&self, on_page: &[&'k str], tile: bool) -> Vec<(&'k str, Result<Vec<u8>, String>)> {
+    /// list's `tile`, as tiles, and one drawn as a tile is drawn again for a page; for a page on dark
+    /// paper of the colour `dark`, those that follow their paper for it, and one drawn for the other
+    /// paper is drawn again. Nothing is locked meanwhile: other pages go on rendering, and another
+    /// thread may draw one of these too.
+    pub(super) fn draw<'k>(&self, on_page: &[&'k str], tile: bool, dark: Option<[u8; 3]>) -> Vec<(&'k str, Result<Vec<u8>, String>)> {
         let wanted: Vec<(&str, &Promise)> = {
             let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-            let drawn = |key: &str| held.drawn.iter().any(|(drawn, _)| drawn == key) && (tile || !held.as_tiles.contains(key));
-            let done = |key: &str| held.failed.contains(key) || drawn(key);
+            let done = |key: &str| {
+                let for_dark = self.for_dark(key, dark.is_some());
+                held.failed.contains(&(key.to_owned(), for_dark)) || held.shows(key, tile, for_dark)
+            };
             on_page.iter().filter(|key| !done(key)).filter_map(|key| Some((*key, self.by_key.get(*key)?))).collect()
         };
-        wanted.into_iter().map(|(key, promise)| (key, promise.draw(tile))).collect()
+        wanted.into_iter().map(|(key, promise)| (key, promise.draw(tile, dark))).collect()
+    }
+
+    /// Whether every picture of `on_page` that is promised is held as a page wants it, a `tile` or
+    /// not, on `dark` paper or not, or could not be drawn for it. The caller holds the document's lock
+    /// for reading: then what the document holds is what this says, since nothing is held or let go of
+    /// but under that lock for writing ([`Promised::hold`]).
+    pub(super) fn settled(&self, on_page: &[&str], tile: bool, dark: bool) -> bool {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        on_page.iter().filter(|key| self.by_key.contains_key(**key)).all(|key| {
+            let for_dark = self.for_dark(key, dark);
+            held.failed.contains(&((*key).to_owned(), for_dark)) || held.shows(key, tile, for_dark)
+        })
     }
 
     /// What the document should now hold, by key, for `drawn` ([`Promised::draw`]) on a page showing
-    /// `on_page`: what it holds is let go of past [`MAX_HELD`], but not that page's. The caller holds the
-    /// document's lock for writing from before this until what it returns is in the document. So a page
-    /// that finds a picture drawn and goes to render finds it held, not its stand-in, since it must
-    /// wait for that lock to read the document.
-    pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str], tile: bool) -> Vec<(String, Png)> {
+    /// `on_page`, on `dark` paper or not: what it holds is let go of past [`MAX_HELD`], but not that
+    /// page's. The caller holds the document's lock for writing from before this until what it returns
+    /// is in the document. So a page that finds a picture drawn and goes to render finds it held, not
+    /// its stand-in, since it must wait for that lock to read the document; unless another page had it
+    /// let go of or drawn otherwise meanwhile, which [`Promised::settled`] tells.
+    pub(super) fn hold(&self, drawn: Vec<(&str, Result<Vec<u8>, String>)>, on_page: &[&str], tile: bool, dark: bool) -> Vec<(String, Png)> {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let mut changes = Vec::new();
         for (key, picture) in drawn {
+            let for_dark = self.for_dark(key, dark);
             match picture {
                 Ok(picture) => {
                     if let Some(at) = held.drawn.iter().position(|(drawn, _)| drawn == key) {
                         // Another thread drew it meanwhile, for a page of its own; unless as a
-                        // tile, and this is a page's, which takes its place.
-                        if tile || !held.as_tiles.contains(key) {
+                        // tile, and this is a page's, or for the other paper: this takes its place.
+                        if held.shows(key, tile, for_dark) {
                             continue;
                         }
                         if let Some((_, size)) = held.drawn.remove(at) {
@@ -349,10 +395,14 @@ impl Promised {
                         true => held.as_tiles.insert(key.to_owned()),
                         false => held.as_tiles.remove(key),
                     };
+                    match for_dark {
+                        true => held.for_dark.insert(key.to_owned()),
+                        false => held.for_dark.remove(key),
+                    };
                     changes.push((key.to_owned(), Arc::new(picture)));
                 }
                 Err(_) => {
-                    held.failed.insert(key.to_owned());
+                    held.failed.insert((key.to_owned(), for_dark));
                 }
             }
         }
@@ -360,6 +410,7 @@ impl Promised {
             let Some(oldest) = held.drawn.iter().position(|(key, _)| !on_page.contains(&key.as_str())) else { break };
             let Some((key, size)) = held.drawn.remove(oldest) else { break };
             held.as_tiles.remove(&key);
+            held.for_dark.remove(&key);
             held.bytes = held.bytes.saturating_sub(size);
             if let Some(promise) = self.by_key.get(&key) {
                 changes.push((key, promise.stand_in.clone()));
@@ -368,10 +419,10 @@ impl Promised {
         changes
     }
 
-    /// Whether any of `on_page` could not be drawn.
-    pub(super) fn failed(&self, on_page: &[&str]) -> bool {
+    /// Whether any of `on_page` could not be drawn, for a page on `dark` paper or not.
+    pub(super) fn failed(&self, on_page: &[&str], dark: bool) -> bool {
         let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        on_page.iter().any(|key| held.failed.contains(*key))
+        on_page.iter().any(|key| held.failed.contains(&((*key).to_owned(), self.for_dark(key, dark))))
     }
 }
 
@@ -623,8 +674,8 @@ mod tests {
     /// [`drawn`], for a page that is a list's tile where `tile`.
     #[cfg(feature = "image")]
     fn drawn_as(promised: &Promised, on_page: &[&str], tile: bool) -> (Vec<(String, Png)>, bool) {
-        let changes = promised.hold(promised.draw(on_page, tile), on_page, tile);
-        (changes, promised.failed(on_page))
+        let changes = promised.hold(promised.draw(on_page, tile, None), on_page, tile, false);
+        (changes, promised.failed(on_page, false))
     }
 
     /// Promises with a picture to draw, each a file of `png`, and what they hold at most.
@@ -770,7 +821,7 @@ mod tests {
         let media = BTreeMap::from([("rId1".to_owned(), stand_in.clone()), ("rId2".to_owned(), Arc::new(b"its own".to_vec()))]);
         let promised = pictures.promised_in(&media);
         assert_eq!((promised.undrawn(), promised.fenced(), promised.left_out(), promised.is_empty()), (2, 3, 0, false));
-        let drawn = promised.draw(&["rId1", "rId2"], false);
+        let drawn = promised.draw(&["rId1", "rId2"], false, None);
         let [(key, Ok(png))] = drawn.as_slice() else { panic!("{} drawn", drawn.len()) };
         assert_eq!((*key, size_of(png)), ("rId1", (900, 450)));
     }
@@ -799,6 +850,60 @@ mod tests {
         let beside = Pictures::among(Some(&dir), &DRAWING);
         assert!(beside.measured("fenced:0000000000000000:0", FIT).is_none());
         assert_eq!((beside.left_out.get(), beside.seen.borrow().len()), (0, 0), "not looked for");
+    }
+
+    /// The colour of `png`'s first pixel: its red, green and blue, with or without an alpha after them.
+    fn colour_of(png: &[u8]) -> [u8; 3] {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut pixels).unwrap();
+        [pixels[0], pixels[1], pixels[2]]
+    }
+
+    /// A fenced block follows its page's paper: drawn for light paper and for dark each when a page
+    /// on it wants it, its backend told which, one taking the other's place in what the document
+    /// holds, and neither drawn twice over. Whether a page finds its pictures as it wants them is
+    /// told for its own paper.
+    #[test]
+    fn a_fenced_block_is_drawn_again_for_the_other_paper() {
+        const RED: [u8; 3] = [255, 0, 0];
+        const BLUE: [u8; 3] = [0, 0, 255];
+        let paper = Some([30, 30, 30]);
+        let pictures = Pictures::among(None, &DRAWING);
+        let stand_in = pictures.fenced("sketch", "40 20", FIT).and_then(|key| pictures.measured(&key, FIT)).expect("drawn");
+        let promised = pictures.promised_in(&BTreeMap::from([("rId1".to_owned(), stand_in)]));
+        let page = ["rId1", "not promised"];
+        assert!(!promised.settled(&page, false, false) && !promised.settled(&page, false, true), "not drawn yet");
+        // What a page does, on light paper or dark: the colour its block is then held in, if drawn.
+        let shown = |dark: Option<[u8; 3]>| {
+            let changes = promised.hold(promised.draw(&page, false, dark), &page, false, dark.is_some());
+            assert!(changes.len() <= 1 && promised.settled(&page, false, dark.is_some()) && !promised.settled(&page, false, dark.is_none()));
+            assert!(!promised.failed(&page, dark.is_some()));
+            changes.first().map(|(key, png)| (key.clone(), colour_of(png)))
+        };
+        assert_eq!(shown(None), Some(("rId1".to_owned(), RED)), "for light paper");
+        assert_eq!(shown(None), None, "once");
+        assert_eq!(shown(paper), Some(("rId1".to_owned(), BLUE)), "again for dark paper, its backend told");
+        assert_eq!(shown(paper), None, "once");
+        assert_eq!(promised.held.lock().unwrap().drawn.len(), 1, "one held, the other let go of");
+        assert_eq!(shown(None), Some(("rId1".to_owned(), RED)), "and back");
+        let held = promised.held.lock().unwrap();
+        assert_eq!((held.drawn.len(), held.for_dark.len(), held.bytes), (1, 0, held.drawn[0].1));
+    }
+
+    /// A picture by path is one picture, whatever paper its page is on: drawn once, its backend never
+    /// told of dark paper, and held for a page on either.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_picture_by_path_is_the_same_on_either_paper() {
+        let promised = promised(&["a"], &picture(), MAX_HELD);
+        let paper = Some([30, 30, 30]);
+        let drawn = promised.draw(&["a"], false, paper);
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(promised.hold(drawn, &["a"], false, true).len(), 1);
+        assert!(promised.settled(&["a"], false, true) && promised.settled(&["a"], false, false));
+        assert!(promised.draw(&["a"], false, None).is_empty() && promised.draw(&["a"], false, paper).is_empty(), "drawn once");
+        assert!(promised.held.lock().unwrap().for_dark.is_empty());
     }
 
     /// With its blocks to be shown as code, a document draws none, whatever their language, and counts

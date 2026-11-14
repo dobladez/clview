@@ -356,6 +356,22 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   find a language to draw. A document's text for a search is told apart by how many blocks it shows
   as pictures (`fingerprint_of`, `Promised::fenced`), so a search kept across `s` starts over even
   where the paragraphs' count is the same.
+  A block follows its page's paper. `rendered` hands the paper to `Laid::drawn_pictures`, and a
+  promise from a block (`Promise::follows_paper`) is drawn with `Request::on_dark` set and the
+  paper's colour in `Request::dark`: the contract's way to tell a backend that a picture is on dark
+  paper, which names no setting of the documents'. What a document holds of such a picture is for
+  one paper at a time (`Held::for_dark`): a page on the other draws it again, and it takes the
+  other's place, as a page's takes a tile's. Since pages render side by side and may want
+  different papers or have a picture let go of, a page checks under the document's read lock that
+  its pictures are held as it wants them (`Promised::settled`) and draws over if not, at most
+  `MAX_DRAWS` times. A picture drawn for dark paper is never put on white (`thin_and_near_black`
+  is for ink made for white paper). Mermaid's side: `open` gives a `Diagram`, the light SVG's
+  source with the diagram's text, whose renderer (`OnPaper`) answers a request with `on_dark` from
+  the dark SVG, asked of the worker as `DRAW_DARK`, merman's site theme `dark`, with no white
+  `<rect>`, and kept by `Cache` under its `Theme`. The dark theme lays some diagrams out larger, so
+  `in_the_room_of` renders the dark drawing at the scale that fits the light one's size and
+  `centred` puts it in a frame that size: the document, laid out around the light drawing, never
+  moves ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`

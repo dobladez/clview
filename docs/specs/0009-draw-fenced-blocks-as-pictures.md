@@ -41,9 +41,11 @@ too, where pictures by path can't be reached.
 - **Markdown:** in `markdown_as_html`, a `CodeBlock(Fenced(info))` whose language a built backend
   lists becomes a picture of its text. An indented block, a fence with no language or one none
   lists, stays code as now: ` ```svg ` stays code, since no format lists `svg`.
-- **HTML, and so an epub's chapters:** a `<pre>` whose `<code>` (or itself) has a class
-  `language-x`, GitHub's and most highlighters' way, `x` listed, becomes a picture of its text, its
-  tags dropped and its entities decoded. Any other `<pre>` stays as it is.
+- **HTML, and so an epub's chapters:** a `<pre>` that says it is written in a listed language `x`
+  becomes a picture of its text, its tags dropped and its entities decoded: by a class `language-x`
+  of its `<code>` or its own (CommonMark's renderers, highlighters), by `x` alone as a class there
+  (pandoc, Mermaid's own), by its `lang="x"` (GitHub's pages), or by a class `highlight-source-x`
+  of the `<div>` right around it (GitHub's API). Any other `<pre>` stays as it is.
 - **Drawn as pictures are:** measured by the listing backend opening the block's text (`Input::held`,
   under a name from its format's first extension, `block.mermaid`), straight through its `open`, not
   `opens`, for its first page's size; drawn when its page first renders; at its own size or smaller to
@@ -75,7 +77,8 @@ too, where pictures by path can't be reached.
   paper, Mermaid's default theme on white, as a `.mmd` file is ([Spec-0008](0008-show-mermaid-diagrams.md));
   on dark paper, drawn again in **Mermaid's own dark theme** on the paper's colour, the white left
   out, never the light drawing's colours inverted. `d` draws the blocks again with the rest of the
-  page (a redraw, no relayout: a theme doesn't change a diagram's size, which the test checks). The
+  page (a redraw, no relayout: the dark drawing is fitted into the room the light one took, its
+  shape kept, since Mermaid's dark theme lays some diagrams out up to a tenth larger). The
   paper reaches the listing backend through the contract, with the request a block is drawn for,
   never by the documents' backend's setting's name; Mermaid's cache keeps each theme's SVG apart.
   A picture by path and a `.mmd` file shown alone stay as they are now (README's Plans).
@@ -193,7 +196,8 @@ too, where pictures by path can't be reached.
   `src/source/picture.rs`, `src/source/wordcraft.rs`, `src/source/mermaid.rs`, `tests/it/mermaid.rs`,
   `tests/it/view_pager.rs`, usage, the ADR. *Verify:* `cargo test -j 2 --test it mermaid`: a block on
   `--theme dark` drawn in the dark theme on the paper's colour, with no white behind it; on
-  `--theme light`, on white; the two of the same size; a picture by path unchanged on dark paper;
+  `--theme light`, on white; the dark one within the light one's room; a picture by path unchanged
+  on dark paper;
   `cargo test -j 2 --test it view_pager`: `d` on a README with a diagram draws the block again, dark,
   then light, without the diagram laid out again more than once a theme. Manual: in kitty with a dark
   background, a README with diagrams, `d` back and forth.
@@ -214,3 +218,7 @@ too, where pictures by path can't be reached.
   paper; a fourth task. `d` for drawings outside blocks left to README's Plans.
 - 2026-11-13 — Mermaid's ADR is ADR-0031 now, renumbered by Spec-0008: Spec-0007's took 0030.
 - 2026-11-13 — Implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)).
+- 2026-11-13 — Revised while implementing, both for the owner to confirm ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)):
+  HTML's blocks are known by four ways of saying a language, not `language-x` alone, as real output
+  showed (the open question on the scanner); and a block on dark paper is fitted into its light
+  drawing's room, since the dark theme does change a diagram's size, by up to a tenth.

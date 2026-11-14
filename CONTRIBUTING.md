@@ -205,14 +205,18 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   diagrams merman accepts drawn under the worker's caps, a list's diagrams opened as their tiles are
   wanted, a Markdown document's ` ```mermaid ` blocks drawn (through a pipe and in an archive too,
   a broken one as its code, a key the document writes itself no picture, and the 1,025th left as
-  code), HTML's `<pre>` blocks the same, through `/dev/stdin` and in an epub's chapter, and that
-  nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
+  code), HTML's `<pre>` blocks the same, through `/dev/stdin` and in an epub's chapter, a block on
+  dark paper in the dark theme within its light drawing's room while a picture by path stays on
+  white, and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
   starts the worker only once its tile is wanted, and a document's diagram, by path or in a block,
-  is turned into SVG once however it is laid out, watched with `ps`; and `s`, a document's blocks
-  as code and drawn again, in a list, on a PDF, and under a search kept; in `tests/it/wordcraft.rs`, a diagram as a document's
+  is turned into SVG once however it is laid out, watched with `ps`; `s`, a document's blocks
+  as code and drawn again, in a list, on a PDF, and under a search kept; and `d`, a block drawn
+  again for each paper, the diagram laid out once a theme; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The
   worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
-  die) and the cache of what it answered are unit-tested in `src/source/mermaid.rs`.
+  die), the cache of what it answered, each theme's apart, and a diagram drawn for dark paper (its
+  theme, its size beside the light one's, the frame it is fitted into) are unit-tested in
+  `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
   else names its decompressors.
