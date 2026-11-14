@@ -17,8 +17,8 @@ setting moves into the contract, so a backend reads it without naming the docume
 
 ### More diagram languages
 
-Graphviz (`dot`), D2, math, drawn from their files and from their fenced blocks as Mermaid's will
-be: each a backend of its own, listing the fences it draws
+Graphviz (`dot`), D2, math, drawn from their files and from their fenced blocks as Mermaid's
+are: each a backend of its own, listing the fences it draws
 ([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)). PlantUML needs Java, which Rust only
 rules out.
 

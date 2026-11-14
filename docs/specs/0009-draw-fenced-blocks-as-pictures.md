@@ -1,6 +1,6 @@
 # Spec-0009: Draw a document's fenced blocks as pictures
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-13
 - **Related:** [Spec-0008](0008-show-mermaid-diagrams.md) (Mermaid's backend and its cache), which
   must be Done first; [ADR-0031](../adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)
@@ -169,7 +169,7 @@ too, where pictures by path can't be reached.
 
 ## Tasks
 
-- [ ] **Fenced blocks in Markdown** — `Format`'s fences and `fenced`, the constructor through every
+- [x] **Fenced blocks in Markdown** — `Format`'s fences and `fenced`, the constructor through every
   backend, `--help`, pictures from blocks, `markdown_as_html`, Mermaid's ` ```mermaid `, the ADR.
   *Files:* `src/source.rs`, the backends' `formats()`, `src/view/mod.rs`, `src/source/picture.rs`,
   `src/source/wordcraft.rs`, `src/source/mermaid.rs`, `tests/it/mermaid.rs`, docs. *Verify:*
@@ -180,18 +180,18 @@ too, where pictures by path can't be reached.
   text; a document of 1,025 blocks leaves the last out; the document rendered page after page without
   the diagram made again; the fences test. Manual: in kitty, a README with
   diagrams, `]` and `+`.
-- [ ] **HTML's blocks** — the scanner. *Files:* `src/source/wordcraft.rs`, `tests/it/mermaid.rs`,
+- [x] **HTML's blocks** — the scanner. *Files:* `src/source/wordcraft.rs`, `tests/it/mermaid.rs`,
   usage. *Verify:* `cargo test -j 2 --lib scanner`: `<pre><code class="language-mermaid">` and
   `<pre class="language-mermaid">` drawn, entities decoded, nested `<span>`s' text kept; one in a
   comment, a `<script>`, a `<style>` or a `<textarea>` left alone; one never closed, code; cut
   anywhere, never a panic (a property test). `cargo test -j 2 --test it mermaid`: an epub's chapter
   draws its block. Manual: in kitty, GitHub's HTML of a README with a diagram, saved from the browser.
-- [ ] **The `fences` setting** — `s`, `--fences`, `?`. *Files:* `src/source/wordcraft.rs`,
+- [x] **The `fences` setting** — `s`, `--fences`, `?`. *Files:* `src/source/wordcraft.rs`,
   `tests/it/view_pager.rs`, usage. *Verify:* `cargo test -j 2 --test it view_pager` on `s`: the block
   as code, then drawn again; `--fences code` starting so; `s` on a PDF saying so; in a list mixing
   them; `a_settings_keys_are_its_own_in_every_backend`. Manual: in kitty, `s` on a README with a
   diagram, and inside a private `tmux -L` server.
-- [ ] **Blocks on the document's paper** — the paper told to a block through the request it is drawn
+- [x] **Blocks on the document's paper** — the paper told to a block through the request it is drawn
   for, Mermaid's dark theme, each theme cached apart. *Files:* `src/source.rs`,
   `src/source/picture.rs`, `src/source/wordcraft.rs`, `src/source/mermaid.rs`, `tests/it/mermaid.rs`,
   `tests/it/view_pager.rs`, usage, the ADR. *Verify:* `cargo test -j 2 --test it mermaid`: a block on
@@ -204,11 +204,11 @@ too, where pictures by path can't be reached.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
-- [ ] Manual: in kitty, a README with diagrams, through a pipe, `s`, `]`; GitHub's HTML of it; inside
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them.
+- [x] Manual: in kitty, a README with diagrams, through a pipe, `s`, `]`; GitHub's HTML of it; inside
   tmux.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
@@ -220,7 +220,14 @@ too, where pictures by path can't be reached.
 - 2026-11-13 — Implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)).
 - 2026-11-13 — Revised while implementing ([notes](0009-draw-fenced-blocks-as-pictures-impl-20261113_2213.md)):
   HTML's blocks are known by four ways of saying a language, not `language-x` alone, as real output
-  showed (the open question on the scanner), for the owner to confirm; and a block on dark paper is
-  fitted into its light drawing's room, since the dark theme does change a diagram's size, by up to
-  a tenth, which the owner chose over a relayout on `d`
+  showed (the open question on the scanner); and a block on dark paper is fitted into its light
+  drawing's room, since the dark theme does change a diagram's size, by up to a tenth, which the
+  owner chose over a relayout on `d`
   ([ADR-0032](../adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+- 2026-11-14 — Three rounds of review, a fix each: the reader's place kept when `s` turns the
+  blocks, a block shown as code written from its text, and a block that can't be drawn for one
+  paper never shown as drawn for the other (the notes have each).
+- 2026-11-14 — The owner checked it in the terminal, kitty and tmux: the manual checks confirmed,
+  and both revisions above, the four ways HTML says a block's language and the dark drawing's
+  size.
+- 2026-11-14 — Done.

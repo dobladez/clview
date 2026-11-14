@@ -356,15 +356,27 @@ and later dark pages never drew again, so it stayed.
   held, or `hold` called only when something was drawn: red on the dark page after a turn to
   light and back.
 
-## What is left
+## Done (2026-11-14)
 
-- Every task's code, tests and docs are committed, and each task's box is open: all four end
-  with a manual check in kitty (the third in tmux too), which only the owner can do. The spec
-  stays `Implementing` until they are confirmed.
-- For the owner to confirm: the four ways HTML says a block's language (task 2). Confirmed by the
-  owner: the dark drawing fitted into the light one's room, and a diagram's own theme kept on dark
-  paper (task 4).
-- In the backlog, the owner's word being to leave it for later: a bound on what a document's
-  blocks cost in all, and with it why every block is sized before the first page shows.
-- Noticed, left alone: in a list, `s` says `open a document to reflow it`, the viewer's words for
-  every relayout setting, which fit a width better than blocks.
+- **The manual checks, confirmed by the owner** in the terminal, kitty and tmux, on 2026-11-14,
+  "all looks good": each task's, and the Done checklist's. The four task boxes are ticked on that.
+- **Confirmed by the owner too:** the four ways HTML says a block's language (task 2), the dark
+  drawing fitted into the light one's room, and a diagram's own theme kept on dark paper (task 4).
+- **The tests added, each seen failing without its change,** are named in the tables above, a
+  task and a review round each: in `src/source.rs`, `src/source/picture.rs`,
+  `src/source/wordcraft.rs` and `src/source/mermaid.rs` (unit), and in `tests/it/mermaid.rs`,
+  `tests/it/view_pager.rs` and `tests/it/view.rs` (through the viewer).
+- **The docs:** `CHANGELOG.md` (one bullet under Unreleased), `docs/usage.md` (Documents, Keys,
+  Options, Limits, Mermaid diagrams, Which files it shows), `docs/architecture.md`, ADR-0032 in
+  the ADRs' index, `CONTRIBUTING.md` and `CLAUDE.md`; README's Plans bullet for Mermaid is out,
+  Spec-0008 and this one both Done, and its table says the blocks.
+- **A test the gates caught at the end:** `help_through_a_pipe_has_no_escape_codes_on_a_terminal_that_shows_images`
+  failed on a clean tree, where it had passed on every dirty one before a commit. The help is
+  longer by `--fences` and Mermaid's fence, and without the version's `.dirty` a line's end falls
+  on the 3,072nd byte a pseudo-terminal writes, where macOS's tty driver doubles the carriage
+  return. The other help tests read past that since 303ee1d (`newlines`); this one does now
+  (b4080c8).
+- **Left for later, in the backlog,** the owner's word: a bound on what a document's blocks cost
+  in all, and with it why every block is sized before the first page shows.
+- **Noticed, left alone:** in a list, `s` says `open a document to reflow it`, the viewer's words
+  for every relayout setting, which fit a width better than blocks.

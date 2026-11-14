@@ -54,7 +54,7 @@ See [`docs/usage.md`](docs/usage.md) for all options and more details.
 | PDFs | [pdfcraft](https://github.com/storytold/pdfcraft) |
 | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, HDR, TGA and more | the [`image`](https://crates.io/crates/image) crate, and JPEG XL [jxl-oxide](https://crates.io/crates/jxl-oxide) |
 | SVG drawings and svgz | [resvg](https://github.com/linebender/resvg), and [Blitz](https://github.com/DioxusLabs/blitz) for their HTML labels |
-| Mermaid diagrams (.mmd, .mermaid) | [merman](https://github.com/Latias94/merman), a Mermaid in Rust, into SVG that clv then shows |
+| Mermaid diagrams (.mmd, .mermaid), and a ` ```mermaid ` block of Markdown or HTML | [merman](https://github.com/Latias94/merman), a Mermaid in Rust, into SVG that clv then shows |
 | Word documents (docx, doc), OpenDocument text (odt) and RTF | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, with fonts of its own under the SIL Open Font License |
 | Markdown and HTML, with the pictures they refer to on disk | [wordcraft](https://github.com/storytold/wordcraft) again, and [pulldown-cmark](https://crates.io/crates/pulldown-cmark) for Markdown |
 | Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |
@@ -91,8 +91,6 @@ High level, roughly in order; the details of each, and ideas not yet planned, ar
 [backlog](docs/backlog.md).
 
 - Plain text files (yes, not yet: ironic).
-- Mermaid diagrams, their files and a Markdown `mermaid` block drawn as its diagram
-  ([Spec-0008](docs/specs/0008-show-mermaid-diagrams.md), then [Spec-0009](docs/specs/0009-draw-fenced-blocks-as-pictures.md)).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
 - `d` for drawings and a document's pictures too, not only Markdown and HTML.
