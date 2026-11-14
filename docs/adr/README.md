@@ -32,7 +32,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0018 | [wordcraft stays before its proofing needs a checkout to build](0018-wordcraft-stays-before-its-proofing-needs-a-checkout-to-build.md) | Accepted |
 | 0019 | [A list opens its files when their tiles are wanted](0019-a-list-opens-its-files-when-their-tiles-are-wanted.md) | Accepted |
 | 0020 | [New versions through a Homebrew tap, not a check inside clv](0020-new-versions-through-a-homebrew-tap-not-a-check-inside-clv.md) | Accepted |
-| 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted; the viewer's keys first set aside for the zoom keys by ADR-0023 |
+| 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted; the viewer's keys first set aside for the zoom keys by ADR-0023; a setting's sentences put together by the viewer by ADR-0033 |
 | 0022 | [Markdown and HTML reflow to a width in characters, as a new level](0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md) | Accepted; its US Letter page superseded by ADR-0023 |
 | 0023 | [The window is the page of Markdown and HTML](0023-the-window-is-the-page-of-markdown-and-html.md) | Accepted; its pages to a row given keys of their own by ADR-0024 |
 | 0024 | [Pages to a row of Markdown and HTML are columns, and the last key wins](0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md) | Accepted |
@@ -44,6 +44,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0030 | [A document's text read from the pool's layout, on a thread](0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md) | Accepted |
 | 0031 | [Mermaid diagrams through merman, in a worker process capped at 2 s and 512 MiB](0031-mermaid-diagrams-through-merman-in-a-worker-process.md) | Accepted |
 | 0032 | [A fenced block is drawn by the backend that lists its language](0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md) | Accepted |
+| 0033 | [Backends share a setting by declaring its name, and the viewer says of it only what they declare](0033-backends-share-a-setting-by-declaring-its-name.md) | Accepted |
 
 ## When to write one
 

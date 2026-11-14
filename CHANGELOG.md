@@ -8,6 +8,10 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- A Mermaid diagram shown by itself follows the paper, as Markdown does: on a terminal with a dark
+  background it is drawn in Mermaid's dark theme on the terminal's own colour, where it was a white
+  rectangle; `d` turns it, in a list too, and `--theme auto|light|dark` says how it starts.
+  `--help` lists `--theme` under Mermaid diagrams too.
 - `/` in a file's pages searches its text: a PDF's, a spreadsheet's, through the PDF it prints
   to, and a Word document's, an OpenDocument text's, an RTF's, Markdown's and HTML's, their body a
   paragraph at a time, so that a word hyphenated at a line's end, or a paragraph running onto the

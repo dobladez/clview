@@ -92,6 +92,11 @@ mermaid`), and run `tests/it/mermaid.rs`, whose costliest diagrams must still be
   to the viewer. An extension may use the core the other way (`args`, `encode`), never `src/view/`,
   and never another backend by name. `source::tests::the_viewer_names_no_backend` checks the core's
   files, and CI's nightly run builds the core with no backend at all (`cargo clippy --no-default-features`).
+  The viewer knows no format either: what it says of one (which formats a key applies to, what an
+  option does) is put together from what the backends declare, never written in the core, and a
+  backend that wants a setting another has declares it under the same name rather than moving it
+  into the contract ([Settings](docs/architecture.md#settings),
+  [ADR-0033](docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
 - **A backend's library is its own.** pdfcraft is named in code only in `src/source/pdfcraft.rs`,
   its tests (`tests/it/pdfcraft*.rs`), `Cargo.toml` and the line listing it in `source::BACKENDS`;
   swapping the PDF renderer must touch nothing else in the code, and in the docs only what credits
@@ -210,15 +215,18 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   a broken one as its code, a key the document writes itself no picture, and the 1,025th left as
   code), HTML's `<pre>` blocks the same, through `/dev/stdin` and in an epub's chapter, a block on
   dark paper in the dark theme within its light drawing's room while a picture by path stays on
-  white, and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
+  white, a diagram shown by itself and a list's diagrams following `--theme` (the dark theme on the
+  paper's colour, within the light drawing's room), and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
   starts the worker only once its tile is wanted, and a document's diagram, by path or in a block,
   is turned into SVG once however it is laid out, watched with `ps`; `s`, a document's blocks
   as code and drawn again, in a list, on a PDF, and under a search kept; and `d`, a block drawn
-  again for each paper, the diagram laid out once a theme; in `tests/it/wordcraft.rs`, a diagram as a document's
+  again for each paper, the diagram laid out once a theme; a diagram shown by itself on a dark terminal's own colour,
+  `d` turning it, in a list beside a PDF too, and `d` on a PDF naming the formats that go dark; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The
   worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
   die), the cache of what it answered, each theme's apart, and a diagram drawn for dark paper (its
-  theme, its size beside the light one's, the frame it is fitted into) are unit-tested in
+  theme, its size beside the light one's, the frame it is fitted into, the paper it is put on shown by
+  itself, and the pool that sends its dark renders to a thread of its own) are unit-tested in
   `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing

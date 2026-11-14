@@ -8,14 +8,16 @@ ends not yet planned: not promised, and not in the Plans until they are. What `c
 
 ### `d` for drawings too
 
-An SVG or a Mermaid diagram shown alone following the paper: an SVG on white or transparent, a
-diagram in Mermaid's default theme on white or its dark theme on the terminal's colour. A document's
-Mermaid blocks and diagrams by path already do
-([Spec-0009](specs/0009-draw-fenced-blocks-as-pictures.md)): `Request::on_dark` tells a picture's
-backend, for a source with a dark form (`Source::dark_form`). For a file shown alone the `paper`
-setting moves into the contract, so a backend reads it without naming the documents' backend: today
-the viewer asks the terminal's background only for a file with a setting that goes by it, and the
-light or dark it found is that setting's value alone.
+An SVG shown alone following the paper: on white, or transparent on the terminal's colour. Markdown,
+HTML and Mermaid diagrams already do, a diagram shown alone and one a document shows alike. Nothing
+of the contract (`src/source.rs`) or of the viewer needs to change for it: the SVG backend would
+declare its own setting named `paper`, as Mermaid's does beside the documents', and the viewer
+would hold one value for all three, ask the terminal's background for an SVG too, and name SVG
+among the formats that go dark
+([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)). What is still to decide is
+the drawing's side: what a drawing's dark form is, when most are drawn for one paper and say
+nothing of the other. Not part of the change that gave Mermaid diagrams theirs, which only had to
+ask merman for its dark theme.
 
 ### More diagram languages
 

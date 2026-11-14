@@ -41,6 +41,10 @@ The code is three layers, and what each may depend on is a rule
   list to `view::run` and `view::print_help`; likewise `WORKERS`, the worker processes a backend
   may run clv again as (`clv --worker <name>`, which `main.rs` hands to `source::serve`). So the
   core builds and its tests run with no backend at all (`cargo clippy --no-default-features`).
+- **The core knows no format.** What it says of one, in `--help`, in `?` or on the status line, is
+  put together from what the backends declare ([Settings](#settings)): a sentence naming formats
+  written in the core, or a setting moved into the contract for a backend to read, is the same
+  mistake.
 - **The contract names the extensions in two places**, `BACKENDS` and `WORKERS`, each line behind
   its feature, and uses the core only for its options' types (`args`); its tests also check no
   backend claims one of the viewer's keys.
@@ -155,8 +159,62 @@ and reads its own options from it, so an option that belongs to one kind of file
 for](#the-room-a-document-is-laid-out-for)): a default method calling `open`, which only the
 documents' backend overrides, for the files that have no page of their own.
 
-A backend declares its settings the same way (`Backend::settings`): what the reader may change while
-its files are shown, each a `Setting` with its named values and what each says, its numbers
+A backend declares its settings the same way (`Backend::settings`), what the reader may change while
+its files are shown, and its formats say which of them have each: [Settings](#settings).
+
+A backend whose `open` costs more than a list should spend on a file the reader may never come to says
+so, going by the file's name and first bytes (`Backend::deferred`), with what a list needs unopened:
+the settings it has. Documents, PDFs, drawings, Mermaid diagrams and spreadsheets defer. Images don't, as
+their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
+defers promises pages, never a container
+([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
+
+A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
+messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name, the
+extensions that tell a file of it where its first bytes can't, and its `fences`, the languages a
+document's fenced block of it is written in (Mermaid's `mermaid`), which only a backend that says
+`draws_pictures` lists, and no two the same (`a_fence_is_listed_once_and_only_by_a_backend_that_draws_pictures`).
+`source::fenced` finds the backend that lists a language, as `shown_by` finds the one that opens a
+file, so the documents' backend draws a block without naming who draws it
+([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)). `--help`
+lists the formats last, under what their backend shows, a format's fences after its extensions
+(`listed`), nothing about formats written in the viewer. A backend takes them from
+the tables its `opens` goes by (the image backend's `DECODED`, the extensions a document's or a
+workbook's kind is told by, `Codec`'s compressions in tar's), so what `--help` lists and what opens
+can't disagree; `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks
+every backend built. A backend also names the libraries it reads and draws its files through
+(`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the names
+are written in the backend's own file, so the viewer still names none.
+
+Nothing in `src/view/` names a backend ([Layers](#layers)): `source::tests::the_viewer_names_no_backend`
+checks the files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.
+
+### Settings
+
+What the reader may change while a file is shown (the paper, a document's width) is a backend's to
+declare, never the viewer's to know:
+
+- **A backend declares, format by format, the keys and options it supports.** Each setting is a
+  `Setting` (`Backend::settings`) with its values, its keys, its option and two phrases, and each
+  `Format` lists the settings its files have (`Format::settings`).
+- **The viewer merges settings by name** (`view::settings`): one value of each for the whole run,
+  whichever backend's file is shown, sent with every render (`Request::values`, and dark paper's
+  colour in `Request::dark`). A source says which it has (`Source::settings`) and draws by a value
+  as it likes, or not at all.
+- **Two backends share a setting by declaring the same name.** The documents' backend and
+  Mermaid's each declare `paper`, alike but for their option's help: `d` and `--theme` then turn
+  Markdown, HTML and a diagram shown by itself together, and neither backend names the other. The
+  name is the contract's convention, as a fence's language is.
+- **Everything the viewer says of a setting comes from those declarations**: its keys in `?`, its
+  option in `--help` under each backend that declares it, and which formats have it, on a key
+  pressed on a file that hasn't. The viewer knows no format.
+- **Adding a setting to a backend never needs a change to the contract** (`src/source.rs`) or to
+  the viewer: not a new one, and not one another backend already has. A plan to move `paper` into
+  the contract so that Mermaid's backend could read it was a misreading of this
+  ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
+
+In detail: a setting is what the reader may change while
+a backend's files are shown, a `Setting` with its named values and what each says, its numbers
 (`Numbers`: least, most, step, and the unit a number is said with, `%` or nothing), its default,
 where a count of 0 sends it (`zero`: `0]` is `window`, `0+` 100%), `auto` by the terminal's
 background, its keys (`Keys::Cycle`, `Keys::Step`, or `Keys::Zoom`, the viewer's own zoom keys, below),
@@ -167,15 +225,17 @@ pages drawn again with the value, or `Relayout`, the document laid out again at 
 through `Format::having`, as it lists its fences), and that is all the viewer knows of which files
 have a setting before one is shown: `view::having` joins the names of the formats that list each, in
 the backends' order, and the pager says a setting's phrases after them (`pager::Settings`), its line
-in `?` (`Markdown and HTML light on dark, or dark on light`) and what its key says on a file without
-it (`only Markdown and HTML go dark`). No backend writes a sentence about formats, and the viewer
-names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
-checks that a format lists only settings its backend declares and that every setting is listed by
-one; the documents' backend, which decides a document's settings by its kind when it opens
+in `?` (`Mermaid, Markdown and HTML light on dark, or dark on light`) and what its key says on a file without
+it (`only Mermaid, Markdown and HTML go dark`, Mermaid's backend coming before the documents').
+No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
+checks that a format lists only settings its backend declares, that every setting is listed by
+one, and that a setting two backends declare is declared alike, their option's help apart, since
+`view::settings` takes it from the first; the documents' backend, which decides a document's settings by its kind when it opens
 (`settings_of`), holds its formats' lists to that (`a_format_lists_the_settings_its_documents_have`).
 The documents' backend declares five, `paper` (`d`, `--theme`, a redraw),
 `width` (`[` and `]`, `--width`), `font` (`+` and `-`, `--font`), `margin` (`{` and `}`, `--margin`)
-and `fences` (`s`, `--fences`), those four relayouts. Which a file has is its source's
+and `fences` (`s`, `--fences`), those four relayouts; Mermaid's declares `paper` too
+([How each opens](#how-each-opens-and-what-it-keeps)). Which a file has is its source's
 (`Source::settings`; a list's, `Joined`'s, those of any of its files). Where a setting's values sit
 for a file depends on the room it is shown in, so the source says (`Source::bounds`, a `Bounds`): where
 its named value sits among its numbers (`named_at`: `window`, at the characters a line of the
@@ -211,33 +271,6 @@ the next draw (`d` then `u`, read together) doesn't keep the parent's pages on t
 checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
 `the_viewers_keys_are_those_listed` checks) and that a key means one setting
 ([ADR-0021](adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)).
-
-A backend whose `open` costs more than a list should spend on a file the reader may never come to says
-so, going by the file's name and first bytes (`Backend::deferred`), with what a list needs unopened:
-the settings it has. Documents, PDFs, drawings, Mermaid diagrams and spreadsheets defer. Images don't, as
-their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
-defers promises pages, never a container
-([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
-
-A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
-messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name, the
-extensions that tell a file of it where its first bytes can't, and its `fences`, the languages a
-document's fenced block of it is written in (Mermaid's `mermaid`), which only a backend that says
-`draws_pictures` lists, and no two the same (`a_fence_is_listed_once_and_only_by_a_backend_that_draws_pictures`).
-`source::fenced` finds the backend that lists a language, as `shown_by` finds the one that opens a
-file, so the documents' backend draws a block without naming who draws it
-([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)). `--help`
-lists the formats last, under what their backend shows, a format's fences after its extensions
-(`listed`), nothing about formats written in the viewer. A backend takes them from
-the tables its `opens` goes by (the image backend's `DECODED`, the extensions a document's or a
-workbook's kind is told by, `Codec`'s compressions in tar's), so what `--help` lists and what opens
-can't disagree; `the_extensions_a_backend_lists_are_the_names_it_opens_by` (`source.rs`) checks
-every backend built. A backend also names the libraries it reads and draws its files through
-(`Backend::credits`), which `--help` credits in its row of formats, beside what it shows: the names
-are written in the backend's own file, so the viewer still names none.
-
-Nothing in `src/view/` names a backend ([Layers](#layers)): `source::tests::the_viewer_names_no_backend`
-checks the files, and `cargo clippy --no-default-features` builds the viewer with no backend at all.
 
 ### How each opens, and what it keeps
 
@@ -312,7 +345,7 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   then its page, and a document's picture (it `draws_pictures`), sized then drawn, and read again on
   every relayout. The SVG is held
   in an `Input` whose `Again` copies it from the cache's `Arc` for the SVG backend's renders, which
-  read it again. Before it is kept, `on_white` puts a white `<rect>` over its viewBox (its viewport
+  read it again. Before the default theme's is kept, `on_white` puts a white `<rect>` over its viewBox (its viewport
   without one) as the first child of its `<svg>`, finding that start tag's `>` outside quotes within
   4 KiB and reading only the tag's `viewBox`, since merman's SVG has no background and an SVG is shown
   on the terminal's ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)).
@@ -388,8 +421,26 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   the dark SVG, asked of the worker as `DRAW_DARK`, merman's site theme `dark`, with no white
   `<rect>`, and kept by `Cache` under its `Theme`. The dark theme lays some diagrams out larger, so
   `in_the_room_of` renders the dark drawing at the scale that fits the light one's size and
-  `centred` puts it in a frame that size: the document, laid out around the light drawing, never
+  `placed` puts it in a frame that size: the document, laid out around the light drawing, never
   moves ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+  A diagram shown by itself follows its paper through a setting of Mermaid's own, `paper`
+  (`mermaid::PAPER`), declared under the documents' name, values, key and option, so that the two
+  are one setting to the viewer ([Settings](#settings)): `Diagram::settings` says it has it, so the
+  terminal is asked its background for a `.mmd`, and `Backend::deferred` says so for a list's tile.
+  `for_dark` reads a request: `on_dark` wants the dark drawing with nothing behind it
+  (`Behind::Nothing`, a document's picture), a `paper` of `dark` wants it on the request's dark
+  colour (`Behind::Paper`), which `placed` paints around it and under it (`over`, the drawing's
+  premultiplied pixels over the opaque paper), in the light drawing's room as before, since the
+  viewer fits the page by the light drawing's size. A frame of more than 64 million pixels
+  (`MAX_FRAME`) is left as drawn, with nothing behind it. In the pager, `Diagram::pool` gives a
+  `Papers`: the light SVG's own pool for the light requests, and for the dark ones a `Threads` of
+  one thread, started by the first dark request, whose render function opens the dark drawing on
+  that thread (merman's worker, up to its 6 s) and keeps it: `set_queue` splits the queue between
+  the two and tells each what is wanted of it, the dark one that nothing is when nothing is, and
+  `try_recv` takes from either, so `Pool`'s contract holds across both. A dark drawing that fails
+  there isn't kept by the pool: the next render asks again, and `Cache` answers where the failure is
+  one that would come again
+  ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`

@@ -41,7 +41,7 @@ pages, and a folder opens to its own list. Use `Esc` or `u` (up) to go back.
 
 Use `c` to copy the current page or tile to the clipboard as a picture.
 
-Markdown and HTML go light on dark on a dark terminal. Use `d` to switch them between dark and light.
+Markdown, HTML and Mermaid diagrams go light on dark on a dark terminal. Use `d` to switch them between dark and light.
 
 See [`docs/usage.md`](docs/usage.md) for all options and more details.
 
@@ -93,7 +93,7 @@ High level, roughly in order; the details of each, and ideas not yet planned, ar
 - Plain text files (yes, not yet: ironic).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
-- `d` for drawings shown alone too, not only Markdown and HTML and their diagrams.
+- `d` for SVG drawings too, as for Markdown, HTML and Mermaid diagrams.
 - More documents: Org-mode, AsciiDoc and reStructuredText; ebooks (epub) as books.
 - A config file: customization, settings and positions remembered.
 - `/` as a search in lists too.

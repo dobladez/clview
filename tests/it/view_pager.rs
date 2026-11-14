@@ -2458,17 +2458,17 @@ fn a_small_picture_gets_a_column_for_each_pixel() {
 const KITTY: Terminal = Terminal { term: Some("xterm-kitty"), ..PLAIN };
 
 /// A dark terminal, not grey, as many are: what a page takes from it can't be mistaken.
-#[cfg(feature = "word")]
+#[cfg(any(feature = "word", feature = "mermaid"))]
 const DARK: &str = "rgb:1e1e/2e2e/3e3e";
-#[cfg(feature = "word")]
+#[cfg(any(feature = "word", feature = "mermaid"))]
 const DARK_COLOUR: [u8; 3] = [0x1E, 0x2E, 0x3E];
 
 /// What `clv` falls back on for dark paper.
-#[cfg(feature = "word")]
+#[cfg(any(feature = "word", feature = "mermaid"))]
 const DARK_PAPER: [u8; 3] = [0x1E, 0x1E, 0x1E];
 
 /// The colour at the corner of each page sent so far, in order.
-#[cfg(feature = "word")]
+#[cfg(any(feature = "word", feature = "mermaid"))]
 fn corners(text: &str) -> Vec<[u8; 3]> {
     use base64::Engine as _;
     let mut found = Vec::new();
@@ -2569,11 +2569,11 @@ fn the_theme_decides_how_it_starts() {
     assert!(view.finish().success());
 }
 
-/// What has no dark form doesn't ask about the background, and `d` says so and sends nothing: `d`
-/// is the documents' backend's.
-#[cfg(feature = "word")]
+/// What has no dark form doesn't ask about the background, and `d` says which formats have one and
+/// sends nothing: `d` is the backends', and what it says names the formats of each that declares it.
+#[cfg(all(feature = "word", feature = "mermaid"))]
 #[test]
-fn what_has_no_dark_form_isnt_asked_and_d_says_so() {
+fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     if !pty_works() {
         return;
     }
@@ -2581,9 +2581,98 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_so() {
     let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
     view.press("d");
-    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML go dark"));
+    view.wait_until("said", |t| bar(t).contains("only Mermaid, Markdown and HTML go dark"));
     assert_eq!(transmitted(&view.text()), 1, "sent again");
     assert!(!view.text().contains("\x1b]11;"), "asked about the background");
+    view.press("?");
+    view.wait_until("listed", |t| bar(t).contains(" d Mermaid, Markdown and HTML light on dark, or dark on light"));
+    view.press("qq");
+    assert!(view.finish().success());
+}
+
+/// A Mermaid diagram shown by itself follows the paper as Markdown does. On a dark terminal, asked
+/// its background, it is drawn in Mermaid's dark theme on the terminal's own colour, nothing white
+/// behind it; `d` turns it to the default theme on white and back, saying so. The diagram is laid
+/// out once a theme: turned to a paper it was on before, no worker starts. On a light terminal it
+/// starts on white, and `d` goes to a dark of `clv`'s own; `--theme` says how it starts whatever
+/// the terminal is.
+#[cfg(feature = "mermaid")]
+#[test]
+fn a_diagram_shown_by_itself_is_on_a_dark_terminals_colour_and_d_turns_it() {
+    if !pty_works() {
+        return;
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/sequence.mermaid");
+    let on = |paper: [u8; 3]| {
+        move |page: &::image::RgbImage| {
+            let white = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v > 240)).count();
+            let light_ink = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v > 150)).count();
+            page.get_pixel(0, 0).0 == paper && white == 0 && light_ink > 200
+        }
+    };
+    let on_light = |page: &::image::RgbImage| {
+        let dark_ink = page.pixels().filter(|pixel| pixel.0.iter().all(|v| *v < 128)).count();
+        page.get_pixel(0, 0).0 == [255; 3] && dark_ink > 200
+    };
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &path, &["--pager"], 100, 40);
+    let (mut shown, page) = next_image(&view, "on the terminal's dark", 0);
+    assert!(on(DARK_COLOUR)(&page), "in the dark theme, on the terminal's colour");
+    assert!(view.text().contains("\x1b]11;"), "the terminal wasn't asked its background");
+    no_mermaid_worker(&view, "both themes laid out");
+    for (turn, dark) in [(1, false), (2, true), (3, false)] {
+        view.press("d");
+        let (next, page) = next_image(&view, "turned", shown);
+        assert!(if dark { on(DARK_COLOUR)(&page) } else { on_light(&page) }, "turn {turn}");
+        view.wait_until("said", |t| last_bar(t).contains(if dark { "light on dark" } else { "dark on light" }));
+        assert!(mermaid_workers(&view).is_empty(), "turn {turn}: the diagram laid out again");
+        shown = next;
+    }
+    view.press("q");
+    assert!(view.finish().success());
+
+    let light = Terminal { background: Some("rgb:fdfd/f6f6/e3e3"), ..KITTY };
+    let mut view = Session::start_on(light, &path, &["--pager"], 100, 40);
+    let (shown, page) = next_image(&view, "on white", 0);
+    assert!(on_light(&page), "a light terminal: as Mermaid draws it by default");
+    view.press("d");
+    let (_, page) = next_image(&view, "turned", shown);
+    assert!(on(DARK_PAPER)(&page), "a dark of its own");
+    view.press("q");
+    assert!(view.finish().success());
+
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &path, &["--pager", "--theme", "light"], 100, 40);
+    let (_, page) = next_image(&view, "on white", 0);
+    assert!(on_light(&page), "--theme light on a dark terminal");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In a list, a diagram's tile is on a dark terminal's colour beside a PDF's on white, and `d` turns
+/// it to white, the PDF's as it was: the list's tiles go through their pools, each diagram's dark
+/// renders on a thread of its own.
+#[cfg(feature = "mermaid")]
+#[test]
+fn in_a_list_a_diagrams_tile_follows_the_paper_and_a_pdfs_stays() {
+    if !pty_works() {
+        return;
+    }
+    let dir = crate::view::tmp("dark-diagrams", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    let flow = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd");
+    std::fs::copy(flow, dir.join("a.mmd")).unwrap();
+    std::fs::copy(fixture("dark-diagrams", 1), dir.join("b.pdf")).unwrap();
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &dir, &[], 80, 40);
+    view.wait_until("both tiles", |t| corners(t).len() >= 2);
+    let tiles = corners(&view.text());
+    assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
+    view.press("d");
+    view.wait_until("both again", |t| corners(t).len() >= 4);
+    assert_eq!(corners(&view.text())[2..], [[255; 3], [255; 3]]);
+    view.wait_until("said", |t| last_bar(t).contains("dark on light"));
+    view.press("d");
+    view.wait_until("and back", |t| corners(t).len() >= 6);
+    let tiles = &corners(&view.text())[4..];
+    assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
     view.press("q");
     assert!(view.finish().success());
 }

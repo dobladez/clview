@@ -11,10 +11,16 @@
 //! answers is kept ([`Cache`]), by the diagram's bytes, so a diagram is turned into SVG once
 //! however often it is opened: a document's picture is opened to size it and again to draw it.
 //!
-//! A diagram a document shows on dark paper ([`Request::on_dark`], a fenced block's or a picture by
-//! path's) is drawn again in Mermaid's dark theme, with nothing behind it ([`Theme`]); the cache
-//! keeps each theme's SVG.
+//! A diagram follows its paper: on dark paper it is drawn again in Mermaid's dark theme ([`Theme`]),
+//! and the cache keeps each theme's SVG. Shown by itself, its paper is a setting it has ([`PAPER`]),
+//! declared here under the name other backends declare theirs by, so that one key and one option
+//! turn whatever follows its paper
+//! ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)): its dark
+//! drawing is put on the paper's colour. Shown by a document on dark paper, a fenced block's or a
+//! picture by path's, the request says so ([`Request::on_dark`]), and it is left with nothing behind
+//! it, for the document's paper to show through.
 
+use std::cell::OnceCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -24,10 +30,11 @@ use merman::model::MermaidConfig;
 use merman::model::resources::{InputResourcePolicy, ResourceProfile};
 use merman::{OperationControl, RenderOutput, RenderRequest, Renderer, SemanticParser, SvgRequest};
 
+use super::threads::{RenderFn, Threads};
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
 use super::{
-    Again, Anchor, BACKENDS, Backend, Bounds, Deferred, Format, Frame, HEAD, Input, Job, Opened, Pixels, Pool, Render, Request, Room, Source, Texts,
-    Values,
+    Again, Anchor, Auto, BACKENDS, Backend, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Named, Opened, Pixels, Pool, Render,
+    Request, Room, Setting, Source, Texts, Value, Values,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -35,8 +42,40 @@ use crate::args::{OptionSpec, Parsed};
 pub(super) struct Mermaid;
 
 /// What it shows, by name alone: a `.mermaid` that is text, and a `.mmd` that starts as a diagram
-/// ([`Kind::of`]).
-const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["mermaid"]);
+/// ([`opens`]); a document's ` ```mermaid ` blocks; and its files follow their paper ([`PAPER`]).
+const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["mermaid"]).having(SETTINGS);
+
+/// The paper a diagram shown by itself is drawn for: light, as Mermaid draws it by default, dark on
+/// white; or dark, in Mermaid's dark theme, light on the colour of dark paper ([`Request::dark`]).
+/// Declared under the name, the values, the key and the option other backends declare their paper
+/// by, so that it is one setting with theirs, which the viewer holds one value of: `d` and `--theme`
+/// turn whatever follows its paper, and no backend names another
+/// ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
+const PAPER: Setting = Setting {
+    name: "paper",
+    named: &[Named { name: LIGHT, says: "dark on light" }, Named { name: DARK, says: "light on dark" }],
+    numbers: None,
+    default: Value::Named(LIGHT),
+    zero: Value::Named(LIGHT),
+    auto: Some(Auto { light: LIGHT, dark: DARK }),
+    keys: Keys::Cycle('d'),
+    option: OptionSpec {
+        name: "--theme",
+        short: None,
+        value: Some("auto|light|dark"),
+        help: "a diagram in Mermaid's dark theme, light on dark, or dark on white (auto: as the terminal is)",
+        alias: None,
+    },
+    help: "light on dark, or dark on light",
+    does: "go dark",
+    effect: Effect::Redraw,
+    sets_width: false,
+};
+const LIGHT: &str = "light";
+const DARK: &str = "dark";
+
+/// The settings a diagram has: its paper.
+const SETTINGS: &[&str] = &[PAPER.name];
 
 impl Backend for Mermaid {
     fn name(&self) -> &'static str {
@@ -59,6 +98,10 @@ impl Backend for Mermaid {
         &[]
     }
 
+    fn settings(&self) -> &'static [Setting] {
+        &[PAPER]
+    }
+
     fn opens(&self, path: &str, head: &[u8]) -> bool {
         opens(path, head)
     }
@@ -71,7 +114,7 @@ impl Backend for Mermaid {
 
     /// It turns the whole diagram into SVG, in a worker, to open it: a list's tile opens it when wanted.
     fn deferred(&self, _path: &str, _head: &[u8]) -> Option<Deferred> {
-        Some(Deferred { settings: &[] })
+        Some(Deferred { settings: SETTINGS })
     }
 
     fn open(&self, input: Input, options: &Parsed<'_>) -> Result<Opened, String> {
@@ -105,35 +148,57 @@ fn shown(path: &str, svg: Arc<Vec<u8>>, options: &Parsed<'_>) -> Result<Opened, 
 /// How a diagram is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Theme {
-    /// In Mermaid's default theme, on white: a diagram shown by itself, as a picture by path, and as
-    /// a document's block on light paper.
+    /// In Mermaid's default theme, on white: a diagram on light paper, shown by itself, as a
+    /// document's picture by path or as its block.
     Light,
-    /// In Mermaid's dark theme, with nothing behind it: a document's block on dark paper, which shows
-    /// through. A diagram's own `%%{init}%%` theme and colours still apply, as they do on a web page
-    /// whose theme is dark.
+    /// In Mermaid's dark theme, with nothing behind it: a diagram on dark paper. A document's shows
+    /// through; a diagram shown by itself is put on its paper's colour once it is drawn
+    /// ([`Behind`]). A diagram's own `%%{init}%%` theme and colours still apply, as they do on a web
+    /// page whose theme is dark.
     Dark,
 }
 
-/// A diagram, open: its SVG in Mermaid's default theme, opened by the backend that shows it, which
-/// shows it wherever it is shown by itself; and its text, for a document that shows it on dark paper
-/// to have it drawn again in the dark theme.
+/// What a diagram drawn for dark paper is put on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Behind {
+    /// Nothing: a document's picture, whose paper shows through.
+    Nothing,
+    /// The paper's colour: a diagram shown by itself.
+    Paper([u8; 3]),
+}
+
+/// What `request` wants the diagram's dark drawing put on, if it wants that drawing: nothing, for a
+/// document's picture on dark paper ([`Request::on_dark`]); the paper's colour ([`Request::dark`]),
+/// for a diagram shown by itself with its paper at dark ([`PAPER`]). `None` wants the light one.
+fn for_dark(request: &Request) -> Option<Behind> {
+    if request.on_dark {
+        return Some(Behind::Nothing);
+    }
+    (request.values.get(PAPER.name) == Some(Value::Named(DARK))).then_some(Behind::Paper(request.dark))
+}
+
+/// A diagram, open: its SVG in Mermaid's default theme, opened by the backend that shows it; and its
+/// text, to have it drawn again in the dark theme when it is first wanted on dark paper.
 struct Diagram {
     light: Box<dyn Source + Send>,
     text: Arc<Vec<u8>>,
     path: String,
 }
 
-impl Diagram {
-    /// The diagram in the dark theme, opened by the backend that shows its SVG, or why not.
-    fn dark(&self) -> Result<Box<dyn Source + Send>, String> {
-        let error = |e: String| format!("{}: {e}", self.path);
-        let svg = drawn(&SERVICE, &CACHE, &self.text, Theme::Dark).map_err(error)?;
-        match shown(&self.path, svg, &Parsed::default())? {
-            Opened::Pages(dark) => Ok(dark),
-            Opened::Files(_) => Err(error("its SVG holds files".into())),
-        }
+/// The diagram `text`, the file at `path`, in the dark theme, opened by the backend that shows its
+/// SVG, or why not.
+fn dark_of(text: &Arc<Vec<u8>>, path: &str) -> Result<Box<dyn Source + Send>, String> {
+    let error = |e: String| format!("{path}: {e}");
+    let svg = drawn(&SERVICE, &CACHE, text, Theme::Dark).map_err(error)?;
+    match shown(path, svg, &Parsed::default())? {
+        Opened::Pages(dark) => Ok(dark),
+        Opened::Files(_) => Err(error("its SVG holds files".into())),
     }
 }
+
+/// The most pages whose light drawing's size a pool keeps, to fit their dark drawing into: a diagram
+/// is one page.
+const MAX_ROOMS: usize = 64;
 
 /// Everything is the light drawing's, as its backend shows it; but a render for dark paper.
 impl Source for Diagram {
@@ -149,8 +214,15 @@ impl Source for Diagram {
         self.light.natural(page)
     }
 
+    /// Its paper, and whatever its light drawing has.
     fn settings(&self) -> Vec<&'static str> {
-        self.light.settings()
+        let mut settings = self.light.settings();
+        for name in SETTINGS {
+            if !settings.contains(name) {
+                settings.push(name);
+            }
+        }
+        settings
     }
 
     /// Mermaid's dark theme.
@@ -168,8 +240,28 @@ impl Source for Diagram {
         Ok(Box::new(OnPaper { diagram: self, light: self.light.renderer()?, dark: None }))
     }
 
+    /// The light drawing's pool, and for the requests on dark paper a thread of this backend's own
+    /// ([`Papers`]), which draws the dark drawing when the first such request comes, so that the
+    /// viewer never waits for merman. A failure isn't kept here: the next render asks again, and is
+    /// answered from the cache where the failure is one that would come again ([`Failed::Kept`]).
     fn pool(&self, threads: usize) -> Box<dyn Pool> {
-        self.light.pool(threads)
+        let (text, path) = (self.text.clone(), self.path.clone());
+        let rooms: Vec<Option<(f32, f32)>> = (0..self.light.pages().min(MAX_ROOMS)).map(|page| self.light.size(page)).collect();
+        let kept: Mutex<Option<Box<dyn Source + Send>>> = Mutex::new(None);
+        let render: RenderFn = Arc::new(move |request| {
+            let Some(behind) = for_dark(&request) else { return Frame::failed(request, "not a render for dark paper".into()) };
+            let room = rooms.get(request.page).copied().flatten();
+            // Taken while it renders: a render that panics leaves none, and the next opens it again.
+            let mut slot = kept.lock().unwrap_or_else(PoisonError::into_inner);
+            let dark = match slot.take() {
+                Some(dark) => Ok(dark),
+                None => dark_of(&text, &path),
+            };
+            let frame = rendered_dark(&dark, room, request, behind);
+            *slot = dark.ok();
+            frame
+        });
+        Box::new(Papers { light: self.light.pool(threads), dark: OnceCell::new(), render })
     }
 
     fn laid_at(&self) -> (Values, Option<Room>) {
@@ -211,46 +303,83 @@ struct OnPaper<'a> {
 
 impl Render for OnPaper<'_> {
     fn render(&mut self, request: Request) -> Frame {
-        if !request.on_dark {
-            return self.light.render(request);
-        }
-        let dark = self.dark.get_or_insert_with(|| self.diagram.dark());
-        let room = self.diagram.light.size(request.page);
-        let rendered = dark.as_ref().map_err(String::clone).and_then(|dark| in_the_room_of(room, &**dark, request));
-        rendered.unwrap_or_else(|why| Frame::failed(request, why))
+        let Some(behind) = for_dark(&request) else { return self.light.render(request) };
+        let dark = self.dark.get_or_insert_with(|| dark_of(&self.diagram.text, &self.diagram.path));
+        rendered_dark(dark, self.diagram.light.size(request.page), request, behind)
     }
+}
+
+/// A diagram's pool: its light drawing's own, and for the renders asked for dark paper one of this
+/// backend's, started when the first is wanted. One thread: a diagram is a page, and its dark
+/// drawing one source, which the thread opens and keeps.
+struct Papers {
+    light: Box<dyn Pool>,
+    dark: OnceCell<Threads>,
+    /// What the dark pool's thread renders with ([`Diagram::pool`]).
+    render: RenderFn,
+}
+
+impl Pool for Papers {
+    /// Each drawing's pool is told what is wanted of it, in the order asked, and that nothing else
+    /// is: a render is delivered only while it is listed, whichever pool made it.
+    fn set_queue(&self, requests: Vec<Request>) {
+        let (dark, light): (Vec<Request>, Vec<Request>) = requests.into_iter().partition(|request| for_dark(request).is_some());
+        self.light.set_queue(light);
+        // Started by the first render wanted of it; told that none is, once started.
+        let started = if dark.is_empty() { self.dark.get() } else { Some(self.dark.get_or_init(|| Threads::new(1, self.render.clone()))) };
+        if let Some(pool) = started {
+            pool.set_queue(dark);
+        }
+    }
+
+    fn try_recv(&self) -> Option<Frame> {
+        self.light.try_recv().or_else(|| self.dark.get().and_then(|pool| pool.try_recv()))
+    }
+}
+
+/// `dark`, a diagram's dark drawing or why there is none, rendered for `request` on `behind`, in the
+/// room `room` its light drawing takes ([`in_the_room_of`]): a page that failed, with why, where
+/// there is none.
+fn rendered_dark(dark: &Result<Box<dyn Source + Send>, String>, room: Option<(f32, f32)>, request: Request, behind: Behind) -> Frame {
+    let rendered = dark.as_ref().map_err(String::clone).and_then(|dark| in_the_room_of(room, &**dark, request, behind));
+    rendered.unwrap_or_else(|why| Frame::failed(request, why))
 }
 
 /// The most pixels of the frame a dark drawing is put in the middle of: 64 million, 256 MiB.
 const MAX_FRAME: u64 = 64_000_000;
 
 /// `dark`, a diagram's dark drawing, rendered for `request` in the room its light drawing takes, of
-/// the size `room`: a document is laid out around the light one, and Mermaid's dark theme lays some
-/// diagrams out a little larger (a class diagram a tenth wider, ADR-0032). So it is drawn at the
-/// request's scale where it is no larger than that room, and smaller where it is, its shape kept;
-/// then put in the middle of a frame the light one's size, with nothing around it.
-fn in_the_room_of(room: Option<(f32, f32)>, dark: &dyn Source, request: Request) -> Result<Frame, String> {
+/// the size `room`: a document is laid out around the light one, the viewer fits a diagram shown by
+/// itself by it, and Mermaid's dark theme lays some diagrams out a little larger (a class diagram a
+/// tenth wider, ADR-0032). So it is drawn at the request's scale where it is no larger than that
+/// room, and smaller where it is, its shape kept; then put in the middle of a frame the light one's
+/// size, on `behind`: nothing, or the paper's colour, around it and behind it. A frame of more than
+/// [`MAX_FRAME`] pixels is left as it was drawn, with nothing behind it.
+fn in_the_room_of(room: Option<(f32, f32)>, dark: &dyn Source, request: Request, behind: Behind) -> Result<Frame, String> {
     let mut renderer = dark.renderer()?;
-    let (Some((room_w, room_h)), Some((w, h))) = (room, dark.size(request.page)) else { return Ok(renderer.render(request)) };
-    let fit = Some((room_w / w).min(room_h / h).min(1.0)).filter(|fit| fit.is_finite() && *fit > 0.0).unwrap_or(1.0);
+    let sizes = room.zip(dark.size(request.page));
+    let fit =
+        sizes.map(|((room_w, room_h), (w, h))| (room_w / w).min(room_h / h).min(1.0)).filter(|fit| fit.is_finite() && *fit > 0.0).unwrap_or(1.0);
     let frame = renderer.render(Request { scale: request.scale * fit, ..request });
     let frame = Frame { request, ..frame };
     if frame.error.is_some() || frame.again {
         return Ok(frame);
     }
-    // The light drawing's frame, in whole pixels, and never smaller than what was drawn. The cast
-    // is of a number between 1 and 2^31.
+    // The light drawing's frame, in whole pixels, and never smaller than what was drawn; what was
+    // drawn, where its size isn't known. The cast is of a number between 1 and 2^31.
     let side = |points: f32, drawn: u32| ((f64::from(points) * f64::from(request.scale)).ceil().clamp(1.0, 2_147_483_648.0) as u32).max(drawn);
-    let (width, height) = (side(room_w, frame.width), side(room_h, frame.height));
-    if (width, height) == (frame.width, frame.height) || u64::from(width).saturating_mul(u64::from(height)) > MAX_FRAME {
+    let (width, height) = sizes.map_or((frame.width, frame.height), |((room_w, room_h), _)| (side(room_w, frame.width), side(room_h, frame.height)));
+    let as_drawn = behind == Behind::Nothing && (width, height) == (frame.width, frame.height);
+    if as_drawn || u64::from(width).saturating_mul(u64::from(height)) > MAX_FRAME {
         return Ok(frame);
     }
-    Ok(centred(frame, width, height))
+    Ok(placed(frame, width, height, behind))
 }
 
-/// `frame` in the middle of one `width` by `height` pixels, each at least its own, with nothing
-/// around it; as it is where its pixels aren't what it says they are.
-fn centred(frame: Frame, width: u32, height: u32) -> Frame {
+/// `frame` in the middle of one `width` by `height` pixels, each at least its own, on `behind`: with
+/// nothing around it, or with the paper's colour around it and behind it, opaque. As it is where
+/// its pixels aren't what it says they are.
+fn placed(frame: Frame, width: u32, height: u32, behind: Behind) -> Frame {
     // Each a `u32`, and their product within `MAX_FRAME`, which the caller checked.
     let (row, drawn_row) = ((width as usize).saturating_mul(4), (frame.width as usize).saturating_mul(4));
     let left = ((width.saturating_sub(frame.width) / 2) as usize).saturating_mul(4);
@@ -258,13 +387,33 @@ fn centred(frame: Frame, width: u32, height: u32) -> Frame {
     if drawn_row == 0 || frame.rgba.len() != drawn_row.saturating_mul(frame.height as usize) {
         return frame;
     }
-    let mut pixels = vec![0u8; row.saturating_mul(height as usize)];
+    let paper = match behind {
+        Behind::Nothing => [0; 4],
+        Behind::Paper([red, green, blue]) => [red, green, blue, 255],
+    };
+    let mut pixels = paper.repeat((width as usize).saturating_mul(height as usize));
     for (into, from) in pixels.chunks_exact_mut(row).skip(top).zip(frame.rgba.chunks_exact(drawn_row)) {
-        if let Some(into) = into.get_mut(left..left.saturating_add(drawn_row)) {
-            into.copy_from_slice(from);
+        let Some(into) = into.get_mut(left..left.saturating_add(drawn_row)) else { continue };
+        match behind {
+            Behind::Nothing => into.copy_from_slice(from),
+            Behind::Paper(_) => over(into, from),
         }
     }
     Frame { width, height, rgba: Pixels::new(pixels), ..frame }
+}
+
+/// `from`, premultiplied pixels, drawn over `under`, as many opaque ones, which stay opaque.
+fn over(under: &mut [u8], from: &[u8]) {
+    for (under, pixel) in under.chunks_exact_mut(4).zip(from.chunks_exact(4)) {
+        let &[red, green, blue, alpha] = pixel else { continue };
+        let clear = 255 - u16::from(alpha);
+        for (under, ink) in under.iter_mut().zip([red, green, blue]) {
+            // At most 255 × 255 + 127, within a `u16`; and a pixel that isn't premultiplied, its ink
+            // past its alpha, stops at white.
+            let through = (u16::from(*under) * clear + 127) / 255;
+            *under = u8::try_from(u16::from(ink).saturating_add(through)).unwrap_or(u8::MAX);
+        }
+    }
 }
 
 /// The largest diagram read: 1 MiB, merman's own limit on a diagram's text.
@@ -1046,10 +1195,11 @@ mod tests {
     /// theme lays some out a little larger (a class diagram a tenth wider), which is why a dark
     /// drawing is fitted into the light one's room ([`in_the_room_of`]).
     ///
-    /// Opened, a diagram is the light drawing wherever it is shown by itself; a render asked for dark
+    /// Opened, a diagram is the light drawing on light paper; a render asked for a document's dark
     /// paper is the dark one, with nothing behind it, in a frame the light one's size: the class
     /// diagram is drawn smaller in the middle of it, its shape kept, so the frame's top and bottom
-    /// are clear and its width is used.
+    /// are clear and its width is used. Shown by itself with its paper at dark, it is that same
+    /// drawing on the paper's colour, opaque, from its renderer and from its pool alike.
     #[test]
     fn a_diagram_for_dark_paper_is_in_the_dark_theme_on_nothing_in_the_light_ones_room() {
         let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1109,7 +1259,7 @@ mod tests {
             let again: Again = Arc::new(move || Ok(diagram.as_bytes().to_vec()));
             let input = Input::held("a.mermaid".into(), Vec::new(), again);
             let Ok(Opened::Pages(diagram)) = Mermaid.open(input, &Parsed::default()) else { panic!("not pages") };
-            assert_eq!(diagram.pages(), 1);
+            assert_eq!((diagram.pages(), diagram.settings()), (1, vec![PAPER.name]));
             let mut renderer = diagram.renderer().unwrap();
             let light = renderer.render(Request { scale: 2.0, tag: 7, ..Request::default() });
             let dark = renderer.render(Request { scale: 2.0, tag: 8, on_dark: true, dark: [30, 30, 30], ..Request::default() });
@@ -1117,6 +1267,41 @@ mod tests {
             assert_eq!((light.request.tag, dark.request.tag, dark.request.scale), (7, 8, 2.0), "the request as it was asked");
             let sizes = ((light.width, light.height), (dark.width, dark.height));
             assert!(light.width.abs_diff(dark.width) <= 1 && light.height.abs_diff(dark.height) <= 1, "{sizes:?}");
+
+            // Shown by itself, its paper at dark: the dark drawing on the paper's colour, opaque,
+            // where the document's has nothing behind it; and at light, the light one.
+            let at = |paper: &'static str, tag: u64| {
+                let mut values = Values::default();
+                assert!(values.set(PAPER.name, Value::Named(paper)));
+                Request { scale: 2.0, tag, values, dark: [30, 40, 50], ..Request::default() }
+            };
+            let alone = renderer.render(at(DARK, 9));
+            assert!(alone.error.is_none(), "{:?}", alone.error);
+            assert_eq!((alone.request, alone.width, alone.height), (at(DARK, 9), dark.width, dark.height));
+            for (alone, dark) in alone.rgba.as_chunks::<4>().0.iter().zip(dark.rgba.as_chunks::<4>().0) {
+                match dark[3] {
+                    0 => assert_eq!(*alone, [30, 40, 50, 255], "the paper where nothing is drawn"),
+                    255 => assert_eq!(alone, dark, "its ink where it is opaque"),
+                    _ => assert_eq!(alone[3], 255, "opaque"),
+                }
+            }
+            assert!(*renderer.render(at(LIGHT, 7)).rgba == *light.rgba, "at light, the light drawing");
+            // In the pager: its pool gives the same of each, the dark one from a thread of its own.
+            let pool = diagram.pool(2);
+            pool.set_queue(vec![at(DARK, 10), at(LIGHT, 11)]);
+            let mut got = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while got.len() < 2 {
+                assert!(Instant::now() < deadline, "the pool's renders never came");
+                match pool.try_recv() {
+                    Some(frame) => got.push(frame),
+                    None => std::thread::sleep(Duration::from_millis(5)),
+                }
+            }
+            got.sort_by_key(|frame| frame.request.tag);
+            assert_eq!((got[0].request, got[1].request), (at(DARK, 10), at(LIGHT, 11)));
+            assert!(got.iter().all(|frame| frame.error.is_none()), "{:?} {:?}", got[0].error, got[1].error);
+            assert!(*got[0].rgba == *alone.rgba && *got[1].rgba == *light.rgba, "as its renderer draws them");
             (light, dark)
         };
         let pixels = |frame: &Frame| frame.rgba.as_chunks::<4>().0.to_vec();
@@ -1139,10 +1324,98 @@ mod tests {
         SERVICE.turn().link = None;
     }
 
-    /// A frame is put in the middle of a larger one, nothing around it; and left as it is where its
-    /// pixels aren't what its size says.
+    /// A request wants the dark drawing as a document's picture on dark paper, with nothing behind it,
+    /// or with the paper at dark, on the paper's colour; and the light one otherwise.
     #[test]
-    fn a_frame_is_centred_in_a_larger_one() {
+    fn a_request_says_whether_it_wants_the_dark_drawing_and_on_what() {
+        let at = |value: Value| {
+            let mut values = Values::default();
+            assert!(values.set(PAPER.name, value));
+            Request { values, dark: [30, 40, 50], ..Request::default() }
+        };
+        assert_eq!(for_dark(&Request::default()), None, "a paper nobody set is light");
+        assert_eq!(for_dark(&at(Value::Named(LIGHT))), None);
+        assert_eq!(for_dark(&at(Value::Named(DARK))), Some(Behind::Paper([30, 40, 50])));
+        assert_eq!(for_dark(&at(Value::Number(7))), None);
+        assert_eq!(for_dark(&at(Value::Named("sepia"))), None);
+        // A document's picture has nothing behind it, whatever the values say.
+        assert_eq!(for_dark(&Request { on_dark: true, dark: [30, 40, 50], ..Request::default() }), Some(Behind::Nothing));
+        assert_eq!(for_dark(&Request { on_dark: true, ..at(Value::Named(DARK)) }), Some(Behind::Nothing));
+        assert_eq!(for_dark(&Request { on_dark: true, ..at(Value::Named(LIGHT)) }), Some(Behind::Nothing));
+    }
+
+    /// A diagram's pool tells each drawing's pool what is wanted of it and that nothing else is: the
+    /// light drawing's the renders for light paper, and a thread started by the first render wanted
+    /// for dark paper those. A render no longer listed isn't delivered, whichever made it.
+    #[test]
+    fn a_pool_sends_the_renders_for_dark_paper_to_a_thread_started_when_one_is_wanted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::mpsc::{Receiver, channel};
+        /// The light drawing's pool: it keeps what it was told, and renders nothing.
+        struct Light(Rc<RefCell<Vec<Vec<Request>>>>);
+        impl Pool for Light {
+            fn set_queue(&self, requests: Vec<Request>) {
+                self.0.borrow_mut().push(requests);
+            }
+            fn try_recv(&self) -> Option<Frame> {
+                None
+            }
+        }
+        let frame = |request| Frame { request, width: 1, height: 1, rgba: Pixels::new(vec![0; 4]), error: None, warnings: Vec::new(), again: false };
+        // The dark thread renders when the test lets it: one render a word.
+        let (go, wait) = channel::<()>();
+        let wait: Mutex<Receiver<()>> = Mutex::new(wait);
+        let render: RenderFn = Arc::new(move |request| {
+            let _ = wait.lock().unwrap().recv();
+            frame(request)
+        });
+        let told = Rc::new(RefCell::new(Vec::new()));
+        let pool = Papers { light: Box::new(Light(told.clone())), dark: OnceCell::new(), render };
+        let dark = |tag| {
+            let mut values = Values::default();
+            assert!(values.set(PAPER.name, Value::Named(DARK)));
+            Request { tag, values, ..Request::default() }
+        };
+        let light = |tag| Request { tag, ..Request::default() };
+        let received = |pool: &Papers| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                assert!(Instant::now() < deadline, "the render never came");
+                match pool.try_recv() {
+                    Some(frame) => break frame.request,
+                    None => std::thread::sleep(Duration::from_millis(2)),
+                }
+            }
+        };
+        pool.set_queue(vec![light(1)]);
+        assert!(pool.dark.get().is_none() && pool.try_recv().is_none(), "no thread until a render for dark paper is wanted");
+        pool.set_queue(vec![dark(2), light(1), Request { on_dark: true, ..light(3) }]);
+        assert_eq!(*told.borrow(), [vec![light(1)], vec![light(1)]], "the light drawing's pool, told its own");
+        go.send(()).unwrap();
+        go.send(()).unwrap();
+        let mut got = [received(&pool), received(&pool)];
+        got.sort_by_key(|request| request.tag);
+        assert_eq!(got, [dark(2), Request { on_dark: true, ..light(3) }], "the dark thread, told its own, as they were asked");
+        // One being rendered when it is no longer wanted is dropped: the queue reaches the thread
+        // though nothing for dark paper is in it.
+        pool.set_queue(vec![dark(4)]);
+        std::thread::sleep(Duration::from_millis(50));
+        pool.set_queue(vec![light(1)]);
+        go.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(pool.try_recv().is_none(), "delivered though no longer listed");
+        assert_eq!(told.borrow().last(), Some(&vec![light(1)]));
+        // Wanted again, it is rendered again.
+        pool.set_queue(vec![dark(4)]);
+        go.send(()).unwrap();
+        assert_eq!(received(&pool), dark(4));
+    }
+
+    /// A frame is put in the middle of a larger one, nothing around it, or on a paper's colour,
+    /// around it and behind it; and left as it is where its pixels aren't what its size says.
+    #[test]
+    fn a_frame_is_put_in_the_middle_of_a_larger_one_on_nothing_or_on_paper() {
         let frame = |width, height, rgba: Vec<u8>| Frame {
             request: Request::default(),
             width,
@@ -1152,14 +1425,26 @@ mod tests {
             warnings: vec!["kept".into()],
             again: false,
         };
-        let centred = super::centred(frame(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]), 4, 3);
+        let centred = placed(frame(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]), 4, 3, Behind::Nothing);
         assert_eq!((centred.width, centred.height, centred.warnings.len()), (4, 3, 1));
         let expected = [[0u8; 16].as_slice(), &[0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0], &[0; 16]].concat();
         assert_eq!(&*centred.rgba, expected.as_slice());
-        let odd = super::centred(frame(2, 1, vec![1, 2, 3]), 4, 3);
-        assert_eq!((odd.width, odd.height, odd.rgba.len()), (2, 1, 3));
-        let none = super::centred(frame(0, 0, Vec::new()), 4, 3);
-        assert_eq!((none.width, none.height), (0, 0));
+        for behind in [Behind::Nothing, Behind::Paper([30, 40, 50])] {
+            let odd = placed(frame(2, 1, vec![1, 2, 3]), 4, 3, behind);
+            assert_eq!((odd.width, odd.height, odd.rgba.len()), (2, 1, 3));
+            let none = placed(frame(0, 0, Vec::new()), 4, 3, behind);
+            assert_eq!((none.width, none.height), (0, 0));
+        }
+        // On paper: opaque ink stays, the paper shows where nothing is drawn and through what is
+        // half clear, and all of it is opaque. A pixel that isn't premultiplied stops at white.
+        const PAPER: [u8; 4] = [30, 40, 50, 255];
+        let drawn = [[200, 100, 0, 255], [0, 0, 0, 0], [100, 100, 100, 128]].concat();
+        let on_paper = placed(frame(3, 1, drawn), 5, 2, Behind::Paper([30, 40, 50]));
+        assert_eq!((on_paper.width, on_paper.height, on_paper.warnings.len()), (5, 2, 1));
+        let expected = [PAPER, [200, 100, 0, 255], PAPER, [115, 120, 125, 255], PAPER, PAPER, PAPER, PAPER, PAPER, PAPER].concat();
+        assert_eq!(&*on_paper.rgba, expected.as_slice());
+        let same = placed(frame(2, 1, vec![0, 0, 0, 0, 255, 255, 255, 10]), 2, 1, Behind::Paper([30, 40, 50]));
+        assert_eq!(&*same.rgba, [PAPER, [255; 4]].concat().as_slice(), "a frame its own size is put on paper too");
     }
 
     #[test]

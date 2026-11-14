@@ -39,8 +39,8 @@ clv --password PW secret.pdf
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
-| `--theme auto` | [Markdown and HTML](#documents) light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents, which `--help` lists it under |
-| `--theme light`, `--theme dark` | Markdown and HTML that way, whatever the terminal |
+| `--theme auto` | [Markdown and HTML](#documents), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
+| `--theme light`, `--theme dark` | Markdown, HTML and Mermaid diagrams that way, whatever the terminal |
 | `--width window` | Markdown and HTML on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
 | `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
 | `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
@@ -103,7 +103,7 @@ In a file's pages:
 | `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
-| `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
+| `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
@@ -128,7 +128,7 @@ In a list:
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
-| `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
+| `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
 | `[`, `]`, `{`, `}`, `s` | nothing: only a document opened from the list is laid out again, and they say so |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
@@ -562,11 +562,23 @@ One cost the limits don't count is a [known issue](#known-issues): a stylesheet'
 ### Mermaid diagrams
 
 A Mermaid diagram is one page: [merman](https://github.com/Latias94/merman), a Mermaid in Rust,
-turns it into SVG, as Mermaid 12 draws it in its default theme, and it is shown as an
-[SVG drawing](#svg-drawings) is, sharp at any size, `c` and text cells included, but on white: a
-drawing shows the terminal's background where it is transparent, and Mermaid's ink is made for
-white, as `mmdc -b white` draws it. (A ` ```mermaid ` block of a [document](#documents) on dark
-paper is drawn in Mermaid's dark theme instead.) merman draws every kind of diagram it parses: flowcharts,
+turns it into SVG, as Mermaid 12 draws it, and it is shown as an
+[SVG drawing](#svg-drawings) is, sharp at any size, `c` and text cells included, but on a paper of
+its own, where a drawing shows the terminal's background wherever it is transparent.
+
+A diagram follows the paper, as [Markdown and HTML](#documents) do. On a terminal with a dark
+background it is drawn in Mermaid's dark theme, light on dark, on exactly the terminal's colour,
+so that it is no rectangle at all; otherwise in Mermaid's default theme on white, as
+`mmdc -b white` draws it, since that theme's ink is made for white. `d` turns it to the other and
+back, in a list too, `--theme light` or `--theme dark` says how it starts, and a terminal that
+doesn't say what its background is gets it on white, with `d` still going to a dark grey. The page
+is as large on either paper, the size of the default theme's drawing: where the dark theme lays a
+diagram out a little larger (a class diagram, a tenth wider), it is drawn that much smaller, in
+the middle. A diagram that can't be drawn in the dark theme fails on dark paper, saying why, and
+`d` still shows it on white. A ` ```mermaid ` block of a document, and a diagram a document shows
+by path, follow that document's paper the same way.
+
+merman draws every kind of diagram it parses: flowcharts,
 sequence, class, state and entity-relationship diagrams, gantt charts, pies, mindmaps, timelines,
 user journeys, git graphs, requirement, C4, quadrant, XY, sankey, packet, block, architecture,
 kanban, radar and treemap diagrams, and the other kinds Mermaid has in beta. A diagram's own
@@ -694,9 +706,10 @@ where the dark theme lays a diagram out a little larger (a class diagram, a tent
 drawn that much smaller, in the middle of that room. A diagram's own theme (`%%{init: …}%%`) is its
 own on either paper. One that can't be drawn for a page's paper is a grey box there, the page
 saying so, never its drawing for the other paper; it isn't tried again until the document is laid
-out again. A diagram shown by path (`![a flow](flow.mmd)`) follows the paper the same way; a
-`.mmd` file shown by itself stays on white. A Word document, an RTF or a PDF is a page as printed, and stays so;
-`d` says so. What `c` copies is the page as it is shown
+out again. A diagram shown by path (`![a flow](flow.mmd)`) follows the paper the same way, and so
+does a `.mmd` file shown by itself ([Mermaid diagrams](#mermaid-diagrams)). A Word document, an RTF
+or a PDF is a page as printed, and stays so; `d` says which formats go dark. What `c` copies is the
+page as it is shown
 ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 
 Opening a document reads and lays it out whole, to know its pages: a quarter of a second for 500

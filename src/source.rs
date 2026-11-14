@@ -202,7 +202,8 @@ pub(crate) struct Deferred {
 /// each backend drawing its own files by it as it likes. So they declare it alike, but for their
 /// option's help, which `--help` lists under each; the viewer takes the rest from the first to
 /// declare it. Which formats have it, their backends say ([`Format::settings`]), and the viewer says
-/// nothing of a setting but what is declared: it knows no format.
+/// nothing of a setting but what is declared: it knows no format
+/// ([ADR-0033](../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Setting {
     /// What it is called, in [`Values`] and in what the reader is told (`width 72`).

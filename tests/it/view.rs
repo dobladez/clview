@@ -407,15 +407,24 @@ fn help_and_version() {
     assert!(!help.contains("--zoom"), "the old name is not shown: {help}");
     assert!(help.contains("\n  -r, --recurse "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
-    // shows: the PDF one, and the documents' and spreadsheets' when they are built.
+    // shows: the PDF one, and the documents', the spreadsheets' and Mermaid's when they are built.
     let heading = |(line, next): &(&str, &str)| line.starts_with("   for ") && line.ends_with(':') && next.starts_with("     --");
     let headings = help.lines().zip(help.lines().skip(1)).filter(heading).count();
-    assert_eq!(headings, 1 + usize::from(cfg!(feature = "word")) + usize::from(cfg!(feature = "sheet")), "{help}");
+    let built = [cfg!(feature = "word"), cfg!(feature = "sheet"), cfg!(feature = "mermaid")];
+    assert_eq!(headings, 1 + built.iter().filter(|built| **built).count(), "{help}");
     assert!(help.contains("\n\n   for PDFs:\n     --password PW ") && !help.contains("no options"), "{help}");
-    // A setting's option is its backend's: `--theme` the documents'.
+    // A setting's option is its backends': `--theme` the documents' and Mermaid's, which share the
+    // setting, listed under each in its own words.
     assert!(!help.contains("\n  --theme "), "{help}");
-    let documents = help.split("\n   for documents:\n").nth(1).map(|rest| rest.split("\n\n").next().unwrap_or_default());
-    assert_eq!(documents.is_some_and(|options| options.contains("\n     --theme auto|light|dark ")), cfg!(feature = "word"), "{help}");
+    let under = |shows: &str| {
+        let options = help.split(&format!("\n   for {shows}:\n")).nth(1).map(|rest| rest.split("\n\n").next().unwrap_or_default());
+        let theme = options.and_then(|options| options.lines().find(|line| line.starts_with("     --theme auto|light|dark ")));
+        theme.map(|line| line.trim_start_matches("     --theme auto|light|dark").trim().to_owned())
+    };
+    let (documents, diagrams) = (under("documents"), under("Mermaid diagrams"));
+    assert_eq!(documents.as_ref().is_some_and(|help| help.starts_with("Markdown and HTML ")), cfg!(feature = "word"), "{help}");
+    assert_eq!(diagrams.as_ref().is_some_and(|help| help.contains("Mermaid's dark theme")), cfg!(feature = "mermaid"), "{help}");
+    assert!(documents != diagrams || documents.is_none(), "each in its own words: {help}");
     // Then the formats shown, by the libraries each backend credits: a backend's only when it is
     // built.
     let shown = |what: &str, formats: &str| {

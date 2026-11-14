@@ -1,7 +1,10 @@
 # ADR-0021: A backend declares its settings, and their options hold for any file
 
 - **Status:** Accepted; the viewer's keys coming first is set aside for the zoom keys alone, on a
-  document with a font size, by [ADR-0023](0023-the-window-is-the-page-of-markdown-and-html.md)
+  document with a font size, by [ADR-0023](0023-the-window-is-the-page-of-markdown-and-html.md); a
+  setting's line in `?` and its message for a file that hasn't it, sentences of the backend's here,
+  are put together by the viewer from what the formats list, by
+  [ADR-0033](0033-backends-share-a-setting-by-declaring-its-name.md)
 - **Date:** 2026-11-07
 
 ## Context

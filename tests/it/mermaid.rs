@@ -324,8 +324,7 @@ fn flow() -> String {
     std::fs::read_to_string(data("flow.mmd")).unwrap()
 }
 
-/// What `clv` printed of the document at `path`, with `args`: its pages, and what it said.
-#[cfg(feature = "word")]
+/// What `clv` printed of the file at `path`, with `args`: its pages, and what it said.
 fn pages_at(path: &Path, args: &[&str]) -> (Vec<image::RgbaImage>, String) {
     let out = view(path, &[&["--protocol", "kitty"], args].concat());
     assert!(out.status.success(), "{}", text(&out.stderr));
@@ -348,7 +347,6 @@ fn shows_flow(page: &image::RgbaImage) -> bool {
 }
 
 /// How many of `page`'s pixels are dark: text's ink.
-#[cfg(feature = "word")]
 fn ink(page: &image::RgbaImage) -> usize {
     page.pixels().filter(|p| p.0[..3].iter().all(|&v| v < 128)).count()
 }
@@ -574,7 +572,6 @@ fn a_mermaid_block_is_shown_as_code_with_fences_code() {
 }
 
 /// The extent of what on `page` isn't its paper, the colour at its corner: left, top, right, bottom.
-#[cfg(feature = "word")]
 fn inked(page: &image::RgbaImage) -> (u32, u32, u32, u32) {
     let paper = *page.get_pixel(0, 0);
     let ink: Vec<(u32, u32)> = page.enumerate_pixels().filter(|(_, _, pixel)| **pixel != paper).map(|(x, y, _)| (x, y)).collect();
@@ -621,6 +618,76 @@ fn a_mermaid_block_follows_its_documents_paper() {
     let ((l, t, r, b), (dl, dt, dr, db)) = (inked(&light[0]), inked(&dark[0]));
     assert!(dl + 3 >= l && dt + 3 >= t && dr <= r + 3, "{:?} past {:?}", (dl, dt, dr, db), (l, t, r, b));
     assert!(b.abs_diff(db) <= 2, "the rule after it moved: {b} and {db}");
+}
+
+/// A diagram shown by itself follows the theme. With `--theme dark` it is drawn in Mermaid's dark
+/// theme, its ink light, on the colour of dark paper, opaque, with no white behind it nor in it; with
+/// `--theme light`, in the default theme on white, as it is where nothing says (printed through a
+/// pipe, the terminal isn't asked). The page is as large either way, the light drawing's size: a
+/// sequence diagram's ink reaches as far in both, and a class diagram, a tenth wider in the dark
+/// theme, is fitted into the light one's room, never past it.
+#[test]
+fn a_diagram_shown_by_itself_follows_the_theme() {
+    const PAPER: [u8; 4] = [0x1E, 0x1E, 0x1E, 255];
+    let white = |page: &image::RgbaImage| page.pixels().filter(|pixel| pixel.0[..3].iter().all(|v| *v > 240)).count();
+    let light_ink = |page: &image::RgbaImage| page.pixels().filter(|pixel| pixel.0[..3].iter().all(|v| *v > 150)).count();
+    let near = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1;
+    let path = data("sequence.mermaid");
+    let (dark, said) = pages_at(&path, &["--theme", "dark"]);
+    assert!(said.is_empty(), "{said}");
+    assert_eq!(dark.len(), 1);
+    assert_eq!(dark[0].get_pixel(0, 0).0, PAPER, "the paper a terminal that doesn't say gets");
+    assert!(dark[0].pixels().all(|pixel| pixel.0[3] == 255), "opaque");
+    assert_eq!(white(&dark[0]), 0, "no white behind it, nor in it");
+    assert!(light_ink(&dark[0]) > 200, "light ink: {}", light_ink(&dark[0]));
+    assert!(ink(&dark[0]) > dark[0].pixels().count() / 2, "on dark paper: {}", ink(&dark[0]));
+    let (light, said) = pages_at(&path, &["--theme", "light"]);
+    assert!(said.is_empty(), "{said}");
+    on_white(&light[0]);
+    assert!(ink(&light[0]) > 200 && light_ink(&light[0]) > light[0].pixels().count() / 2, "dark ink on white: {}", ink(&light[0]));
+    assert!(pages_at(&path, &[]).0 == light, "as where nothing says");
+    assert!(pages_at(&path, &["--theme", "auto"]).0 == light, "and where the terminal isn't asked");
+    assert!(near(light[0].dimensions(), dark[0].dimensions()), "{:?} and {:?}", light[0].dimensions(), dark[0].dimensions());
+    let ((l, t, r, b), (dl, dt, dr, db)) = (inked(&light[0]), inked(&dark[0]));
+    assert!(
+        l.abs_diff(dl) <= 3 && t.abs_diff(dt) <= 3 && r.abs_diff(dr) <= 3 && b.abs_diff(db) <= 3,
+        "{:?} and {:?}",
+        inked(&light[0]),
+        inked(&dark[0])
+    );
+
+    // A class diagram is a tenth wider in the dark theme: within the light one's room.
+    let class = "classDiagram\n  class Animal {\n    +name string\n    +speak()\n  }\n  Animal <|-- Dog\n";
+    let path = written("mermaid-theme", "class.mmd", class);
+    let (dark, _) = pages_at(&path, &["--theme", "dark"]);
+    let (light, _) = pages_at(&path, &["--theme", "light"]);
+    assert_eq!((dark[0].get_pixel(0, 0).0, white(&dark[0])), (PAPER, 0));
+    assert!(near(light[0].dimensions(), dark[0].dimensions()), "{:?} and {:?}", light[0].dimensions(), dark[0].dimensions());
+    let ((l, t, r, b), (dl, dt, dr, db)) = (inked(&light[0]), inked(&dark[0]));
+    assert!(dl + 3 >= l && dt + 3 >= t && dr <= r + 3 && db <= b + 3, "{:?} past {:?}", (dl, dt, dr, db), (l, t, r, b));
+}
+
+/// A list's diagrams follow the theme too, each tile opened when it is printed: with `--theme
+/// dark`, every tile on the colour of dark paper with nothing white, and on white without.
+#[test]
+fn a_lists_diagrams_follow_the_theme() {
+    let dir = tmp("mermaid-theme-dir", "diagrams");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(data("flow.mmd"), dir.join("a.mmd")).unwrap();
+    std::fs::copy(data("sequence.mermaid"), dir.join("b.mermaid")).unwrap();
+    let (dark, said) = pages_at(&dir, &["--theme", "dark"]);
+    assert!(said.is_empty(), "{said}");
+    assert_eq!(dark.len(), 2);
+    for tile in &dark {
+        assert_eq!(tile.get_pixel(0, 0).0, [0x1E, 0x1E, 0x1E, 255]);
+        assert_eq!(tile.pixels().filter(|pixel| pixel.0[..3].iter().all(|v| *v > 240)).count(), 0, "nothing white");
+    }
+    // The flow's own colours are its own on either paper: its red node left of its blue one.
+    let (red, blue) = (spread(&dark[0], [255, 0, 0]).unwrap(), spread(&dark[0], [0, 0, 255]).unwrap());
+    assert!(red.1 < 0.5 && blue.0 > 0.5, "red at {red:?}, blue at {blue:?}");
+    let (light, _) = pages_at(&dir, &[]);
+    assert_eq!(light.len(), 2);
+    light.iter().for_each(on_white);
 }
 
 /// A picture by path follows its document's paper as a block does, a diagram having a dark form:
