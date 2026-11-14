@@ -2257,7 +2257,8 @@ fn help_through_a_pipe_has_no_escape_codes_on_a_terminal_that_shows_images() {
     let mut out = Vec::new();
     child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
     child.wait().unwrap();
-    assert_eq!(String::from_utf8(out).unwrap().replace("\r\n", "\n"), help_text());
+    // As the terminal's own line ends, and the carriage return a full queue doubles ([`newlines`]).
+    assert_eq!(newlines(&String::from_utf8(out).unwrap()), help_text());
 }
 
 /// What a stream shows, once its escape sequences are taken out: control sequences, and the string
