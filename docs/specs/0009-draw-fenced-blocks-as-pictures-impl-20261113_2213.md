@@ -256,6 +256,49 @@ build and gave it the light SVG; alone, it failed.
 
 **Verify:** the manual check, in kitty with a dark background, is the owner's.
 
+## Codex review, round 1 (2026-11-14)
+
+**[P2] The reading position lost when `s` turns the blocks.** It held: `Source::anchor` gave a
+paragraph's number in the body, and a block is one paragraph drawn and a paragraph a line as code,
+so every paragraph after a block changed its number with `s`, and the reader landed on other text
+(the paragraph after a three-line block, in the block's own code).
+
+- **The fix:** an anchor is now a paragraph's number with each fenced block counted as one, and
+  which of a block's paragraphs it is (`Blocks`). A document without blocks has the anchors it had.
+- **How a block is found in the document as read:** drawn, by its picture, which only a block's
+  promise has. As code, by a mark on each of its lines: an invisible `<a id>` named with what is
+  afresh for the reading, which wordcraft keeps as a bookmark and lays out as nothing. The marks
+  go where a line becomes a paragraph in wordcraft's importer (read at its pin: `text` in
+  `html/builder.rs`), a blank line's before its carriage return, a `<br>` a line's end; a test
+  reads marked and unmarked blocks back through the importer and finds the same paragraphs.
+- **Considered:** the paragraphs' count taken from the block's text (it would have to mirror the
+  importer's rules for blank lines, `<br>` and nested tags exactly, and a miss shifts everything
+  after it), and one mark at a block's start with the code paragraphs after it counted (a code
+  block right after would be taken for more of it). A mark a line needs neither.
+- **The paths asked about:** HTML's blocks had the same fault, and have the same fix (`pre_marked`
+  marks a `<pre>` left as code; the scanner now knows a listed block whether it is drawn or not).
+  A block that fails to draw is code in both layouts and is marked too, so one that fails in one
+  reading and draws in another keeps the reader's place as well.
+- **What changed besides:** a failed Markdown block is written by clv (`code_block`), not through
+  pulldown-cmark's events, without its language's class, which nothing read; `Pictures::draws`
+  became `Pictures::lists`, since a block shown as code is still gathered; `blocks_drawn` gives
+  back new text for a block it only marks.
+- **Tests, each seen failing:** `a_place_is_kept_when_blocks_turn_to_code_and_back` (Markdown and
+  HTML, a drawn block of three lines and a refused one; with the anchor the paragraph's number
+  again, the paragraph after the block was found at the block's blank line; with the marks left
+  out, no block was found); `a_marked_block_makes_the_paragraphs_it_made_and_each_holds_its_mark`
+  (it failed on the first version of the marks, which put a blank line's after its carriage
+  return and made a paragraph more); `the_scanner_leaves_every_other_pre_as_it_is` and
+  `a_fenced_block_a_backend_draws_is_written_as_its_picture` (their marked lines, with the marks
+  left out); `a_place_counts_a_block_as_one_paragraph_however_many_it_is_shown_as` is `Blocks`'
+  arithmetic alone. The pages of a refused block and of `--fences code` are still pixel for pixel
+  those of a block in a language nothing draws (`tests/it/mermaid.rs`), which is the marks being
+  invisible.
+- **A test backend for the documents' tests:** `picture::AMONG`, a thread's override of the
+  backends that draw blocks, under `cfg(test)`, so `wordcraft.rs`'s tests draw a block without
+  naming Mermaid. It holds on the test's own thread only: a document's text read on its queue's
+  thread sees the backends built, which the test reads around.
+
 ## What is left
 
 - Every task's code, tests and docs are committed, and each task's box is open: all four end

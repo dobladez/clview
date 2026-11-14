@@ -573,7 +573,17 @@ page as wide as the window has to scroll; a source that doesn't say leaves the r
 last if there are fewer. The documents' backend keeps each page's body paragraphs for it, by their
 order in the document, with their top and height on the page (`paragraphs_of`, from the layout's
 `Placed::Lines`), for Markdown and HTML alone; a paragraph split across pages is found on the one it
-starts on, and below a page's last paragraph the anchor is that one. The old level
+starts on, and below a page's last paragraph the anchor is that one. A paragraph's number depends
+on how the fenced blocks before it are shown, one paragraph as a picture and a paragraph a line as
+code, so the anchor is its number with each block counted as one, and which of a block's paragraphs
+it is (`Blocks::place`, `Blocks::index`): the same place whether `s` has the blocks drawn or as
+code. The blocks are found in the document as it was read (`blocks_of`): a paragraph holding a
+block's picture, and the paragraphs holding the mark of a block shown as code, an invisible
+`<a id>` that `marked_lines` puts at the start of each of its lines, in Markdown's code block
+(`code_block`) and in HTML's `<pre>` (`pre_marked`), named with what is afresh for the reading as
+a block's key is (`Pictures::coded`). wordcraft's importer keeps such an anchor as a bookmark and
+lays it out as nothing; the marks add no paragraph and leave none out
+(`a_marked_block_makes_the_paragraphs_it_made_and_each_holds_its_mark`). The old level
 goes as one gone back from does (`Pager::let_go`, which `back` shares): a copy still rendering on its
 pool stops and says so (`clip::Copier::left`), its pages sent are deleted by its id, its renders
 wanted dropped. A failure keeps the old level, says why through `printable`, once, puts the shared value

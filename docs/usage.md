@@ -674,7 +674,8 @@ code it is, and the first page says how many weren't drawn. Its text isn't
 
 `s` shows a document's blocks as the code they are, to read a diagram's source or to search it, and
 again draws them: the document is laid out again, since a picture and its code take other room,
-and the status line says `blocks as code` while they are. A search kept meanwhile starts over, on
+with the paragraph at the top of the screen kept there, and the status line says `blocks as code`
+while they are. A search kept meanwhile starts over, on
 the text as it is then. `--fences code` starts that way, and `--fences drawn`, the default, is as
 without it. On a file that is neither Markdown nor HTML `s` says so; in a list it says to open a
 document, and the tiles stay as they were opened: drawn, or as code with `--fences code`.

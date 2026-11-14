@@ -66,7 +66,10 @@ What constrains how:
    `fences`, `drawn` or `code`, on `s` and `--fences`
    ([ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)). Its
    effect is a relayout, as `width`'s is: a picture and its code take other room, so the pages
-   fall otherwise. It is the document's: one block alone can't be turned.
+   fall otherwise. It is the document's: one block alone can't be turned. The reader's place is
+   kept by a paragraph's number with each block counted as one, since a block is one paragraph
+   drawn and a paragraph a line as code; the lines of a block shown as code are known by an
+   invisible anchor on each, named afresh as a block's key is.
 9. **A block follows its document's paper, told through the request.** `Request` has `on_dark`:
    set for a picture a document shows on dark paper, whose colour is `Request::dark`. A backend
    with a dark form of what it draws draws that, with nothing behind it; one with none draws as

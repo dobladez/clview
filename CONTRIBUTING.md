@@ -199,7 +199,10 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   break, one too long to search, and the tint on dark paper. What a document's text answers, and
   that the pool and a search lay it out once, is unit-tested in `src/source/wordcraft.rs`; so is
   the scanner of HTML's fenced blocks (`the_scanner_…`): which `<pre>` says a language and how,
-  a block's text, what is left alone, and a property test that it never panics wherever HTML is cut.
+  a block's text, what is left alone, and a property test that it never panics wherever HTML is cut;
+  and the reader's place kept when blocks turn to code and back, with a test backend that draws a
+  block (`picture::AMONG`), and the marks on a code block's lines read back through wordcraft's
+  importer.
 - **`tests/it/mermaid.rs`**: Mermaid diagrams through the viewer: which `.mmd` files it opens and
   which it leaves to MultiMarkdown, what merman draws of one, its limits and messages, the costliest
   diagrams merman accepts drawn under the worker's caps, a list's diagrams opened as their tiles are

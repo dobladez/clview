@@ -54,6 +54,13 @@ fn caught<T>(read: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| Err("it failed on this picture".into()))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The backends that draw the fenced blocks of the documents a test opens on this thread, in
+    /// place of those built: for the documents' backend's tests, which name no backend.
+    pub(super) static AMONG: Cell<Option<&'static [&'static dyn Backend]>> = const { Cell::new(None) };
+}
+
 /// The pictures of a document being read, each on its way to a [`Promise`].
 pub(super) struct Pictures<'a> {
     /// The directory the document is in, what its pictures' paths start from; none for one come
@@ -72,6 +79,11 @@ pub(super) struct Pictures<'a> {
     fences: Cell<usize>,
     /// How many of them aren't drawn, and stay code.
     undrawn: Cell<usize>,
+    /// Whether no fenced block is drawn: each stays the code it is ([`Pictures::blocks_as_code`]).
+    as_code: bool,
+    /// How many blocks a backend lists are shown as code, each with a marker of its own
+    /// ([`Pictures::coded`]).
+    coded: Cell<usize>,
     promises: RefCell<HashMap<Png, Promise>>,
     /// How many it refers to on this machine aren't shown.
     left_out: Cell<usize>,
@@ -79,6 +91,10 @@ pub(super) struct Pictures<'a> {
 
 impl<'a> Pictures<'a> {
     pub(super) fn beside(beside: Option<&'a Path>) -> Self {
+        #[cfg(test)]
+        if let Some(backends) = AMONG.get() {
+            return Self::among(beside, backends);
+        }
         Self::among(beside, BACKENDS)
     }
 
@@ -92,6 +108,8 @@ impl<'a> Pictures<'a> {
             afresh: afresh(),
             fences: Cell::new(0),
             undrawn: Cell::new(0),
+            as_code: false,
+            coded: Cell::new(0),
             promises: RefCell::default(),
             left_out: Cell::new(0),
         }
@@ -99,17 +117,28 @@ impl<'a> Pictures<'a> {
 
     /// These pictures, with no fenced block drawn: each stays the code it is, and none is counted.
     pub(super) fn blocks_as_code(self) -> Self {
-        Self { backends: &[], ..self }
+        Self { as_code: true, ..self }
+    }
+
+    /// Whether a backend lists `language` for a fenced block, drawn here or not: a block a document
+    /// shows as a picture in one layout and as its code in another.
+    pub(super) fn lists(&self, language: &str) -> bool {
+        super::fenced(language, self.backends).is_some()
+    }
+
+    /// The marker of a block a backend lists that is shown as its code: a name for the invisible
+    /// anchors the document's HTML puts on its lines, by which the lines are known to be one block's
+    /// once the document is read ([`Promised::coded`]). Made with what is afresh for this reading, as
+    /// a block's key is, so no anchor a document writes itself is one.
+    pub(super) fn coded(&self) -> String {
+        let block = self.coded.get();
+        self.coded.set(block.saturating_add(1));
+        format!("{}{block}", coded_prefix(self.afresh))
     }
 
     /// How many pictures the document has asked for so far, by path or as fenced blocks, shown or not.
     fn asked(&self) -> usize {
         self.seen.borrow().len().saturating_add(self.fences.get())
-    }
-
-    /// Whether a fenced block written in `language` is drawn as a picture: a backend lists it.
-    pub(super) fn draws(&self, language: &str) -> bool {
-        super::fenced(language, self.backends).is_some()
     }
 
     /// The key of a picture of the fenced block `text`, written in `language`, to fit in `fit`: what
@@ -120,6 +149,9 @@ impl<'a> Pictures<'a> {
     /// which is counted ([`Promised::undrawn`]): one its backend can't open, or past the document's
     /// [`MAX_PICTURES`]. The document shows either as its code.
     pub(super) fn fenced(&self, language: &str, text: &str, fit: (f32, f32)) -> Option<String> {
+        if self.as_code {
+            return None;
+        }
         let (backend, format) = super::fenced(language, self.backends)?;
         let within = self.asked() < MAX_PICTURES;
         self.fences.set(self.fences.get().saturating_add(1));
@@ -188,8 +220,14 @@ impl<'a> Pictures<'a> {
         let promises = self.promises.into_inner();
         let by_key = media.iter().filter_map(|(key, held)| Some((key.clone(), promises.get(held)?.clone()))).collect();
         let (left_out, undrawn, fenced) = (self.left_out.get(), self.undrawn.get(), self.blocks.borrow().len());
-        Promised { by_key, left_out, undrawn, fenced, max_held: MAX_HELD, held: Mutex::default() }
+        Promised { by_key, left_out, undrawn, fenced, coded: coded_prefix(self.afresh), max_held: MAX_HELD, held: Mutex::default() }
     }
+}
+
+/// What the marker of a block shown as code starts with, in a reading whose keys hold `afresh`: the
+/// block's number follows.
+fn coded_prefix(afresh: u64) -> String {
+    format!("{FENCED}{afresh:016x}:code:")
 }
 
 /// A number no document can know, made afresh each time: the hash of nothing under a key of std's
@@ -277,6 +315,8 @@ pub(super) struct Promised {
     undrawn: usize,
     /// How many fenced blocks the document shows as pictures.
     fenced: usize,
+    /// What the markers of its blocks shown as code start with ([`Pictures::coded`]).
+    coded: String,
     max_held: usize,
     held: Mutex<Held>,
 }
@@ -324,6 +364,17 @@ impl Promised {
     /// that many blocks' text is no text of the document's.
     pub(super) fn fenced(&self) -> usize {
         self.fenced
+    }
+
+    /// Whether `key`, of what the document holds, is a fenced block's picture.
+    pub(super) fn is_block(&self, key: &str) -> bool {
+        self.by_key.get(key).is_some_and(Promise::follows_paper)
+    }
+
+    /// Which of the document's blocks shown as code `name` is the marker of, if it is one
+    /// ([`Pictures::coded`]): its number among them.
+    pub(super) fn coded(&self, name: &str) -> Option<usize> {
+        name.strip_prefix(self.coded.as_str())?.parse().ok()
     }
 
     /// Whether any of the document's pictures is promised.
@@ -687,7 +738,15 @@ mod tests {
             let stand_in = Arc::new(key.as_bytes().to_vec());
             (key.to_string(), Promise { origin: Origin::Path(path.to_str().unwrap().to_owned()), scale: 1.0, shown: (1.0, 1.0), stand_in })
         };
-        Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, undrawn: 0, fenced: 0, max_held, held: Mutex::default() }
+        Promised {
+            by_key: keys.iter().map(promise).collect(),
+            left_out: 0,
+            undrawn: 0,
+            fenced: 0,
+            coded: String::new(),
+            max_held,
+            held: Mutex::default(),
+        }
     }
 
     #[cfg(feature = "image")]
@@ -801,7 +860,7 @@ mod tests {
     #[test]
     fn a_fenced_block_is_a_picture_of_its_text_by_the_backend_that_lists_its_language() {
         let pictures = Pictures::among(None, &DRAWING);
-        assert!(pictures.draws("sketch") && pictures.draws("SKETCH") && !pictures.draws("svg") && !pictures.draws("held"));
+        assert!(pictures.lists("sketch") && pictures.lists("SKETCH") && !pictures.lists("svg") && !pictures.lists("held"));
         let key = pictures.fenced("Sketch", "400 200\n", FIT).expect("drawn");
         let stand_in = pictures.measured(&key, FIT).expect("its stand-in");
         assert_eq!(size_of(&stand_in), (400, 200));
@@ -911,11 +970,19 @@ mod tests {
     #[test]
     fn fenced_blocks_shown_as_code_are_none_of_the_pictures() {
         let pictures = Pictures::among(None, &DRAWING).blocks_as_code();
-        assert!(!pictures.draws("sketch"));
+        assert!(pictures.lists("sketch") && !pictures.lists("svg"), "listed all the same");
         assert_eq!(pictures.fenced("sketch", "400 200", FIT), None);
         assert_eq!((pictures.fences.get(), pictures.undrawn.get()), (0, 0));
+        // Each has a marker of its own instead, which only this reading's pictures know.
+        let (first, second) = (pictures.coded(), pictures.coded());
+        assert!(first.starts_with(FENCED) && first != second && local(&first).is_none(), "{first} {second}");
+        let other = Pictures::among(None, &DRAWING).coded();
         let promised = pictures.promised_in(&BTreeMap::new());
         assert_eq!((promised.fenced(), promised.undrawn()), (0, 0));
+        assert_eq!((promised.coded(&first), promised.coded(&second), promised.coded(&other)), (Some(0), Some(1), None));
+        for forged in ["fenced:0000000000000000:code:0", "fenced:code:0", "0", "", &format!("{first}x"), &first[..first.len() - 1]] {
+            assert_eq!(promised.coded(forged), None, "{forged}");
+        }
     }
 
     /// Fenced blocks count among a document's pictures: past the most it has, a block isn't opened,
