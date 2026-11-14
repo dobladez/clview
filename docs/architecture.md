@@ -1052,14 +1052,15 @@ names no format for it, nor any backend:
   by default, why it has none.
 - **The launchers.** `launch::LAUNCHERS` lists them as `source::BACKENDS` lists backends, the first
   that applies used: `Open` (macOS's `open`, `-R` for a folder) and `XdgOpen` (Linux and the BSDs
-  with `DISPLAY` or `WAYLAND_DISPLAY`, through `setsid` where `PATH` has it). Each decides from a
+  with `DISPLAY` or `WAYLAND_DISPLAY`, always through `setsid`: without it on `PATH` its command is
+  refused, since an app for the terminal could write to `clv`'s through `/dev/tty`). Each decides from a
   `Here` it is given (the OS, the desktop session, `PATH`), finds its program on `PATH` itself, in
   absolute directories, builds its `Command` with the path as one argument, and puts its exit
   status in words. Every launcher is built on every platform, so each is tested anywhere.
 - **The launches** (`launch::Launches`, the pager's like its `Copier`): refused when the terminal
-  isn't `local`, or with 4 under way. The opener's stdin, stdout and stderr are null; `open`, and
-  `xdg-open` without `setsid`, get a process group of their own (`process_group(0)`), while `setsid`
-  is left out of one, since as a group's leader it forks and its exit status is lost. A thread,
+  isn't `local`, or with 4 under way. The opener's stdin, stdout and stderr are null; `open` gets a
+  process group of its own (`process_group(0)`), while `setsid` is left out of one, since as a
+  group's leader it forks and its exit status is lost. A thread,
   started before the opener so that one is always there to wait for it, waits for it as long as it
   runs. The pager polls `Launches::on` each time round its loop (every 50 ms while one is waited
   for): `opened`, the launcher's words for its failure, or after 5 s (`SAID_WAIT`) that it was

@@ -41,9 +41,13 @@ What the pager shows comes from many places: a file named on the command line, a
 - **Never waited for, never tied to the terminal.** stdin, stdout and stderr are null: nothing it
   writes reaches the screen, and no pipe ties it to `clv` (an app it starts would inherit the pipe,
   and could die of `SIGPIPE` once `clv` is gone). `open` runs in a process group of its own
-  (`CommandExt::process_group(0)`), so `Ctrl-C` in `clv` doesn't reach it. `xdg-open` runs through
-  `setsid` where `PATH` has it, so it has no controlling terminal and an app for the terminal fails
-  rather than taking `clv`'s; without `setsid`, in a process group of its own. A thread waits for
+  (`CommandExt::process_group(0)`), so `Ctrl-C` in `clv` doesn't reach it; it hands the app to
+  launchd, which starts it outside `clv`'s session, and itself writes only to its null stderr.
+  `xdg-open` runs through `setsid`, so it has no controlling terminal and an app for the terminal
+  it starts fails rather than taking `clv`'s, or writing to it through `/dev/tty`. Where `PATH` has
+  no `setsid`, `o` is refused, saying so: in a process group of its own, `xdg-open` and what it
+  starts would keep `clv`'s controlling terminal, and with `TOSTOP` off, as it usually is, nothing
+  stops a write to `/dev/tty`, raw bytes on `clv`'s screen. A thread waits for
   the opener as long as it runs, so it is never left a zombie; the status line says how it went,
   or after 5 s that it was handed over. At most 4 launches are outstanding.
 - **Refused over SSH**, by the `local` that `c` goes by
@@ -74,6 +78,9 @@ The platforms' documents, and the openers watched from outside:
   (`photo.png` to `photo.command`), and a relative path depends on the opener's directory.
 - **Second-guessing the format** (only the format it was read as): a `.md` read as HTML, or a
   `.dot` Word template, is what it says; the rule only stops a dangerous mismatch.
+- **`xdg-open` in a process group of its own where there is no `setsid`**, as first written: an
+  app for the terminal that it starts opens `/dev/tty` and writes to `clv`'s screen (reproduced on a
+  pseudo-terminal in a review, 2026-11-14), against the rule that nothing raw reaches the terminal.
 - **`setsid` with `-f`**: it always forks, so the opener's exit status is lost; and calling
   `setsid()` in the child before `exec` takes `unsafe`, which the crate forbids.
 - **Waiting for the opener on the pager's thread**: some of `xdg-open`'s ways wait for the app to
@@ -88,7 +95,8 @@ The platforms' documents, and the openers watched from outside:
 - **Positive:** no dependency; each launcher an entry and a test, tested on any machine since none
   reads the environment itself; nothing an app does reaches the screen; a file's name never makes
   it run as something it doesn't look like in `clv`.
-- **Accepted:** a file swapped for another between the check and the launch (a race no hand-over
+- **Accepted:** on a Linux or BSD system with no `setsid` (util-linux and BusyBox have one), `o`
+  opens nothing. A file swapped for another between the check and the launch (a race no hand-over
   by path can close) opens as the other: the path is checked when the file is opened, and the
   reader may move it after. On Linux, a link of the reader's to `/dev/stdin` redirected from a file
   resolves to that file, which opens as the file it is. An archive's file can't be opened. Over

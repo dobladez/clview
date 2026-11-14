@@ -3,9 +3,9 @@
 //!
 //! The platform's opener is run with the file's real path, a single argument and no shell, and is
 //! never waited for: its stdin, stdout and stderr are null, so nothing it writes reaches the screen
-//! and no pipe ties it, or an app it starts, to `clv`; it has a process group of its own, or through
-//! `setsid` a session of its own, so `Ctrl-C` in `clv` doesn't reach it and an app for the terminal
-//! can't take `clv`'s. A thread waits for it as long as it runs, so it is never left a zombie; the
+//! and no pipe ties it, or an app it starts, to `clv`; it has a process group of its own (`open`),
+//! or through `setsid` a session of its own (`xdg-open`, never run without it), so `Ctrl-C` in `clv`
+//! doesn't reach it and an app for the terminal can't take `clv`'s. A thread waits for it as long as it runs, so it is never left a zombie; the
 //! status line says how it went, or past [`SAID_WAIT`] that it was handed over.
 //!
 //! Each opener is a [`Launcher`] in [`LAUNCHERS`], tried in order as the backends are: another
@@ -111,11 +111,12 @@ impl Launcher for Open {
 
 /// freedesktop.org's `xdg-open`, on Linux and the BSDs, where a desktop session is there
 /// (`DISPLAY` or `WAYLAND_DISPLAY`). It reaches most desktops through their own tools. Run through
-/// `setsid` where `PATH` has it, so it has no controlling terminal: an app for the terminal fails
-/// rather than taking `clv`'s. `setsid` forks when it starts as a process group's leader, and its
+/// `setsid`, so it has no controlling terminal: an app for the terminal it starts fails rather than
+/// taking `clv`'s, or writing to it through `/dev/tty`. Without `setsid` on `PATH` it isn't run at
+/// all: in a process group of its own it would keep `clv`'s terminal, and such an app could write
+/// raw bytes to the screen. `setsid` forks when it starts as a process group's leader, and its
 /// parent then exits at once, its program's exit status lost; so it isn't put in a group of its own
-/// first, and gives itself a session, a group with it. Without `setsid`, it has a process group of
-/// its own.
+/// first, and gives itself a session, a group with it.
 pub(crate) struct XdgOpen;
 
 /// The systems `xdg-open` serves.
@@ -133,20 +134,10 @@ impl Launcher for XdgOpen {
     /// A folder opens in the file manager as a file does in its app.
     fn command(&self, path: &Path, _folder: bool, here: &Here) -> Result<Command, String> {
         let program = here.find(self.name()).ok_or_else(|| not_found(self.name()))?;
-        let mut command = match here.find("setsid") {
-            Some(setsid) => {
-                let mut command = Command::new(setsid);
-                command.arg(program);
-                command
-            }
-            None => {
-                let mut command = Command::new(program);
-                command.process_group(0);
-                command
-            }
-        };
+        let setsid = here.find("setsid").ok_or(NO_SETSID)?;
+        let mut command = Command::new(setsid);
         // Absolute, so never taken for an option.
-        command.arg(path);
+        command.arg(program).arg(path);
         Ok(command)
     }
 
@@ -161,6 +152,9 @@ impl Launcher for XdgOpen {
         }
     }
 }
+
+/// Why `xdg-open` isn't run without `setsid` ([`XdgOpen`]).
+const NO_SETSID: &str = "there is no setsid here to keep clv's terminal from its app";
 
 /// Why `program` can't be had.
 fn not_found(program: &str) -> String {
@@ -369,15 +363,15 @@ mod tests {
         assert_eq!(open(odd, false), [program.as_str(), "/home/a b/-x 'q\" $HOME.pdf"]);
         // A folder is shown in Finder, never opened.
         assert_eq!(open(Path::new("/Users/a/Pictures.app"), true), [program.as_str(), "-R", "/Users/a/Pictures.app"]);
-        // On Linux through setsid where it is found, without it otherwise.
+        // On Linux through setsid, and not without it: the opener, and an app for the terminal it
+        // starts, would keep clv's terminal and could write to it.
         let linux = Here { os: "linux", display: true, path: path(&[&fakes]) };
         let (setsid, xdg) = (fakes.join("setsid").to_string_lossy().into_owned(), fakes.join("xdg-open").to_string_lossy().into_owned());
         let through = argv(&XdgOpen.command(odd, false, &linux).unwrap());
         assert_eq!(through, [setsid.as_str(), &xdg, "/home/a b/-x 'q\" $HOME.pdf"]);
         let alone = bin("argv-alone", &[("xdg-open", "exit 0")]);
         let no_setsid = Here { path: path(&[&alone]), ..linux.clone() };
-        let xdg_alone = alone.join("xdg-open").to_string_lossy().into_owned();
-        assert_eq!(argv(&XdgOpen.command(odd, true, &no_setsid).unwrap()), [xdg_alone.as_str(), "/home/a b/-x 'q\" $HOME.pdf"]);
+        assert_eq!(XdgOpen.command(odd, true, &no_setsid).err().as_deref(), Some(NO_SETSID));
         // No program, no command; and no PATH, none either.
         let empty = Here { path: path(&[&not_executable]), ..linux };
         assert_eq!(XdgOpen.command(odd, false, &empty).err().as_deref(), Some("there is no xdg-open to open it with"));
@@ -395,17 +389,15 @@ mod tests {
     }
 
     /// `setsid` forks when it starts as a process group's leader, and the opener's exit status is
-    /// lost: so with it the command has no group of its own, and `setsid` makes one; without it,
-    /// the opener leads one of its own, as `open` does.
+    /// lost: so with it the command has no group of its own, and `setsid` makes one. `open` leads
+    /// one of its own.
     #[test]
-    fn with_setsid_the_opener_leads_no_group_and_without_it_leads_its_own() {
+    fn with_setsid_the_opener_leads_no_group_and_open_leads_its_own() {
         let noted = std::env::temp_dir().join(format!("clview-launch-group-{}", std::process::id()));
         let note = format!("ps -o pid= -o pgid= -p $$ > '{}'", noted.display());
         let with = bin("group-setsid", &[("setsid", &format!("{note}; exec \"$@\"")), ("xdg-open", "exit 0"), ("open", &note)]);
-        let alone = bin("group-alone", &[("xdg-open", &note)]);
         let here = |dir: &Path| Here { os: "linux", display: true, path: path(&[dir]) };
         assert!(!group_leader(XdgOpen.command(Path::new("/a.pdf"), false, &here(&with)).unwrap(), &noted), "setsid started as a group's leader");
-        assert!(group_leader(XdgOpen.command(Path::new("/a.pdf"), false, &here(&alone)).unwrap(), &noted), "no group of its own");
         let mac = Here { os: "macos", ..here(&with) };
         assert!(group_leader(Open.command(Path::new("/a.pdf"), false, &mac).unwrap(), &noted), "open in no group of its own");
         let _ = std::fs::remove_file(&noted);

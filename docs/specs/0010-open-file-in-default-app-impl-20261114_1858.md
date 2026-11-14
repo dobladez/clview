@@ -22,7 +22,7 @@ surprises, and what a later reader would want.
   and the BSDs, `setsid` when found. `setsid(1)` forks when it starts as a process group's leader
   (its manual), its parent exiting without the opener's status, so with `setsid` the child isn't
   put in a group first: `setsid` makes a session and a group of its own. `open`, and `xdg-open`
-  without `setsid`, get `process_group(0)`.
+  without `setsid`, get `process_group(0)`. (The second changed after the Codex review below.)
 - **The trait** takes `here` in `command` and returns a `Result` (its program found on `PATH`, or
   why not), beside the spec's `name`, `applies`, `why`.
 - **The thread before the opener**: started first, so that an opener started always has one to
@@ -38,6 +38,7 @@ surprises, and what a later reader would want.
   note their arguments, and `/bin` only; the one for no opener, an empty directory alone, since on
   a merged-`/usr` Linux `/bin` holds `xdg-open`.
 - **`setsid` checked by a test**: `with_setsid_the_opener_leads_no_group_and_without_it_leads_its_own`
+  (now `…_and_open_leads_its_own`)
   runs the commands built, with fakes that note their own pid and process group: with `setsid`, it
   starts as no group's leader; `xdg-open` without it, and `open`, lead their own.
 - **Seen failing**, each by copying the file aside, reverting the fix, running the test, copying it
@@ -82,3 +83,19 @@ surprises, and what a later reader would want.
 - **Left open**: its manual check (in kitty on macOS, `clv tests/data`, `o` on a PDF's tile opens
   Preview, on a folder Finder shows it) waits for the owner, so its box stays unticked; no test may
   launch a real app.
+
+## Codex review fixes
+
+- **`xdg-open` never runs without `setsid`.** A Codex review of task 1 found that, in a process
+  group of its own, the opener keeps `clv`'s controlling terminal: an app for the terminal that it
+  starts can open `/dev/tty` and write raw bytes to `clv`'s screen, `TOSTOP` being off as it usually
+  is (reproduced on a pseudo-terminal), against "nothing raw reaches the terminal". So
+  `XdgOpen::command` refuses without `setsid` on `PATH` (`there is no setsid here to keep clv's
+  terminal from its app`), and the fallback to `process_group(0)` is gone. macOS's `open` is
+  unchanged: it hands the app to launchd, outside `clv`'s session, and itself writes only to its
+  null stderr (said in ADR-0034). The spec's 🟡 on `setsid` missing says so.
+- **Seen failing**: `a_launch_command_has_the_path_as_one_argument_and_its_program_found_on_path`,
+  changed to expect the refusal, failed against the fallback (`left == right`), then passed with
+  the fix. The group test lost its case without `setsid` and is now
+  `with_setsid_the_opener_leads_no_group_and_open_leads_its_own`. No pseudo-terminal test of
+  `/dev/tty`: on macOS `xdg-open` never applies, and Linux CI has no desktop to start an app.

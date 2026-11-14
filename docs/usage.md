@@ -243,7 +243,8 @@ or `/dev/stdin`, even redirected from a file, and a file or a folder in an archi
 archive's own. Nor is anything over SSH, where the app would open on
 the far machine ([On this machine or over SSH](#on-this-machine-or-over-ssh)), nor on Linux or a BSD
 without a desktop session (neither `DISPLAY` nor `WAYLAND_DISPLAY`; inside tmux, as the pane has
-them), nor where the opener isn't on `PATH`.
+them), nor where the opener isn't on `PATH`; on Linux and the BSDs, nor where `setsid` isn't
+either, since it is what keeps an app for the terminal off `clv`'s screen.
 [ADR-0034](adr/0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) has why.
 
 ## Several files

@@ -161,9 +161,10 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
 
 - 🟡 **`xdg-open` that blocks** — some of its fallbacks wait for the app to exit; the status line
   stops waiting at 5 s, and the thread reaps it whenever it ends.
-- 🟡 **`setsid` missing** — util-linux and BusyBox have it; where neither does (some BSDs), the
-  opener runs in its own process group alone, and an app for the terminal opening `/dev/tty` would
-  stop on `SIGTTIN` or `SIGTTOU` rather than take the screen.
+- 🟡 **`setsid` missing** — util-linux and BusyBox have it; where neither does (some BSDs), `o` is
+  refused, saying so. Revised after a Codex review: in its own process group alone, the opener
+  keeps `clv`'s controlling terminal, and an app for the terminal opening `/dev/tty` writes to it
+  freely, `TOSTOP` being off as it usually is: only `SIGTTIN` would stop it, not a write.
 
 ## Tasks
 
@@ -199,3 +200,5 @@ starts as a PNG does, or a `photo.png` linked to it, would run as a script).
   WSL left for later, no pipes, `setsid`, the opener reaped however long it runs, the path kept
   through a level's life, two tasks.
 - 2026-11-14 — Implementing ([notes](0010-open-file-in-default-app-impl-20261114_1858.md)).
+- 2026-11-14 — After a Codex review of task 1: `xdg-open` never runs without `setsid`, `o`
+  refused instead (the 🟡 on `setsid` missing).
