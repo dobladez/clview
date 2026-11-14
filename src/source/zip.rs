@@ -11,7 +11,7 @@ use std::sync::Arc;
 use ::zip::ZipArchive;
 
 use super::tree::Tree;
-use super::{Again, Backend, Badge, Container, Format, HEAD, Input, Listing, Opened, Reopenable};
+use super::{Again, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Opened, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive is read to: a picture larger than that is more than the
@@ -124,6 +124,25 @@ impl Archive {
             }
         })
     }
+
+    /// File `index`, unpacked whole if it is no more than `most` bytes, else `None`, unpacking no more
+    /// than a byte past them: past [`MAX_BYTES`], as [`Archive::whole`] says.
+    fn within(&self, index: usize, most: u64) -> Result<Option<Vec<u8>>, String> {
+        if most >= MAX_BYTES {
+            return self.whole(index, MAX_BYTES).map(Some);
+        }
+        caught(|| {
+            let mut zip = self.zip.clone();
+            let entry = zip.by_index(index).map_err(|e| e.to_string())?;
+            // What the archive says first, then what it unpacks to, which may be more.
+            if entry.size() > most {
+                return Ok(None);
+            }
+            let mut bytes = Vec::new();
+            entry.take(most.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
+        })
+    }
 }
 
 /// What `read` returns, or an error if the zip crate panics on the archive: its bug costs the
@@ -161,9 +180,10 @@ impl Container for Directory {
         let path = format!("{}/{name}", self.path);
         let index = self.archive.tree.file(&self.at, name).ok_or_else(|| format!("{path}: not in the archive"))?;
         let head = self.archive.head(index).map_err(|e| format!("{path}: {e}"))?;
-        let archive = self.archive.clone();
+        let (archive, bound) = (self.archive.clone(), self.archive.clone());
         let again: Again = Arc::new(move || archive.whole(index, MAX_BYTES));
-        Ok(Input::held(path, head, again))
+        let bounded: Bounded = Arc::new(move |most| bound.within(index, most));
+        Ok(Input::held_bounded(path, head, again, bounded))
     }
 
     /// The archive itself is a parcel; a directory in it, a folder as any directory is.

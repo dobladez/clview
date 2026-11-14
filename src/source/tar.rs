@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use super::tree::Tree;
-use super::{Again, BACKENDS, Backend, Badge, Container, Format, HEAD, Input, Listing, Opened, Ready, Reopenable};
+use super::{Again, BACKENDS, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Opened, Ready, Reopenable};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive, or a file compressed alone, is read to, as for zip: it
@@ -860,9 +860,14 @@ impl Container for Directory {
                 head
             }
         };
-        let shared = self.handle.0.clone();
+        let (shared, bound, files) = (self.handle.0.clone(), self.handle.0.clone(), index.clone());
         let again: Again = Arc::new(move || shared.read(&index.files, file));
-        Ok(Input::held(path, head, again))
+        // Its size is in its header: one larger than the bound isn't read at all.
+        let bounded: Bounded = Arc::new(move |most| match files.files.get(file) {
+            Some(member) if member.size > most => Ok(None),
+            _ => bound.read(&files.files, file).map(Some),
+        });
+        Ok(Input::held_bounded(path, head, again, bounded))
     }
 
     /// The archive itself is a parcel; a directory in it, a folder as any directory is.
@@ -1003,6 +1008,22 @@ mod tests {
             let head = file.get(..HEAD as usize).unwrap_or(&file);
             assert!(Tar.opens("x", head) && Codec::of(head).unwrap_or(Codec::None) == codec, "{codec:?}");
             assert!(listed.contains(&codec.format()), "{codec:?} opens, but isn't listed");
+        }
+    }
+
+    /// A file in an archive read to a bound is read whole within it, and past it not at all: its size
+    /// is in its header.
+    #[test]
+    fn a_file_in_an_archive_read_to_a_bound_is_read_only_within_it() {
+        let plain = tar(&[("a.mmd", &[b'x'; 3000])]);
+        for codec in [Codec::None, Codec::Gzip] {
+            let path = on_disk("bounded", &format!("t-{codec:?}.tar"), &compress(&plain, codec));
+            let top = opened(&path).unwrap();
+            top.list(false).unwrap();
+            let super::super::Rest::Held(_, Some(bounded)) = top.open("a.mmd").unwrap().rest else { panic!("held, and read to a bound") };
+            assert_eq!(bounded(2999).unwrap().map(|b| b.len()), None, "{codec:?}");
+            assert_eq!(bounded(3000).unwrap().map(|b| b.len()), Some(3000), "{codec:?}");
+            assert_eq!(top.open("a.mmd").unwrap().at_most(2999).unwrap().map(|b| b.len()), None, "{codec:?}");
         }
     }
 

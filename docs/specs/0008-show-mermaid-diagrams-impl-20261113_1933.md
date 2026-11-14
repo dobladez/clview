@@ -165,3 +165,28 @@ Mermaid one, which this branch accepts and lists, is renumbered ADR-0031, with i
 and every link to them (Spec-0008 and Spec-0009, their notes, the code's comments, CONTRIBUTING,
 architecture, `Cargo.toml`); Spec-0007's keeps 0030.
 
+## Codex review, round 1 (2026-11-13)
+
+Two findings, both fixed in one commit:
+
+- **An archive's diagram was unpacked whole before the 1 MiB check.** `Input::at_most` called a held
+  file's `Again`, which unpacks it whole within the archive's 512 MiB, before comparing. `Again` is a
+  bare closure that most backends call, so a bound in it would have touched them all. Instead a held
+  file may carry a second reader beside it, `Bounded` (`source.rs`): the file whole within a bound,
+  `None` past it, reading no more than a byte past it. zip (`Archive::within`, by the entry's size,
+  then `take`) and tar's members (by the member's size in its header) give one, `later.rs` keeps it
+  for a list's deferred file, and `at_most` takes it, checking the length it gets all the same.
+  Everything else keeps `Again`. A file compressed alone (`x.mmd.gz`) gets none: it keeps its `.gz`
+  name, so it is never a diagram, as `notes.md.gz` is never a document.
+- **A byte order mark made a cut head look whole.** `starts_as_diagram` measured the head after
+  stripping the BOM, so 1,024 bytes looked like 1,021, a shorter file's, and a last line cut by the
+  head's end counted: blank lines, then "graphical notes" cut after `graph`, opened as a flowchart.
+  The head's completeness is now told from its length as read.
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `source::tests::a_file_is_read_whole_only_within_a_cap` (a held file, read to a bound) | `at_most` calling `Again` | the whole-file reader, which panics, called |
+| `tar::tests::a_file_in_an_archive_read_to_a_bound_is_read_only_within_it` | the member's size not checked | `Some(3000)` read for a bound of 2,999 |
+| `it mermaid::a_diagram_in_an_archive_is_unpacked_only_to_the_most_a_diagram_may_be` (a zip of a `.mmd` unpacking past 512 MiB, some 600 KB) | `at_most` calling `Again` | refused by the archive's 512 MiB, not as a diagram past 1 MiB |
+| `mermaid::tests::a_mmd_starts_as_a_diagram_merman_draws` (a 1,024-byte head with a BOM, cut after `graph`) | completeness told after the BOM is stripped | the cut head opened |
+

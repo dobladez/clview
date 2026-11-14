@@ -257,3 +257,23 @@ fn a_diagram_in_text_cells() {
         assert!(shown.lines().count() > 5 && shown.chars().filter(|c| !c.is_whitespace()).count() > 100, "{protocol}: {shown}");
     }
 }
+
+/// A diagram in a zip is read only to the most a diagram may be: one that unpacks past the archive's
+/// own 512 MiB is refused as a diagram past 1 MiB, unpacked no further, not as a file past what the
+/// archive unpacks. It compresses to some 600 KB.
+#[cfg(feature = "zip")]
+#[test]
+fn a_diagram_in_an_archive_is_unpacked_only_to_the_most_a_diagram_may_be() {
+    let path = tmp("mermaid-archive", "big.zip");
+    let mut zip = ::zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file("big.mmd", ::zip::write::SimpleFileOptions::default().large_file(true)).unwrap();
+    zip.write_all(b"flowchart LR\n").unwrap();
+    let piece = "%% padding\n".repeat((1 << 20) / 11);
+    for _ in 0..520 {
+        zip.write_all(piece.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    let out = view(&path, &["--protocol", "kitty"]);
+    let stderr = text(&out.stderr);
+    assert!(!out.status.success() && stderr.contains("big.mmd: the diagram is more than 1 MiB"), "{stderr}");
+}

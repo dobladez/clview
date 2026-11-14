@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-use super::{Again, Backend, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Room, Source};
+use super::{Again, Backend, Bounded, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Room, Source};
 use crate::args::OwnedOptions;
 
 /// The most files opened at once. A document's first layout takes a core, and a large PDF is read
@@ -40,8 +40,8 @@ const UNKNOWN: (f32, f32) = (612.0, 792.0);
 pub(crate) enum Reopen {
     /// On disk, by its path.
     Disk(String),
-    /// Held in another file: its path, first bytes, and how to read it from there.
-    Held(String, Vec<u8>, Again),
+    /// Held in another file: its path, first bytes, and how to read it from there, whole or to a bound.
+    Held(String, Vec<u8>, Again, Option<Bounded>),
 }
 
 impl Reopen {
@@ -49,7 +49,8 @@ impl Reopen {
     fn input(&self) -> Result<Input, String> {
         match self {
             Self::Disk(path) => Input::open(path),
-            Self::Held(path, head, again) => Ok(Input::held(path.clone(), head.clone(), again.clone())),
+            Self::Held(path, head, again, None) => Ok(Input::held(path.clone(), head.clone(), again.clone())),
+            Self::Held(path, head, again, Some(bounded)) => Ok(Input::held_bounded(path.clone(), head.clone(), again.clone(), bounded.clone())),
         }
     }
 }
@@ -68,7 +69,7 @@ impl Input {
         match rest {
             Rest::File(file) if file.metadata().is_ok_and(|m| m.is_file()) && has_a_path_of_its_own(&path) => Ok(Reopen::Disk(path)),
             Rest::File(file) => Err(Self { path, head, rest: Rest::File(file) }),
-            Rest::Held(again) => Ok(Reopen::Held(path, head, again)),
+            Rest::Held(again, bounded) => Ok(Reopen::Held(path, head, again, bounded)),
         }
     }
 }

@@ -381,13 +381,19 @@ pub(crate) struct Input {
 enum Rest {
     /// A file of its own, read on from its head.
     File(File),
-    /// A file held in another (an archive's), read whole, again, from there.
-    Held(Again),
+    /// A file held in another (an archive's), read whole, again, from there; and read only so far, if
+    /// the holder can stop early ([`Bounded`]).
+    Held(Again, Option<Bounded>),
 }
 
 /// A file held in another, read whole from it, every time it is called: within the holder's
 /// limits, and on any thread, since a render reads it.
 pub(crate) type Again = Arc<dyn Fn() -> Result<Vec<u8>, String> + Send + Sync>;
+
+/// A file held in another, read from it to a bound of the reader's own: the whole file if it is no
+/// more than that many bytes, else `None`, having unpacked no more than a byte past them, so a reader
+/// that wants a small file doesn't unpack a large one whole. Within the holder's limits too.
+pub(crate) type Bounded = Arc<dyn Fn(u64) -> Result<Option<Vec<u8>>, String> + Send + Sync>;
 
 impl Input {
     fn open(path: &str) -> Result<Self, String> {
@@ -401,7 +407,13 @@ impl Input {
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
-        Self { path, head, rest: Rest::Held(again) }
+        Self { path, head, rest: Rest::Held(again, None) }
+    }
+
+    /// [`Input::held`], for a holder that can stop reading the file at a bound ([`Bounded`]).
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives stop early"))]
+    fn held_bounded(path: String, head: Vec<u8>, again: Again, bounded: Bounded) -> Self {
+        Self { path, head, rest: Rest::Held(again, Some(bounded)) }
     }
 
     /// The whole file.
@@ -412,12 +424,13 @@ impl Input {
                 rest.read_to_end(&mut head).map_err(|e| format!("{}: {e}", self.path))?;
                 Ok(head)
             }
-            Rest::Held(again) => again().map_err(|e| format!("{}: {e}", self.path)),
+            Rest::Held(again, _) => again().map_err(|e| format!("{}: {e}", self.path)),
         }
     }
 
     /// The whole file, if it is no more than `most` bytes, else `None`: reading stops past them, so
-    /// a pipe or a device is never read whole. A file held in another is read within the holder's
+    /// a pipe or a device is never read whole, nor an archive's file unpacked whole where its holder
+    /// can stop early ([`Bounded`]); otherwise, a file held in another is read within the holder's
     /// limits.
     #[cfg_attr(not(any(feature = "mermaid", test)), expect(dead_code, reason = "only diagrams are read so"))]
     pub(crate) fn at_most(self, most: u64) -> Result<Option<Vec<u8>>, String> {
@@ -428,7 +441,11 @@ impl Input {
                 rest.take(left).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", self.path))?;
                 bytes
             }
-            Rest::Held(again) => again().map_err(|e| format!("{}: {e}", self.path))?,
+            Rest::Held(_, Some(bounded)) => match bounded(most).map_err(|e| format!("{}: {e}", self.path))? {
+                Some(bytes) => bytes,
+                None => return Ok(None),
+            },
+            Rest::Held(again, None) => again().map_err(|e| format!("{}: {e}", self.path))?,
         };
         Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
     }
@@ -456,7 +473,7 @@ impl Input {
                 Ok(Reopenable::Disk(file))
             }
             Rest::File(file) => Self { path, head, rest: Rest::File(file) }.bytes().map(Reopenable::Bytes),
-            Rest::Held(again) => Ok(Reopenable::Again(again)),
+            Rest::Held(again, _) => Ok(Reopenable::Again(again)),
         }
     }
 }
@@ -913,7 +930,7 @@ pub(crate) mod tests {
     }
 
     /// A file read to a cap is read whole within it, and found larger past it, without reading on:
-    /// on disk, through a pipe, held in another.
+    /// on disk, through a pipe, held in another (by a holder that can stop early, only so far).
     #[test]
     fn a_file_is_read_whole_only_within_a_cap() {
         let path = std::env::temp_dir().join(format!("clview-at-most-{}", std::process::id()));
@@ -933,6 +950,17 @@ pub(crate) mod tests {
         assert_eq!(piped.at_most(1 << 20).unwrap().map(|b| b.len()), None);
         yes.kill().unwrap();
         yes.wait().unwrap();
+        // A holder that can stop early is asked to, never for the whole file.
+        let whole: Again = Arc::new(|| panic!("read whole"));
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let told = asked.clone();
+        let bounded: Bounded = Arc::new(move |most| {
+            told.lock().unwrap().push(most);
+            Ok((most >= 100).then(|| vec![b'x'; 100]))
+        });
+        let input = |most| Input::held_bounded("a.zip/b".into(), Vec::new(), whole.clone(), bounded.clone()).at_most(most);
+        assert_eq!((input(99).unwrap().map(|b| b.len()), input(100).unwrap().map(|b| b.len())), (None, Some(100)));
+        assert_eq!(*asked.lock().unwrap(), [99, 100]);
         let again: Again = Arc::new(|| Ok(vec![b'x'; 100]));
         assert_eq!(Input::held("a.zip/b".into(), Vec::new(), again.clone()).at_most(100).unwrap().map(|b| b.len()), Some(100));
         assert_eq!(Input::held("a.zip/b".into(), Vec::new(), again).at_most(99).unwrap().map(|b| b.len()), None);

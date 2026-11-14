@@ -267,7 +267,10 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   backend that opens it, found the way any file's backend is, not by name, as a spreadsheet's PDF is
   ([ADR-0031](adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)). It is read through
   `Input::at_most`, which stops past `MAX_SOURCE` (1 MiB, merman's own limit), so a named pipe is
-  never read whole, and refused if it isn't UTF-8. merman works in a worker process,
+  never read whole, nor a diagram in a zip or a tar unpacked whole: a file held in another may come
+  with a `Bounded` reader beside its `Again`, which the archives give, the file whole within a bound
+  or `None` past it, having read no more than a byte past it (zip and tar go by the size in its
+  header first). It is refused if it isn't UTF-8. merman works in a worker process,
   `clv --worker mermaid` (`mermaid::DIAGRAMS`, in `source::WORKERS`): one `DRAW` request a diagram,
   its text shared (`Link::request_shared`), answered `DRAWN` with the SVG (at most `MAX_SVG`, 64 MiB)
   or `REFUSED` with merman's reason (at most 256 bytes, cut at a character). The worker makes
@@ -342,11 +345,13 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   renders at other sizes and lets them go with it; a picture on disk is read again to decode, one
   from a pipe kept as it came, one in an archive read from it again.
 - **A zip** has its central directory parsed once, and a file read from it on demand: the first
-  bytes, for `Input`, and the whole file through the `Input`'s `Again`, on a render thread. It holds
+  bytes, for `Input`, and the whole file through the `Input`'s `Again`, on a render thread, or as much
+  of it as a bound allows through its `Bounded` (`Archive::within`). It holds
   no open file while idle, so a directory of archives doesn't run out of file descriptors.
 - **A tar** is listed through `Container::ready`: a compressed one is read through once, on a thread
   of its own, into a temporary file removed as soon as it is made
-  ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file
+  ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file in
+  it read to a bound (`Bounded`) isn't read at all when its header says it is larger. A file
   compressed alone is opened as what it unpacks to.
 
 ### The room a document is laid out for

@@ -112,14 +112,16 @@ fn opens(path: &str, head: &[u8]) -> bool {
 /// starts otherwise. Only what `head` holds whole counts: a line cut by its end, or by a character
 /// cut there, is no line, so a diagram that starts past it is declined.
 fn starts_as_diagram(head: &[u8]) -> bool {
+    // A file shorter than the head ends with its last line; otherwise that line may go on. Told by
+    // the head as read, its byte order mark included.
+    let short = head.len() < HEAD as usize;
     let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     let text = match std::str::from_utf8(head) {
         Ok(text) => text,
         // What is UTF-8 of it, up to a character cut by its end or one that isn't.
         Err(e) => head.get(..e.valid_up_to()).and_then(|valid| std::str::from_utf8(valid).ok()).unwrap_or_default(),
     };
-    // A file shorter than the head ends with its last line; otherwise that line may go on.
-    let whole = head.len() < HEAD as usize && text.len() == head.len();
+    let whole = short && text.len() == head.len();
     let mut lines = text.split('\n').peekable();
     let mut front = false;
     let mut first = true;
@@ -626,6 +628,16 @@ mod tests {
         // A line cut by the head's end is no line.
         let full = |text: &str| -> Vec<u8> { format!("{text}{}", "x".repeat(HEAD as usize)).into_bytes()[..HEAD as usize].to_vec() };
         assert!(opens("a.mmd", &full("flowchart LR\n%% ")) && !opens("a.mmd", &full(&"\n".repeat(1023))));
+        // A head of 1024 bytes with a byte order mark is as cut as one without: a file whose first
+        // line, after blank ones, has its 1024th byte just after `graph`, in "graphical notes", is no
+        // diagram.
+        let graphical = |bom: &str| -> Vec<u8> {
+            let text = format!("{bom}{}graphical notes", "\n".repeat(HEAD as usize - bom.len() - 5));
+            text.into_bytes()[..HEAD as usize].to_vec()
+        };
+        assert!(graphical("\u{feff}").ends_with(b"\ngraph") && graphical("").ends_with(b"\ngraph"));
+        assert!(!opens("a.mmd", &graphical("\u{feff}")) && !opens("a.mmd", &graphical("")));
+        assert!(opens("a.mmd", b"\xEF\xBB\xBFgraph"), "a short file with a byte order mark ends with its line");
         let mut cut = full("pie\n%% ");
         cut[HEAD as usize - 1] = 0xC3;
         assert!(opens("a.mmd", &cut));
