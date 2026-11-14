@@ -277,3 +277,41 @@ fn a_diagram_in_an_archive_is_unpacked_only_to_the_most_a_diagram_may_be() {
     let stderr = text(&out.stderr);
     assert!(!out.status.success() && stderr.contains("big.mmd: the diagram is more than 1 MiB"), "{stderr}");
 }
+
+/// gzip `text`, its trailing checksum made wrong with `corrupt`.
+#[cfg(feature = "tar")]
+fn gzipped(text: &[u8], corrupt: bool) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(text).unwrap();
+    let mut out = gz.finish().unwrap();
+    if corrupt {
+        let at = out.len() - 8;
+        out[at] ^= 0xff;
+    }
+    out
+}
+
+/// A file's compression is told by its signature, whatever its name, so gzip named `big.mmd` is a
+/// diagram: unpacked only to the most a diagram may be, its decoder stopped a byte past 1 MiB, so a
+/// wrong checksum at its end is never reached and it is refused as more than 1 MiB. One of exactly
+/// 1 MiB is unpacked whole, and drawn.
+#[cfg(feature = "tar")]
+#[test]
+fn a_gzip_named_as_a_diagram_is_unpacked_only_to_the_most_a_diagram_may_be() {
+    let padded = |size: usize| {
+        let mut text = b"flowchart LR\n  a --> b\n".to_vec();
+        while text.len() < size {
+            text.extend_from_slice(b"%% padding\n");
+        }
+        text.truncate(size - 1);
+        text.push(b'\n');
+        text
+    };
+    let big = written("mermaid-gzip", "big.mmd", gzipped(&padded(2 << 20), true));
+    let said = refused(&big);
+    assert!(said.ends_with("big.mmd: the diagram is more than 1 MiB\n"), "{said}");
+    let exact = padded(1 << 20);
+    assert_eq!(exact.len(), 1 << 20);
+    assert_eq!(printed(&written("mermaid-gzip", "exact.mmd", gzipped(&exact, false))).len(), 1);
+}

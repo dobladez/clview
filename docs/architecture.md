@@ -270,7 +270,8 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   never read whole, nor a diagram in a zip or a tar unpacked whole: a file held in another may come
   with a `Bounded` reader beside its `Again`, which the archives give, the file whole within a bound
   or `None` past it, having read no more than a byte past it (zip and tar go by the size in its
-  header first). It is refused if it isn't UTF-8. merman works in a worker process,
+  header first, a file compressed alone by its decoder stopped a byte past the bound). It is refused
+  if it isn't UTF-8. merman works in a worker process,
   `clv --worker mermaid` (`mermaid::DIAGRAMS`, in `source::WORKERS`): one `DRAW` request a diagram,
   its text shared (`Link::request_shared`), answered `DRAWN` with the SVG (at most `MAX_SVG`, 64 MiB)
   or `REFUSED` with merman's reason (at most 256 bytes, cut at a character). The worker makes
@@ -352,7 +353,8 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   of its own, into a temporary file removed as soon as it is made
   ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file in
   it read to a bound (`Bounded`) isn't read at all when its header says it is larger. A file
-  compressed alone is opened as what it unpacks to.
+  compressed alone is opened as what it unpacks to; read to a bound, its decoder stops a byte past
+  it (`unpack_within`).
 
 ### The room a document is laid out for
 

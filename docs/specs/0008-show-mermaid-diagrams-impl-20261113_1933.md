@@ -176,8 +176,8 @@ Two findings, both fixed in one commit:
   `None` past it, reading no more than a byte past it. zip (`Archive::within`, by the entry's size,
   then `take`) and tar's members (by the member's size in its header) give one, `later.rs` keeps it
   for a list's deferred file, and `at_most` takes it, checking the length it gets all the same.
-  Everything else keeps `Again`. A file compressed alone (`x.mmd.gz`) gets none: it keeps its `.gz`
-  name, so it is never a diagram, as `notes.md.gz` is never a document.
+  Everything else keeps `Again`. A file compressed alone got none here, on the reasoning that it
+  keeps its `.gz` name and so is never a diagram: wrong, as round 2 found.
 - **A byte order mark made a cut head look whole.** `starts_as_diagram` measured the head after
   stripping the BOM, so 1,024 bytes looked like 1,021, a shorter file's, and a last line cut by the
   head's end counted: blank lines, then "graphical notes" cut after `graph`, opened as a flowchart.
@@ -189,4 +189,23 @@ Two findings, both fixed in one commit:
 | `tar::tests::a_file_in_an_archive_read_to_a_bound_is_read_only_within_it` | the member's size not checked | `Some(3000)` read for a bound of 2,999 |
 | `it mermaid::a_diagram_in_an_archive_is_unpacked_only_to_the_most_a_diagram_may_be` (a zip of a `.mmd` unpacking past 512 MiB, some 600 KB) | `at_most` calling `Again` | refused by the archive's 512 MiB, not as a diagram past 1 MiB |
 | `mermaid::tests::a_mmd_starts_as_a_diagram_merman_draws` (a 1,024-byte head with a BOM, cut after `graph`) | completeness told after the BOM is stripped | the cut head opened |
+
+## Codex review, round 2 (2026-11-13)
+
+Round 1's fixes held. One finding fixed, one dismissed by the team lead (to the backlog):
+
+- **Fixed: a file compressed alone bypassed the diagram's bound.** Compression is told by a file's
+  signature, whatever its name, so gzip content named `big.mmd` (not `big.mmd.gz`) reaches tar's
+  `alone`, and its unpacked head is a diagram's. `alone` gave only `Again`, which decompresses up to
+  512 MiB before `at_most` checks. It gives a `Bounded` now: `unpack_within`, its decoder (gzip, bzip2
+  or xz) read through `take(most + 1)`, `None` past the bound. A gzip whose checksum at its end is
+  wrong shows where it stops: unpacked whole it fails on the checksum; to a bound, it never reaches it.
+  A gzip of exactly 1 MiB of diagram is unpacked whole and drawn (merman takes 1 MiB itself).
+- **Dismissed:** past 8,192 headers, tar reads a member's head by unpacking it whole: its way for any
+  file there, under the archive's 512 MiB, not this branch's.
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `it mermaid::a_gzip_named_as_a_diagram_is_unpacked_only_to_the_most_a_diagram_may_be` (2 MiB gzipped, its CRC wrong; and exactly 1 MiB, drawn) | `alone` without its `Bounded` | not refused as more than 1 MiB: unpacked to the end, its checksum failed |
+| `tar::tests::a_file_compressed_alone_read_to_a_bound_is_unpacked_only_within_it` (gzip, bzip2, xz; a wrong CRC) | `unpack_within` without its `take` | the wrong CRC reached, an error |
 

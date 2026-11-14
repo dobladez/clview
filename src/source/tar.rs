@@ -113,14 +113,31 @@ impl Backend for Tar {
 /// A file compressed alone, opened as what it unpacks to (`paper.pdf.gz` as a PDF) by the first
 /// other backend that opens it. It unpacks again, whole, every time it is read.
 fn alone(path: String, raw: Raw, codec: Codec, head: Vec<u8>, options: &Parsed<'_>) -> Result<Opened, String> {
+    let bound = raw.clone();
     let again: Again = Arc::new(move || caught(|| unpack(&raw, codec, MAX_BYTES)));
-    let input = Input::held(path, head, again);
+    // Its compression is told by its signature, whatever its name: a gzip named `x.mmd` is a diagram,
+    // read only to a diagram's bound.
+    let bounded: Bounded = Arc::new(move |most| {
+        caught(|| match most >= MAX_BYTES {
+            true => unpack(&bound, codec, MAX_BYTES).map(Some),
+            false => unpack_within(&bound, codec, most),
+        })
+    });
+    let input = Input::held_bounded(path, head, again, bounded);
     // Not this one: a file compressed twice is left as it is.
     let backend = BACKENDS.iter().filter(|b| b.name() != Tar.name()).find(|b| b.opens(&input.path, &input.head));
     match backend {
         Some(backend) => backend.open(input, options),
         None => Err(format!("{}: it unpacks to a file that {} doesn't show", input.path, crate::NAME)),
     }
+}
+
+/// A file compressed alone, unpacked whole if it comes to no more than `most` bytes, else `None`,
+/// unpacking no more than a byte past them: gzip, bzip2 and xz alike, the decoder stopped there.
+fn unpack_within(raw: &Raw, codec: Codec, most: u64) -> Result<Option<Vec<u8>>, String> {
+    let mut bytes = Vec::new();
+    stream(raw, codec, None)?.take(most.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
 }
 
 /// A file compressed alone, unpacked: at most `max` bytes ([`MAX_BYTES`]).
@@ -1025,6 +1042,26 @@ mod tests {
             assert_eq!(bounded(3000).unwrap().map(|b| b.len()), Some(3000), "{codec:?}");
             assert_eq!(top.open("a.mmd").unwrap().at_most(2999).unwrap().map(|b| b.len()), None, "{codec:?}");
         }
+    }
+
+    /// A file compressed alone, read to a bound, is unpacked whole within it and past it no further:
+    /// its decoder stops a byte past the bound, so a corrupt checksum at its end is never reached.
+    #[test]
+    fn a_file_compressed_alone_read_to_a_bound_is_unpacked_only_within_it() {
+        let text = vec![b'x'; 3000];
+        for codec in [Codec::Gzip, Codec::Bzip2, Codec::Xz] {
+            let raw = Raw::Memory(compress(&text, codec).into());
+            assert_eq!(unpack_within(&raw, codec, 2999).unwrap().map(|b| b.len()), None, "{codec:?}");
+            assert_eq!(unpack_within(&raw, codec, 3000).unwrap().map(|b| b.len()), Some(3000), "{codec:?}");
+        }
+        // gzip's trailer: its CRC-32, then its size. A wrong CRC fails the whole unpacking, not one
+        // that stops before it.
+        let mut gz = compress(&text, Codec::Gzip);
+        let at = gz.len() - 8;
+        gz[at] ^= 0xff;
+        let raw = Raw::Memory(gz.into());
+        assert!(unpack(&raw, Codec::Gzip, MAX_BYTES).is_err());
+        assert_eq!(unpack_within(&raw, Codec::Gzip, 2999).unwrap().map(|b| b.len()), None);
     }
 
     /// Plain, gzip, bzip2 or xz, an archive lists as a directory on disk does, its directories
