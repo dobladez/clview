@@ -547,3 +547,28 @@ fn a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub() {
         assert!(tiles.len() == 1 && shows_flow(&tiles[0]), "an epub's chapter");
     }
 }
+
+/// `--fences code` shows a document's blocks as the code they are, exactly as a block in a language
+/// nothing draws, with nothing said of them; `--fences drawn` is how it starts without it, and any
+/// other value is refused before a file opens.
+#[cfg(feature = "word")]
+#[test]
+fn a_mermaid_block_is_shown_as_code_with_fences_code() {
+    let flow = flow();
+    let document = |language: &str| format!("# A flow\n\n```{language}\n{flow}```\n\nAfter.\n");
+    let path = written("mermaid-fences", "a.md", document("mermaid"));
+    let (as_code, said) = pages_at(&path, &["--fences", "code"]);
+    assert!(said.is_empty(), "{said}");
+    let (code, _) = pages_of("mermaid-fences", "text.md", &document("text"));
+    assert!(as_code[0] == code[0] && !shows_flow(&as_code[0]), "not the code block it is");
+    let (drawn, _) = pages_at(&path, &["--fences", "drawn"]);
+    assert!(shows_flow(&drawn[0]) && drawn[0] == pages_at(&path, &[]).0[0]);
+    let html = written("mermaid-fences", "a.html", format!("<!doctype html>\n<pre lang=\"mermaid\">{}</pre>\n", escaped(&flow)));
+    assert!(shows_flow(&pages_at(&html, &[]).0[0]) && !shows_flow(&pages_at(&html, &["--fences", "code"]).0[0]), "HTML's too");
+    let out = view(&path, &["--protocol", "kitty", "--fences", "sometimes"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert_eq!(text(&out.stderr), "clv: --fences: expected drawn or code, got sometimes\n");
+    // A broken block is nothing to speak of when none is drawn.
+    let broken = written("mermaid-fences", "broken.md", format!("```mermaid\n{}```\n", std::fs::read_to_string(data("broken.mmd")).unwrap()));
+    assert!(pages_at(&broken, &["--fences", "code"]).1.is_empty());
+}

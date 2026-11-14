@@ -350,6 +350,12 @@ checks the files, and `cargo clippy --no-default-features` builds the viewer wit
   `<img src="KEY">` in its place when `Pictures::fenced` sizes it. One pass, and one more over the
   text of a `<pre>` that says a drawn language, which stops at the next `<pre>`: within the marks
   `marked_up` has counted before it runs.
+  Whether blocks are drawn is the `fences` setting (`FENCES`, `drawn` or `code`, `Keys::Cycle('s')`,
+  `--fences`), a relayout setting as `width` is: `At::fences`, which `laid_out` turns into pictures
+  that draw no block (`Pictures::blocks_as_code`), so neither Markdown's events nor HTML's scanner
+  find a language to draw. A document's text for a search is told apart by how many blocks it shows
+  as pictures (`fingerprint_of`, `Promised::fenced`), so a search kept across `s` starts over even
+  where the paragraphs' count is the same.
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`

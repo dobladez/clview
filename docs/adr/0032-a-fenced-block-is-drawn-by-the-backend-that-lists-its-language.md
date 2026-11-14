@@ -62,7 +62,12 @@ What constrains how:
    `highlight-source-x` of the `<div>` right around it. Said, never guessed, as in Markdown. The
    scanner cuts the text as wordcraft's lexer does, so that what is a `<pre>` to one is to the
    other. Markdown's own blocks never go through it: pulldown-cmark gives them whole.
-8. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
+8. **As code, by a setting that lays the document out again.** The documents' backend declares
+   `fences`, `drawn` or `code`, on `s` and `--fences`
+   ([ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)). Its
+   effect is a relayout, as `width`'s is: a picture and its code take other room, so the pages
+   fall otherwise. It is the document's: one block alone can't be turned.
+9. **The listing backend keeps what it made.** Each reading asks the backend again, with the same
    text. Mermaid's cache answers without its worker
    ([ADR-0031](0031-mermaid-diagrams-through-merman-in-a-worker-process.md)); `Format::fences`
    says that a backend listing one keeps what it made the same way.

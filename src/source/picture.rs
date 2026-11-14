@@ -97,6 +97,11 @@ impl<'a> Pictures<'a> {
         }
     }
 
+    /// These pictures, with no fenced block drawn: each stays the code it is, and none is counted.
+    pub(super) fn blocks_as_code(self) -> Self {
+        Self { backends: &[], ..self }
+    }
+
     /// How many pictures the document has asked for so far, by path or as fenced blocks, shown or not.
     fn asked(&self) -> usize {
         self.seen.borrow().len().saturating_add(self.fences.get())
@@ -182,7 +187,8 @@ impl<'a> Pictures<'a> {
     pub(super) fn promised_in(self, media: &BTreeMap<String, Png>) -> Promised {
         let promises = self.promises.into_inner();
         let by_key = media.iter().filter_map(|(key, held)| Some((key.clone(), promises.get(held)?.clone()))).collect();
-        Promised { by_key, left_out: self.left_out.get(), undrawn: self.undrawn.get(), max_held: MAX_HELD, held: Mutex::default() }
+        let (left_out, undrawn, fenced) = (self.left_out.get(), self.undrawn.get(), self.blocks.borrow().len());
+        Promised { by_key, left_out, undrawn, fenced, max_held: MAX_HELD, held: Mutex::default() }
     }
 }
 
@@ -260,6 +266,8 @@ pub(super) struct Promised {
     by_key: HashMap<String, Promise>,
     left_out: usize,
     undrawn: usize,
+    /// How many fenced blocks the document shows as pictures.
+    fenced: usize,
     max_held: usize,
     held: Mutex<Held>,
 }
@@ -288,6 +296,12 @@ impl Promised {
     /// their backend couldn't open, or past the most pictures a document has.
     pub(super) fn undrawn(&self) -> usize {
         self.undrawn
+    }
+
+    /// How many fenced blocks the document shows as pictures, where it would have shown their code:
+    /// that many blocks' text is no text of the document's.
+    pub(super) fn fenced(&self) -> usize {
+        self.fenced
     }
 
     /// Whether any of the document's pictures is promised.
@@ -622,7 +636,7 @@ mod tests {
             let stand_in = Arc::new(key.as_bytes().to_vec());
             (key.to_string(), Promise { origin: Origin::Path(path.to_str().unwrap().to_owned()), scale: 1.0, shown: (1.0, 1.0), stand_in })
         };
-        Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, undrawn: 0, max_held, held: Mutex::default() }
+        Promised { by_key: keys.iter().map(promise).collect(), left_out: 0, undrawn: 0, fenced: 0, max_held, held: Mutex::default() }
     }
 
     #[cfg(feature = "image")]
@@ -755,7 +769,7 @@ mod tests {
         // a point.
         let media = BTreeMap::from([("rId1".to_owned(), stand_in.clone()), ("rId2".to_owned(), Arc::new(b"its own".to_vec()))]);
         let promised = pictures.promised_in(&media);
-        assert_eq!((promised.undrawn(), promised.left_out(), promised.is_empty()), (2, 0, false));
+        assert_eq!((promised.undrawn(), promised.fenced(), promised.left_out(), promised.is_empty()), (2, 3, 0, false));
         let drawn = promised.draw(&["rId1", "rId2"], false);
         let [(key, Ok(png))] = drawn.as_slice() else { panic!("{} drawn", drawn.len()) };
         assert_eq!((*key, size_of(png)), ("rId1", (900, 450)));
@@ -785,6 +799,18 @@ mod tests {
         let beside = Pictures::among(Some(&dir), &DRAWING);
         assert!(beside.measured("fenced:0000000000000000:0", FIT).is_none());
         assert_eq!((beside.left_out.get(), beside.seen.borrow().len()), (0, 0), "not looked for");
+    }
+
+    /// With its blocks to be shown as code, a document draws none, whatever their language, and counts
+    /// none as left undrawn: there is nothing to say of them.
+    #[test]
+    fn fenced_blocks_shown_as_code_are_none_of_the_pictures() {
+        let pictures = Pictures::among(None, &DRAWING).blocks_as_code();
+        assert!(!pictures.draws("sketch"));
+        assert_eq!(pictures.fenced("sketch", "400 200", FIT), None);
+        assert_eq!((pictures.fences.get(), pictures.undrawn.get()), (0, 0));
+        let promised = pictures.promised_in(&BTreeMap::new());
+        assert_eq!((promised.fenced(), promised.undrawn()), (0, 0));
     }
 
     /// Fenced blocks count among a document's pictures: past the most it has, a block isn't opened,

@@ -138,3 +138,50 @@ removed.
 
 **Files beyond the plan's:** `CONTRIBUTING.md` (the tests), `docs/architecture.md`, ADR-0032,
 `CHANGELOG.md`.
+
+## Task 3: The `fences` setting
+
+As planned: `FENCES` beside `PAPER` in `src/source/wordcraft.rs`, `drawn` or `code`,
+`Keys::Cycle('s')`, `--fences drawn|code`, `Effect::Relayout`. The viewer needed nothing: it cycles
+a setting's named values and lays a document out again for any relayout setting, and
+`a_settings_keys_are_its_own_in_every_backend` and `the_viewers_keys_are_those_listed` pass with
+`s` as they are.
+
+**Decided here:**
+
+- **`At::fences`**, with the width, the font size and the margins, since it is what a layout is
+  made at. As code, `laid_out` reads the document with `Pictures::blocks_as_code`, pictures that
+  list no backend for a block: Markdown's events and HTML's scanner then find no language to draw,
+  with nothing to tell either. No block is counted as left undrawn, so nothing is said of a broken
+  one.
+- **What the status line says:** `blocks as code` on going there and, as for any relayout setting
+  off its default, on the right while it lasts; `blocks drawn` on going back.
+- **A search across `s` starts over** (the requirement's "a drawn block's text isn't searched;
+  shown as code, it is"). A search kept across a relayout keeps what it read when the text's
+  fingerprint and its paragraphs' count are the same, and the fingerprint was the bytes' alone. A
+  block of one line is one paragraph, as its picture is, so the count didn't tell them apart and
+  the search went on saying `no match` over code that had the word. `fingerprint_of` now hashes
+  how many blocks are shown as pictures too (`Promised::fenced`). With none drawn either way, a
+  document's text is the same and its search is kept.
+- **In a list** `s` says what the width keys say there, the viewer's `open a document to reflow
+  it`, and a document gone into takes it. The words fit a width better than blocks; they are the
+  viewer's, for every relayout setting, and are left as they are.
+
+**Files beyond the plan's:** `src/source/picture.rs` (`blocks_as_code`, `Promised::fenced`),
+`tests/it/mermaid.rs` (`--fences code` printed), `docs/architecture.md`, ADR-0032, `CHANGELOG.md`,
+`CONTRIBUTING.md`.
+
+**Each test seen failing:**
+
+| Test | Reverted | How it failed |
+|---|---|---|
+| `s_shows_a_documents_blocks_as_code_and_draws_them_again`, `s_on_a_pdf_…_and_a_list_says_to_open_one` (its list), `a_mermaid_block_is_shown_as_code_with_fences_code`, `fenced_blocks_shown_as_code_are_none_of_the_pictures` | `blocks_as_code` giving the pictures back as they were | the block still drawn after `s`, and with `--fences code` |
+| `markdown_and_html_say_their_width_and_room_and_lay_out_again_at_another` (its `fences` lines) | `laid_at` not saying `fences` | `None`, not `drawn` |
+| `s_on_a_pdf_…` (its PDF) | `FENCES` not among the backend's settings | `s` said nothing |
+| `a_search_reads_a_block_shown_as_code_and_not_one_drawn` | `fingerprint_of` hashing the bytes alone | `no match` kept over the one-line block's code |
+
+The last first passed with the fix reverted: a block of several lines changes the paragraphs' count,
+which restarts a search by itself. The one-line block was added for it.
+
+**Verify:** the pager's tests ran with their 60 s of patience cut to 8 s while they were seen
+failing, and put back. The manual check, in kitty and inside a private tmux, is the owner's.

@@ -142,6 +142,33 @@ const MARGIN: Setting = Setting {
 };
 const MARGIN_DEFAULT: u32 = 3;
 
+/// Whether the fenced blocks of Markdown and HTML that a backend draws (` ```mermaid `) show as
+/// pictures of them, or as the code they are: which lays the document out again, a picture and its
+/// code taking other room
+/// ([ADR-0032](../../docs/adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+const FENCES: Setting = Setting {
+    name: "fences",
+    named: &[Named { name: DRAWN, says: "blocks drawn" }, Named { name: CODE, says: "blocks as code" }],
+    numbers: None,
+    default: Value::Named(DRAWN),
+    zero: Value::Named(DRAWN),
+    auto: None,
+    keys: Keys::Cycle('s'),
+    option: OptionSpec {
+        name: "--fences",
+        short: None,
+        value: Some("drawn|code"),
+        help: "Markdown and HTML's fenced blocks drawn as pictures (```mermaid), or shown as code",
+        alias: None,
+    },
+    help: "Markdown and HTML's blocks drawn, or as code",
+    missing: "only Markdown and HTML draw their blocks",
+    effect: Effect::Relayout,
+    sets_width: false,
+};
+const DRAWN: &str = "drawn";
+const CODE: &str = "code";
+
 /// The margin `values` ask for, in characters: [`MARGIN`]'s, within its range, or the default where
 /// they say nothing.
 fn margin_wanted(values: &Values) -> u32 {
@@ -184,10 +211,11 @@ fn font_within(percent: u32) -> u32 {
     percent.clamp(numbers.least, numbers.most.max(numbers.least))
 }
 
-/// The settings a document of `kind` has: paper, width, font size and margins, for Markdown and HTML.
+/// The settings a document of `kind` has: paper, width, font size, margins and fenced blocks, for
+/// Markdown and HTML.
 fn settings_of(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name],
+        Kind::Markdown | Kind::Html => &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name],
         _ => &[],
     }
 }
@@ -396,7 +424,7 @@ impl Backend for Wordcraft {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER, WIDTH, FONT, MARGIN]
+        &[PAPER, WIDTH, FONT, MARGIN, FENCES]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
@@ -430,11 +458,15 @@ fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, Strin
     let width = Width::given(options.value(WIDTH.option.name));
     let font = font_given(options.value(FONT.option.name));
     let margin = margin_given(options.value(MARGIN.option.name));
-    let at = At { width, font, margin };
+    // The viewer refuses any other value before a file opens: anything but `code` is drawn.
+    let fences = options.value(FENCES.option.name) != Some(CODE);
+    let at = At { width, font, margin, fences };
     let read_as = |bytes: &[u8], beside: Option<&Path>| {
-        (caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room)), fingerprint_of(bytes))
+        let laid = caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room))?;
+        let fingerprint = fingerprint_of(bytes, &laid);
+        Ok((laid, fingerprint))
     };
-    let (stored, (laid, fingerprint)) = match input.reopenable()? {
+    let (stored, read) = match input.reopenable()? {
         Reopenable::Disk(file) => {
             let bytes = read(file).map_err(error)?;
             (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
@@ -451,18 +483,22 @@ fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, Strin
     };
     // Only the pages' sizes are kept, and where their paragraphs are: the document goes, and a render
     // reads it again.
-    let laid = laid.map_err(error)?;
+    let (laid, fingerprint) = read.map_err(error)?;
     let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, kind));
     let mut document = Document::new(stored, kind, password, path, sizes, (at, room), paras);
     document.fingerprint = fingerprint;
     Ok(Paged(Arc::new(document)))
 }
 
-/// A hash of a document's bytes, the same for the same bytes in this build ([`Texts::fingerprint`]).
-fn fingerprint_of(bytes: &[u8]) -> u64 {
+/// What a document's text was read from, as a number the same for the same text in this build
+/// ([`Texts::fingerprint`]): a hash of its bytes, and of how many of its fenced blocks `laid` shows as
+/// pictures, since a block drawn is no text and one shown as code is that code's paragraphs. A
+/// document with none drawn has the same text however its blocks are asked for.
+fn fingerprint_of(bytes: &[u8], laid: &Laid) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::hash::DefaultHasher::new();
     bytes.hash(&mut hasher);
+    laid.pictures.fenced().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -610,19 +646,21 @@ struct Document {
     layouts: std::sync::atomic::AtomicUsize,
 }
 
-/// What Markdown and HTML are laid out at, as asked: the width, the font size (a percentage, [`FONT`])
-/// and the side margins (characters, [`MARGIN`]).
+/// What Markdown and HTML are laid out at, as asked: the width, the font size (a percentage, [`FONT`]),
+/// the side margins (characters, [`MARGIN`]), and whether their fenced blocks are drawn ([`FENCES`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct At {
     width: Width,
     font: u32,
     margin: u32,
+    fences: bool,
 }
 
 impl At {
     /// What `values` ask for.
     fn wanted(values: &Values) -> Self {
-        Self { width: Width::wanted(values), font: font_wanted(values), margin: margin_wanted(values) }
+        let fences = values.get(FENCES.name) != Some(Value::Named(CODE));
+        Self { width: Width::wanted(values), font: font_wanted(values), margin: margin_wanted(values), fences }
     }
 }
 
@@ -809,6 +847,7 @@ impl Source for Paged {
         let _ = values.set(WIDTH.name, self.0.at.width.value());
         let _ = values.set(FONT.name, Value::Number(self.0.at.font));
         let _ = values.set(MARGIN.name, Value::Number(self.0.at.margin));
+        let _ = values.set(FENCES.name, Value::Named(if self.0.at.fences { DRAWN } else { CODE }));
         (values, Some(self.0.room))
     }
 
@@ -1154,7 +1193,7 @@ impl Document {
         let (stored, password, path) = (stored.clone(), password.clone(), path.clone());
         let (sizes, paras) = (sizes_of(&laid), paras_of(&laid, *kind));
         let mut document = Document::new(stored, *kind, password, path, sizes, (at, room), paras);
-        document.fingerprint = fingerprint_of(&bytes);
+        document.fingerprint = fingerprint_of(&bytes, &laid);
         Ok(Paged(Arc::new(document)))
     }
 
@@ -1222,7 +1261,10 @@ fn pixels(size: f32, scale: f32) -> Result<u64, String> {
 /// the rest on pages of their own. `path` is the file's, for the fields that show it, and `beside` the
 /// directory it is in, for the pictures it refers to.
 fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>, at: At, room: &Room) -> Result<Laid, String> {
-    let pictures = Pictures::beside(beside);
+    let pictures = match at.fences {
+        true => Pictures::beside(beside),
+        false => Pictures::beside(beside).blocks_as_code(),
+    };
     let read = match kind {
         Kind::Package => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
         Kind::Compound if wordcraft_docx::is_encrypted(bytes) => wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string()),
@@ -2584,6 +2626,17 @@ mod tests {
         assert_eq!(wide_margins.laid_at().0.get(MARGIN.name), Some(Value::Number(5)));
         assert!(near(wide_margins.size(0).unwrap().0, 50.0 * CODE_WIDTH), "{:?}", wide_margins.size(0));
         assert!(wide_margins.relayout(margins, small).is_none(), "at it already");
+        // Its fenced blocks drawn or as code is said too, and the other lays it out again; with no
+        // block to draw, its text is the same either way, and a search of it is kept.
+        assert_eq!(source.laid_at().0.get(FENCES.name), Some(Value::Named(DRAWN)));
+        let mut as_code = at(40);
+        assert!(as_code.set(FENCES.name, Value::Named(CODE)));
+        let coded = source.relayout(as_code, small).expect("a job")().unwrap();
+        assert_eq!(coded.laid_at().0.get(FENCES.name), Some(Value::Named(CODE)));
+        assert!(coded.relayout(as_code, small).is_none() && coded.relayout(at(40), small).is_some(), "drawn again is another layout");
+        let fingerprint = |source: &dyn Source| source.texts().and_then(|texts| texts.fingerprint());
+        assert!(fingerprint(&*source).is_some() && fingerprint(&*source) == fingerprint(&*coded));
+        assert!(source.settings().contains(&FENCES.name) && Wordcraft.settings().iter().any(|setting| setting.name == FENCES.name));
         let wider = source.relayout(at(76), small).expect("a job")().unwrap();
         assert_eq!(wider.laid_at().0.get(WIDTH.name), Some(Value::Number(76)));
         assert!(near(wider.size(0).unwrap().0, 80.0 * CODE_WIDTH));
@@ -2669,7 +2722,9 @@ mod tests {
     #[test]
     fn only_markdown_and_html_are_given_this_look() {
         let font = |bytes: &[u8], kind| {
-            let laid = laid_out(bytes, kind, None, "a", None, At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT }, &ROOMLESS).unwrap();
+            let laid =
+                laid_out(bytes, kind, None, "a", None, At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT, fences: true }, &ROOMLESS)
+                    .unwrap();
             let document = laid.document.read().unwrap();
             document.styles.default_chr.font.clone().unwrap()
         };
@@ -2813,7 +2868,7 @@ mod tests {
             None,
             "a",
             None,
-            At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT },
+            At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT, fences: true },
             &ROOMLESS,
         )
         .unwrap();

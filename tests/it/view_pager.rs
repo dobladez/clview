@@ -1302,6 +1302,134 @@ fn drawn_once(name: &str, first: &str, again: &str) {
     assert!(view.finish().success());
 }
 
+/// A Markdown file named `name` whose ` ```mermaid ` block is `flow.mmd`'s diagram, a red node and a
+/// blue one, and no word of the diagram's anywhere else.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+fn flow_document(test: &str, name: &str) -> PathBuf {
+    let flow = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd")).unwrap();
+    let path = crate::view::tmp(test, name);
+    std::fs::write(&path, format!("# A diagram\n\nBefore it.\n\n```mermaid\n{flow}```\n\nAfter it.\n")).unwrap();
+    path
+}
+
+/// Whether `page` shows `flow.mmd`'s diagram drawn: its red node and its blue one.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+fn shows_flow(page: &::image::RgbImage) -> bool {
+    let has = |colour: [u8; 3]| page.pixels().any(|pixel| pixel.0.iter().zip(colour).all(|(a, b)| a.abs_diff(b) < 40));
+    has([255, 0, 0]) && has([0, 0, 255])
+}
+
+/// `s` shows a document's fenced blocks as the code they are, the document laid out again and the
+/// status line saying so, and again draws them; `?` lists it; and `--fences code` starts so.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn s_shows_a_documents_blocks_as_code_and_draws_them_again() {
+    if !pty_works() {
+        return;
+    }
+    let path = flow_document("pager-fences", "flow.md");
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 40);
+    let (drawn, page) = next_image(&view, "the block drawn", 0);
+    assert!(shows_flow(&page), "drawn to start with");
+    assert!(!bar(&view.text()).contains("blocks"), "nothing said of what is as it starts");
+    view.press("s");
+    let (coded, page) = next_image(&view, "the block as code", drawn);
+    assert!(!shows_flow(&page));
+    view.wait_until("said", |t| last_bar(t).contains("· blocks as code ·"));
+    view.press("s");
+    let (_, page) = next_image(&view, "the block drawn again", coded);
+    assert!(shows_flow(&page));
+    view.wait_until("said", |t| last_bar(t).contains(" blocks drawn "));
+    view.press("?");
+    view.wait_until("listed", |t| bar(t).contains(" s Markdown and HTML's blocks drawn, or as code"));
+    // Any key leaves the keys; the next one quits.
+    view.press("qq");
+    assert!(view.finish().success());
+
+    let mut view = Session::start_on(KITTY, &path, &["--pager", "--fences", "code"], 100, 40);
+    let (coded, page) = next_image(&view, "as code to start with", 0);
+    assert!(!shows_flow(&page));
+    view.wait_until("said", |t| last_bar(t).contains("· blocks as code ·"));
+    view.press("s");
+    assert!(shows_flow(&next_image(&view, "drawn", coded).1));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// On what has no fenced blocks, `s` says so and nothing is sent again; in a list it says to open a
+/// document, the tiles as they were; and a document gone into from the list takes it.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_open_one() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 80, 40);
+    view.wait_until("page 1", |t| drawn(t, "page 1/1"));
+    view.press("s");
+    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML draw their blocks"));
+    assert_eq!(transmitted(&view.text()), 1);
+    view.press("q");
+    assert!(view.finish().success());
+
+    let dir = crate::view::tmp("fences-list", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    flow_document("fences-list", "shelf/a.md");
+    std::fs::copy(fixture("fences-list", 1), dir.join("b.pdf")).unwrap();
+    let mut view = Session::start_on(KITTY, &dir, &[], 100, 40);
+    view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
+    let tiles = pngs(&view.text());
+    assert!(tiles.len() == 2 && tiles.iter().any(|(_, tile)| shows_flow(tile)), "the document's tile shows its block drawn");
+    view.press("s");
+    view.wait_until("said", |t| bar(t).contains("open a document to reflow it"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(pngs(&view.text()).len(), 2, "the tiles are as they were");
+    let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("\r");
+    view.wait_until("a opened", |t| bar(t).contains(" a.md "));
+    let (opened, page) = next_image(&view, "its page", shown);
+    assert!(shows_flow(&page));
+    view.press("s");
+    assert!(!shows_flow(&next_image(&view, "its block as code", opened).1));
+    view.press("u");
+    view.wait_until("back in the list", |t| bar(last_draw(t)).contains(" 1/2 ·"));
+    view.press("\x1b[C");
+    view.wait_until("b chosen", |t| chosen(t).as_deref() == Some("b.pdf"));
+    view.press("\r");
+    view.wait_until("b opened", |t| bar(last_draw(t)).contains(" b.pdf "));
+    view.press("s");
+    view.wait_until("said", |t| last_bar(t).contains("only Markdown and HTML draw their blocks"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A block drawn is a picture, with no text for a search; shown as code, its text is the
+/// document's. A search kept across `s` starts over on the text as it is then: it counts what the
+/// code says, and nothing once the block is drawn again. So too where the document has as many
+/// paragraphs either way, a block of one line being one paragraph as its picture is: the text is
+/// told apart by the blocks drawn, not by its paragraphs' count.
+#[cfg(all(feature = "mermaid", feature = "word"))]
+#[test]
+fn a_search_reads_a_block_shown_as_code_and_not_one_drawn() {
+    if !pty_works() {
+        return;
+    }
+    let one_line = crate::view::tmp("fences-search", "line.md");
+    std::fs::write(&one_line, "# A diagram\n\nBefore it.\n\n```mermaid\nflowchart LR; start --> finish\n```\n\nAfter it.\n").unwrap();
+    for (path, in_code) in [(flow_document("fences-search", "flow.md"), " /finish 3 "), (one_line, " /finish 1 ")] {
+        let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 40);
+        view.wait_until("page 1", |t| drawn(t, "page 1/1"));
+        view.press("/finish\r");
+        view.wait_until("no text of the block's", |t| last_bar(t).contains(" /finish no match "));
+        view.press("s");
+        view.wait_until("its code searched", |t| last_bar(t).contains("blocks as code") && last_bar(t).contains(in_code));
+        view.press("s");
+        view.wait_until("drawn again, no text", |t| last_bar(t).contains(" /finish no match ") && !last_bar(t).contains("blocks as code"));
+        view.press("q");
+        assert!(view.finish().success());
+    }
+}
+
 /// What the status line last said, each run of spaces made one: from the last time it was written,
 /// with the screen or by itself.
 pub(crate) fn last_bar(text: &str) -> String {

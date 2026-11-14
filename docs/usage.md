@@ -45,6 +45,8 @@ clv --password PW secret.pdf
 | `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
 | `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
 | `--margin 5` | Markdown and HTML side margins of that many characters of code, 0 to 20 (3 by default) ([Documents](#a-page-the-windows-size)). With documents |
+| `--fences drawn` | the [fenced blocks](#documents) of Markdown and HTML that `clv` draws (` ```mermaid `) shown as pictures of them (the default); taken whatever the files. With documents |
+| `--fences code` | those blocks shown as the code they are |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
 | `--compression small` | PNGs with the fewest bytes, for a slow link |
@@ -104,6 +106,7 @@ In a file's pages:
 | `d` | Markdown and HTML light on dark, or dark on light ([Documents](#documents)); with documents |
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
+| `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace`, `u` | clear the search, if one is kept; otherwise back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
@@ -126,7 +129,7 @@ In a list:
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `d` | Markdown and HTML light on dark, or dark on light; the rest of the list stays as it is |
-| `[`, `]`, `{`, `}` | nothing: only a document opened from the list reflows, and they say so |
+| `[`, `]`, `{`, `}`, `s` | nothing: only a document opened from the list is laid out again, and they say so |
 | `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
 | `q`, `Ctrl-C` | quit |
 
@@ -667,6 +670,13 @@ that can't be drawn (a broken diagram, or one past what its kind [may be](#limit
 code it is, and the first page says how many weren't drawn. Its text isn't
 [searched](#searching-a-documents-text) once it is a picture
 ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+
+`s` shows a document's blocks as the code they are, to read a diagram's source or to search it, and
+again draws them: the document is laid out again, since a picture and its code take other room,
+and the status line says `blocks as code` while they are. A search kept meanwhile starts over, on
+the text as it is then. `--fences code` starts that way, and `--fences drawn`, the default, is as
+without it. On a file that is neither Markdown nor HTML `s` says so; in a list it says to open a
+document, and the tiles stay as they were opened: drawn, or as code with `--fences code`.
 
 Markdown and HTML have no paper of their own, so on a terminal with a dark background they go light
 on dark, the page exactly the terminal's colour, so that it is no rectangle at all. `d` turns them to

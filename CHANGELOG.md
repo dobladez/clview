@@ -28,7 +28,8 @@ works today. A version's section becomes the notes of its
   drawn as a document's pictures are, and through a pipe or from an archive too, since its text
   comes with the document. A block that can't be drawn stays code, and the first page says how
   many did. `clv --help` lists the languages drawn, beside each format's extensions; a block in any
-  other stays code, ` ```svg ` included.
+  other stays code, ` ```svg ` included. `s` shows a document's blocks as code, to read or search a
+  diagram's source, and again draws them; `--fences code` starts that way.
 
 ### Changed
 

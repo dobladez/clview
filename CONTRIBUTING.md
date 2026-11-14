@@ -207,8 +207,9 @@ it after a change to `cfg` attributes. Each backend alone is tested nowhere.
   a broken one as its code, a key the document writes itself no picture, and the 1,025th left as
   code), HTML's `<pre>` blocks the same, through `/dev/stdin` and in an epub's chapter, and that
   nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
-  starts the worker only once its tile is wanted, and a document's diagram is turned into SVG once
-  however it is laid out, watched with `ps`; in `tests/it/wordcraft.rs`, a diagram as a document's
+  starts the worker only once its tile is wanted, and a document's diagram, by path or in a block,
+  is turned into SVG once however it is laid out, watched with `ps`; and `s`, a document's blocks
+  as code and drawn again, in a list, on a PDF, and under a search kept; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The
   worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
   die) and the cache of what it answered are unit-tested in `src/source/mermaid.rs`.
