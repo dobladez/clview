@@ -569,7 +569,9 @@ Which files have links:
 - **Places in Markdown and HTML:** in HTML, any element with an `id` (`<h2 id="usage">`,
   `<div id="usage">`), as well as `<a id>` and `<a name>`. Markdown's headings get the ids GitHub
   gives them: lower case, punctuation dropped, each space a hyphen, and `-1`, `-2` after it for a
-  heading that repeats, so `[see](#install)` goes to `## Install`; an id the document writes
+  heading that repeats, so `[see](#install)` goes to `## Install`. Letters and numbers of any
+  script stay, with the marks that combine with them (an accent written apart from its letter, a
+  script's vowel signs) and `_`; an id the document writes
   itself (`<a id="install">`) wins over a heading's. A link's path and its `#name` are read as a
   URL's: `my%20file.md` is `my file.md`.
 

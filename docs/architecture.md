@@ -1491,7 +1491,9 @@ picture after its tag (a picture's own before the picture itself): there it join
 the element starts, where right after the tag it would make an empty paragraph of its own between
 two blocks. `markdown_as_html` holds a heading's events until its end, and writes an anchor at its
 start named by the id GitHub gives its text (`slugged`; a line's end within the heading is a
-space), with a private-use character before it (`SLUG`), which keeps a heading's place apart
+space; what stays is letters and numbers, by the standard library's tests, combining marks, by a
+table of Unicode 15.0's `Mn`, `Mc` and `Me` ranges, `MARKS`, since the library has no test for
+them, connector punctuation and hyphens), with a private-use character before it (`SLUG`), which keeps a heading's place apart
 from the ids a document writes itself, looked for first.
 
 A spreadsheet's `Noted` hands `links` on to the PDF it prints to, as it does `texts`.

@@ -369,3 +369,21 @@ blocks` and over SSH. The gates passed on the last tree that changed code (`547f
 tests, 13 of the docs, 276 through the viewer, three more runs of the last without a failure).
 Left for the owner outside this spec: the nightly feature sets weren't built here, and a document
 redirected into `/dev/stdin` from a file is laid out from nothing in the pager (Task 5's notes).
+
+## After Done: the Codex review's second round
+
+- **A heading's id dropped combining marks** (2026-11-15): `## café` written with U+0301 got the id
+  `cafe`, where GitHub's keeps the mark, so `[go](#cafe%CC%81)` was said missing; a script written
+  with marks (Devanagari's virama) lost them too. `slugged` kept only what `char::is_alphanumeric`
+  takes. It now keeps combining marks as well (the general categories `Mn`, `Mc` and `Me`), and
+  the other connector punctuation beside `_`, as GitHub's slugger does.
+- **No crate for it**: the standard library has no test for a general category, and the crates
+  that have one are other crates' dependencies, not clv's. The 310 ranges of Unicode 15.0's marks
+  are a table in `wordcraft.rs` (`MARKS`), made from Python 3.12's `unicodedata` (each run of code
+  points whose category starts with `M`), searched by halves. To be made again when a newer
+  Unicode's marks matter.
+- **Still by the standard library's tests**: letters and numbers are `char::is_alphanumeric`'s,
+  which takes a few symbols GitHub drops (circled letters, `Other_Alphabetic` symbols). Left as it
+  was.
+- **Seen failing first**: `slug_of_a_heading_is_githubs_and_repeats_are_numbered`, on `Cafe` with
+  U+0301 (`cafe-noir`), before the table was written.
