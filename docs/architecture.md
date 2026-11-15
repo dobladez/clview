@@ -1435,7 +1435,7 @@ which a relayout keeps), 16 at the most (`MAX_DEPTH`).
 A `Web` is checked too (`link::web`): at most 4 KiB; no character that `hidden` names (a control
 character, any whitespace, a bidirectional mark, a soft hyphen, a zero-width or filler character,
 a variation selector, a tag); a scheme of `http` or `https` followed by `//` and a host's first
-character, or `mailto` with no parameter named `attach…` or `insert…` among what follows its first
+character (a letter or a digit of any script, a `%`, or an IPv6 address's `[`), or `mailto` with no parameter named `attach…` or `insert…` among what follows its first
 `?`, apart at `&`, `;` and `?`, looked for as written and after each of up to 8 percent-decodings
 (`LAYERS`), one still encoded past them refused. Then `Launches::start_address` runs the same
 opener `o` runs, the address its one argument

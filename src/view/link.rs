@@ -92,11 +92,15 @@ pub(super) fn web(address: &str) -> Result<(), String> {
         return Err("a link that is no web address, nor a file's path: it isn't followed".into());
     };
     match scheme.to_ascii_lowercase().as_str() {
-        // `//` and a host: `http:x` is a path to some browsers, a host to others.
-        "http" | "https" => match rest.strip_prefix("//").is_some_and(|host| host.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '[')) {
-            true => Ok(()),
-            false => Err(format!("a {}: link without a host, which isn't followed", scheme.to_ascii_lowercase())),
-        },
+        // `//` and a host: `http:x` is a path to some browsers, a host to others. A host starts
+        // with a letter or a digit of any script (`例え.jp`), a percent-encoded one, or the bracket of
+        // an IPv6 address.
+        "http" | "https" => {
+            match rest.strip_prefix("//").is_some_and(|host| host.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '%' | '['))) {
+                true => Ok(()),
+                false => Err(format!("a {}: link without a host, which isn't followed", scheme.to_ascii_lowercase())),
+            }
+        }
         "mailto" => match reads_a_file(rest) {
             true => Err("a mailto: link that names a file for the mail app to read, which isn't followed".into()),
             false => Ok(()),
@@ -319,6 +323,13 @@ mod tests {
     fn a_web_address_is_http_https_or_mailto() {
         for address in ["http://example.com", "https://example.com/a?b=c#d", "HTTPS://Example.com/", "https://[::1]:8080/x", "mailto:a@example.com"] {
             assert_eq!(web(address), Ok(()), "{address}");
+        }
+        // A host in any script, as written or percent-encoded.
+        for address in ["https://例え.jp/", "http://bücher.example/a", "https://%E4%BE%8B.jp/", "https://١.example/"] {
+            assert_eq!(web(address), Ok(()), "{address}");
+        }
+        for address in ["https://", "https:///x", "http://?q", "https://-x.example/", "https://.example/", "http://@example.com"] {
+            assert!(web(address).is_err_and(|why| why.contains("without a host")), "{address}");
         }
         assert_eq!(web("MailTo:a@example.com?subject=Hello%20there&body=insert%20coin"), Ok(()), "a value isn't a name");
         assert_eq!(web("mailto:insert@example.com"), Ok(()), "nor is the address");

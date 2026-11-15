@@ -333,3 +333,30 @@ session's. Each pointed at a real defect, fixed here with a test of its own:
   `view_pager::links_followed_from_the_middle_of_a_long_paragraph_…` has it (back on page 1, not 5,
   with the fix reverted).
 - **Seen failing**, each fix reverted in a copy: the three tests above.
+
+## The Codex review, and the last manual checks
+
+- **Round 1's three findings** (2026-11-15). Two were the defects its probes had shown, fixed and
+  committed before the findings arrived (`159184a`): `u` without a relayout going to its
+  paragraph's start (now by the saved page while the level is the one the jump was made in;
+  `view_pager::links_followed_from_the_middle_of_a_long_paragraph_…`), and an `<img id>` whose
+  anchor was written before its own id was known (`links_of_html_…`). The third: `link::web` took
+  only a host starting with an ASCII letter or digit, or `[`, so `https://例え.jp/` and a
+  percent-encoded host were refused as having none. A host now starts with a letter or a digit of
+  any script, a `%`, or `[`; an empty host, and one starting with anything else, is still refused,
+  as is everything `hidden` names. Seen failing first: `a_web_address_is_http_https_or_mailto`, on
+  `https://例え.jp/`, before the fix was written.
+- **The owner's answers**: the clipboard's order for text stays as implemented (OSC 5522, the
+  system's clipboard on this machine, OSC 52 over SSH or where that fails); where an HTML `id`'s
+  anchor goes, percent-decoding, absolute paths followed, and any key dropping the labels while
+  they are read are accepted as they are.
+- **The manual checks, all passed** (the owner, 2026-11-15): task 2's five steps in kitty, Ghostty
+  and WezTerm; a Markdown file's heading, `other.md#part` with `u` back, and its web link opening
+  the browser, in all three; the labels inside tmux in kitty and with `--protocol blocks`; and in
+  kitty over SSH (a plain `ssh` to a `sshd` on this machine, `SSH_CONNECTION` set), `f` on the web
+  link opening no browser, the status line saying the address was copied, and a paste giving it.
+  Task 5's box and the Done list's manual line are ticked.
+- **A test of this spec's own was racy**: `links_followed_from_the_middle_of_a_long_paragraph_…`
+  waited after `u` for any redraw, then looked 300 ms later, and in one full run the key hadn't been
+  handled by then (page 10, not 5). It now waits until the view has left the last page, and then
+  says which page it is on. With the fix reverted it still fails as before, on page 1.

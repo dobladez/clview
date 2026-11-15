@@ -4527,8 +4527,8 @@ fn links_followed_from_the_middle_of_a_long_paragraph_are_come_back_to_on_their_
     view.wait_until("the end", |t| place_now(&t[before..]).is_some_and(|(page, pages)| page == pages));
     let before = view.text().len();
     view.press("u");
-    view.wait_until("back", |t| t.len() > before && place_now(&t[before..]).is_some());
-    std::thread::sleep(Duration::from_millis(300));
+    // Wherever it goes back to, it leaves the last page: then, which page it is on.
+    view.wait_until("back", |t| place_now(&t[before..]).is_some_and(|(page, pages)| page != pages));
     assert_eq!(place_now(&view.text()).map(|(page, _)| page), Some(on), "back on the page the link is on");
     view.press("q");
     assert!(view.finish().success());

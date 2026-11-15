@@ -273,7 +273,7 @@ followed into.
   `tests/it/view_pager.rs`, `docs/usage.md`. *Verify:* `cargo test -j 2 --bin clv slug`,
   `cargo test -j 2 --bin clv field_link`, `cargo test -j 2 --test it wordcraft::links` (a DOCX's
   internal link and `REF \h`, `<h2 id>`, `<div id>`, a Markdown heading and its repeat).
-- [ ] **Other files, the web, and `F`** — a local file opened as a level with its fragment, a PDF's
+- [x] **Other files, the web, and `F`** — a local file opened as a level with its fragment, a PDF's
   `/GoToR`, the 16 levels, a web address through the launchers or copied, `F` and what it copies,
   text through OSC 5522, OSC 52 or the system's clipboard. *Files:* `src/view/mod.rs`,
   `src/view/pager.rs`, `src/view/launch.rs`, `src/view/clip.rs`, `tests/it/view_pager.rs`, `docs/`.
@@ -289,7 +289,7 @@ followed into.
 - [x] Tests added, each seen failing without the change: name them. (Named, with what was
   reverted, under each task's "Seen failing" in the
   [notes](0011-follow-a-documents-links-impl-20261115_1751.md).)
-- [ ] Manual: in kitty, Ghostty and WezTerm, `f` on a PDF and a Markdown file, following a place,
+- [x] Manual: in kitty, Ghostty and WezTerm, `f` on a PDF and a Markdown file, following a place,
   a local file and a web address, `u` back; inside tmux and with `--protocol blocks`, the labels.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
