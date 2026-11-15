@@ -271,11 +271,69 @@ fn inside_tmux_every_page_on_screen_reaches_the_terminal() {
     server.tmux(&["send-keys", "-t", "view:0", "q"]);
 }
 
-/// A page turn inside tmux writes each row's placeholder cells right after erasing that row, never
-/// erasing the screen first and filling it after: tmux paints the terminal between the reads of a
-/// long draw, and the screen erased first showed there as a blank between two pages.
+/// The cells, as (row, column), that `written` both erases and writes a placeholder in, the
+/// cursor followed through its moves (`H`), erasures (`X`, `K`, `2K`) and characters; passthrough
+/// (`ESC P … ESC \`, its ESCs doubled) and other escape codes move nothing. `cols` is the pane's
+/// width.
+fn erased_and_written(written: &str, cols: u16) -> HashSet<(u16, u16)> {
+    let (mut erased, mut drawn) = (HashSet::new(), HashSet::new());
+    let (mut row, mut col) = (0u16, 0u16);
+    let mut chars = written.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut end = None;
+                    for c in chars.by_ref() {
+                        if c.is_ascii_digit() || c == ';' || c == '?' {
+                            params.push(c);
+                        } else {
+                            end = Some(c);
+                            break;
+                        }
+                    }
+                    let numbers: Vec<u16> = params.split(';').map(|n| n.parse().unwrap_or(0)).collect();
+                    let n = |i: usize| numbers.get(i).copied().unwrap_or(0);
+                    let span = |row: u16, from: u16, to: u16, erased: &mut HashSet<(u16, u16)>| erased.extend((from..to).map(|c| (row, c)));
+                    match end {
+                        Some('H') => (row, col) = (n(0).saturating_sub(1), n(1).saturating_sub(1)),
+                        Some('X') => span(row, col, col.saturating_add(n(0).max(1)), &mut erased),
+                        Some('K') if n(0) == 2 => span(row, 0, cols, &mut erased),
+                        Some('K') if n(0) == 0 => span(row, col, cols, &mut erased),
+                        _ => {}
+                    }
+                }
+                // Passthrough, to its end: ESC \ where an ESC isn't doubled.
+                Some('P') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x1b' && chars.next() == Some('\\') {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\u{10EEEE}' => {
+                drawn.insert((row, col));
+                col = col.saturating_add(1);
+                // Its marks, from kitty's table of diacritics: none of them ASCII, none a cell.
+                while chars.peek().is_some_and(|c| !c.is_ascii() && *c != '\u{10EEEE}') {
+                    chars.next();
+                }
+            }
+            c if c.is_control() => {}
+            _ => col = col.saturating_add(1),
+        }
+    }
+    erased.intersection(&drawn).copied().collect()
+}
+
+/// A page turn inside tmux writes the new page's placeholder cells over the old one's, erasing only
+/// the cells nothing covers now: tmux paints the terminal between the reads of a long draw, and a
+/// screen erased first and filled after showed there as a blank between two pages.
 #[test]
-fn inside_tmux_a_page_turn_erases_no_row_before_what_replaces_it() {
+fn inside_tmux_a_page_turn_writes_over_the_page_before() {
     let Some((server, output)) = start("turn") else { return };
     all_arrive(&server, &output, "the first pages");
     // What `clv` writes to the pane from now on, as it writes it.
@@ -290,21 +348,24 @@ fn inside_tmux_a_page_turn_erases_no_row_before_what_replaces_it() {
         std::thread::sleep(Duration::from_millis(100));
     }
     all_arrive(&server, &output, "the next pages");
+    let cols = String::from_utf8_lossy(&server.tmux(&["display", "-p", "-t", "view:0", "#{pane_width}"])).trim().parse().unwrap();
     server.tmux(&["send-keys", "-t", "view:0", "q"]);
     std::thread::sleep(Duration::from_millis(300));
     let written = String::from_utf8_lossy(&std::fs::read(&piped).unwrap()).into_owned();
     assert!(written.contains('\u{10EEEE}'), "the page turn wrote no placeholder cells");
-    // Between an erased row and the next row erased, something drawn: not a cursor moved alone.
-    let cursor_alone = |between: &str| {
-        between
-            .strip_prefix("\x1b[")
-            .and_then(|s| s.strip_suffix('H'))
-            .and_then(|s| s.split_once(';'))
-            .is_some_and(|(row, col)| [row, col].iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
-    };
-    let erased: Vec<&str> = written.split("\x1b[2K").collect();
-    let blanked = erased.iter().skip(1).rev().skip(1).filter(|between| cursor_alone(between)).count();
-    assert_eq!(blanked, 0, "rows erased one after another, the screen blank until they are filled");
+    let both = erased_and_written(&written, cols);
+    assert!(both.is_empty(), "{} cells of the page erased before it was written over them", both.len());
+}
+
+#[test]
+fn erased_and_written_follows_the_cursor() {
+    let p = "\x1b[38;5;7m\u{10EEEE}\u{0595}\u{0305}\u{10EEEE}\x1b[39m";
+    // A row erased, then drawn: both cells; written over, its gap and its end erased: none.
+    assert_eq!(erased_and_written(&format!("\x1b[3;1H\x1b[2K\x1b[3;5H{p}"), 10), HashSet::from([(2, 4), (2, 5)]));
+    assert_eq!(erased_and_written(&format!("\x1b[3;1H\x1b[4X\x1b[3;5H{p}\x1b[3;7H\x1b[K"), 10), HashSet::new());
+    // Erasing past the cells drawn, or after them on the row, counts too; passthrough moves nothing.
+    assert_eq!(erased_and_written(&format!("\x1b[3;5H{p}\x1b[3;6H\x1b[2X"), 10), HashSet::from([(2, 5)]));
+    assert_eq!(erased_and_written(&format!("\x1bPtmux;\x1b\x1b_Gi=1;x\x1b\x1b\\\x1b\\\x1b[1;1H{p}\x1b[1;2H\x1b[K"), 10), HashSet::from([(0, 1)]));
 }
 
 #[test]

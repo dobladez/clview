@@ -2575,7 +2575,10 @@ impl Pager<'_> {
         // Drawn as text, or as tmux's placeholder cells, each row is written whole, below, only when
         // it changes, and erased only as what replaces it comes: tmux paints the terminal between
         // the reads of a long draw, and a screen erased first and filled after showed there as a
-        // blank between two pages.
+        // blank between two pages. Inside tmux a row is written over, and only the cells nothing
+        // covers now are erased ([`over`]), so a page in the cells of the one before never blanks:
+        // `ends` is where what is written on each row ends so far.
+        let mut ends = vec![0u16; usize::from(size.rows)];
         let mut text_rows = match self.output {
             Output::Text(_) | Output::Tmux(_) => vec![Vec::new(); usize::from(size.rows)],
             Output::Direct => {
@@ -2617,8 +2620,8 @@ impl Pager<'_> {
                 Output::Tmux(colour) => {
                     for row in 0..visible {
                         let at = top.saturating_add(row);
-                        if let Some(line) = text_rows.get_mut(usize::from(at)) {
-                            cursor(line, at, left);
+                        if let (Some(line), Some(end)) = (text_rows.get_mut(usize::from(at)), ends.get_mut(usize::from(at))) {
+                            over(line, end, at, left, s.cols);
                             // Within the placeholders' table: the layout keeps it so.
                             let _ = kitty::placeholder_row(line, s.id, colour, scroll.saturating_add(row), s.cols);
                         }
@@ -2644,8 +2647,19 @@ impl Pager<'_> {
         for (slot, view) in (0u16..).zip(labelled) {
             let Some((v, item)) = view.and_then(|v| Some((v, self.level.items.get(v.page)?))) else { continue };
             let row = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows);
+            let col = left.saturating_add((slot % per_row).saturating_mul(across));
             let into = text_rows.get_mut(usize::from(row)).unwrap_or(&mut *out);
-            cursor(into, row, left.saturating_add((slot % per_row).saturating_mul(across)));
+            match (self.output, ends.get_mut(usize::from(row))) {
+                (Output::Tmux(_), Some(end)) => {
+                    // The name is spaces to its place's width, but a character may take two cells
+                    // or none: the place is erased first, as it is text and not a page.
+                    over(into, end, row, col, grid.cols);
+                    if grid.cols > 0 {
+                        into.extend_from_slice(format!("\x1b[{}X", grid.cols).as_bytes());
+                    }
+                }
+                _ => cursor(into, row, col),
+            }
             // A tile that failed is an empty place, as one not rendered yet is: this tells them apart.
             let broken = self.failed.iter().any(|(failed, _)| *failed == v);
             let name = if broken { format!("! {}", item.name()) } else { item.name().to_owned() };
@@ -2656,10 +2670,22 @@ impl Pager<'_> {
         // The rows of text that aren't as they already are. Inside tmux, a page that leaves the
         // screen goes with its placeholder cells, erased here or written over.
         if matches!(self.output, Output::Text(_) | Output::Tmux(_)) {
+            if let Output::Tmux(_) = self.output {
+                // The rest of each row, past what is written on it, erased: a cell at the window's
+                // edge is the last, and erasing from it would erase it.
+                for ((row, line), end) in (0u16..).zip(&mut text_rows).zip(&ends) {
+                    if *end < size.cols {
+                        cursor(line, row, *end);
+                        line.extend_from_slice(b"\x1b[K");
+                    }
+                }
+            }
             for (row, line) in (0u16..).zip(&text_rows) {
                 if self.on_glass.get(usize::from(row)) != Some(line) {
-                    cursor(out, row, 0);
-                    out.extend_from_slice(b"\x1b[2K");
+                    if let Output::Text(_) = self.output {
+                        cursor(out, row, 0);
+                        out.extend_from_slice(b"\x1b[2K");
+                    }
                     out.extend_from_slice(line);
                 }
             }
@@ -2993,6 +3019,19 @@ fn note(on_screen: &[Option<View>], sent: &[Sent], failed: &[(View, String)]) ->
 /// Move the cursor to 0-based `row` and `col`.
 fn cursor(out: &mut Vec<u8>, row: u16, col: u16) {
     out.extend_from_slice(format!("\x1b[{};{}H", u32::from(row) + 1, u32::from(col) + 1).as_bytes());
+}
+
+/// Inside tmux, the cursor to `start` on `row`, for something `width` cells wide, the cells between
+/// where the row's last such thing ended (`end`) and `start` erased (ECH, which leaves the cursor
+/// where it is), and `end` moved past it. What is written there next goes over what the cells
+/// held, without erasing them first.
+fn over(line: &mut Vec<u8>, end: &mut u16, row: u16, start: u16, width: u16) {
+    if start > *end {
+        cursor(line, row, *end);
+        line.extend_from_slice(format!("\x1b[{}X", start - *end).as_bytes());
+    }
+    cursor(line, row, start);
+    *end = (*end).max(start.saturating_add(width));
 }
 
 /// The pixels of `shown` that `visible` cell rows starting at row `scroll` cover.
