@@ -378,8 +378,10 @@ const _: () = assert!(GLYPHS.len() == LETTERS.len());
 const MAX_ENLARGED: u16 = 32;
 
 /// The image the labels are drawn from: every letter in a box of its own, side by side, once as
-/// a label shows it and under that once as a letter typed. A label is its letters' boxes placed
-/// side by side.
+/// a label shows it and under that once as a letter typed; and after them a box with no letter,
+/// for the padding at a label's ends. A label is a strip of that box, its letters' boxes side by
+/// side, and another strip: the letters have the box's colour around them, above and below as much
+/// as at the label's ends, and less between two of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Sheet {
     pub(super) width: u32,
@@ -389,20 +391,26 @@ pub(super) struct Sheet {
     /// A letter's box, in pixels.
     pub(super) box_w: u16,
     pub(super) box_h: u16,
+    /// How wide the strip at each end of a label is, in pixels.
+    pub(super) edge: u16,
 }
 
 impl Sheet {
     /// The letters for a cell `cell_h` pixels high: each of a letter's pixels as many pixels as
     /// fit its seven rows of them, and half of one above and below, in the cell's height; one at
-    /// the least, in a cell too small for that.
+    /// the least, in a cell too small for that. Around the letter, padding: one of its pixels and a
+    /// pixel more above and below it, so the box is a cell high, or up to a quarter more; half of
+    /// one of its pixels at either side, where the next letter is, and one of its pixels more at each
+    /// end of the label ([`Sheet::end`]).
     pub(super) fn new(cell_h: f32) -> Self {
         let cell_h = if cell_h.is_finite() { cell_h.clamp(1.0, 4096.0) as u16 } else { 20 };
         // Seven rows of the letter's pixels and half of one above and below, within the cell.
         let fits = |enlarged: &u16| enlarged * 7 + enlarged.div_ceil(2) * 2 <= cell_h;
         let enlarged = (1..=MAX_ENLARGED).rev().find(fits).unwrap_or(1);
-        let (pad_x, pad_y) = (enlarged.div_ceil(2), enlarged.div_ceil(2));
+        let (pad_x, pad_y, edge) = (enlarged.div_ceil(2), enlarged + 1, enlarged);
         let (box_w, box_h) = (enlarged * 5 + pad_x * 2, enlarged * 7 + pad_y * 2);
-        let (width, height) = (usize::from(box_w) * LETTERS.len(), usize::from(box_h) * 2);
+        // The letters' boxes, and one more without a letter: the last column has no glyph.
+        let (width, height) = (usize::from(box_w) * (LETTERS.len() + 1), usize::from(box_h) * 2);
         let mut rgba = Vec::with_capacity(width * height * 4);
         for y in 0..height {
             let (typed, y) = (y >= usize::from(box_h), y % usize::from(box_h));
@@ -424,8 +432,15 @@ impl Sheet {
                 rgba.extend_from_slice(&[colour[0], colour[1], colour[2], 255]);
             }
         }
-        // At most 14 boxes of 192 by 256 pixels: within u32.
-        Self { width: width as u32, height: height as u32, rgba, box_w, box_h }
+        // At most 15 boxes of 192 by 290 pixels: within u32.
+        Self { width: width as u32, height: height as u32, rgba, box_w, box_h, edge }
+    }
+
+    /// Where the strip at a label's end is in the image: its left, top, width and height in
+    /// pixels, of the box with no letter.
+    pub(super) fn end(&self) -> (u32, u32, u32, u32) {
+        // Fourteen letters: within u32.
+        (LETTERS.len() as u32 * u32::from(self.box_w), 0, u32::from(self.edge.min(self.box_w)), u32::from(self.box_h))
     }
 
     /// Where letter `c`'s box is in the image, as a label shows it or as a letter `typed`: its
@@ -699,15 +714,17 @@ mod tests {
         assert!(hints.runs(&[]).is_empty() && Hints::new(Aim::Follow, &[0], Instant::now()).runs(&[page]).is_empty());
     }
 
-    /// The image of the letters: each in a box of its own, as tall as fits the cell, in the
-    /// labels' yellow with dark ink, and under it again in the ink of a letter typed; the same
-    /// shape both times, and a different one for each letter.
+    /// The image of the letters: each in a box of its own, its letter as tall as fits the cell with
+    /// the box's yellow around it, in dark ink, and under it again in the ink of a letter typed; the
+    /// same shape both times, and a different one for each letter. After them, a box with no letter,
+    /// a strip of which pads each end of a label.
     #[test]
     fn hints_letters_are_drawn_in_boxes_that_fit_the_cell() {
         let sheet = Sheet::new(20.0);
-        // Two pixels a pixel: letters of 10 by 14 in boxes of 12 by 16.
-        assert_eq!((sheet.box_w, sheet.box_h, sheet.width, sheet.height), (12, 16, 12 * 14, 32));
-        assert_eq!(sheet.rgba.len(), 12 * 14 * 32 * 4);
+        // Two pixels a pixel: letters of 10 by 14 in boxes of 12 by 20, three pixels of yellow above
+        // and below, one at each side, and two more at a label's ends.
+        assert_eq!((sheet.box_w, sheet.box_h, sheet.edge, sheet.width, sheet.height), (12, 20, 2, 12 * 15, 40));
+        assert_eq!(sheet.rgba.len(), 12 * 15 * 40 * 4);
         let pixel = |x: u32, y: u32| {
             let at = ((y * sheet.width + x) * 4) as usize;
             [sheet.rgba[at], sheet.rgba[at + 1], sheet.rgba[at + 2]]
@@ -719,22 +736,31 @@ mod tests {
         let mut shapes = Vec::new();
         for c in LETTERS.chars() {
             let (x, y, w, h) = sheet.letter(c, false).unwrap();
-            assert_eq!((y, w, h), (0, 12, 16));
-            assert_eq!((pixel(x, 0), pixel(x, 15), pixel(x, 1)), (RULE, RULE, BOX), "{c}");
+            assert_eq!((y, w, h), (0, 12, 20));
+            assert_eq!((pixel(x, 0), pixel(x, 19), pixel(x, 1)), (RULE, RULE, BOX), "{c}");
             let plain = shape(c, false, INK);
             assert!(plain.iter().filter(|inked| **inked).count() >= 4 * 11, "{c} has ink");
+            // Padded: no ink in the box's first three rows, its last three, or its side columns.
+            let inked = |dx: u32, dy: u32| pixel(x + dx, dy) == INK;
+            assert!(!(0..12).any(|dx| (0..3).chain(17..20).any(|dy| inked(dx, dy))) && !(0..20).any(|dy| inked(0, dy) || inked(11, dy)), "{c}");
             assert_eq!(plain, shape(c, true, TYPED), "{c} typed is the same shape");
             assert!(!shapes.contains(&plain), "{c} is its own shape");
             shapes.push(plain);
         }
-        assert_eq!((sheet.letter('s', true), sheet.letter('h', false)), (Some((0, 16, 12, 16)), Some((13 * 12, 0, 12, 16))));
+        assert_eq!((sheet.letter('s', true), sheet.letter('h', false)), (Some((0, 20, 12, 20)), Some((13 * 12, 0, 12, 20))));
         assert_eq!((sheet.letter('x', false), sheet.letter('S', false)), (None, None));
-        // As tall as the cell lets it, never taller, whatever the cell.
+        // The strip for a label's ends: of the box after the letters, which has no ink.
+        let (x, y, w, h) = sheet.end();
+        assert_eq!((x, y, w, h), (14 * 12, 0, 2, 20));
+        assert!((0..12).all(|dx| (0..40).all(|dy| [BOX, RULE].contains(&pixel(x + dx, dy)))));
+        // The letter as tall as the cell lets it, and its box with it: a cell high, or a little
+        // more, whatever the cell.
         for cell in [0.0, 1.0, 8.0, 9.0, 16.0, 37.0, 4096.0, f32::NAN, f32::INFINITY, -5.0] {
             let sheet = Sheet::new(cell);
             assert_eq!(sheet.rgba.len(), sheet.width as usize * sheet.height as usize * 4, "{cell}");
-            assert!(sheet.box_h >= 8 && (cell.is_nan() || cell < 9.0 || f32::from(sheet.box_h) <= cell), "{cell}: {}", sheet.box_h);
+            assert!(sheet.box_h >= 11 && (cell.is_nan() || cell < 9.0 || f32::from(sheet.box_h) <= cell * 1.25 + 2.0), "{cell}: {}", sheet.box_h);
         }
-        assert_eq!((Sheet::new(40.0).box_w, Sheet::new(40.0).box_h), (24, 32));
+        assert_eq!((Sheet::new(40.0).box_w, Sheet::new(40.0).box_h, Sheet::new(40.0).edge), (24, 38, 4));
+        assert_eq!((Sheet::new(16.0).box_w, Sheet::new(16.0).box_h), (12, 20), "the letter fits the cell, its box a little more");
     }
 }

@@ -284,3 +284,31 @@ surprises, and what a later reader would want.
   and `Target` keep theirs (the core makes no `Told`, and no `File` nor `Web`); and the pager
   tests' helpers that only the Markdown tests use are under the `word` feature, as those tests
   are. Reasoned, not run: `gh workflow run CI` runs both feature sets.
+
+## After task 2's manual check
+
+- **The check passed** (2026-11-15, the owner, in kitty, Ghostty and WezTerm, outside tmux): the
+  labels over a PDF's page at their links, a label typed going to its page, `u` back, `Esc`
+  dropping them, and with more than 14 links the labels narrowing and the typed letter paling.
+  So Ghostty and WezTerm place part of an image at `z=1` with pixel offsets as kitty does: the
+  spec's open question is answered, no fallback to cells is needed there, and task 2's box is
+  ticked. ADR-0035's Evidence says so.
+- **Padding, asked for at that look**: the letters touched the box's edges. A letter's box now has
+  one of the letter's pixels and a pixel more above and below it (3 px in a 20 px cell, where it
+  had 1), and a label has a strip of plain box at each end, one of the letter's pixels wide (2 px),
+  beside the half pixel a side each letter's box already had: letters stay close to one another,
+  and the label has yellow all round. The strips are parts of a fifteenth box of the image, with no
+  letter, so a label is two placements more.
+- **The letter is as tall as before**, chosen to fit the cell; its box is now a cell high where the
+  cell is 20 or 40 pixels, and up to a quarter more elsewhere (20 px in a 16 px cell). A box held
+  within the cell would have halved the letter in a 16 px cell.
+- **The label's corner stays at its link's top left**: the padding moves the letters two pixels
+  right and two down inside it, not the box.
+- **Inside tmux and in text cells** a label is still a cell a letter: a cell's own ground is its
+  padding.
+- **Measured again** for ADR-0035: 42 parts placed for 14 one-letter labels, 7.5 KB written, the
+  image 2.8 KB, still 21 to 25 ms from `f`.
+- **Seen failing**: the padding taken back (`pad_y` half a pixel, no strips placed):
+  `hints_letters_are_drawn_in_boxes_that_fit_the_cell` and
+  `view_pager::links_are_labelled_from_one_image_and_a_label_typed_goes_to_its_place`.
+- **Still open**: task 5's manual line, and the Done list's.

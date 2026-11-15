@@ -1372,11 +1372,16 @@ anything else drops them.
 
 **Drawing them** (`Pager::draw_labels`, in every draw). Directly, one image holds the letters
 (`hints::Sheet`): each in a box of its own, drawn from a bitmap font of five pixels by seven
-(`GLYPHS`), each pixel enlarged by the whole number that fits the cell's height, once in the
-labels' ink and under it once paler, for a letter typed. It is sent as a PNG the first time, made
-room for as a page is (`make_room`), and each letter of each label is a placement of its box of
-it (`kitty::place_part`: `a=p,q=1,C=1,z=1,i=…,p=…,x=…,y=…,w=…,h=…,X=…,Y=…`), at its own size, over
-the pages (`z=1`), within the pages' rows. When what is typed changes, every placement goes
+(`GLYPHS`), each pixel enlarged by the whole number that fits the letter, with half a pixel of it
+above and below, in the cell's height, once in the labels' ink and under it once paler, for a
+letter typed. The box pads the letter: one of its pixels and a pixel more above and below (so the
+box is a cell high, or up to a quarter more), half of one at each side; and a last box has no
+letter, a strip of which, one of the letter's pixels wide, pads each end of a label
+(`Sheet::end`). In a cell 20 pixels high, a letter of 10 by 14 in a box of 12 by 20. The image is
+sent as a PNG the first time, made room for as a page is (`make_room`), and a label is placements
+of parts of it (`kitty::place_part`: `a=p,q=1,C=1,z=1,i=…,p=…,x=…,y=…,w=…,h=…,X=…,Y=…`): a strip,
+each letter's box, a strip, side by side from the link's own corner, at their own size, over the
+pages (`z=1`), within the pages' rows. When what is typed changes, every placement goes
 (`kitty::hide_all`, `a=d,d=i`) and those that still match are placed again. The labels are kept
 with the level and the screen they were made for (`Labels`): on any other screen (a resize, a
 relayout, the keys in place of the pages) they go, the image deleted, as when the reader drops

@@ -2273,24 +2273,31 @@ impl Pager<'_> {
         // Every placement of it goes, and those that still match come back, a letter typed greyed.
         kitty::hide_all(out, *id, wrap);
         let (cell_w, cell_h) = (cell.w.max(1.0), cell.h.max(1.0));
-        let (box_w, box_h) = (f32::from(sheet.box_w), f32::from(sheet.box_h));
+        let (box_w, box_h, edge) = (f32::from(sheet.box_w), f32::from(sheet.box_h), f32::from(sheet.edge));
         let mut placement = 0u32;
+        // A part of the image `across` and `down` the screen, in pixels: at whole cells, and what is
+        // left of a cell, both finite and within u16.
+        let mut put = |out: &mut Vec<u8>, across: f32, down: f32, (x, y, w, h): (u32, u32, u32, u32)| {
+            let (col, row) = ((across / cell_w).floor(), (down / cell_h).floor());
+            let offset = ((across - col * cell_w).clamp(0.0, cell_w - 1.0) as u16, (down - row * cell_h).clamp(0.0, cell_h - 1.0) as u16);
+            placement = placement.saturating_add(1);
+            cursor(out, row as u16, col as u16);
+            kitty::place_part(out, *id, placement, Rect { x, y, w, h }, offset, wrap);
+        };
         for (label, typed) in hints.visible() {
             // In pixels from the screen's top left, within the pages' cells: never over the status
-            // line, nor past the window's edge.
+            // line, nor past the window's edge. Its corner at its link's, its letters past the strip
+            // of padding at its start.
             let letters = label.code.chars().count() as f32;
-            let across = (f32::from(label.at.col) * cell_w + f32::from(label.at.x)).min(f32::from(cols) * cell_w - letters * box_w).max(0.0);
+            let width = letters * box_w + 2.0 * edge;
+            let across = (f32::from(label.at.col) * cell_w + f32::from(label.at.x)).min(f32::from(cols) * cell_w - width).max(0.0);
             let down = (f32::from(label.at.row) * cell_h + f32::from(label.at.y)).min(f32::from(area_rows) * cell_h - box_h).max(0.0);
+            put(out, across, down, sheet.end());
             for (nth, letter) in label.code.chars().enumerate() {
-                let Some((x, y, w, h)) = sheet.letter(letter, nth < typed) else { continue };
-                let across = across + nth as f32 * box_w;
-                // Whole cells, and what is left of a cell: both finite, and within u16.
-                let (col, row) = ((across / cell_w).floor(), (down / cell_h).floor());
-                let offset = ((across - col * cell_w).clamp(0.0, cell_w - 1.0) as u16, (down - row * cell_h).clamp(0.0, cell_h - 1.0) as u16);
-                placement = placement.saturating_add(1);
-                cursor(out, row as u16, col as u16);
-                kitty::place_part(out, *id, placement, Rect { x, y, w, h }, offset, wrap);
+                let Some(part) = sheet.letter(letter, nth < typed) else { continue };
+                put(out, across + edge + nth as f32 * box_w, down, part);
             }
+            put(out, across + edge + letters * box_w, down, sheet.end());
         }
         labels.drawn = Some(hints.typed().to_owned());
         self.placed_at = Some(Instant::now());

@@ -24,9 +24,10 @@ to the desktop's opener, and a path opens a file.
 1. **Directly, a label is drawn over the page, never into it.** One image holds the fourteen
    letters, each in a yellow box of its own, once as a label shows it and once paler, as a letter
    typed (`hints::Sheet`, drawn from a bitmap font of the viewer's own, five pixels by seven,
-   enlarged by a whole number to fit the cell's height). It is sent when the labels first show.
-   Each letter of each label is a placement of its box of that image (`x`, `y`, `w`, `h`), at its
-   own size, at a cell and a pixel offset into it (`X`, `Y`), above the pages (`z=1`)
+   enlarged by a whole number to fit the cell's height), and a box with no letter, for the padding
+   at a label's ends. It is sent when the labels first show. A label is placements of parts of
+   that image (`x`, `y`, `w`, `h`): a strip of the empty box, each letter's box, and another strip,
+   at their own size, at a cell and a pixel offset into it (`X`, `Y`), above the pages (`z=1`)
    (`kitty::place_part`). A letter typed takes every placement off (`a=d,d=i`) and places what
    still matches again; the labels gone, the image is deleted. The page is never rendered again.
 2. **One image, not one a label.** What the pager keeps in the terminal is counted in images
@@ -66,17 +67,19 @@ pseudo-terminal of 10 × 20 pixel cells that takes no temporary files, on the te
 (`tests/it/fixtures.rs`'s `linked`), five times each: from `f` to the labels' placements and the
 status line written.
 
-| Window | Links on screen | Letters placed | From `f` to the labels | Written in all |
+| Window | Links on screen | Parts placed: letters, and two strips a label | From `f` to the labels | Written in all |
 |---|---|---|---|---|
-| 100 × 60 cells, one page | 14 | 14 | 21 to 25 ms, the harness's own 20 ms poll among them | 5.3 KB, the image's 2.6 KB among them |
-| 200 × 60 cells, two pages | 15 | 30 | 21 to 25 ms | 6.8 KB |
+| 100 × 60 cells, one page | 14 | 42 | 21 to 25 ms, the harness's own 20 ms poll among them | 7.5 KB, the image's 2.8 KB among them |
+| 200 × 60 cells, two pages | 15 | 60 | 21 to 25 ms | 9.1 KB |
 
 A page sent again with a tint is 22 to 61 ms of render and PNG a page and 30 to 560 KiB written
 ([ADR-0028](0028-matches-tinted-into-the-pages-pixels.md)'s Evidence), each time what is typed
 changes.
 
-**Not watched:** how Ghostty and WezTerm take a placement of part of an image at `z=1` with pixel
-offsets over another placement. Spec-0011 leaves it to a look in each.
+**Ghostty and WezTerm** take such a placement as kitty does: the owner looked, the same day, in
+kitty, Ghostty and WezTerm, outside tmux, at the labels over a PDF's page: drawn over the page at
+their links, narrowed as a letter is typed, gone with `Esc`. The labels then had no padding; it was
+asked for at that look, and added.
 
 ## Alternatives considered
 
@@ -109,6 +112,6 @@ offsets over another placement. Spec-0011 leaves it to a look in each.
   a later one on top. Inside tmux and in text cells the labels are characters, a cell each, since
   neither has placements at pixels.
 - **Follow-ups:** a mouse click on a link would test against the same rectangles.
-- **Revisit when:** Ghostty or WezTerm turn out not to draw such a placement as kitty does (the
-  labels as characters there, as inside tmux); or a web address opened without a confirmation
-  proves a mistake.
+- **Revisit when:** a terminal that speaks the protocol turns out not to draw such a placement as
+  kitty, Ghostty and WezTerm do (the labels as characters there, as inside tmux); or a web address
+  opened without a confirmation proves a mistake.

@@ -3800,8 +3800,15 @@ pub(crate) struct Letter {
     y: u32,
 }
 
-/// The letters of the links' labels placed since they were last taken off the screen, in order.
+/// The letters of the links' labels placed since they were last taken off the screen, in order:
+/// not the strips of padding at each label's ends, which are parts of the box after the fourteen
+/// letters' (12 pixels each, at the tests' cell).
 pub(crate) fn letters(text: &str) -> Vec<Letter> {
+    parts(text).into_iter().filter(|part| part.x < 14 * 12).collect()
+}
+
+/// Every part of the labels' image placed since the labels were last taken off the screen.
+fn parts(text: &str) -> Vec<Letter> {
     const HIDDEN: &str = "\x1b_Ga=d,d=i,q=2,i=";
     const PLACED_PART: &str = "\x1b_Ga=p,q=1,C=1,z=1,i=";
     let Some(from) = text.rfind(HIDDEN) else { return Vec::new() };
@@ -3824,9 +3831,9 @@ pub(crate) fn letters(text: &str) -> Vec<Letter> {
 }
 
 /// The images of the labels' letters sent so far: at the tests' cell of 10 × 20 pixels, fourteen
-/// boxes of 12 × 16, twice.
+/// boxes of 12 × 20 and one more without a letter, twice.
 fn sheets(text: &str) -> Vec<(u32, ::image::RgbImage)> {
-    pngs(text).into_iter().filter(|(_, image)| image.dimensions() == (168, 32)).collect()
+    pngs(text).into_iter().filter(|(_, image)| image.dimensions() == (180, 40)).collect()
 }
 
 /// Wait until the status line, since `from` bytes of output, has said `place` with nothing left to
@@ -3864,6 +3871,17 @@ fn links_are_labelled_from_one_image_and_a_label_typed_goes_to_its_place() {
     // Down the page, every link starting at the same place across it.
     assert!(placed.windows(2).all(|pair| pair[0].row < pair[1].row && pair[0].col == pair[1].col), "{placed:?}");
     assert!(placed[0].row > 1 && placed[13].row < 60 && placed[0].col > 1, "{placed:?}");
+    // Each between two strips of the box with no letter, the padding at its ends: the first at the
+    // link's own place, the letter two pixels on, the second twelve more.
+    let all = parts(&text);
+    assert_eq!(all.len(), 14 * 3);
+    for label in all.chunks(3) {
+        assert_eq!((label[0].x, label[0].y, label[2].x, label[2].y), (168, 0, 168, 0), "{label:?}");
+        assert!(
+            label[0].row == label[1].row && label[1].row == label[2].row && label[0].col <= label[1].col && label[1].col < label[2].col,
+            "{label:?}"
+        );
+    }
     assert!(last_bar(&text).contains(" f: type a label to follow its link · esc cancel "), "{}", last_bar(&text));
     // `s`, the first: to page 3, by `/XYZ`.
     let before = text.len();
@@ -3933,7 +3951,7 @@ fn links_on_two_pages_side_by_side_have_two_letters_and_typing_narrows_them() {
     view.press("s");
     view.wait_until("the labels narrowed", |t| t.len() > before && letters(t).len() == 28 && last_bar(t).contains("its link · s · esc cancel"));
     let narrowed = letters(&view.text());
-    assert!(narrowed.chunks(2).all(|label| label[0].y == 16 && label[0].x == 0 && label[1].y == 0), "the letter typed, greyed: {narrowed:?}");
+    assert!(narrowed.chunks(2).all(|label| label[0].y == 20 && label[0].x == 0 && label[1].y == 0), "the letter typed, greyed: {narrowed:?}");
     let before = view.text().len();
     view.press("\x7f");
     view.wait_until("the labels back", |t| t.len() > before && letters(t).len() == 30 && letters(t).iter().all(|letter| letter.y == 0));

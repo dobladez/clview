@@ -238,7 +238,8 @@ followed into.
 
 - 🟡 **Ghostty and WezTerm** — whether they place part of an image at `z=1` with pixel offsets over
   another placement as kitty does: watch it before task 2's drawing, and fall back to cells where
-  they don't.
+  they don't. **Answered 2026-11-15:** they do; the owner looked in all three, and no fallback is
+  needed ([ADR-0035](../adr/0035-link-labels-as-placements-of-one-image-of-letters.md)'s Evidence).
 - 🟡 **No confirmation for a web address** — chosen to try; revisit after use.
 
 ## Tasks
@@ -252,7 +253,7 @@ followed into.
   page, the caps, a malformed rectangle dropped) and `cargo test -j 2 --bin clv link::` (a `mailto`
   with `attach` and with it percent-encoded twice refused, hidden characters, 4 KiB, a FIFO and a
   device refused, a symbolic link to one too).
-- [ ] **`f` directly, a place, and `u`** — `hints.rs`, the image of letters and its placements, the
+- [x] **`f` directly, a place, and `u`** — `hints.rs`, the image of letters and its placements, the
   wait for the pages' answers, following a place in the document, the jumps through `u` and
   `Backspace` and through a relayout, `--pages`, `?`; ADR-0035, usage, architecture, the changelog.
   *Files:* `src/view/hints.rs`, `src/view/kitty.rs`, `src/view/pager.rs`, `tests/it/view_pager.rs`,
@@ -301,3 +302,5 @@ followed into.
   as places, a PDF's destinations through their page, what `F` copies, `--pages` and relayout, OSC
   52, when the labels show, tmux's placeholders after a label, five tasks (spec-update).
 - 2026-11-15 — Implementing ([notes](0011-follow-a-documents-links-impl-20261115_1751.md)).
+- 2026-11-15 — Task 2's manual check passed in kitty, Ghostty and WezTerm; the labels padded, as
+  the owner asked on seeing them (implementation).

@@ -478,8 +478,9 @@ Printing (`--no-pager`, or a single page) has no search.
 ## Following links
 
 In a file's pages, `f` labels every link on screen, as the Vimium browser extension does: a small
-yellow box of dark letters at the top left of each link, on every page shown side by side, and on
-a page taller than the window, on the part of it that shows. Type a label and its link is
+yellow box of dark letters, with a little of the yellow around them, its corner at the top left of
+its link, on every page shown side by side, and on a page taller than the window, on the part of
+it that shows. Type a label and its link is
 followed. The letters are Vimium's, the home row first (`sadfjklewcmpgh`), and every label is the
 same length, the shortest that gives each link its own: one letter for up to 14 links, two for up
 to 196, three past that. Each letter typed hides the labels it rules out and pales in the others,
