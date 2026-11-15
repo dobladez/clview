@@ -36,7 +36,6 @@ pub(super) enum Aim {
     /// `f`: the link chosen is followed.
     Follow,
     /// `F`: its address is copied.
-    #[cfg_attr(not(test), expect(dead_code, reason = "`F` comes with Spec-0011's last task"))]
     Copy,
 }
 

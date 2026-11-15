@@ -14,8 +14,13 @@ works today. A version's section becomes the notes of its
   Word document's cross-reference, Markdown's `[see](#usage)`, which finds `## Usage` by the id
   GitHub gives it, HTML's `#name`, which finds any element with that `id`. `u` or `Backspace` come
   back, through the last 100 links followed, before they go back
-  to the list. A link that would run a script or start a program is never followed, and says what
-  it is. The labels are drawn over the page, which is never rendered again for them: at their
+  to the list. A link to another file (`[guide](docs/guide.md#usage)`, a PDF's link to another
+  PDF) opens it in `clv`, at the place it names, and `u` comes back to the document; only a regular
+  file or a folder is opened. A web address (`http`, `https` and `mailto` only, checked for hidden
+  characters, and never a `mailto` that would attach a file) opens in your browser or mail app,
+  the status line naming it; over SSH it is copied to your clipboard instead. `F` labels the links
+  and copies the address of the one chosen. A link that would run a script or start a program is
+  never followed, and says what it is. The labels are drawn over the page, which is never rendered again for them: at their
   links' own places directly in kitty, Ghostty and WezTerm, and as capitals over the page's cells
   inside tmux and in text cells.
 - `o` opens the file you are reading in the app the desktop opens it with (`open` on macOS,

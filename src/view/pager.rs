@@ -36,8 +36,8 @@ use super::launch;
 use super::link;
 use crate::encode::{self, PngEffort};
 use crate::source::{
-    Anchor, Bounds, Container, Effect, Frame, Handle, Keys, Later, Link, Links, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source,
-    Target, Texts, Told, Value, Values,
+    Anchor, Ask, Bounds, Container, Effect, Frame, Handle, Keys, Later, Link, Links, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting,
+    Source, Target, Texts, Told, Value, Values,
 };
 
 use super::files::{Files, Written};
@@ -75,6 +75,11 @@ const NO_SEARCH: &str = "no search: / starts one";
 /// The most places the reader comes back to with `u`, the links followed last: an older one is
 /// forgotten.
 const MAX_JUMPS: usize = 100;
+/// How many files deep links are followed into, each a level of its own: past it, a link to
+/// another file says so.
+const MAX_DEPTH: usize = 16;
+/// The most characters of a link's address the status line names it by: its start and its end.
+const ADDRESS_SHOWN: usize = 60;
 /// What a relayout setting's keys say in a list, and while `--pages` picks the pages.
 const REFLOW_IN_LIST: &str = "open a document to reflow it";
 const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
@@ -136,7 +141,7 @@ const KEYS: [&str; 4] = [
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofgGbjknNphl +=-_,.r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofFgGbjknNphl +=-_,.r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -154,6 +159,7 @@ const PAGE_HELP: &[(&str, &str)] = &[
     ("/", "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
     ("n  N p  3n", "with a search: the next match, or with N or p the one before; 3n the third on"),
     ("f", "label the links on screen: type a label to follow its link, Esc drops the labels"),
+    ("F", "label them, and copy the address of the one whose label is typed"),
     ("u  Backspace", "back to where the last link followed was"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
@@ -177,7 +183,7 @@ const LIST_HELP: &[(&str, &str)] = &[
 /// The `, .` line on a document laid out for its room, where they are columns.
 const COLUMNS_HELP: (&str, &str) = (", .  3.", "one more column, or one fewer, down to one; 3. sets 3, 0. auto");
 /// Leaving, gone into from a list or not, and these keys themselves.
-const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list"), ("q  Ctrl-C", "quit")];
+const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list, or to the file a link led from"), ("q  Ctrl-C", "quit")];
 const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
 const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
 
@@ -264,6 +270,7 @@ pub(super) fn run(
         replaced: false,
         spots: Vec::new(),
         labels: None,
+        arriving: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -299,8 +306,8 @@ pub(super) fn run(
         } else if pager.level.nav.search.as_ref().is_some_and(Search::expecting) {
             // A search's text being read or matched, or a match's place asked for: taken between keys.
             POLL
-        } else if pager.level.nav.hints.as_ref().is_some_and(Hints::waiting) {
-            // The links of the pages on screen, asked for: taken between keys.
+        } else if pager.level.nav.hints.as_ref().is_some_and(Hints::waiting) || pager.level.seeking.is_some() {
+            // The links of the pages on screen, or the place a link named, asked for: taken between keys.
             POLL
         } else {
             TICK
@@ -338,6 +345,8 @@ pub(super) fn run(
                     continue;
                 }
                 redraw = true;
+                // A key says where the reader wants to be: the place a link named is no longer waited for.
+                pager.stop_seeking();
                 // Reading a container gone into: Esc (or the others that go back) stops it, and
                 // the keys that quit, quit. Nothing else moves meanwhile.
                 if pager.reading.is_some() || pager.going_into.is_some() {
@@ -374,7 +383,7 @@ pub(super) fn run(
                         pager.level.nav.start_search(texts);
                     }
                     Step::Hints(aim) => pager.start_hints(aim),
-                    Step::Follow => pager.follow(),
+                    Step::Follow => pager.follow(opener)?,
                     Step::Return => pager.jump_back(),
                 }
                 if quit {
@@ -929,9 +938,9 @@ impl Nav {
             Key::Char('o') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
             _ if self.list => return self.list_key(key),
             // A number typed before it is dropped.
-            Key::Char('f') => {
+            Key::Char(key @ ('f' | 'F')) => {
                 self.typed.clear();
-                return Step::Hints(Aim::Follow);
+                return Step::Hints(if key == 'f' { Aim::Follow } else { Aim::Copy });
             }
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
@@ -1793,6 +1802,11 @@ struct Level {
     /// the file: `None` until then (`linked`), and for a source with none.
     links: Option<Box<dyn Links>>,
     linked: bool,
+    /// The place a link into this file named (its `#fragment`), asked of the source and not yet
+    /// answered: gone to once it is.
+    seeking: Option<String>,
+    /// How many links to other files were followed to get here: at most [`MAX_DEPTH`].
+    depth: usize,
 }
 
 impl Level {
@@ -1811,7 +1825,7 @@ impl Level {
         let room = Room { per_row: nav.columns_in(&room), ..room };
         nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
         nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
-        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk, links: None, linked: false }
+        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk, links: None, linked: false, seeking: None, depth: 0 }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
@@ -1911,6 +1925,15 @@ struct Pager<'a> {
     spots: Vec<hints::Shown>,
     /// The links' labels as drawn, while they show ([`Pager::draw_labels`]).
     labels: Option<Labels>,
+    /// A link to another file being followed, until its level shows: where in that file it leads.
+    arriving: Option<Arrival>,
+}
+
+/// Where in the file a link leads into the reader arrives: at the place its `#fragment` names, or
+/// at a page; at its start with neither.
+struct Arrival {
+    fragment: Option<String>,
+    page: Option<usize>,
 }
 
 /// The links' labels on screen: what they were made for, and what the terminal holds of them.
@@ -2168,6 +2191,9 @@ impl Pager<'_> {
     /// ([`Hints::settle`]): whether the screen is to be drawn again. With no link to label, the
     /// status line says so.
     fn links_on(&mut self) -> bool {
+        if self.level.seeking.is_some() {
+            return self.seek_on();
+        }
         let Some(hints) = self.level.nav.hints.as_mut().filter(|hints| hints.waiting()) else { return false };
         let Some(links) = self.level.links.as_ref() else {
             self.level.nav.hints = None;
@@ -2286,15 +2312,186 @@ impl Pager<'_> {
         shown && fits
     }
 
-    /// The link whose label the reader typed, followed: to its place in the document, the reader's
-    /// place kept to come back to; or what it is, said, when it leads nowhere the pager goes.
-    fn follow(&mut self) {
-        let Some((link, _aim)) = self.level.nav.chosen.take() else { return };
+    /// The link whose label the reader typed, followed (`f`): to its place in the document, the
+    /// reader's place kept to come back to; into the file it names, a level of its own; to the
+    /// desktop's opener, for a web address; or what it is, said, when it leads nowhere the pager
+    /// goes. Or its address copied (`F`).
+    fn follow(&mut self, opener: &Opener<'_, '_>) -> Result<(), String> {
+        let Some((link, aim)) = self.level.nav.chosen.take() else { return Ok(()) };
+        if aim == Aim::Copy {
+            return self.copy_address(link);
+        }
         match link.target {
             Target::Place { page, y } => self.go_to_place(page, y),
             Target::Other(says) => self.level.nav.message = Some(says),
-            Target::File { .. } => self.level.nav.message = Some("a link to another file, which isn't followed yet".into()),
-            Target::Web(_) => self.level.nav.message = Some("a web address, which isn't followed yet".into()),
+            Target::File { path, fragment, page } => return self.follow_file(&path, Arrival { fragment, page }, opener),
+            Target::Web(address) => return self.follow_web(address),
+        }
+        Ok(())
+    }
+
+    /// `F`: the address of `link` copied to the clipboard, as the document writes it: a web
+    /// address, a file's path with its `#fragment`, a place's `#name`. A link the document gives no
+    /// address (a PDF's to a page) says where it goes instead, and one that is never followed what
+    /// it is; neither is copied.
+    fn copy_address(&mut self, link: Link) -> Result<(), String> {
+        let address = match (link.target, link.address) {
+            (Target::Other(says), _) => {
+                self.level.nav.message = Some(says);
+                return Ok(());
+            }
+            (_, Some(address)) | (Target::Web(address), None) => address,
+            (Target::Place { page, .. }, None) => {
+                self.level.nav.message = Some(format!("goes to page {}", page.saturating_add(1)));
+                return Ok(());
+            }
+            (Target::File { path, .. }, None) => path,
+        };
+        let mut out = Vec::new();
+        self.level.nav.message = Some(self.copier.start_text(cut(&address, ADDRESS_SHOWN), address, Instant::now(), &mut out));
+        self.write_copy(&out)
+    }
+
+    /// A web address a link leads to, checked ([`link::web`]) and handed to the desktop's opener,
+    /// the status line naming it; where no opener may be run here (over SSH, with no desktop), copied
+    /// to the clipboard instead. One that isn't `http`, `https` or `mailto`, or hides something, is
+    /// said, and goes nowhere.
+    fn follow_web(&mut self, address: String) -> Result<(), String> {
+        if let Err(why) = link::web(&address) {
+            self.level.nav.message = Some(why);
+            return Ok(());
+        }
+        let (now, shown) = (Instant::now(), cut(&address, ADDRESS_SHOWN));
+        match self.launches.start_address(&shown, &address, now) {
+            Ok(said) => self.level.nav.message = Some(said),
+            Err(why) => {
+                let mut out = Vec::new();
+                let said = self.copier.start_text(shown, address, now, &mut out);
+                self.level.nav.message = Some(format!("not opened ({why}): {said}"));
+                self.write_copy(&out)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A link to another file followed: the file its `path` leads to beside this document, checked
+    /// ([`link::local`]: a regular file or a directory, made real), opened as a level of its own, as
+    /// a list's tile is gone into, the reader arriving where `arrival` says. A document with no
+    /// file of its own (from stdin, in an archive) has nothing to look beside, and says so, as does a
+    /// path that leads to nothing `clv` opens, and a link past [`MAX_DEPTH`] files deep.
+    fn follow_file(&mut self, path: &str, arrival: Arrival, opener: &Opener<'_, '_>) -> Result<(), String> {
+        let shown = cut(path, ADDRESS_SHOWN);
+        let Ok(OnDisk { path: document, .. }) = &self.level.on_disk else {
+            self.level.nav.message = Some(format!("{shown}: not followed, as this document is no file on disk to look beside"));
+            return Ok(());
+        };
+        if self.level.depth >= MAX_DEPTH {
+            self.level.nav.message = Some(format!("{shown}: not followed, {MAX_DEPTH} files deep in links already; u goes back"));
+            return Ok(());
+        }
+        let item = match link::local(document, path).and_then(|local| opener.link(&local)) {
+            Ok(item) => item,
+            Err(why) => {
+                self.level.nav.message = Some(format!("{shown}: {why}"));
+                return Ok(());
+            }
+        };
+        self.arriving = Some(arrival);
+        match item {
+            Item::File(pages) => {
+                let level = Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true, self.settings.clone(), self.room);
+                self.enter(level);
+                self.arrive();
+            }
+            // Opened on the openers' threads, as a tile's is: waited for without the keys waiting.
+            Item::Later { name, later, on_disk } => {
+                self.going_into = Some(GoingInto { name, later, on_disk });
+                self.go_on_into()?;
+            }
+            Item::Container { name, container } => {
+                self.level.nav.message = Some(format!("opening {name}…"));
+                self.draw()?;
+                self.reading = Some(Reading { name, container, opening: None, since: Instant::now() });
+                self.read_on(opener)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The level a link led into has just shown: go where the link says in it. A page, at once, or
+    /// said not to be there; the place a `#fragment` names, asked of the file's links and gone to
+    /// when they answer ([`Pager::seek_on`]). A list has no such place.
+    fn arrive(&mut self) {
+        let Some(Arrival { fragment, page }) = self.arriving.take() else { return };
+        if self.level.nav.list {
+            return;
+        }
+        if let Some(page) = page {
+            match self.level.nav.pages.iter().position(|given| *given == page) {
+                Some(index) => self.level.nav.go(index),
+                None => self.level.nav.message = Some(format!("no page {} in {}", page.saturating_add(1), self.level.name)),
+            }
+        } else if let Some(name) = fragment {
+            self.level.links = self.level.source.links();
+            self.level.linked = true;
+            match &self.level.links {
+                Some(links) => {
+                    links.set_queue(vec![Ask::Name(name.clone())]);
+                    self.level.seeking = Some(name);
+                }
+                None => self.level.nav.message = Some(format!("no #{name} in this document")),
+            }
+        }
+    }
+
+    /// Take the source's answer about the place a link named, if it has come: the reader goes
+    /// there, the place a third of the way down the screen where the page scrolls; a name the
+    /// document hasn't is said. Whether the screen is to be drawn again.
+    fn seek_on(&mut self) -> bool {
+        // A document just opened is laid out again for the window: the place is where that layout
+        // puts it, which is asked when it shows ([`Pager::replace`]).
+        if self.relayout.is_under_way() {
+            return false;
+        }
+        let (Some(wanted), Some(links)) = (self.level.seeking.as_ref(), self.level.links.as_ref()) else {
+            self.level.seeking = None;
+            return false;
+        };
+        let mut found = None;
+        while let Some(told) = links.try_recv() {
+            if let Told::Name { name, at } = told
+                && name == *wanted
+            {
+                found = Some(at);
+                break;
+            }
+        }
+        let Some(at) = found else {
+            links.set_queue(vec![Ask::Name(wanted.clone())]);
+            return false;
+        };
+        links.set_queue(Vec::new());
+        let name = self.level.seeking.take().unwrap_or_default();
+        let nav = &mut self.level.nav;
+        let place = at.map(|at| at.and_then(|(page, y)| Some((nav.pages.iter().position(|given| *given == page)?, page, y))));
+        match place {
+            Ok(Some((index, page, y))) => {
+                let height = self.level.source.size(page).map_or(0.0, |(_, height)| height);
+                nav.go(index);
+                nav.land = (height > 0.0 && y.is_finite() && nav.first() == index).then(|| y / height);
+            }
+            Ok(None) => nav.message = Some(format!("no #{name} in this document")),
+            Err(why) => nav.message = Some(why),
+        }
+        true
+    }
+
+    /// The reader pressed a key: the place a link named is no longer waited for.
+    fn stop_seeking(&mut self) {
+        if self.level.seeking.take().is_some()
+            && let Some(links) = &self.level.links
+        {
+            links.set_queue(Vec::new());
         }
     }
 
@@ -2395,6 +2592,7 @@ impl Pager<'_> {
                     Ok(opening) => gone_into.opening.insert(opening),
                     Err(why) => {
                         let Some(Reading { name, .. }) = self.reading.take() else { return Ok(false) };
+                        self.arriving = None;
                         self.later.push(why.1);
                         self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
                         return Ok(true);
@@ -2415,6 +2613,7 @@ impl Pager<'_> {
         let Found { items, left_out, warnings, .. } = found;
         self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
         if items.is_empty() {
+            self.arriving = None;
             self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
             return Ok(true);
         }
@@ -2423,6 +2622,7 @@ impl Pager<'_> {
         level.nav.message = left_out_note(&left_out);
         level.from = Some(container);
         self.enter(level);
+        self.arrive();
         Ok(true)
     }
 
@@ -2441,8 +2641,12 @@ impl Pager<'_> {
                 let shown = Shown { pages: Pages::all(source, name, on_disk), items: Vec::new() };
                 let level = Level::new(self.levels, shown, Zoom::Auto, true, self.settings.clone(), self.room);
                 self.enter(level);
+                self.arrive();
             }
-            Err(why) => self.level.nav.message = Some(format!("{name}: {why}")),
+            Err(why) => {
+                self.arriving = None;
+                self.level.nav.message = Some(format!("{name}: {why}"));
+            }
         }
         Ok(true)
     }
@@ -2450,6 +2654,7 @@ impl Pager<'_> {
     /// Stop reading the container gone into, if one is: it lets go of what it read. Or waiting for a
     /// file to go into, which, begun, goes on opening for its tile.
     fn stop_reading(&mut self) {
+        self.arriving = None;
         if let Some(GoingInto { name, .. }) = self.going_into.take() {
             self.level.nav.message = Some(format!("stopped opening {name}"));
         }
@@ -2473,8 +2678,10 @@ impl Pager<'_> {
     }
 
     /// Show `level`, opened from this one, which waits to be gone back to.
-    fn enter(&mut self, level: Level) {
+    fn enter(&mut self, mut level: Level) {
         self.levels = self.levels.wrapping_add(1);
+        // One deeper, for a level a link led into ([`Pager::arrive`] takes where it leads).
+        level.depth = self.level.depth.saturating_add(usize::from(self.arriving.is_some()));
         // A fresh pool, holding nothing: the old one lets go of what its files rendered with,
         // which for a PDF is the document parsed again.
         self.level.pool = self.level.source.pool(THREADS);
@@ -2663,6 +2870,17 @@ impl Pager<'_> {
         level.nav.message.clone_from(&self.level.nav.message);
         // The places to come back to are the file's, whatever its layout: each by its paragraph.
         level.nav.jumps = std::mem::take(&mut self.level.nav.jumps);
+        // As deep in links as it was; and the place a link into it named, if it is still waited
+        // for, is asked of the new layout.
+        level.depth = self.level.depth;
+        level.seeking = self.level.seeking.take();
+        if let Some(name) = &level.seeking {
+            level.links = level.source.links();
+            level.linked = true;
+            if let Some(links) = &level.links {
+                links.set_queue(vec![Ask::Name(name.clone())]);
+            }
+        }
         // The search goes on in the new layout, on its text, the old one's let go of with it.
         if let Some((search, follow)) = search {
             let texts = level.source.texts();
@@ -4452,7 +4670,7 @@ mod tests {
         assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
         // Without the pages to a row where there isn't room for them.
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[1])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list".into())));
+        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list, or to the file a link led from".into())));
         assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit".into())));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
@@ -4527,7 +4745,10 @@ mod tests {
         let mut nav = reader(1, 12, 20, 40);
         assert_eq!(press(&mut nav, &[Key::Char('7'), Key::Char('f')]), Step::Hints(Aim::Follow));
         assert_eq!(nav.typed, "");
+        assert_eq!(press(&mut nav, &[Key::Char('3'), Key::Char('F')]), Step::Hints(Aim::Copy));
+        assert_eq!(nav.typed, "");
         assert_eq!(press(&mut tiles(10, 3, 2), &[Key::Char('f')]), Step::Continue, "in a list");
+        assert_eq!(press(&mut tiles(10, 3, 2), &[Key::Char('F')]), Step::Continue, "in a list");
         for key in [Key::Escape, Key::Char(' '), Key::Char('s'), Key::Char('q'), Key::Backspace, Key::Enter, Key::Char('u')] {
             let mut nav = reader(1, 12, 20, 40);
             nav.hints = Some(Hints::new(Aim::Follow, &[1], Instant::now()));
@@ -4547,6 +4768,17 @@ mod tests {
         let links = || (0..15).map(|n| link(1, [0.0, 10.0 * n as f32, 10.0, 10.0 * n as f32 + 5.0], n)).collect::<Vec<_>>();
         let mut nav = labelled(reader(1, 12, 20, 40), links());
         assert!(squeezed(&nav.status("a.pdf", 140, false)).contains(" f: type a label to follow its link · esc cancel "));
+        // `F` shows the same labels, and what is chosen is to be copied.
+        let mut copying = labelled(reader(1, 12, 20, 40), links());
+        copying.hints = copying.hints.take().map(|_| {
+            let mut hints = Hints::new(Aim::Copy, &[1], Instant::now());
+            hints.told(1, Ok(links()), 0);
+            hints.settle(&[hints::Shown { page: 1, left: 0, top: 0, cols: 50, rows: 20, scroll: 0, of: 20, size: (100.0, 200.0) }], (10.0, 20.0));
+            hints
+        });
+        assert!(squeezed(&copying.status("a.pdf", 140, false)).contains(" F: type a label to copy its link's address · esc cancel "));
+        assert_eq!(press(&mut copying, &[Key::Char('a')]), Step::Follow);
+        assert_eq!(copying.chosen.take().map(|(_, aim)| aim), Some(Aim::Copy));
         // `s` is a label's first letter here, not a setting's key, and `j` its second, not a move.
         assert_eq!(press(&mut nav, &[Key::Char('s')]), Step::Continue);
         assert!(squeezed(&nav.status("a.pdf", 140, false)).contains(" f: type a label to follow its link · s · esc cancel "));

@@ -8,6 +8,11 @@
 //! doesn't reach it and an app for the terminal can't take `clv`'s. A thread waits for it as long as it runs, so it is never left a zombie; the
 //! status line says how it went, or past [`SAID_WAIT`] that it was handed over.
 //!
+//! A web address a link leads to goes the same way ([`Launches::start_address`]): the same
+//! opener, the address its single argument, once the viewer has checked it is one. Where no opener
+//! may be run (over SSH, with no desktop, with none installed), it says so, for the address to be
+//! copied instead.
+//!
 //! Each opener is a [`Launcher`] in [`LAUNCHERS`], tried in order as the backends are: another
 //! desktop or platform is another entry. Named so beside `Opener`, which opens a list's files.
 
@@ -170,6 +175,16 @@ fn failed(program: &str, status: ExitStatus) -> String {
     }
 }
 
+/// Why no opener is run here.
+enum Refused {
+    /// The terminal is on another machine: an app opened here isn't on the reader's screen.
+    Elsewhere,
+    /// No launcher applies: no desktop session to open an app in.
+    NoDesktop,
+    /// The launcher's program can't be had, and why.
+    NoOpener(String),
+}
+
 /// A launch under way: its opener started, waited for on a thread of its own.
 struct Launch {
     /// What the status line calls it: `report.pdf`.
@@ -208,20 +223,43 @@ impl Launches {
     /// `path`, with the first launcher that applies here: its opener started, not waited for. What
     /// the status line says.
     pub(crate) fn start(&mut self, what: &str, path: &Path, folder: bool, now: Instant) -> String {
+        match self.started(what, path, folder, now) {
+            Ok(said) => said,
+            Err(Refused::Elsewhere) => format!("{what} isn't opened: over SSH, its app would open on the machine clv runs on, not yours"),
+            Err(Refused::NoDesktop) => format!("{what} isn't opened: there is no desktop here to open it in"),
+            Err(Refused::NoOpener(why)) => format!("{what} isn't opened: {why}"),
+        }
+    }
+
+    /// Open the web address `address`, which the viewer has checked is one (`http`, `https` or
+    /// `mailto`, so never taken for an option), called `what` on the status line, in the app the
+    /// desktop opens it with: the same openers, the address their single argument. What the status
+    /// line says; or, where no opener may be run here, why not, in a few words, for the address to
+    /// be copied instead: over SSH, with no desktop, or with no opener to run.
+    pub(crate) fn start_address(&mut self, what: &str, address: &str, now: Instant) -> Result<String, String> {
+        self.started(what, Path::new(address), false, now).map_err(|refused| match refused {
+            Refused::Elsewhere => "over SSH".to_owned(),
+            Refused::NoDesktop => "no desktop here".to_owned(),
+            Refused::NoOpener(why) => why,
+        })
+    }
+
+    /// [`Launches::start`], or why no opener is run here.
+    fn started(&mut self, what: &str, path: &Path, folder: bool, now: Instant) -> Result<String, Refused> {
         if !self.local {
-            return format!("{what} isn't opened: over SSH, its app would open on the machine clv runs on, not yours");
+            return Err(Refused::Elsewhere);
         }
         if self.under_way.len() >= MAX_UNDER_WAY
             && let Some(launch) = self.under_way.first()
         {
-            return format!("{} is still being opened: o waits for it", launch.what);
+            return Ok(format!("{} is still being opened: o waits for it", launch.what));
         }
         let Some(launcher) = self.launchers.iter().copied().find(|launcher| launcher.applies(&self.here)) else {
-            return format!("{what} isn't opened: there is no desktop here to open it in");
+            return Err(Refused::NoDesktop);
         };
         let mut command = match launcher.command(path, folder, &self.here) {
             Ok(command) => command,
-            Err(why) => return format!("{what} isn't opened: {why}"),
+            Err(why) => return Err(Refused::NoOpener(why)),
         };
         command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         // The thread first, so that an opener started always has one to wait for it.
@@ -233,22 +271,22 @@ impl Launches {
             }
         });
         if let Err(e) = thread {
-            return format!("{what} isn't opened: {e}");
+            return Ok(format!("{what} isn't opened: {e}"));
         }
         let child = match command.spawn() {
             Ok(child) => child,
             // Its thread ends, with nothing sent to it.
-            Err(e) => return format!("{what} isn't opened: {} didn't start ({e})", launcher.name()),
+            Err(e) => return Ok(format!("{what} isn't opened: {} didn't start ({e})", launcher.name())),
         };
         let pid = child.id();
         // The thread waits for it, and never ends before it has it. Should it be gone all the
         // same, the opener is reaped here if it has ended, and let go of otherwise.
         if let Err(mut back) = give.send(child) {
             let _ = back.0.try_wait();
-            return format!("{what}: handed to {}, which can't be waited for", launcher.name());
+            return Ok(format!("{what}: handed to {}, which can't be waited for", launcher.name()));
         }
         self.under_way.push(Launch { what: what.to_owned(), launcher, since: now, said: false, pid, ended });
-        format!("opening {what}…")
+        Ok(format!("opening {what}…"))
     }
 
     /// What became of the launches, at `now`: one ended (opened, or why not), or one handed over
@@ -495,6 +533,39 @@ mod tests {
         let mut no_program = Launches::with(true, here, LAUNCHERS);
         assert_eq!(no_program.start("a.pdf", Path::new("/a.pdf"), false, now), "a.pdf isn't opened: there is no xdg-open to open it with");
         assert!(nowhere.under_way.is_empty() && no_program.under_way.is_empty());
+    }
+
+    /// A web address goes to the same openers, as their single argument, whatever is in it, and is
+    /// said opened as a file is; where no opener may be run (over SSH, with no desktop, with none
+    /// installed) nothing is started, and why comes back in a few words, for it to be copied instead.
+    #[test]
+    fn a_web_address_is_launched_as_one_argument_or_refused_with_why() {
+        let now = Instant::now();
+        let address = "https://example.com/a b?c=$(touch /tmp/x)&d='e';f";
+        // The fake opener notes what it is run with: its one argument, as it is.
+        let noted = std::env::temp_dir().join(format!("clview-launch-address-{}", std::process::id()));
+        let _ = std::fs::remove_file(&noted);
+        let script: &'static str = Box::leak(format!("printf '%s\\n' \"$#\" \"$1\" > '{}'", noted.display()).into_boxed_str());
+        let fake: &'static &'static dyn Launcher = Box::leak(Box::new(Box::leak(Box::new(Fake(script))) as &'static dyn Launcher));
+        let mut opened = launches(fake, true);
+        assert_eq!(opened.start_address("example.com", address, now), Ok("opening example.com…".into()));
+        assert_eq!(news(&mut opened, now), "opened example.com");
+        assert_eq!(std::fs::read_to_string(&noted).unwrap(), format!("1\n{address}\n"));
+        std::fs::remove_file(&noted).unwrap();
+        // The real ones: `open` takes it as it takes a path, and `xdg-open` after `setsid`.
+        let here = |os| Here { os, display: true, path: path(&[&bin("address", &[("open", "true"), ("xdg-open", "true"), ("setsid", "true")])]) };
+        let open = Open.command(Path::new("mailto:a@example.com"), false, &here("macos")).unwrap();
+        assert_eq!(argv(&open).get(1..), Some(&["mailto:a@example.com".to_owned()][..]));
+        let xdg = XdgOpen.command(Path::new("https://example.com/"), false, &here("linux")).unwrap();
+        assert_eq!(argv(&xdg).last().map(String::as_str), Some("https://example.com/"));
+        // Refused, with why, and nothing started.
+        let mut remote = launches(&TRUE, false);
+        assert_eq!(remote.start_address("example.com", address, now), Err("over SSH".into()));
+        let mut nowhere = Launches::with(true, Here { os: "linux", display: false, path: None }, LAUNCHERS);
+        assert_eq!(nowhere.start_address("example.com", address, now), Err("no desktop here".into()));
+        let mut no_program = Launches::with(true, Here { os: "macos", display: false, path: None }, LAUNCHERS);
+        assert_eq!(no_program.start_address("example.com", address, now), Err("there is no open to open it with".into()));
+        assert!(remote.under_way.is_empty() && nowhere.under_way.is_empty() && no_program.under_way.is_empty());
     }
 
     /// Past five seconds the status line says the file was handed over; the thread waits on, and

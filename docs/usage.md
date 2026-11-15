@@ -102,6 +102,7 @@ In a file's pages:
 | `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto`. On a Markdown or HTML file, columns: the document laid out again on that many pages to a row ([Documents](#a-page-the-windows-size)) |
 | `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
 | `f` | label the links on screen; type a label to follow its link ([Following links](#following-links)) |
+| `F` | label them, and copy the address of the link whose label you type |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
@@ -110,7 +111,7 @@ In a file's pages:
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace`, `u` | clear the search, if one is kept; then `Backspace` and `u` go back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one |
+| `Esc`, `Backspace`, `u` | clear the search, if one is kept; then `Backspace` and `u` go back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
 | `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
 
 A Markdown or HTML page is as tall as the window ([Documents](#documents)), so it has nothing to
@@ -513,9 +514,43 @@ document doesn't have says so too (`no #usage in this document`). A Markdown or 
 laid out again (`]`, the window resized) keeps the places to go back to: each is the paragraph you
 were at, found again in the new pages.
 
+**Another file** (`[the guide](docs/guide.md)`, `../README.md#install`, a PDF's link to another
+PDF) opens in `clv`, as a level of its own, the way a list's tile is gone into: `u`, `Backspace`
+and `Esc` come back to the document, where you left it. Its path is looked for beside the
+document, made real (every symbolic link followed), and opened only if it is a regular file or a
+directory, a directory as a list: a pipe, a socket or a device is refused before anything opens
+it, as is a path that leads nowhere, or to `/dev` or `/proc`. Then the place the link names is
+gone to: its `#fragment`, or for a PDF's link the destination or the page it names, and a name the
+file doesn't have is said. Links are followed into files 16 deep at the most, two files that link
+to each other counting each time; past that the status line says so. A document that is no file
+on disk (through a pipe, in an archive) has nothing to look beside, and says so; its links to
+places in itself still work.
+
+**A web address** goes to your browser, or your mail app, through the desktop's opener, the one
+`o` uses ([Opening in another app](#opening-in-another-app)), as a single argument and never
+through a shell. The status line says `opening https://…`, then `opened https://…`, or why not;
+nothing asks you to confirm it. Only `http`, `https` and `mailto` addresses are opened, of at most
+4 KiB, with no space, no control character, no bidirectional mark and no other character that
+doesn't show; and never a `mailto` whose parameters name a file for the mail app to read
+(`attach`, `attachment`, `insert`), as written or under up to eight layers of percent-encoding.
+Any other is said by its kind (`a file: link, which isn't followed`). Where no app can be opened
+for you (over SSH, with no desktop session, with no opener installed), the address is copied to
+the clipboard instead, and the status line says so.
+
 **Anything else** a link may do isn't done, and the status line says what it was: a script, a
-program to start, layers shown or hidden. A link to another file, and a web address, say that
-they aren't followed yet.
+program to start, layers shown or hidden.
+
+**`F`** labels the same links, and copies the address of the one whose label you type, instead of
+following it: a web address as it is, a file's path as the document writes it, with its
+`#fragment`, a place in the document as its `#name`. A link with no address of its own (a PDF's
+link to a page) says where it goes instead (`goes to page 12`), and one that is never followed
+says what it is; neither is copied. The address goes to the terminal's clipboard where it has one
+for programs to write (kitty's clipboard protocol, as [a page copied](#copying-a-page) does),
+which says when it has it; otherwise to this machine's clipboard, when the terminal runs on this
+machine; and over SSH through OSC 52, the escape code most terminals take text for their clipboard
+by, which nothing answers: the status line says it was sent, and names the address, since it can't
+say whether the terminal took it. Inside tmux it goes through passthrough, as the pages do; in
+text cells inside tmux, tmux takes it only with its `set-clipboard` on.
 
 Which files have links:
 
@@ -1025,6 +1060,8 @@ machine. A small PNG takes longer to make and a fast one takes more bytes; the p
 either way. The same guess says whether `c` may use this machine's clipboard
 ([Copying a page](#copying-a-page)) and whether `o` opens a file in an app here: over SSH it
 doesn't, since the app would open on the far machine ([Opening in another app](#opening-in-another-app)).
+A web address a link leads to isn't opened over SSH either: it is copied to your clipboard instead
+([Following links](#following-links)).
 
 ## Inside tmux
 
@@ -1122,6 +1159,8 @@ limit, it does as the last column says. How large a page is drawn is under
 | The links labelled at once | 1,000, in reading order | the rest have no label, and the status line says how many |
 | The wait for the links of the pages on screen | 2 s | a page that hasn't answered has no labels, and the status line names it |
 | The places `u` goes back to | the last 100 links followed in a file | an older one is forgotten |
+| Files followed into through links, each from the one before | 16 | the next link to a file isn't followed, and the status line says so; `u` goes back |
+| A web address followed, or an address copied | 4 KiB | not followed, saying so; not copied |
 
 ## Known issues
 

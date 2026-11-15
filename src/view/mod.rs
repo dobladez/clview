@@ -1072,6 +1072,28 @@ impl<'o, 'a> Opener<'o, 'a> {
         }
     }
 
+    /// What a link leads to, the file or the directory at `path`, real and checked
+    /// ([`link::local`]), as a list's tile would be: a directory as a folder to list, a file with the
+    /// first backend that opens it, to its pages or, for a file that holds files, to a container;
+    /// one whose backend defers opening it, when it is gone into, on the openers' threads, as a
+    /// tile's file is. Or why it can't be shown.
+    fn link(&self, local: &link::Local) -> Result<Item, String> {
+        let (path, directory) = match local {
+            link::Local::File(path) => (path, false),
+            link::Local::Directory(path) => (path, true),
+        };
+        let path = path.to_str().ok_or("its path isn't UTF-8")?;
+        let name = file_name(path);
+        if directory {
+            return Ok(Item::Container { name: format!("{name}/"), container: Rc::new(Directory::new(path)) });
+        }
+        let chosen = crate::source::choose(path, self.backends)?;
+        match self.file(Some(chosen), &name, true)? {
+            Some((_, item)) => Ok(item),
+            None => Err(format!("{path}: not a file {} shows", crate::NAME)),
+        }
+    }
+
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
     /// its pages, or for a file that holds files, to a container of them; or if `defer` and the
     /// backend says what it costs is better spent later, not opened until its tile is wanted. A file

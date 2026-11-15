@@ -43,6 +43,12 @@ to the desktop's opener, and a path opens a file.
    ([ADR-0014](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)).
 5. **A web address opens with no key to confirm it:** the status line names it as it goes
    (`opening https://…`). Chosen to try; the label typed is the reader's choice of that link.
+6. **An address is copied to the clipboard that can say it took it.** Through kitty's clipboard
+   protocol (OSC 5522, as `text/plain`) where the terminal speaks it; otherwise to the system's
+   clipboard when the terminal runs on this machine; and through OSC 52 over SSH, or where the
+   system's clipboard can't be had. OSC 52 is never answered, so it is the last resort, said as
+   sent and not as copied, with the address on the status line. On this machine the system's
+   clipboard and the one a terminal sets through OSC 52 are the same one.
 
 ## Evidence
 
@@ -90,6 +96,10 @@ offsets over another placement. Spec-0011 leaves it to a look in each.
 - **pdfcraft's own checks for a link's target** (`pdfcraft_engine::links`): they are a PDF
   backend's, and Markdown's links go through the same door.
 - **A key to confirm a web address:** Vimium asks none. Revisit after use.
+- **OSC 52 before the system's clipboard**, as Spec-0011 lists them: on this machine both reach
+  the same clipboard, and only the system's says whether the text got there; a terminal that
+  ignores OSC 52 (macOS's Terminal, a tmux with `set-clipboard` off and no passthrough) would
+  leave the reader told it was sent, with nothing copied.
 
 ## Consequences
 

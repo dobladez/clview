@@ -204,3 +204,64 @@ surprises, and what a later reader would want.
   - `Noted::links` giving none: `links_of_a_workbook_are_those_of_the_pdf_it_prints_to`;
   - the jumps not handed to the new level (`Pager::replace`):
     `view_pager::links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again`.
+
+## Task 5: other files, the web, and `F`
+
+- **A file followed into is opened as a list's tile is**: `Opener::link` gives an `Item` (deferred
+  on the openers' threads where the backend defers), and `Pager::follow_file` goes into it as
+  `Pager::open` goes into a tile, so a large PDF opens without the keys waiting, and a document
+  is laid out for a preview and then again for the window, as one gone into from a list is. Where
+  the link leads waits in `Pager::arriving` until the level shows.
+- **A `#fragment` is asked of the new file's links and waited for** (`Level::seeking`), with no
+  time limit: it is answered when the file's layout is there, which is when its page shows. Any
+  key stops the wait. Since a document opened this way is laid out again at once, the wait is
+  handed to the new level (`Pager::replace`) and not answered from the layout about to go.
+- **Labels asked for while a just-opened document is laid out again are dropped** when the new
+  layout shows, as the spec has a relayout drop them: `f` pressed in that tenth of a second has to
+  be pressed again. The tests wait for the layout to settle (`settled`).
+- **The depth** is the level's (`Level::depth`), one more for each level a link led into, kept
+  through a relayout; a list reached through a link to a folder, and its tiles, count as that
+  deep.
+- **The clipboard's order for text**: OSC 5522, then the system's clipboard on this machine, then
+  OSC 52 (over SSH, or where the system's fails). The spec lists OSC 52 before the system's
+  clipboard; but nothing answers OSC 52, so there is no telling when to fall through from it, and
+  on this machine both are the same clipboard, of which only the system's says it took the text
+  (ADR-0035, decision 6). Over SSH the outcome is the spec's. **For the owner to confirm.**
+- **Where `o`'s launchers refuse, the address is copied**: over SSH, with no desktop session, and
+  also where the opener's program isn't on `PATH`. With four launches under way, it says to wait,
+  as `o` does.
+- **The status line names an address by its first and last characters** when it is longer than 60
+  (`ADDRESS_SHOWN`); the whole of it is what is launched or copied.
+- **`F` on a link with an address but never followed** (`[gone](#nowhere)`) says what it is and
+  copies nothing, as the spec has `Other`.
+- **Markdown never gives a link of another scheme** (`ftp:`): wordcraft's importer keeps `http`,
+  `https`, `mailto` and paths, and drops the rest, `javascript:` among them. `link::web`'s refusal
+  by kind is reached from a PDF's URI, and tested on its own.
+- **Messages shortened** after seeing them cut in a 100-column window: `… : not followed, as this
+  document is no file on disk to look beside`, `…: not followed, 16 files deep in links already; u
+  goes back`.
+- **`fixtures::linked`** names a second destination, `intro`, so that a copy of it called
+  `other.pdf` is what its own `/GoToR` links lead to.
+- **Found, outside this spec:** in the pager, a Markdown, HTML or Word document given as
+  `/dev/stdin` redirected from a regular file (`clv /dev/stdin < page.html`) is read again for its
+  first render through `/dev/stdin`, which on macOS shares the offset of the descriptor already
+  read to its end: the render thread reads 0 bytes and lays out an empty document (seen: `laid: 0
+  bytes on thread "render"`). Through a pipe the bytes are kept, and it works. Not touched here;
+  reported to the owner. The test for a document with no file of its own goes through a pipe.
+- **Seen failing**, the fixes reverted in copies (`cp` aside, `cmp` after), in three rounds:
+  - `Launches` not refusing over SSH: `a_web_address_is_launched_as_one_argument_or_refused_with_why`;
+    text written as `image/png`: `clip_text_goes_through_the_protocol_as_text_plain`; `osc52`
+    writing nothing: `clip_text_over_ssh_without_the_protocol_goes_through_osc_52` and
+    `view_pager::links_to_the_web_over_ssh_…`; a web address launched unchecked:
+    `view_pager::links_to_the_web_go_to_the_desktops_opener_…` (the `mailto` with `attach` was
+    launched); an `Other` with an address copied: `view_pager::links_addresses_are_copied_…`; no
+    cap on the depth: `view_pager::links_into_files_go_sixteen_levels_deep_…`; a document with no
+    file looking beside the working directory: `view_pager::links_to_other_files_from_stdin_…`;
+  - `Pager::arrive` going nowhere: `view_pager::links_to_other_files_open_them_as_levels_…`,
+    `view_pager::links_from_a_pdf_to_another_pdf_…`; `F` no key:
+    `hints_f_asks_for_the_labels_…`, `view_pager::links_addresses_are_copied_…`;
+  - the wait for a fragment not handed to the new layout:
+    `view_pager::links_to_other_files_open_them_as_levels_…`.
+- **The box stays open** at this commit: its commands pass, and its manual check (in kitty on macOS,
+  `f` on a Markdown file's web link opens the browser; over `ssh localhost`, copied) is the
+  owner's.

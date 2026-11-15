@@ -8,6 +8,11 @@
 //! goes to the system's clipboard instead when the terminal runs on this machine; over SSH there
 //! is no way to the reader's.
 //!
+//! Text is copied too, a link's address (the pager's `F`): through the same protocol as
+//! `text/plain` where the terminal speaks it; otherwise to the system's clipboard when the
+//! terminal runs on this machine, which says whether it took it; and over SSH, or where that
+//! failed, through OSC 52, xterm's, which carries text and which nothing answers.
+//!
 //! The pager never waits for a copy: the page renders on the level's pool beside the pages, its
 //! PNG is made on a thread of its own, and it goes to the terminal a round of packets at a time,
 //! the keys read in between ([`Copier::on`]).
@@ -50,8 +55,11 @@ pub(crate) const ANSWER_WAIT: Duration = Duration::from_secs(1);
 const RELEASE_WAIT: Duration = Duration::from_millis(500);
 /// How often a copy is looked at while it waits on a thread or an answer.
 const POLL: Duration = Duration::from_millis(10);
-/// The type a picture is copied as.
+/// The type a picture is copied as, and text.
 const PNG_TYPE: &str = "image/png";
+const TEXT_TYPE: &str = "text/plain";
+/// The most text copied, in bytes: a link's address is at most this long.
+pub(crate) const MAX_TEXT: usize = 4 << 10;
 
 /// The scale page `size` is copied at: its own pixels for a picture, [`SCALE`] otherwise, within
 /// [`MAX_PIXELS`] a side and [`MAX_AREA`] in all.
@@ -88,11 +96,22 @@ fn packet(out: &mut Vec<u8>, metadata: &str, data: &[u8], wrap: Wrap) {
     kitty::pass(out, &code, wrap);
 }
 
-/// A PNG on its way to the terminal's clipboard as `image/png`: a packet to start, a packet for
-/// each [`CHUNK`] of it, and a packet to end, a round of them at a time. The terminal answers the
-/// end, or an error at any time, under the write's `id` ([`Key::Copied`]).
+/// OSC 52, xterm's way to the clipboard, for `text`: `OSC 52 ; c ; base64 ST`. Nothing answers
+/// it: a terminal that takes it sets its clipboard, and one that doesn't drops it.
+fn osc52(out: &mut Vec<u8>, text: &str, wrap: Wrap) {
+    let mut code = b"\x1b]52;c;".to_vec();
+    code.extend_from_slice(base64::engine::general_purpose::STANDARD.encode(text).as_bytes());
+    code.extend_from_slice(b"\x1b\\");
+    kitty::pass(out, &code, wrap);
+}
+
+/// A PNG on its way to the terminal's clipboard as `image/png`, or text as `text/plain`: a packet
+/// to start, a packet for each [`CHUNK`] of it, and a packet to end, a round of them at a time. The
+/// terminal answers the end, or an error at any time, under the write's `id` ([`Key::Copied`]).
 pub(crate) struct Write {
     png: Vec<u8>,
+    /// The type it is written as.
+    mime: &'static str,
     id: u32,
     wrap: Wrap,
     /// The chunks written so far.
@@ -103,7 +122,12 @@ pub(crate) struct Write {
 
 impl Write {
     pub(crate) fn new(png: Vec<u8>, id: u32, wrap: Wrap) -> Self {
-        Self { png, id, wrap, sent: 0, begun: false, ended: false }
+        Self { png, mime: PNG_TYPE, id, wrap, sent: 0, begun: false, ended: false }
+    }
+
+    /// `text` on its way there, as `text/plain`.
+    pub(crate) fn text(text: String, id: u32, wrap: Wrap) -> Self {
+        Self { png: text.into_bytes(), mime: TEXT_TYPE, id, wrap, sent: 0, begun: false, ended: false }
     }
 
     /// The next packets into `out`, as many as `bytes` of escape codes take and at least one: the
@@ -117,7 +141,7 @@ impl Write {
             packet(out, &format!("type=write:{id}"), b"", self.wrap);
             self.begun = true;
         }
-        let mime = base64::engine::general_purpose::STANDARD.encode(PNG_TYPE);
+        let mime = base64::engine::general_purpose::STANDARD.encode(self.mime);
         let mut chunks = self.png.chunks(CHUNK).skip(self.sent);
         while out.len().saturating_sub(from) < bytes {
             let Some(chunk) = chunks.next() else {
@@ -168,6 +192,8 @@ struct Copying {
     what: String,
     /// The level whose pool renders it.
     level: u64,
+    /// Whether it is text, which has no size to say.
+    text: bool,
     /// A picture's own size, when it is copied smaller than that.
     smaller: Option<(u32, u32)>,
     /// Its size in pixels, once rendered.
@@ -189,6 +215,10 @@ enum Stage {
     Sent { id: u32, since: Instant, said: bool },
     /// With the system's clipboard, on its thread.
     System(Receiver<Result<(), String>>),
+    /// Text, the terminal's answer about the protocol still to come.
+    Text(String),
+    /// Text with the system's clipboard, on its thread: kept, to go through OSC 52 if that fails.
+    SystemText(Receiver<Result<(), String>>, String),
 }
 
 /// What [`Copier::advance`] made of a copy.
@@ -246,7 +276,29 @@ impl Copier {
         let said = format!("copying {what}…");
         // The pager puts the page on the paper it is shown on, when it queues this.
         let stage = Stage::Rendering(Request { page, scale, tag, ..Default::default() });
-        self.copy = Some(Copying { what, level, smaller, size: (0, 0), stage });
+        self.copy = Some(Copying { what, level, text: false, smaller, size: (0, 0), stage });
+        said
+    }
+
+    /// Start copying `text`, called `what` on the status line, unless a copy is under way or it
+    /// is more than [`MAX_TEXT`]. The first time, the question about the clipboard protocol goes
+    /// into `out`. What the status line says.
+    pub(crate) fn start_text(&mut self, what: String, text: String, now: Instant, out: &mut Vec<u8>) -> String {
+        if let Some(copy) = &self.copy
+            && !matches!(copy.stage, Stage::Sent { said: true, .. })
+        {
+            return format!("still copying {}", copy.what);
+        }
+        if text.len() > MAX_TEXT {
+            return format!("can't copy {what}: it is more than {} KiB", MAX_TEXT >> 10);
+        }
+        if self.support == Support::Unknown {
+            ask(out, self.wrap);
+            self.support = Support::Asked(now);
+        }
+        let said = format!("copying {what}…");
+        // No level's pool renders it: none left stops it.
+        self.copy = Some(Copying { what, level: u64::MAX, text: true, smaller: None, size: (0, 0), stage: Stage::Text(text) });
         said
     }
 
@@ -280,7 +332,8 @@ impl Copier {
     /// tmux threw output away: a write under way, or one just sent, may have lost packets.
     pub(crate) fn lost(&mut self) -> Option<String> {
         let copy = self.copy.take_if(|copy| matches!(copy.stage, Stage::Sending(_) | Stage::Sent { said: false, .. }))?;
-        Some(format!("tmux dropped part of the copy of {}; c copies it again", copy.what))
+        let key = if copy.text { 'F' } else { 'c' };
+        Some(format!("tmux dropped part of the copy of {}; {key} copies it again", copy.what))
     }
 
     /// The terminal's answer about the clipboard: whether it speaks the protocol, or how a write
@@ -349,7 +402,7 @@ impl Copier {
                         Ok(encoding) => Stage::Encoding(encoding),
                         Err(e) => return Next::Done(format!("can't copy {}: {e}", copy.what)),
                     },
-                    Way::System => match self.system(frame) {
+                    Way::System => match self.system(Job::Picture(Box::new(frame))) {
                         Ok(done) => Stage::System(done),
                         Err(e) => return Next::Done(format!("can't copy {}: {e}", copy.what)),
                     },
@@ -388,14 +441,51 @@ impl Copier {
                 Ok(Err(e)) => return Next::Done(format!("can't copy {}: {e}", copy.what)),
                 Ok(Ok(())) => return Next::Done(copied(&copy)),
             },
+            Stage::Text(text) => {
+                let speaks = match self.support {
+                    Support::Known(speaks) => speaks,
+                    Support::Asked(at) if now.saturating_duration_since(at) < ASK_WAIT => {
+                        copy.stage = Stage::Text(text);
+                        return Next::Wait(copy);
+                    }
+                    Support::Asked(_) | Support::Unknown => {
+                        self.support = Support::Known(false);
+                        false
+                    }
+                };
+                match way(speaks, self.local) {
+                    Way::Terminal => {
+                        self.writes = self.writes.wrapping_add(1);
+                        Stage::Sending(Write::text(text, self.writes, self.wrap))
+                    }
+                    // The system's clipboard says whether it took it; OSC 52 if it can't be had.
+                    Way::System => match self.system(Job::Text(text.clone())) {
+                        Ok(done) => Stage::SystemText(done, text),
+                        Err(_) => return Next::Done(self.through_osc52(&copy, &text, out)),
+                    },
+                    // Over SSH the system's clipboard isn't the reader's: OSC 52 is all there is.
+                    Way::Nowhere => return Next::Done(self.through_osc52(&copy, &text, out)),
+                }
+            }
+            Stage::SystemText(done, text) => match done.try_recv() {
+                Err(TryRecvError::Empty) => Stage::SystemText(done, text),
+                Ok(Ok(())) => return Next::Done(copied(&copy)),
+                Err(TryRecvError::Disconnected) | Ok(Err(_)) => return Next::Done(self.through_osc52(&copy, &text, out)),
+            },
             stage @ (Stage::Rendering(_) | Stage::Sent { .. }) => stage,
         };
         Next::Wait(copy)
     }
 
-    /// `frame` to the system's clipboard, on its thread, started the first time: its answer.
-    #[expect(clippy::result_large_err, reason = "a job refused comes straight back, and is looked at here, never passed on")]
-    fn system(&mut self, frame: Frame) -> Result<Receiver<Result<(), String>>, String> {
+    /// `text` through OSC 52, into `out`, and what the status line says of `copy`: sent, with
+    /// the text itself, since nothing says whether the terminal took it.
+    fn through_osc52(&self, copy: &Copying, text: &str, out: &mut Vec<u8>) -> String {
+        osc52(out, text, self.wrap);
+        format!("sent {} to the terminal's clipboard (OSC 52), which doesn't say whether it took it", copy.what)
+    }
+
+    /// `job` to the system's clipboard, on its thread, started the first time: its answer.
+    fn system(&mut self, job: Job) -> Result<Receiver<Result<(), String>>, String> {
         let system = match self.system.take() {
             Some(system) => system,
             None => System::start()?,
@@ -403,7 +493,7 @@ impl Copier {
         let (answer, done) = sync_channel(1);
         // Never waits: copies go one at a time, so the thread has nothing waiting for it. One that
         // ended (it panicked) is let go, and started again for the next copy.
-        match system.jobs.as_ref().map(|jobs| jobs.try_send((frame, answer))) {
+        match system.jobs.as_ref().map(|jobs| jobs.try_send((job, answer))) {
             Some(Ok(())) => {
                 self.system = Some(system);
                 Ok(done)
@@ -437,9 +527,13 @@ impl Copier {
     }
 }
 
-/// What the status line says of `copy` once copied: `copied page 3, 1224 × 1584 pixels`.
+/// What the status line says of `copy` once copied: `copied page 3, 1224 × 1584 pixels`, or for
+/// text, `copied https://example.com`.
 fn copied(copy: &Copying) -> String {
     let (w, h) = copy.size;
+    if copy.text {
+        return format!("copied {}", copy.what);
+    }
     match copy.smaller {
         Some((full_w, full_h)) => format!("copied {}, {w} × {h} pixels of its {full_w} × {full_h}", copy.what),
         None => format!("copied {}, {w} × {h} pixels", copy.what),
@@ -469,28 +563,37 @@ fn png(frame: Frame, effort: PngEffort) -> Result<Receiver<Result<Vec<u8>, Strin
     Ok(png)
 }
 
+/// What goes to the system's clipboard: a page's pixels, or text.
+enum Job {
+    Picture(Box<Frame>),
+    Text(String),
+}
+
 /// A copy for the system's clipboard, and where its answer goes.
-type Job = (Frame, SyncSender<Result<(), String>>);
+type Asked = (Job, SyncSender<Result<(), String>>);
 
 /// The system's clipboard, kept on a thread of its own for the pager's run: on X11 a picture is
 /// on the clipboard only while the program that put it there is there to hand it over.
 struct System {
     /// `None` once the pager ends, which ends the thread.
-    jobs: Option<SyncSender<Job>>,
+    jobs: Option<SyncSender<Asked>>,
     /// Said by the thread once it let go of the clipboard.
     ended: Receiver<()>,
 }
 
 impl System {
     fn start() -> Result<Self, String> {
-        let (jobs, take) = sync_channel::<Job>(1);
+        let (jobs, take) = sync_channel::<Asked>(1);
         let (end, ended) = sync_channel(1);
         std::thread::Builder::new()
             .name("view-clipboard".into())
             .spawn(move || {
                 let mut clipboard = None;
-                for (frame, answer) in take {
-                    let _ = answer.send(put(&mut clipboard, &frame));
+                for (job, answer) in take {
+                    let _ = answer.send(match job {
+                        Job::Picture(frame) => put(&mut clipboard, &frame),
+                        Job::Text(text) => put_text(&mut clipboard, text),
+                    });
                 }
                 drop(clipboard);
                 let _ = end.send(());
@@ -521,6 +624,15 @@ fn put(clipboard: &mut Option<arboard::Clipboard>, frame: &Frame) -> Result<(), 
         None => clipboard.insert(arboard::Clipboard::new().map_err(|e| format!("no clipboard here ({e})"))?),
     };
     clipboard.set_image(arboard::ImageData { width, height, bytes: Cow::Owned(rgba) }).map_err(|e| format!("the clipboard: {e}"))
+}
+
+/// `text` on the system's clipboard, `clipboard` opened the first time.
+fn put_text(clipboard: &mut Option<arboard::Clipboard>, text: String) -> Result<(), String> {
+    let clipboard = match clipboard {
+        Some(clipboard) => clipboard,
+        None => clipboard.insert(arboard::Clipboard::new().map_err(|e| format!("no clipboard here ({e})"))?),
+    };
+    clipboard.set_text(text).map_err(|e| format!("the clipboard: {e}"))
 }
 
 #[cfg(test)]
@@ -677,6 +789,77 @@ mod tests {
         copier.rendered(frame(Request { page: 3, scale: 2.0, tag: 41, ..Default::default() }, None));
         until_sent(&mut copier, &mut Vec::new());
         assert_eq!(copier.answer(Key::Copied(2, Err(ClipError::Denied))).as_deref(), Some("the terminal didn't copy page 4: not allowed (EPERM)"));
+    }
+
+    /// Text goes to a terminal that speaks the clipboard protocol as `text/plain`, asked first
+    /// whether it does, and is said copied when the terminal says so, without a size; while it is
+    /// under way another copy waits; and text past what is copied is refused.
+    #[test]
+    fn clip_text_goes_through_the_protocol_as_text_plain() {
+        let mut copier = Copier::new(false, PngEffort::Fast, Wrap::None);
+        let now = Instant::now();
+        let mut out = Vec::new();
+        let address = "https://example.com/a?b=c#d é";
+        assert_eq!(copier.start_text("example.com/a".into(), address.into(), now, &mut out), "copying example.com/a…");
+        assert_eq!(out, b"\x1b[?5522$p", "asked the first time");
+        assert_eq!(copier.start_text("other".into(), "other".into(), now, &mut Vec::new()), "still copying example.com/a");
+        assert_eq!(copier.start("page 4".into(), 1, 3, Some(PAGE), 41, now, &mut Vec::new()), "still copying example.com/a");
+        // No level's render is waited for, and leaving one stops nothing.
+        assert!(copier.request(0).is_none() && copier.left(0).is_none() && copier.left(u64::MAX).is_none());
+        let mut out = Vec::new();
+        assert_eq!(copier.on(now, &mut out), None, "until the terminal answers");
+        assert!(out.is_empty() && copier.answer(Key::Clipboard(true)).is_none());
+        until_sent(&mut copier, &mut out);
+        let packets = packets(&out);
+        let mime = base64::engine::general_purpose::STANDARD.encode("text/plain");
+        let metadata: Vec<&str> = packets.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(metadata, ["type=write:id=clv-1", &format!("type=wdata:mime={mime}:id=clv-1"), "type=wdata:id=clv-1"]);
+        assert_eq!(packets[1].1, address.as_bytes());
+        assert_eq!(copier.answer(Key::Copied(1, Ok(()))).as_deref(), Some("copied example.com/a"));
+        // Not asked again; refused by the terminal, in its words.
+        let mut out = Vec::new();
+        copier.start_text("a path".into(), "docs/guide.md#usage".into(), now, &mut out);
+        assert!(out.is_empty());
+        until_sent(&mut copier, &mut out);
+        assert_eq!(copier.answer(Key::Copied(2, Err(ClipError::Denied))).as_deref(), Some("the terminal didn't copy a path: not allowed (EPERM)"));
+        // What tmux dropped is said with the key that copies it again.
+        copier.start_text("a path".into(), "x".into(), now, &mut Vec::new());
+        until_sent(&mut copier, &mut Vec::new());
+        assert_eq!(copier.lost().as_deref(), Some("tmux dropped part of the copy of a path; F copies it again"));
+        let long = "x".repeat(MAX_TEXT + 1);
+        assert_eq!(copier.start_text("long".into(), long, now, &mut Vec::new()), "can't copy long: it is more than 4 KiB");
+        assert!(copier.copy.is_none());
+    }
+
+    /// Over SSH, a terminal that doesn't speak the clipboard protocol, or doesn't say, is sent text
+    /// through OSC 52, which nothing answers: said sent, once, and not asked again. Inside tmux it
+    /// goes through passthrough, as the pages do.
+    #[test]
+    fn clip_text_over_ssh_without_the_protocol_goes_through_osc_52() {
+        let then = Instant::now();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("mailto:a@example.com");
+        const SENT: &str = "sent the address to the terminal's clipboard (OSC 52), which doesn't say whether it took it";
+        // It says it doesn't speak the protocol.
+        let mut copier = Copier::new(false, PngEffort::Fast, Wrap::None);
+        copier.start_text("the address".into(), "mailto:a@example.com".into(), then, &mut Vec::new());
+        assert!(copier.answer(Key::Clipboard(false)).is_none());
+        let mut out = Vec::new();
+        assert_eq!(copier.on(then, &mut out).as_deref(), Some(SENT));
+        assert_eq!(out, format!("\x1b]52;c;{encoded}\x1b\\").as_bytes());
+        assert!(copier.copy.is_none() && copier.wait().is_none() && copier.due().is_none());
+        // It says nothing: after a second, the same. And inside tmux, in a passthrough.
+        let mut copier = Copier::new(false, PngEffort::Fast, Wrap::Tmux);
+        copier.start_text("the address".into(), "mailto:a@example.com".into(), then, &mut Vec::new());
+        let mut out = Vec::new();
+        assert_eq!(copier.on(then + ASK_WAIT / 2, &mut out), None);
+        assert_eq!(copier.on(then + ASK_WAIT, &mut out).as_deref(), Some(SENT));
+        assert_eq!(out, format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}\x1b\x1b\\\x1b\\").as_bytes());
+        // Known by now: the next one goes at once, with no question.
+        let mut out = Vec::new();
+        copier.start_text("the address".into(), "mailto:a@example.com".into(), then, &mut out);
+        assert!(out.is_empty());
+        assert_eq!(copier.on(then, &mut out).as_deref(), Some(SENT));
+        assert!(!out.is_empty());
     }
 
     #[test]

@@ -37,7 +37,8 @@ pub(crate) fn letter(title: &str, pages: usize) -> Vec<u8> {
 /// - **Page 3**, 300 × 300 units of 2 pt (`/UserUnit 2`), so 600 × 600 pt as shown: a link to
 ///   `mailto:someone@example.com`, at `/Rect [30 240 130 270]`.
 ///
-/// The catalog names the destination `chapter` in its `/Names` tree.
+/// The catalog names the destinations `chapter` and `intro` (page 3) in its `/Names` tree, so a
+/// copy of this file called `other.pdf` is what its own `/GoToR` links lead to.
 pub(crate) fn linked() -> Vec<u8> {
     let link = |rect: &str, rest: &str| format!("<< /Type /Annot /Subtype /Link /Border [0 0 0] /Rect [{rect}] {rest} >>");
     let first = [
@@ -72,7 +73,7 @@ pub(crate) fn linked() -> Vec<u8> {
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
     };
     let mut objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(chapter) [6 0 R /XYZ 300 400 null]] >> >> >>".to_string(),
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(chapter) [6 0 R /XYZ 300 400 null] (intro) [8 0 R /Fit]] >> >> >>".to_string(),
         "<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>".into(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         page("/MediaBox [0 0 612 792]", 5, numbers(0..first)),

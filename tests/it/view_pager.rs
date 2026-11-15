@@ -4130,3 +4130,341 @@ fn links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again
     view.press("uq");
     assert!(view.finish().success());
 }
+
+/// A directory of the test's own, empty.
+fn empty_dir(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// `f` and the letter `label`, once the `links` labels on screen show: the output's length before
+/// the letter.
+fn follow(view: &mut Session, links: usize, label: &str) -> usize {
+    let before = view.text().len();
+    view.press("f");
+    view.wait_until("the labels", |t| letters(&t[before..]).len() == links);
+    let before = view.text().len();
+    view.press(label);
+    before
+}
+
+/// Whether the file called `name` is on screen with nothing still to come: every page rendered,
+/// and the document not being laid out again for the window, as one just opened from a link is,
+/// which would drop labels asked for meanwhile.
+fn settled(text: &str, name: &str) -> bool {
+    let bar = last_bar(text);
+    bar.contains(&format!(" {name} ")) && !bar.contains('…')
+}
+
+/// `F` and the letter `label`, likewise.
+fn copy_link(view: &mut Session, links: usize, label: &str) -> usize {
+    let before = view.text().len();
+    view.press("F");
+    view.wait_until("the labels", |t| letters(&t[before..]).len() == links && last_bar(t).contains("to copy its link's address"));
+    let before = view.text().len();
+    view.press(label);
+    before
+}
+
+/// The text clipboard write `id` carried: its `text/plain` packets' data, put together.
+fn copied_text(text: &str, id: u32) -> String {
+    use base64::Engine as _;
+    let start = format!("\x1b]5522;type=wdata:mime={}:id=clv-{id};", base64::engine::general_purpose::STANDARD.encode("text/plain"));
+    let mut copied = Vec::new();
+    for (at, _) in text.match_indices(&start) {
+        let data = &text[at + start.len()..];
+        let Some(end) = data.find("\x1b\\") else { break };
+        copied.extend(base64::engine::general_purpose::STANDARD.decode(&data[..end]).unwrap());
+    }
+    String::from_utf8(copied).unwrap()
+}
+
+/// A link to another file opens it in `clv`, a level of its own, at the place the link names; `u`
+/// comes back to the document, and from there to the list. A folder opens as a list, a PDF at
+/// its first page. A path that leads nowhere, or to a pipe, is said, and nothing opens.
+#[cfg(feature = "word")]
+#[test]
+fn links_to_other_files_open_them_as_levels_and_u_comes_back_to_the_document() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-files");
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    let filler = "Filler, with words enough in it to fill a line of a page.\n\n".repeat(80);
+    let index = dir.join("index.md");
+    std::fs::write(&index, "# Index\n\n[the guide](docs/guide.md#usage) [gone](gone.md) [pipe](pipe.md) [folder](docs) [the pdf](other.pdf)\n")
+        .unwrap();
+    std::fs::write(dir.join("docs/guide.md"), format!("# Guide\n\n{filler}## Usage\n\nHere.\n\n{filler}")).unwrap();
+    let other = dir.join("other.pdf");
+    std::fs::write(&other, crate::fixtures::letter("Other", 3)).unwrap();
+    assert!(Command::new("mkfifo").arg(dir.join("pipe.md")).status().unwrap().success());
+    // Wide, for the whole of what the status line says of a link not followed.
+    let mut view = Session::start_on(KITTY, &index, &[other.to_str().unwrap(), "--pager"], 160, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    view.press("\r");
+    view.wait_until("the document", |t| settled(t, "index.md") && place_now(t).is_some());
+    // The guide, at its heading, well into it.
+    let before = follow(&mut view, 5, "s");
+    view.wait_until("the guide at its heading", |t| {
+        settled(t, "guide.md") && place_now(&t[before..]).is_some_and(|(page, pages)| page > 1 && page < pages)
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let (heading, pages) = place_now(&view.text()).unwrap();
+    assert!(heading > 1 && heading < pages, "at page {heading} of {pages}");
+    // Back: the document, as it was left.
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back in the document", |t| {
+        t.len() > before && settled(t, "index.md") && place_now(&t[before..]).is_some_and(|(page, _)| page == 1)
+    });
+    // What leads nowhere, and what is no file.
+    let before = follow(&mut view, 5, "a");
+    said_since(&view, before, "gone.md: it can't be found");
+    let before = follow(&mut view, 5, "d");
+    said_since(&view, before, "pipe.md: it is no file or folder");
+    assert!(last_bar(&view.text()).contains(" index.md "));
+    // A folder, as a list; a PDF, at its first page.
+    let before = follow(&mut view, 5, "f");
+    view.wait_until("the folder listed", |t| bar(&t[before..]).contains(" docs/guide.md 1/1 "));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back from the folder", |t| t.len() > before && settled(t, "index.md"));
+    let before = follow(&mut view, 5, "j");
+    view.wait_until("the PDF", |t| settled(t, "other.pdf") && drawn(&t[before..], "pages 1–2/3"));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back from the PDF", |t| t.len() > before && settled(t, "index.md"));
+    // And from the document, the list.
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("the list again", |t| t.get(before..).is_some_and(|t| bar(t).contains(" index.md 1/2 ")));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A PDF's link to another PDF opens it at the destination it names, or at the page; one whose
+/// file isn't there says so.
+#[test]
+fn links_from_a_pdf_to_another_pdf_open_it_at_the_place_or_the_page_they_name() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links-remote");
+    let other = pdf.with_file_name("other.pdf");
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the first page", |t| drawn(t, "page 1/3"));
+    // No `other.pdf` yet.
+    let before = follow(&mut view, 14, "f");
+    said_since(&view, before, "other.pdf: it can't be found");
+    std::fs::write(&other, crate::fixtures::linked()).unwrap();
+    // `f`, the fourth: its destination `intro`, on page 3.
+    let before = follow(&mut view, 14, "f");
+    view.wait_until("the other PDF at its destination", |t| last_bar(t).contains(" other.pdf ") && drawn(&t[before..], "page 3/3"));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back", |t| t.len() > before && last_bar(t).contains(" links.pdf ") && drawn(&t[before..], "page 1/3"));
+    // `j`, the fifth: its third page.
+    let before = follow(&mut view, 14, "j");
+    view.wait_until("the other PDF at its page", |t| last_bar(t).contains(" other.pdf ") && drawn(&t[before..], "page 3/3"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// A document read through a pipe has no file of its own to look beside: a link to another file
+/// says so, and a link to a place in it still goes there.
+#[cfg(feature = "word")]
+#[test]
+fn links_to_other_files_from_stdin_are_said_and_not_followed() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-stdin");
+    let filler = "<p>Filler, with words enough in it to fill a line of a page.</p>".repeat(80);
+    let page = dir.join("page.html");
+    std::fs::write(
+        &page,
+        format!(
+            "<!DOCTYPE html><html><body><p><a href=\"guide.md\">guide</a> <a href=\"#end\">end</a></p>{filler}<p id=\"end\">End</p></body></html>"
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("guide.md"), "# Guide\n").unwrap();
+    let mut view = Session::start_command(KITTY, &format!("cd '{}' && cat page.html | '{BIN}' /dev/stdin --pager", dir.display()), 100, 60);
+    view.wait_until("the page", |t| place_now(t).is_some_and(|(page, _)| page == 1) && last_draw(t).contains("  page 1/"));
+    let before = follow(&mut view, 2, "s");
+    // As much of it as a window this wide leaves whole.
+    said_since(&view, before, "guide.md: not followed, as");
+    assert!(last_bar(&view.text()).contains("to look beside"), "{}", last_bar(&view.text()));
+    let before = follow(&mut view, 2, "a");
+    view.wait_until("the place in it", |t| place_now(&t[before..]).is_some_and(|(page, _)| page > 1));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A web address goes to the desktop's opener, as its single argument, the status line naming it:
+/// `http`, `https` and `mailto`. A `mailto` that names a file to attach is said and never launched,
+/// as written or percent-encoded twice over. (Another scheme never gets this far from Markdown:
+/// what reads it makes no link of one. `link::web`'s own tests have those.)
+#[cfg(feature = "word")]
+#[test]
+fn links_to_the_web_go_to_the_desktops_opener_and_other_schemes_nowhere() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-web");
+    let notes = dir.join("notes.md");
+    let text = "# Notes\n\n[site](https://example.com/a?b=c&d=e) [mail](mailto:a@example.com?subject=Hi) [bad](mailto:a@example.com?attach=/etc/passwd) [twice](mailto:a@example.com?%2561ttach=x)\n";
+    std::fs::write(&notes, text).unwrap();
+    let fakes = openers("links-web", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let terminal = Terminal { term: Some("xterm-kitty"), ..desktop(&path) };
+    let mut view = Session::start_on(terminal, &notes, &["--pager"], 160, 40);
+    view.wait_until("the notes", |t| place_now(t).is_some() && last_draw(t).contains("  page 1/"));
+    let before = follow(&mut view, 4, "s");
+    said_since(&view, before, "opening https://example.com/a?b=c&d=e…");
+    said_since(&view, before, "opened https://example.com/a?b=c&d=e");
+    assert_eq!(wait_launched(&fakes, 1), opening(&fakes, Path::new("https://example.com/a?b=c&d=e")));
+    let count = launched(&fakes).len();
+    let before = follow(&mut view, 4, "a");
+    said_since(&view, before, "opened mailto:a@example.com?subject=Hi");
+    let all = wait_launched(&fakes, count * 2);
+    assert_eq!(all[count..], opening(&fakes, Path::new("mailto:a@example.com?subject=Hi"))[..]);
+    // Never launched: what would attach a file, as written or encoded twice over.
+    let before = follow(&mut view, 4, "d");
+    said_since(&view, before, "a mailto: link that names a file for the mail app to read, which isn't followed");
+    let before = follow(&mut view, 4, "f");
+    said_since(&view, before, "a mailto: link that names a file for the mail app to read, which isn't followed");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(launched(&fakes).len(), count * 2, "{:?}", launched(&fakes));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `F` copies the address of the link whose label is typed, as the document writes it, through the
+/// terminal's clipboard protocol as text: a web address, a file's path with its fragment, a place's
+/// name. A link with no address says where it goes, and one never followed what it is; neither is
+/// copied. Nothing is followed.
+#[cfg(feature = "word")]
+#[test]
+fn links_addresses_are_copied_by_capital_f_as_the_document_writes_them() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-copy");
+    let notes = dir.join("notes.md");
+    std::fs::write(&notes, "# Notes\n\n[site](https://example.com/a?b=c) [guide](docs/guide.md#usage) [top](#notes) [gone](#nowhere)\n").unwrap();
+    let terminal = Terminal { clipboard: Some(true), term: Some("xterm-kitty"), ..PLAIN };
+    let mut view = Session::start_on(terminal, &notes, &["--pager"], 120, 40);
+    view.wait_until("the notes", |t| place_now(t).is_some() && last_draw(t).contains("  page 1/"));
+    let before = copy_link(&mut view, 4, "s");
+    said_since(&view, before, "copied https://example.com/a?b=c");
+    assert_eq!(copied_text(&view.text(), 1), "https://example.com/a?b=c");
+    let before = copy_link(&mut view, 4, "a");
+    said_since(&view, before, "copied docs/guide.md#usage");
+    assert_eq!(copied_text(&view.text(), 2), "docs/guide.md#usage");
+    let before = copy_link(&mut view, 4, "d");
+    said_since(&view, before, "copied #notes");
+    assert_eq!(copied_text(&view.text(), 3), "#notes");
+    let before = copy_link(&mut view, 4, "f");
+    said_since(&view, before, "no #nowhere in this document");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(copied_text(&view.text(), 4), "", "a place the document hasn't was copied");
+    assert!(last_bar(&view.text()).contains(" notes.md ") && place_now(&view.text()).is_some_and(|(page, _)| page == 1), "something was followed");
+    view.press("q");
+    assert!(view.finish().success());
+    // A PDF's link to a page has no address: where it goes is said. A script says what it is.
+    let pdf = linked("links-copy-pdf");
+    let mut view = Session::start_on(Terminal { clipboard: Some(true), ..PLAIN }, &pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the first page", |t| drawn(t, "page 1/3"));
+    let before = copy_link(&mut view, 14, "s");
+    said_since(&view, before, "goes to page 3");
+    let before = copy_link(&mut view, 14, "p");
+    said_since(&view, before, "a script, which clv doesn't run");
+    let before = copy_link(&mut view, 14, "d");
+    said_since(&view, before, "copied https://example.com/a?b=c");
+    let before = copy_link(&mut view, 14, "f");
+    said_since(&view, before, "copied other.pdf#intro");
+    let text = view.text();
+    assert_eq!(
+        (copied_text(&text, 1), copied_text(&text, 2), copied_text(&text, 3)),
+        ("https://example.com/a?b=c".into(), "other.pdf#intro".into(), String::new())
+    );
+    assert!(drawn(last_draw(&text), "page 1/3"), "something was followed");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// Over SSH no app is opened on the machine `clv` runs on: a web address followed is copied
+/// instead, through OSC 52 where the terminal has no clipboard protocol, and the status line says
+/// so; `F` copies the same way.
+#[cfg(feature = "word")]
+#[test]
+fn links_to_the_web_over_ssh_are_copied_through_osc_52() {
+    use base64::Engine as _;
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-ssh");
+    let notes = dir.join("notes.md");
+    std::fs::write(&notes, "# Notes\n\n[site](https://example.com/a?b=c) [mail](mailto:a@example.com)\n").unwrap();
+    let fakes = openers("links-ssh", 0);
+    let path = format!("{}:/bin", fakes.display());
+    let terminal = Terminal { clipboard: Some(false), ssh: true, term: Some("xterm-kitty"), ..desktop(&path) };
+    let mut view = Session::start_on(terminal, &notes, &["--pager"], 160, 40);
+    view.wait_until("the notes", |t| place_now(t).is_some() && last_draw(t).contains("  page 1/"));
+    let osc52 = |address: &str| format!("\x1b]52;c;{}\x1b\\", base64::engine::general_purpose::STANDARD.encode(address));
+    let before = follow(&mut view, 2, "s");
+    said_since(&view, before, "not opened (over SSH): copying https://example.com/a?b=c…");
+    said_since(&view, before, "sent https://example.com/a?b=c to the terminal's clipboard (OSC 52)");
+    assert_eq!(view.text().matches(&osc52("https://example.com/a?b=c")).count(), 1);
+    let before = copy_link(&mut view, 2, "a");
+    said_since(&view, before, "sent mailto:a@example.com to the terminal's clipboard (OSC 52)");
+    assert_eq!(view.text().matches(&osc52("mailto:a@example.com")).count(), 1);
+    assert!(launched(&fakes).is_empty(), "{:?}", launched(&fakes));
+    assert!(!view.text().contains("\x1b]5522;"), "a write through the protocol it doesn't speak");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Links followed into files go sixteen levels deep, two files that link to each other counting
+/// each time; the seventeenth says so, and `u` still comes back.
+#[cfg(feature = "word")]
+#[test]
+fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-deep");
+    let (a, b) = (dir.join("a.md"), dir.join("b.md"));
+    std::fs::write(&a, "# A\n\n[to b](b.md)\n").unwrap();
+    std::fs::write(&b, "# B\n\n[to a](a.md)\n").unwrap();
+    // Wide, for the whole of what the status line says past the last level.
+    let mut view = Session::start_on(KITTY, &a, &["--pager"], 160, 40);
+    view.wait_until("a", |t| place_now(t).is_some() && last_draw(t).contains("  page 1/"));
+    for level in 1..=16 {
+        let name = if level % 2 == 1 { "b.md" } else { "a.md" };
+        let before = follow(&mut view, 1, "s");
+        view.wait_until("the next file", |t| t.len() > before && settled(t, name) && last_bar(t).contains(" page 1/1 "));
+    }
+    let before = follow(&mut view, 1, "s");
+    said_since(&view, before, "b.md: not followed, 16 files deep in links already; u goes back");
+    assert!(last_bar(&view.text()).contains(" a.md "));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back a level", |t| t.len() > before && settled(t, "b.md"));
+    // And from there a link is followed again.
+    let before = follow(&mut view, 1, "s");
+    view.wait_until("a again", |t| t.len() > before && settled(t, "a.md"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

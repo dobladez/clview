@@ -1042,6 +1042,12 @@ a second, is no. The pager never waits for any of it:
   it there is there to hand it over. At the end, once the terminal is put back, the pager waits up
   to half a second for the thread to let it go.
 
+- **Text** (`Copier::start_text`, a link's address, at most 4 KiB) goes the same way, as
+  `text/plain` (`Write::text`), with no render and no PNG. Where the terminal doesn't speak the
+  protocol, it goes to the system's clipboard on this machine, which answers; and over SSH, or
+  where that fails, through OSC 52 (`osc52`: `OSC 52 ; c ; base64 ST`, in tmux's passthrough like
+  the rest), which nothing answers, so the status line says it was sent and no more.
+
 Quitting while an answer is due (the question, or a write's end) waits up to a second for it, so
 it doesn't land on the shell's command line.
 
@@ -1078,6 +1084,10 @@ names no format for it, nor any backend:
   runs. The pager polls `Launches::on` each time round its loop (every 50 ms while one is waited
   for): `opened`, the launcher's words for its failure, or after 5 s (`SAID_WAIT`) that it was
   handed over; after that, only a failure is said.
+- **A web address** (`Launches::start_address`) is launched as a file is, its text the opener's
+  one argument in place of a path: the viewer has checked it starts with `http`, `https` or
+  `mailto`, so it is never taken for an option. Where nothing may be launched it gives back why
+  (`Refused`), for the pager to copy the address instead.
 
 ## Searching a file's text (`search.rs`, `pager.rs`)
 
@@ -1400,6 +1410,34 @@ after a kept search, give `Step::Return` while `Nav::jumps` holds any, at most 1
 the last is found again (`Source::find` on its anchor, or its page) and scrolled to as it was
 (`Pager::jump_back`). A document laid out again hands its jumps to the new level
 (`Pager::replace`), as it does its search: an anchor is found in any layout of the document.
+
+A `File` is checked in the core (`link::local`): its path joined to the directory of the
+document's own real path (`Level::on_disk`, so a document with none follows no such link), made
+real through `source::real`, which refuses what is given or resolves under `/dev` or `/proc`, and
+taken only if `metadata` says a regular file or a directory. `Opener::link` opens it as a list's
+tile is opened: a directory as a `Directory` to list, a file with the first backend that opens it,
+deferred to the openers' threads where its backend defers (`Item::Later`). The pager then goes
+into it as `Pager::open` goes into a tile (`Pager::follow_file`), with where the link leads kept
+meanwhile (`Pager::arriving`): once the level shows (`Pager::arrive`), a page is gone to at once,
+and a `#fragment` is asked of the new file's links (`Ask::Name`, `Level::seeking`) and gone to
+when they answer (`Pager::seek_on`); a key meanwhile stops the wait. A document opened this way is
+laid out for a list's preview and then again for the window, so the wait is handed to the new
+level and asked of its layout (`Pager::replace`). Each such level is one deeper (`Level::depth`,
+which a relayout keeps), 16 at the most (`MAX_DEPTH`).
+
+A `Web` is checked too (`link::web`): at most 4 KiB; no character that `hidden` names (a control
+character, any whitespace, a bidirectional mark, a soft hyphen, a zero-width or filler character,
+a variation selector, a tag); a scheme of `http` or `https` followed by `//` and a host's first
+character, or `mailto` with no parameter named `attach…` or `insert…` among what follows its first
+`?`, apart at `&`, `;` and `?`, looked for as written and after each of up to 8 percent-decodings
+(`LAYERS`), one still encoded past them refused. Then `Launches::start_address` runs the same
+opener `o` runs, the address its one argument
+([Opening in another app](#opening-in-another-app-launchrs)); where it refuses (the terminal isn't
+local, no launcher applies, its program isn't found), the address is copied instead.
+
+`F` copies the chosen link's `address` (`Pager::copy_address`, `Copier::start_text`): a link with
+none says where it goes, an `Other` what it is
+([Copying to the clipboard](#copying-to-the-clipboard-cliprs)).
 
 ### A PDF's links (`pdfcraft.rs`)
 
