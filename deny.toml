@@ -1,0 +1,26 @@
+# `cargo deny check advisories`: the crates in Cargo.lock against the RustSec advisory database.
+# CI runs it on every push and nightly (CONTRIBUTING.md's "Quality gates"). Only advisories are
+# checked; licences and sources are not.
+
+[graph]
+all-features = true
+
+[advisories]
+# An unmaintained crate fails the check only when clv names it itself: one deep in a backend's
+# library is that library's to replace.
+unmaintained = "workspace"
+# Advisories that don't reach clv, each with why. Remove one when its crate moves past it.
+ignore = [
+    # zip 3.0.0, through gridcraft-xlsx and wordcraft's docx and formats: all four are about
+    # `ZipArchive::extract` and `ZipStreamReader::extract` writing an archive to disk, which neither
+    # calls; they read their packages in memory. clv's own zip is past them. Gone when gridcraft and
+    # wordcraft move to zip 9.
+    { id = "RUSTSEC-2026-0367", reason = "zip extraction to disk: never called" },
+    { id = "RUSTSEC-2026-0368", reason = "zip extraction to disk: never called" },
+    { id = "RUSTSEC-2026-0369", reason = "zip extraction to disk: never called" },
+    { id = "RUSTSEC-2026-0429", reason = "zip extraction to disk: never called" },
+    # rsa 0.10.0-rc.18, through pdfcraft-sign: the Marvin attack recovers a private key through the
+    # timing of decryptions with it. pdfcraft uses rsa only for a signature's public-key operation
+    # (`rsa_pad.rs`); clv decrypts and signs nothing with an RSA key.
+    { id = "RUSTSEC-2023-0071", reason = "only public-key operations; no private RSA key is used" },
+]

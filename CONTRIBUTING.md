@@ -160,6 +160,15 @@ tests the viewer without backends (which keeps the core free of the extensions,
 [Layers](docs/architecture.md#layers)), and `pdf,svg`; `gh workflow run CI` runs both at once, worth
 it after a change to `cfg` attributes. Each backend alone is tested nowhere.
 
+Every push and every night, moved or not, CI checks `Cargo.lock` against the RustSec advisory
+database: `cargo deny check advisories` ([`deny.toml`](deny.toml); `cargo install --locked
+cargo-deny` to run it here). A vulnerable or unsound crate fails it, and an unmaintained one only
+if clv names it itself. An advisory that can't reach clv goes in `deny.toml`'s `ignore`, saying
+why, and comes out when the crate moves past it; for a crate a backend's library brings, that
+move is the library's, at its next pin. GitHub's Dependabot alerts and security updates are on
+too, but see only crates.io: not pdfcraft, wordcraft, gridcraft or what they bring from git.
+CodeQL's default setup scans the Rust and the workflows.
+
 ## Tests
 
 - **Unit tests** in each module, among them property tests for the key decoder (answers cut

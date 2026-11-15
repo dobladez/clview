@@ -1,5 +1,6 @@
 # The quality gates in CONTRIBUTING.md, on Linux and macOS. Every push: the binary shipped, all
-# features, formatted, lint-free and every test. Nightly, if main moved since the last nightly: the
+# features, formatted, lint-free and every test. Every push and every night: the dependencies'
+# security advisories. Nightly, if main moved since the last nightly: the
 # viewer without backends, and pdf,svg (the SVG backend without its HTML labels).
 name: CI
 
@@ -49,6 +50,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+
+  # The crates in Cargo.lock against the RustSec advisory database (deny.toml). Every push, and
+  # every night whether main moved or not: advisories are published without a push.
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
 
   # Whether main moved since the last nightly run that finished, passed or failed: a cancelled one
   # tested nothing. Run by hand, the nightly builds always run.
