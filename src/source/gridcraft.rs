@@ -171,15 +171,15 @@ fn printed(path: &str, bytes: &[u8], kind: Kind, password: Option<&str>) -> Resu
         return Err("the workbook has nothing to print".into());
     }
     let name = Path::new(path).file_name().map_or_else(|| path.into(), |name| name.to_string_lossy());
-    let (pdf, pages) = render_pdf(&workbook, &laid, &name, path);
-    if pages == 0 {
+    let printed = render_pdf(&workbook, &laid, &name, path).map_err(|e| e.to_string())?;
+    if printed.pages == 0 {
         return Err("the workbook has nothing to print".into());
     }
     let mut notes: Vec<String> = said.iter().filter_map(|note| for_reader(note)).collect();
-    if blanked(&workbook) {
+    if blanked(&workbook, !printed.missing_arabic_font) {
         notes.push(BLANKED.into());
     }
-    Ok(Printed { pdf, notes })
+    Ok(Printed { pdf: printed.bytes, notes })
 }
 
 /// What a page says when some of the workbook's text is left blank ([`blanked`]).
@@ -189,10 +189,18 @@ const BLANKED: &str =
 /// Whether some of `workbook`'s text is left blank in its pages: gridcraft's PDF sets what the
 /// standard PDF fonts' encoding (Windows-1252) lacks in a Chinese font it doesn't carry, which the
 /// PDF backend doesn't substitute, so that text prints as nothing, with no warning of its own.
-fn blanked(workbook: &Workbook) -> bool {
-    let drawn = |c: char| matches!(c, ' '..='~' | '\u{A0}'..='\u{FF}' | '\t' | '\n' | '\r') || "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ".contains(c);
+/// Arabic is the exception when `arabic` (gridcraft found an installed Noto Sans Arabic, said by
+/// `RenderedPdf::missing_arabic_font`): it embeds that face, and draws the Arabic it has.
+fn blanked(workbook: &Workbook, arabic: bool) -> bool {
+    let western = |c: char| matches!(c, ' '..='~' | '\u{A0}'..='\u{FF}' | '\t' | '\n' | '\r') || "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ".contains(c);
+    let drawn = |c: char| western(c) || (arabic && is_arabic(c));
     let text = |value: &Value| matches!(value, Value::Text(text) if !text.chars().all(drawn));
     workbook.sheets.iter().any(|sheet| sheet.cells.iter().any(|(_, cell)| text(&cell.value)))
+}
+
+/// Whether `c` is in one of Unicode's Arabic blocks, those Noto Sans Arabic covers.
+fn is_arabic(c: char) -> bool {
+    matches!(c, '\u{600}'..='\u{6FF}' | '\u{750}'..='\u{77F}' | '\u{8A0}'..='\u{8FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
 }
 
 /// What gridcraft said on reading a workbook, `note`, as the reader of its pages should hear it:
@@ -451,6 +459,15 @@ mod tests {
         for word in ["καλημέρα", "привет", "Łódź", "你好", "≤ ∞"] {
             assert_eq!(notes(&format!("word\nhello\n{word}\n")), [BLANKED], "{word}");
         }
+    }
+
+    #[test]
+    fn arabic_is_blank_only_without_an_arabic_face() {
+        let workbook = |csv: &str| gridcraft_engine::io::open_bytes_with("a.csv", csv.as_bytes(), None, false).unwrap().0;
+        let arabic = workbook("word\nمرحبا\n");
+        assert!(blanked(&arabic, false), "no Noto Sans Arabic: blank");
+        assert!(!blanked(&arabic, true), "drawn in the face gridcraft found");
+        assert!(blanked(&workbook("word\nمرحبا привет\n"), true), "the Cyrillic beside it is still blank");
     }
 
     #[test]

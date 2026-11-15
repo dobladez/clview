@@ -52,6 +52,10 @@ works today. A version's section becomes the notes of its
 - A PDF of more than 100,000 pages is refused, saying how many it has. A file of a few megabytes
   could name a million pages and take several gigabytes to open.
 - Inside tmux, a page turned no longer flashes the screen blank before the next page shows.
+- PDFs are drawn by a newer pdfcraft, and spreadsheets printed by a newer gridcraft, with their
+  fixes since. A PDF's page warns of an image whose colour table is malformed, and of a Type 3
+  font without its widths. A spreadsheet's Arabic is drawn where Noto Sans Arabic is installed,
+  where it was blank.
 
 ## 0.4.0 (2026-11-10)
 

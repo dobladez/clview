@@ -129,6 +129,22 @@ wider than its column, a hidden column, and a formula, searched through the PDF 
 | A hidden column's cell | its text | no: it isn't printed |
 | A formula | its value; its text | the value; not the formula |
 
+**Measured again at `17fc47b`** on 2026-11-15, the same machine and toolchain, with `0027-measure/`
+moved to that pin and a copy at `168a3cb` beside it, both run on the same files: every PDF under
+`~/Documents` (1,741 files, 15,451 pages; another set than the one above), and the hostile pages,
+three runs each.
+
+| What | `168a3cb` | `17fc47b` |
+|---|---|---|
+| A page's text, on average | 1.10 ms | 1.17 ms |
+| The slowest page; the most heap a page took | 0.38 s; 15.7 MiB | 0.39 s; 15.7 MiB |
+| `gen off 3000000` | 5.25 to 5.53 s | 5.40 to 5.80 s |
+| `gen grid 400000` | 1.31 s, 896 MiB | 1.49 s, 926 MiB |
+
+Text is 5 to 15% slower and a dense page's heap 3% larger: the caps hold as they were chosen.
+Real pages stay far inside both, and the hostile pages fall on the same side of each: `gen off
+3000000` still reads inside the second of grace past `PAGE_CPU`'s five, now with less to spare.
+
 ## Alternatives considered
 
 - **pdfcraft's `RenderPool`, which reads text on threads and can cancel a request**

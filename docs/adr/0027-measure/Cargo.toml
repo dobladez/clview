@@ -10,18 +10,18 @@ publish = false
 [workspace]
 
 [dependencies]
-pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
 
 [patch.crates-io]
-hayro = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
-vello_cpu = { git = "https://github.com/storytold/pdfcraft", rev = "168a3cb91e90333a7069f2bac63835140c6d0f5b" }
+hayro = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+hayro-interpret = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+hayro-syntax = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+hayro-cmap = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+hayro-postscript = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+hayro-jbig2 = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+lopdf = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+vello_common = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
+vello_cpu = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906" }
 
 [profile.release]
 debug = false

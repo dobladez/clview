@@ -173,6 +173,8 @@ fn frame(p: RenderedPage) -> Frame {
         .map(|w| match w {
             RenderWarning::ContentTruncated => "content past the page's safety budget was skipped",
             RenderWarning::ColourFallback => "a colour that could not be computed was painted in a fallback colour",
+            RenderWarning::MalformedIndexedImage => "an image whose colour table is malformed may be drawn wrongly, or not at all",
+            RenderWarning::Type3WidthsMissing => "a font without the widths it must give was spaced by its glyphs' own",
         })
         .map(String::from)
         .collect();

@@ -501,7 +501,8 @@ comments without an appearance of their own are drawn too, and a dynamic XFA for
 its template lays out into, not the placeholder page the file carries for viewers that can't. A
 page whose content runs past pdfcraft's safety budget is drawn without the rest of it, and a colour
 it can't compute (a colour space it can't read, a tint transform it can't evaluate) is painted in a
-fallback colour, each with a warning. `/` [searches a PDF's text](#searching-a-documents-text).
+fallback colour; an image whose colour table is malformed is drawn as well as it can be, or left
+out, and a Type 3 font without its widths is spaced by its glyphs' own; each with a warning. `/` [searches a PDF's text](#searching-a-documents-text).
 
 ### Images
 
@@ -859,7 +860,11 @@ short at one of its [limits](#limits), and that an ods or an xlsb is shown by it
 (gridcraft reads their formatting, charts and pictures from neither). So does text in letters other
 than Western European ones (Greek, Cyrillic, Chinese…, and symbols such as `≤`): the PDF gridcraft
 prints to sets it in a font it doesn't carry, and the PDF backend has none to put in its place, so
-that text is blank.
+that text is blank. Arabic is the exception where Noto Sans Arabic is installed (as
+`NotoSansArabic-Regular.ttf`, `-Bold.ttf` or the variable `NotoSansArabic[wght].ttf`, in
+`/Library/Fonts`, `~/Library/Fonts`, `~/.local/share/fonts`, `~/.fonts` or `/usr/share/fonts`'s
+Noto folders): gridcraft shapes it and embeds that face, so it is drawn. Without it, Arabic is
+blank too.
 
 Opening a workbook reads it, recalculates it and prints every page, then lets go of it: what is
 kept is the PDF. On an M3 Max that took 6 ms for a styled workbook of four sheets, and 1.5 s for

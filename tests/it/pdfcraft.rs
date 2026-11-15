@@ -124,6 +124,48 @@ fn a_colour_painted_in_a_fallback_colour_is_said() {
     assert!(text(&out.stderr).contains(said), "{}", text(&out.stderr));
 }
 
+/// The page drawn from `resources` and `content`, with `objects` after its content (from 5 0 R),
+/// and what the viewer said on its stderr.
+fn warned(name: &str, resources: &str, content: &str, objects: &[String]) -> String {
+    let mut all = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources {resources} /Contents 4 0 R >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    all.extend_from_slice(objects);
+    let pdf = tmp(name, &format!("{name}.pdf"));
+    std::fs::write(&pdf, self::pdf(&all)).unwrap();
+    let out = view(&pdf, &["--protocol", "kitty"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(images(&out.stdout).len(), 1, "the page is still drawn");
+    text(&out.stderr)
+}
+
+/// An image whose `/Indexed` lookup table is shorter than its `hival` asks: the backend warns.
+#[test]
+fn an_image_with_a_malformed_colour_table_is_said() {
+    let image = "<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /BitsPerComponent 8 \
+                 /ColorSpace [/Indexed /DeviceRGB 255 <FF0000>] /Length 2 >>\nstream\n\u{0}\u{1}\nendstream";
+    let said = warned("indexed", "<< /XObject << /Im1 5 0 R >> >>", "q 200 0 0 200 0 0 cm /Im1 Do Q", &[image.into()]);
+    assert!(said.contains("warning: page 1: an image whose colour table is malformed may be drawn wrongly, or not at all"), "{said}");
+}
+
+/// A Type 3 font without its `/Widths`: the backend warns.
+#[test]
+fn a_type3_font_without_its_widths_is_said() {
+    let glyph = "0 0 0 0 750 750 d1 0 0 750 750 re f";
+    let font = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 750 750] /FontMatrix [0.001 0 0 0.001 0 0] \
+                /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 >>";
+    let said = warned(
+        "type3",
+        "<< /Font << /F1 5 0 R >> >>",
+        "BT /F1 50 Tf 20 80 Td (aaa) Tj ET",
+        &[font.into(), format!("<< /Length {} >>\nstream\n{glyph}\nendstream", glyph.len())],
+    );
+    assert!(said.contains("warning: page 1: a font without the widths it must give was spaced by its glyphs' own"), "{said}");
+}
+
 /// A page tree naming one page `pages` times: under a megabyte for a hundred thousand pages.
 fn one_page_named(pages: usize) -> Vec<u8> {
     let kids = vec!["3 0 R"; pages].join(" ");
