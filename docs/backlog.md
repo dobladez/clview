@@ -175,3 +175,18 @@ launcher and its test. Candidates: `gio open`, `kde-open`, `exo-open`, `termux-o
 and WSL's `wslview`. `wslview` hands the path on to PowerShell or `cmd.exe`, a parser of its own, so
 it waits for tests on a real WSL with names holding quotes, `$()`, backticks and `&`; `explorer.exe`
 with `wslpath -w` is the other way there, with parsing of its own to test too.
+
+### `f` in a list: labels on tiles
+
+`f` labels a file's links and follows the one typed ([Spec-0011](specs/0011-follow-a-documents-links.md)).
+In a list, the same labels could go on the tiles on screen, typing one opening it as `Enter` does:
+Vimium's own use, a click without a mouse. The labels' codes and drawing would be the same; only
+what a label stands for differs, a tile and not a link.
+
+### A table of contents to browse
+
+A PDF's outline (pdfcraft's `DocInfo.outline`: titles, levels, each a page and a place) and a
+document's headings (paragraphs with an outline level, which wordcraft's PDF exporter already lists
+with their pages) could be shown over the pages as `?`'s keys are, and one chosen gone to, as
+following a link to a place in the document goes there
+([Spec-0011](specs/0011-follow-a-documents-links.md)), `u` coming back.
