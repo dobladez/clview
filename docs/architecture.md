@@ -1417,6 +1417,39 @@ specification is a local path; a script, a launch, a change of layers and any ot
 (`pdfcraft_render::named_destination`) by reading the file again, which is why the links have a
 thread.
 
+### A document's links (`wordcraft.rs`)
+
+A document's links are read from the layout the pool renders with and a search reads
+(`Document::shared`), on a queue's thread (`Linker`): no second layout. A page's are those of the
+body paragraphs on it (`Document::on`, as a search's chunks), tables' cells included: each
+paragraph is cut into the runs that carry a link (`Paragraph::run_ranges`, `CharProps::link`),
+runs side by side with the same address one link, and its cross-reference fields that are links
+(`spans`). A field is one when its instruction is `REF` or `PAGEREF` with `\h` (`field_link`, a
+parser of the backend's own, the instruction held to 1,024 bytes: wordcraft's readings of it are
+its app's and its layout's, neither public), unless a run's link is over it already, as a table
+of contents' entry has it. A link's rectangles are wordcraft's selection of its bytes on that page
+(`DocLayout::selection_rects`), a line each, at most 64.
+
+Where an address leads (`Linker::leads`): `#name` to a `Place`, the bookmark of that name
+(`Document::bookmarks`, read once) where the layout puts it (`DocLayout::caret`: its page, and the
+top of its line), or an `Other` saying the document has none; what starts with a scheme to a
+`Web`, as written; anything else to a `File`, its path and the name after `#` percent-decoded, as
+a URL's are, since what reads Markdown writes them so. A name is looked for among the names the
+document gives itself, exactly, then in any case, then among Markdown's heading slugs the same
+way, as written and then percent-decoded (`Linker::place`); `Ask::Name` is answered the same.
+
+wordcraft's HTML importer makes a bookmark of an `<a>`'s `id` or `name`, and of nothing else, so
+the places HTML and Markdown have are written as such anchors before it reads them.
+`ids_as_anchors`, a pass over the HTML as the fenced blocks' scanner is (`blocks_drawn`, the same
+`Piece`s), writes an `<a id="…"></a>` for every other element with an `id`, before the next text or
+picture after its tag: there it joins the paragraph the element starts, where right after the tag
+it would make an empty paragraph of its own between two blocks. `markdown_as_html` holds a
+heading's events until its end, and writes an anchor at its start named by the id GitHub gives it
+(`slugged`), with a private-use character before it (`SLUG`), which keeps a heading's place apart
+from the ids a document writes itself, looked for first.
+
+A spreadsheet's `Noted` hands `links` on to the PDF it prints to, as it does `texts`.
+
 ## The terminal's state
 
 The pager runs on the alternate screen, in raw mode, with the cursor hidden and line wrap off.

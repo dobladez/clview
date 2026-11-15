@@ -15,6 +15,12 @@
 //! `source/picture.rs`, when a page they are on first renders. A fenced block written in a language
 //! a backend lists (` ```mermaid `) is such a picture, of its text
 //! ([ADR-0032](../../docs/adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
+//!
+//! A document's links are read from the same layout a search reads ([`Linker`]): the runs of its
+//! body's paragraphs that carry a link, and its cross-reference fields, each where wordcraft's
+//! selection puts it; a place in it is one of its bookmarks. Markdown's headings get GitHub's ids
+//! and HTML's elements with an `id` are places too, both written as the anchors wordcraft's
+//! importer makes bookmarks of ([`slugged`], [`ids_as_anchors`]).
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -36,8 +42,9 @@ use super::picture::{Pictures, Promised};
 use super::texts::{Answer, Queue};
 use super::threads::Threads;
 use super::{
-    Again, Anchor, Auto, Backend, Bounds, Deferred, Effect, Format, Frame, Got, Input, Job, Keys, Named, Numbers, Opened, Pixels, Pool, Render,
-    Reopenable, Request, Room, Setting, Source, Texts, Value, Values, Want, guarded,
+    Again, Anchor, Ask, Auto, Backend, Bounds, Deferred, Effect, Format, Frame, Got, Input, Job, Keys, Link, Links, MAX_ADDRESS, MAX_LINK_RECTS,
+    MAX_LINKS, MAX_NAME, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request, Room, Setting, Source, Target, Texts, Told, Value,
+    Values, Want, guarded,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -1037,6 +1044,281 @@ impl Source for Paged {
         queue.start("document text", Reader { document: self.0.clone(), laid: self.0.shared(), paths: None });
         Some(Box::new(Paragraphs { queue, document: self.0.clone() }))
     }
+
+    /// Its body's links, read from the layout the pool renders with, on a thread of their own.
+    fn links(&self) -> Option<Box<dyn Links>> {
+        let queue = Queue::new();
+        let mut linker = Linker { document: self.0.clone(), laid: self.0.shared(), paths: None, places: None };
+        queue.serve("document links", move |ask| match ask {
+            Ask::Page(page) => match linker.on(page) {
+                Ok((links, more)) => Told::Page { page, links: Ok(links), more },
+                Err(why) => Told::Page { page, links: Err(why), more: 0 },
+            },
+            Ask::Name(name) => Told::Name { at: linker.named(&name), name },
+        });
+        Some(Box::new(Linked { queue }))
+    }
+}
+
+/// A document's links for the viewer ([`Links`]), answered on a queue's thread by a [`Linker`].
+struct Linked {
+    queue: Queue<Told>,
+}
+
+impl Links for Linked {
+    fn set_queue(&self, wanted: Vec<Ask>) {
+        self.queue.set_queue(wanted);
+    }
+
+    fn try_recv(&self) -> Option<Told> {
+        self.queue.try_recv()
+    }
+}
+
+/// What starts the name of a bookmark clv made of a Markdown heading's slug ([`slugged`]), a
+/// character of the private use area: a place the document names itself is looked for first, by
+/// its own name, so that it wins over a heading's.
+const SLUG: char = '\u{E000}';
+
+/// The longest instruction of a field read for a link.
+const MAX_INSTRUCTION: usize = 1024;
+
+/// The queue's side of a document's links: the layout, laid out by the first to want it, a render,
+/// a search or this; its body's paragraphs, in order, once read; and its bookmarks, once asked.
+struct Linker {
+    document: Arc<Document>,
+    laid: Arc<Cache>,
+    paths: Option<Vec<wordcraft_doc::Path>>,
+    places: Option<Vec<(String, Pos)>>,
+}
+
+impl Linker {
+    /// The layout, and the body's paragraphs and the bookmarks read from it if they weren't.
+    fn laid(&mut self) -> Result<Arc<Laid>, String> {
+        let laid = self.document.laid(&self.laid)?;
+        if self.paths.is_none() || self.places.is_none() {
+            let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+            let (paths, places) = caught(|| Ok((document.para_paths(StoryRef::Body), document.bookmarks())))?;
+            (self.paths, self.places) = (Some(paths), Some(places));
+        }
+        Ok(laid)
+    }
+
+    /// Page `page`'s links, at most [`MAX_LINKS`], and how many more it has: of each body paragraph
+    /// on it, tables' cells included, the runs that carry a link and the cross-reference fields
+    /// that are one ([`spans`]), each over the rectangles wordcraft's selection gives it on that
+    /// page, a line each.
+    fn on(&mut self, page: usize) -> Result<(Vec<Link>, usize), String> {
+        let laid = self.laid()?;
+        let document = laid.document.read().unwrap_or_else(PoisonError::into_inner);
+        let (mut links, mut more) = (Vec::new(), 0usize);
+        let paragraphs = self.document.on.get(page).cloned().unwrap_or_default();
+        for path in self.paths.as_deref().unwrap_or_default().get(paragraphs).unwrap_or_default() {
+            let Some(para) = document.para(StoryRef::Body, path) else { continue };
+            for (start, end, address) in spans(para) {
+                let (a, b) = (Pos::new(StoryRef::Body, path.clone(), start), Pos::new(StoryRef::Body, path.clone(), end));
+                let selected = caught(|| Ok(laid.layout.selection_rects(&document, &a, &b, page)))?;
+                let rects: Vec<[f32; 4]> =
+                    selected.into_iter().filter(|(on, _)| *on == page).map(|(_, r)| [r.x, r.y, r.x + r.w, r.y + r.h]).collect();
+                if rects.is_empty() {
+                    continue;
+                }
+                if links.len() >= MAX_LINKS {
+                    more = more.saturating_add(1);
+                    continue;
+                }
+                let rects = rects.into_iter().take(MAX_LINK_RECTS).collect();
+                let target = self.leads(&laid, &address)?;
+                links.push(Link { page, rects, address: Some(address).filter(|address| address.len() <= MAX_ADDRESS), target });
+            }
+        }
+        Ok((links, more))
+    }
+
+    /// Where the link `address` leads, as the document writes it: `#name` to the place of that
+    /// name in this document, or said not to be in it; what starts as a URI does, a scheme and a
+    /// colon, to a web address, whatever the scheme; anything else to a file, by its path, with
+    /// the place in it after a `#`. A path and a name are a URL's: percent-decoded, where that
+    /// gives text.
+    fn leads(&self, laid: &Laid, address: &str) -> Result<Target, String> {
+        if address.len() > MAX_ADDRESS {
+            return Ok(Target::Other("a link whose address is too long to follow".into()));
+        }
+        if let Some(name) = address.strip_prefix('#') {
+            return Ok(match self.place(laid, name)? {
+                Some((page, y)) => Target::Place { page, y },
+                None => Target::Other(format!("no #{} in this document", decoded(name))),
+            });
+        }
+        let scheme = address.split_once(':').map(|(scheme, _)| scheme);
+        let is_scheme = |scheme: &str| {
+            scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        };
+        if scheme.is_some_and(is_scheme) {
+            return Ok(Target::Web(address.to_owned()));
+        }
+        let (path, fragment) = match address.split_once('#') {
+            Some((path, name)) => (path, Some(decoded(name).into_owned()).filter(|name| !name.is_empty())),
+            None => (address, None),
+        };
+        Ok(match fragment.as_ref().is_some_and(|name| name.len() > MAX_NAME) {
+            true => Target::Other("a link to a place whose name is too long to follow".into()),
+            false => Target::File { path: decoded(path).into_owned(), fragment, page: None },
+        })
+    }
+
+    /// Where the place called `name` is, [`Ask::Name`]'s answer: none for a name the document
+    /// hasn't.
+    fn named(&mut self, name: &str) -> Result<Option<(usize, f32)>, String> {
+        let laid = self.laid()?;
+        self.place(&laid, name)
+    }
+
+    /// Where the place called `name` is in the layout: the page its bookmark is on, and how far
+    /// down it, in points. A name the document gives itself first (a Word bookmark, HTML's `id`),
+    /// exactly, then in any case, as wordcraft's own links find theirs; then a Markdown heading's
+    /// slug, the same way; each as written, then percent-decoded.
+    fn place(&self, laid: &Laid, name: &str) -> Result<Option<(usize, f32)>, String> {
+        if name.is_empty() || name.len() > MAX_NAME {
+            return Ok(None);
+        }
+        let places = self.places.as_deref().unwrap_or_default();
+        let find = |wanted: &str| {
+            let slug = |held: &str| held.strip_prefix(SLUG).map(str::to_owned);
+            let own = |held: &str| (!held.starts_with(SLUG)).then(|| held.to_owned());
+            let by = |of: &dyn Fn(&str) -> Option<String>, same: &dyn Fn(&str, &str) -> bool| {
+                places.iter().find(|(held, _)| of(held).is_some_and(|held| same(&held, wanted))).map(|(_, at)| at)
+            };
+            let (exact, any_case) = (|a: &str, b: &str| a == b, |a: &str, b: &str| a.to_lowercase() == b.to_lowercase());
+            by(&own, &exact).or_else(|| by(&own, &any_case)).or_else(|| by(&slug, &exact)).or_else(|| by(&slug, &any_case))
+        };
+        let Some(at) = find(name).or_else(|| find(&decoded(name))) else { return Ok(None) };
+        let caret = caught(|| Ok(laid.layout.caret(at)))?;
+        Ok(caret.map(|caret| (caret.page, caret.top.max(0.0))))
+    }
+}
+
+/// `text` with each `%` and two hexadecimal digits made the byte they say, as a URL's path or
+/// fragment is read; as it is where that isn't UTF-8, or nothing is encoded.
+fn decoded(text: &str) -> Cow<'_, str> {
+    if !text.contains('%') {
+        return Cow::Borrowed(text);
+    }
+    let bytes = text.as_bytes();
+    let digit = |b: Option<&u8>| b.and_then(|b| char::from(*b).to_digit(16)).and_then(|d| u8::try_from(d).ok());
+    let (mut out, mut at) = (Vec::with_capacity(bytes.len()), 0usize);
+    while let Some(byte) = bytes.get(at) {
+        match (*byte, digit(bytes.get(at.saturating_add(1))), digit(bytes.get(at.saturating_add(2)))) {
+            (b'%', Some(high), Some(low)) => {
+                out.push(high.saturating_mul(16).saturating_add(low));
+                at = at.saturating_add(3);
+            }
+            _ => {
+                out.push(*byte);
+                at = at.saturating_add(1);
+            }
+        }
+    }
+    String::from_utf8(out).map_or(Cow::Borrowed(text), Cow::Owned)
+}
+
+/// The links of `para`, each from its first byte to past its last, with its address: the runs
+/// that carry one, runs side by side with the same address one link; and the cross-reference
+/// fields that are links ([`field_link`]), where no run's link is over them already.
+fn spans(para: &Paragraph) -> Vec<(usize, usize, String)> {
+    let mut spans: Vec<(usize, usize, String)> = Vec::new();
+    for (range, props) in para.run_ranges() {
+        let Some(link) = props.link.as_deref().filter(|link| !link.is_empty()) else { continue };
+        match spans.last_mut() {
+            Some((_, end, address)) if *end == range.start && address == link => *end = range.end,
+            _ => spans.push((range.start, range.end, link.to_owned())),
+        }
+    }
+    let runs = spans.len();
+    for (at, object) in para.objects_with_offsets() {
+        let InlineObject::Field { instr, .. } = object else { continue };
+        let covered = spans.get(..runs).unwrap_or_default().iter().any(|(start, end, _)| (*start..*end).contains(&at));
+        if let Some(address) = field_link(instr).filter(|_| !covered) {
+            spans.push((at, at.saturating_add(OBJ.len_utf8()), address));
+        }
+    }
+    spans.sort_by_key(|(start, ..)| *start);
+    spans
+}
+
+/// The link a cross-reference field makes, as `#name`: `REF name \h` and `PAGEREF name \h` lead
+/// to the bookmark `name`, as in Word; without `\h` their result is plain text. The name is the
+/// first of the instruction's arguments, in quotes or not; a switch is a backslash and a
+/// character, and `\*`, `\#` and `\@` take the argument after them. An instruction past
+/// [`MAX_INSTRUCTION`], or a name past [`MAX_NAME`], makes none. (wordcraft's own reading of these
+/// is its app's and its layout's, neither of them public.)
+fn field_link(instr: &str) -> Option<String> {
+    if instr.len() > MAX_INSTRUCTION {
+        return None;
+    }
+    let mut rest = instr.trim_start();
+    // A word, quoted or not, and what follows it.
+    let word = |rest: &mut &str| -> Option<String> {
+        let text = rest.trim_start();
+        if text.is_empty() {
+            return None;
+        }
+        let (word, after) = match text.strip_prefix('"') {
+            Some(quoted) => match quoted.find('"') {
+                Some(end) => (quoted.get(..end)?, quoted.get(end.saturating_add(1)..)?),
+                None => (quoted, ""),
+            },
+            None => {
+                let end = text.find(char::is_whitespace).unwrap_or(text.len());
+                (text.get(..end)?, text.get(end..)?)
+            }
+        };
+        *rest = after;
+        Some(word.to_owned())
+    };
+    let kind = word(&mut rest)?;
+    if !(kind.eq_ignore_ascii_case("REF") || kind.eq_ignore_ascii_case("PAGEREF")) {
+        return None;
+    }
+    let (mut name, mut linked) = (None, false);
+    while let Some(next) = word(&mut rest) {
+        match next.strip_prefix('\\') {
+            Some(switch) if switch.eq_ignore_ascii_case("h") => linked = true,
+            // A format switch's argument is no bookmark.
+            Some("*" | "#" | "@") => {
+                word(&mut rest);
+            }
+            Some(_) => {}
+            None if name.is_none() => name = Some(next),
+            None => {}
+        }
+    }
+    name.filter(|name| linked && !name.is_empty() && name.len() <= MAX_NAME).map(|name| format!("#{name}"))
+}
+
+/// A heading's id as GitHub gives it: its text in lower case, what is neither a letter, a number,
+/// a hyphen nor an underscore dropped, each space a hyphen; and `-1`, `-2`, … after it for the
+/// second, the third heading of `seen` that comes to the same, which it is added to.
+fn slugged(heading: &str, seen: &mut HashMap<String, usize>) -> String {
+    let slug: String = heading
+        .trim()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            c if c.is_alphanumeric() || matches!(c, '-' | '_') => Some(c),
+            _ => None,
+        })
+        .collect();
+    // The first as it is; the next with the least number none before it has.
+    let mut numbered = slug.clone();
+    while seen.contains_key(&numbered) {
+        let count = seen.entry(slug.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        numbered = format!("{slug}-{count}");
+    }
+    seen.insert(numbered.clone(), 0);
+    numbered
 }
 
 /// The most bytes of a paragraph's text a search reads: a longer one is left unread, as the viewer
@@ -1512,6 +1794,52 @@ fn blocks_drawn<'h>(html: &'h str, pictures: &Pictures<'_>, fit: (f32, f32)) -> 
     Cow::Owned(out)
 }
 
+/// The most ids waiting for the next text to be written before, as anchors ([`ids_as_anchors`]).
+const MAX_IDS_WAITING: usize = 64;
+
+/// `html` with every element that has an `id` made a place: an `<a id="…"></a>` for it, which
+/// wordcraft's importer makes a bookmark of, where it makes one only of an `<a>`'s own `id` or
+/// `name`. The anchor is written before the next text or picture after the element's tag, so that
+/// it lands in the paragraph the element starts and makes none of its own: an element with nothing
+/// after it is no place. Its `id` is written as the document has it, entities and all. An `<a>` is
+/// left to the importer, what the importer reads no text of ([`SKIPPED`], and a page's `<title>`)
+/// is passed over, and an id past [`MAX_NAME`] is none. One pass, as [`blocks_drawn`]'s.
+fn ids_as_anchors(html: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let (mut written, mut at) = (0usize, 0usize);
+    let mut waiting: Vec<&str> = Vec::new();
+    while let Some((piece, next)) = Piece::at(html, at) {
+        let from = at;
+        at = next;
+        let shows = match &piece {
+            Piece::Text(text) => !text.trim().is_empty(),
+            Piece::Start(tag) => tag.is("img"),
+            Piece::End(_) | Piece::Other => false,
+        };
+        if shows && !waiting.is_empty() {
+            out.push_str(html.get(written..from).unwrap_or_default());
+            for id in waiting.drain(..) {
+                out.push_str(&format!("<a id=\"{}\"></a>", id.replace('"', "&quot;")));
+            }
+            written = from;
+        }
+        let Piece::Start(tag) = piece else { continue };
+        if !tag.self_closed && (tag.is("title") || SKIPPED.iter().any(|name| tag.is(name))) {
+            at = past_end_tag(html, at, tag.name);
+            continue;
+        }
+        let id = tag.id.filter(|id| !id.is_empty() && id.len() <= MAX_NAME && !tag.is("a"));
+        if let Some(id) = id.filter(|_| waiting.len() < MAX_IDS_WAITING) {
+            waiting.push(id);
+        }
+    }
+    if written == 0 {
+        return Cow::Borrowed(html);
+    }
+    out.push_str(html.get(written..).unwrap_or_default());
+    Cow::Owned(out)
+}
+
 /// The elements whose text wordcraft's importer leaves out, tags and all, up to their end tag.
 const SKIPPED: [&str; 5] = ["script", "style", "noscript", "template", "textarea"];
 
@@ -1527,12 +1855,13 @@ enum Piece<'h> {
     Other,
 }
 
-/// A start tag: its name as written, and of its attributes the first `class` and the first `lang`,
-/// as written too, their entities not decoded.
+/// A start tag: its name as written, and of its attributes the first `class`, the first `lang` and
+/// the first `id`, as written too, their entities not decoded.
 struct StartTag<'h> {
     name: &'h str,
     class: Option<&'h str>,
     lang: Option<&'h str>,
+    id: Option<&'h str>,
     /// Ended by `/>`.
     self_closed: bool,
 }
@@ -1610,7 +1939,7 @@ fn start_tag(rest: &str) -> (StartTag<'_>, usize) {
     };
     let named = bytes.get(1..).unwrap_or_default().iter().take_while(|b| in_name(b)).count();
     let mut i = named.saturating_add(1);
-    let mut tag = StartTag { name: rest.get(1..i).unwrap_or_default(), class: None, lang: None, self_closed: false };
+    let mut tag = StartTag { name: rest.get(1..i).unwrap_or_default(), class: None, lang: None, id: None, self_closed: false };
     loop {
         i = blank(i);
         match (at(i), at(i.saturating_add(1))) {
@@ -1663,6 +1992,8 @@ fn start_tag(rest: &str) -> (StartTag<'_>, usize) {
             tag.class = Some(value);
         } else if attribute.eq_ignore_ascii_case("lang") && tag.lang.is_none() {
             tag.lang = Some(value);
+        } else if attribute.eq_ignore_ascii_case("id") && tag.id.is_none() {
+            tag.id = Some(value);
         }
     }
     (tag, i.min(rest.len()))
@@ -1760,6 +2091,34 @@ fn markdown_as_html(text: &str, pictures: &Pictures<'_>, fit: (f32, f32)) -> Str
             (_, other) => [Some(other), None, None],
         };
         [before, event, text, end, after].into_iter().flatten()
+    });
+    // A heading is a place, by the id GitHub gives it ([`slugged`]): an anchor at its start, which
+    // wordcraft's importer makes a bookmark of, named apart from the ids the document writes itself
+    // ([`SLUG`]). Its events are held until its end, where its text is known.
+    let mut seen = HashMap::new();
+    let mut heading: Option<Vec<Event<'_>>> = None;
+    let events = events.flat_map(move |event| match (heading.take(), event) {
+        (None, start @ Event::Start(Tag::Heading { .. })) => {
+            heading = Some(vec![start]);
+            Vec::new()
+        }
+        (Some(mut held), end @ Event::End(TagEnd::Heading(_))) => {
+            let text: String =
+                held.iter().filter_map(|event| if let Event::Text(text) | Event::Code(text) = event { Some(&**text) } else { None }).collect();
+            let slug = slugged(&text, &mut seen);
+            if !slug.is_empty() && slug.len() < MAX_NAME {
+                // Letters, numbers, hyphens and underscores: nothing to escape.
+                held.insert(1.min(held.len()), Event::InlineHtml(format!("<a id=\"{SLUG}{slug}\"></a>").into()));
+            }
+            held.push(end);
+            held
+        }
+        (Some(mut held), event) => {
+            held.push(event);
+            heading = Some(held);
+            Vec::new()
+        }
+        (None, event) => vec![event],
     });
     let mut out = String::with_capacity(text.len());
     pulldown_cmark::html::push_html(&mut out, events);
@@ -1879,7 +2238,8 @@ fn marked_up(
     // page goes into the conversion, since tables size to its width there; `import_with` would give them
     // the default page's. (What that entry point does first, `begin_import`, only starts wordcraft's log of
     // what an import dropped afresh, and is the crate's own.)
-    let flow = wordcraft_formats::html::parse_with(&as_html(bytes), &|source: &str| pictures.measured(source, fit));
+    let html = as_html(bytes);
+    let flow = wordcraft_formats::html::parse_with(&ids_as_anchors(&html), &|source: &str| pictures.measured(source, fit));
     let mut document = wordcraft_formats::model::to_doc_in(&flow, page);
     let measured: HashMap<&str, Measured> = document
         .media
@@ -3939,6 +4299,246 @@ mod tests {
         for (page, paras) in pages.iter().enumerate() {
             assert!(paras.iter().all(|para| on[page].contains(&(para.index as usize))), "page {page}: {paras:?} not in {:?}", on[page]);
         }
+    }
+
+    /// A heading's id is GitHub's: lower case, punctuation dropped, spaces to hyphens, whatever
+    /// the script; and a number after it for each heading that comes to the same again.
+    #[test]
+    fn slug_of_a_heading_is_githubs_and_repeats_are_numbered() {
+        let mut seen = HashMap::new();
+        let mut slug = |heading: &str| slugged(heading, &mut seen);
+        assert_eq!(slug("Install"), "install");
+        assert_eq!(slug("What's new, in 2.0?"), "whats-new-in-20");
+        assert_eq!(slug("  Following links  "), "following-links");
+        assert_eq!(slug("A  B_c-d"), "a--b_c-d");
+        assert_eq!(slug("Über uns & Čeština 日本語"), "über-uns--čeština-日本語");
+        assert_eq!(slug("`clv --help` 🎉"), "clv---help-");
+        assert_eq!((slug("Install"), slug("install"), slug("INSTALL!")), ("install-1".into(), "install-2".into(), "install-3".into()));
+        // A heading that is another's number: the next free one.
+        assert_eq!((slug("Install 1"), slug("Install")), ("install-1-1".into(), "install-4".into()));
+        assert_eq!((slug("?!"), slug("")), (String::new(), "-1".into()));
+    }
+
+    /// A cross-reference field is a link when it says so: `REF` and `PAGEREF` with `\h`, to the
+    /// bookmark that is their first argument, quoted or not, whatever their other switches; without
+    /// `\h`, or any other field, none.
+    #[test]
+    fn field_link_is_a_ref_or_pageref_with_the_hyperlink_switch() {
+        assert_eq!(field_link(r" REF _Ref123456 \h ").as_deref(), Some("#_Ref123456"));
+        assert_eq!(field_link(r"PAGEREF _Toc42 \h").as_deref(), Some("#_Toc42"));
+        assert_eq!(field_link(r"pageref _Toc42 \H \p").as_deref(), Some("#_Toc42"));
+        assert_eq!(field_link(r#"REF "My bookmark" \h \* MERGEFORMAT"#).as_deref(), Some("#My bookmark"));
+        assert_eq!(field_link(r"REF \h _Ref1").as_deref(), Some("#_Ref1"), "a switch before the name");
+        assert_eq!(field_link(r"REF \* Upper target \h").as_deref(), Some("#target"), "a format's argument is no name");
+        assert_eq!(field_link(r#"REF \* "h" target \h"#).as_deref(), Some("#target"));
+        for none in [
+            r"REF _Ref123456",
+            r"REF _Ref123456 \* MERGEFORMAT",
+            r"REF _Ref1 \* h",
+            r"REF \h",
+            r#"REF "" \h"#,
+            r"PAGE \h",
+            r"REFS x \h",
+            r#"HYPERLINK "https://example.com" \h"#,
+            r"TOC \h \z",
+            "",
+            "   ",
+            r"\h",
+        ] {
+            assert_eq!(field_link(none), None, "{none:?}");
+        }
+        assert_eq!(field_link(r#"REF "never closed \h"#), None, "the switch is in the quotes");
+        assert_eq!(field_link(&format!(r"REF {} \h", "x".repeat(MAX_NAME))).map(|link| link.len()), Some(MAX_NAME + 1));
+        assert_eq!(field_link(&format!(r"REF {} \h", "x".repeat(MAX_NAME + 1))), None);
+        assert_eq!(field_link(&format!(r"REF x \h {}", " ".repeat(MAX_INSTRUCTION))), None);
+    }
+
+    /// What `links` gives for `wanted`, each once, within twenty seconds.
+    fn told(links: &dyn Links, wanted: Vec<Ask>) -> Vec<Told> {
+        let (mut got, begun) = (Vec::new(), std::time::Instant::now());
+        while got.len() < wanted.len() && begun.elapsed() < std::time::Duration::from_secs(20) {
+            links.set_queue(wanted.clone());
+            match links.try_recv() {
+                Some(one) => got.push(one),
+                None => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        got
+    }
+
+    /// Every link of `paged`, page by page: its page, its address and where it leads.
+    fn links_of(paged: &Paged) -> Vec<(usize, Option<String>, Target)> {
+        let links = paged.links().unwrap();
+        let mut all = Vec::new();
+        for told in told(&*links, (0..paged.pages()).map(Ask::Page).collect()) {
+            let Told::Page { page, links: Ok(links), more: 0 } = told else { panic!("a page's links unread") };
+            for link in links {
+                let (width, height) = paged.size(page).unwrap();
+                assert!(!link.rects.is_empty() && link.page == page);
+                assert!(
+                    link.rects.iter().all(|[x0, y0, x1, y1]| *x0 >= 0.0 && x0 < x1 && *x1 <= width && *y0 >= 0.0 && y0 < y1 && *y1 <= height),
+                    "{:?}",
+                    link.rects
+                );
+                all.push((page, link.address, link.target));
+            }
+        }
+        all.sort_by_key(|(page, ..)| *page);
+        all
+    }
+
+    /// Where the place `name` is in `paged`, as its links say.
+    fn place_of(paged: &Paged, name: &str) -> Option<(usize, f32)> {
+        let links = paged.links().unwrap();
+        match told(&*links, vec![Ask::Name(name.into())]).pop() {
+            Some(Told::Name { at: Ok(at), .. }) => at,
+            _ => panic!("{name} unanswered"),
+        }
+    }
+
+    /// Markdown's links: to a heading, by the id GitHub gives it, a repeat's numbered; to a web
+    /// address; to another file, with the place in it, a path and a name read as a URL's; and to a
+    /// place the document hasn't, which says so. A place the document names itself wins over a
+    /// heading's, a table's cells have their links, and each link is where its text is drawn.
+    #[test]
+    fn links_of_markdown_lead_to_headings_files_and_the_web() {
+        let filler = "Filler.\n\n".repeat(60);
+        let markdown = format!(
+            "# Top\n\n[install](#install) [again](#install-1) [third](#Install-2) [own](#usage) [gone](#nowhere) [uber](#über-uns)\n\n\
+             [web](https://example.com/a?b=c) [mail](mailto:a@example.com) [script](javascript:alert(1))\n\n\
+             [guide](docs/guide.md#usage) [spaced](<my file.md>) [encoded](caf%C3%A9.md#%C3%BCber) [up](../README.md)\n\n\
+             | a | b |\n|---|---|\n| [cell](#top) | x |\n\n{filler}## Install\n\n{filler}## Install\n\ntext <a id=\"usage\"></a>here\n\n{filler}## Install\n\n## Usage\n\n## Über uns\n"
+        );
+        let paged = paged("links.md", markdown.as_bytes());
+        assert!(paged.pages() > 2, "{} pages", paged.pages());
+        let links = links_of(&paged);
+        let lead =
+            |address: &str| links.iter().find(|(_, held, _)| held.as_deref() == Some(address)).map(|(page, _, target)| (*page, target.clone()));
+        let place = |address: &str| match lead(address) {
+            Some((0, Target::Place { page, y })) => (page, y),
+            other => panic!("{address}: {other:?}"),
+        };
+        // The headings, in order down the document, each where it is asked for by name too.
+        let (first, second, third) = (place("#install"), place("#install-1"), place("#Install-2"));
+        assert!(first < second && second < third && first.0 >= 1, "{first:?} {second:?} {third:?}");
+        assert_eq!((place_of(&paged, "install"), place_of(&paged, "install-1")), (Some(first), Some(second)));
+        assert_eq!(place_of(&paged, "INSTALL-2"), Some(third), "in any case");
+        // `#usage` is the document's own anchor, before the heading `Usage`.
+        let own = place("#usage");
+        assert!(second < own && own < third, "{own:?}");
+        assert_eq!(place("#top"), (0, place("#top").1));
+        assert!(place("#top").1 < 100.0);
+        // Written percent-encoded by what reads the Markdown, and found all the same.
+        assert!(place("#%C3%BCber-uns") > third);
+        assert_eq!(place_of(&paged, "über-uns"), Some(place("#%C3%BCber-uns")));
+        assert_eq!(lead("#nowhere"), Some((0, Target::Other("no #nowhere in this document".into()))));
+        assert_eq!((place_of(&paged, "nowhere"), place_of(&paged, ""), place_of(&paged, &"x".repeat(MAX_NAME + 1))), (None, None, None));
+        // The web, as written; what is made of a scheme is the viewer's to say.
+        assert_eq!(lead("https://example.com/a?b=c"), Some((0, Target::Web("https://example.com/a?b=c".into()))));
+        assert_eq!(lead("mailto:a@example.com"), Some((0, Target::Web("mailto:a@example.com".into()))));
+        // wordcraft's importer makes no link of a script.
+        assert!(!links.iter().any(|(_, held, _)| held.as_deref().is_some_and(|held| held.contains("script"))));
+        // Other files, by their paths as a URL has them.
+        let file = |path: &str, fragment: Option<&str>| Target::File { path: path.into(), fragment: fragment.map(String::from), page: None };
+        assert_eq!(lead("docs/guide.md#usage"), Some((0, file("docs/guide.md", Some("usage")))));
+        assert_eq!(lead("my%20file.md"), Some((0, file("my file.md", None))));
+        assert_eq!(lead("caf%C3%A9.md#%C3%BCber"), Some((0, file("café.md", Some("über")))));
+        assert_eq!(lead("../README.md"), Some((0, file("../README.md", None))));
+        assert_eq!(links.len(), 13, "{links:?}");
+    }
+
+    /// HTML's elements with an `id` are places, whatever the element, as an `<a>`'s `id` and `name`
+    /// are; and making them places adds no paragraph and moves none.
+    #[test]
+    fn links_of_html_lead_to_any_element_with_an_id() {
+        let filler = "<p>Filler.</p>".repeat(60);
+        let page = |ids: bool| {
+            let id = |name: &str| if ids { format!(" id=\"{name}\"") } else { String::new() };
+            format!(
+                "<html{}><head><title{}>A title</title><style id=\"s\">p {{ margin: 0 }}</style></head><body><p><a href=\"#usage\">usage</a> \
+                 <a href=\"#deep\">deep</a> <a href=\"#row\">row</a> <a href=\"#named\">named</a> <a href=\"#s\">style</a> <a href=\"#last\">last</a> \
+                 <a href=\"#it's\">quoted</a></p>{filler}<h2{}>Usage</h2>{filler}<div{}>\n  <div><p>Deep</p></div></div>{filler}\
+                 <table><tr{}><td>Cell</td></tr></table><p><a name=\"named\">Named</a></p><p id='it&#39;s'>Quoted</p><p{}></p></body></html>",
+                id("root"),
+                id("title"),
+                id("usage"),
+                id("deep"),
+                id("row"),
+                id("last"),
+            )
+        };
+        let (with, without) = (paged("ids.html", page(true).as_bytes()), paged("ids.html", page(false).as_bytes()));
+        assert_eq!((with.pages(), with.0.count, &with.0.sizes), (without.pages(), without.0.count, &without.0.sizes), "the ids changed the layout");
+        let links = links_of(&with);
+        let place = |address: &str| match links.iter().find(|(_, held, _)| held.as_deref() == Some(address)) {
+            Some((0, _, Target::Place { page, y })) => (*page, *y),
+            other => panic!("{address}: {other:?}"),
+        };
+        let (usage, deep, row, named) = (place("#usage"), place("#deep"), place("#row"), place("#named"));
+        assert!(usage.0 >= 1 && usage < deep && deep < row && row < named, "{usage:?} {deep:?} {row:?} {named:?}");
+        assert!(place("#it's") > named);
+        // The page's own root is where its first text is; an element with nothing after it is no place.
+        assert_eq!(place_of(&with, "root").map(|(page, _)| page), Some(0));
+        let said = |address: &str| links.iter().find(|(_, held, _)| held.as_deref() == Some(address)).map(|(_, _, target)| target.clone());
+        assert_eq!(said("#last"), Some(Target::Other("no #last in this document".into())));
+        assert_eq!(said("#s"), Some(Target::Other("no #s in this document".into())), "a style's id");
+        assert_eq!(place_of(&with, "title"), None);
+        // Without the ids, every one of them leads nowhere.
+        let plain = links_of(&without);
+        let written = |held: &Option<String>| matches!(held.as_deref(), Some("#named" | "#it's"));
+        assert!(plain.iter().filter(|(_, held, _)| !written(held)).all(|(_, _, target)| matches!(target, Target::Other(_))), "{plain:?}");
+        // The pass itself: an anchor before the next text or picture, as the document writes the id.
+        assert_eq!(ids_as_anchors("<h2 id=\"a\">A</h2>"), "<h2 id=\"a\"><a id=\"a\"></a>A</h2>");
+        assert_eq!(
+            ids_as_anchors("<div id='x\"y'>\n <p ID=b><img src=i></p></div>"),
+            "<div id='x\"y'>\n <p ID=b><a id=\"x&quot;y\"></a><a id=\"b\"></a><img src=i></p></div>"
+        );
+        for same in
+            ["<a id=\"a\">A</a>", "<p>no ids</p>", "<p id=\"\">x</p>", "<script id=s>x</script>", "<title id=t>x</title>", "<p id=end></p>", ""]
+        {
+            assert!(matches!(ids_as_anchors(same), Cow::Borrowed(_)), "{same}");
+        }
+        assert!(matches!(ids_as_anchors(&format!("<p id=\"{}\">x</p>", "i".repeat(MAX_NAME + 1))), Cow::Borrowed(_)));
+    }
+
+    /// A Word document's links: a hyperlink to a bookmark in it, a cross-reference field with `\h`
+    /// (and not one without), a hyperlink in a table's cell, and one over two lines, a rectangle a
+    /// line; not what a header holds.
+    #[test]
+    fn links_of_a_word_document_are_its_hyperlinks_and_cross_references() {
+        let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+        let anchor =
+            |name: &str, text: &str| format!(r#"<w:hyperlink w:anchor="{name}"><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:hyperlink>"#);
+        let field = |instr: &str, text: &str| format!(r#"<w:fldSimple w:instr="{instr}"><w:r><w:t>{text}</w:t></w:r></w:fldSimple>"#);
+        let long = "many words that run on over the end of the line of a narrow page ".repeat(2);
+        let first = format!(
+            "<w:p>{}{}{}<w:r><w:t xml:space=\"preserve\"> plain </w:t></w:r>{}</w:p>",
+            anchor("target", "to the target"),
+            field(r" REF target \h ", "see there"),
+            field(r" REF target ", "not a link"),
+            anchor("gone", "nowhere"),
+        );
+        let cell = format!("<w:tbl><w:tr><w:tc><w:p>{}</w:p></w:tc></w:tr></w:tbl>", anchor("target", "in a cell"));
+        let wrapped = format!("<w:p>{}</w:p>", anchor("target", &long));
+        let filler: String = (0..40).map(|n| para(&format!("Filler {n}"))).collect();
+        let target = r#"<w:p><w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>The target</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#;
+        let paged = paged("links.docx", &docx(&format!("{first}{cell}{wrapped}{filler}{target}"), ""));
+        assert!(paged.pages() > 1);
+        let links = paged.links().unwrap();
+        let Some(Told::Page { links: Ok(first), more: 0, .. }) = told(&*links, vec![Ask::Page(0)]).pop() else { panic!("unread") };
+        let at = place_of(&paged, "target").unwrap();
+        assert!(at.0 >= 1, "{at:?}");
+        let leads: Vec<(Option<&str>, &Target, usize)> = first.iter().map(|link| (link.address.as_deref(), &link.target, link.rects.len())).collect();
+        let place = Target::Place { page: at.0, y: at.1 };
+        assert_eq!(leads.len(), 5, "{leads:?}");
+        assert_eq!(leads[0], (Some("#target"), &place, 1));
+        assert_eq!(leads[1], (Some("#target"), &place, 1), "the field");
+        assert_eq!(leads[2], (Some("#gone"), &Target::Other("no #gone in this document".into()), 1));
+        assert_eq!(leads[3], (Some("#target"), &place, 1), "in the table");
+        assert!(leads[4].0 == Some("#target") && leads[4].2 >= 2, "a rectangle a line: {:?}", leads[4]);
+        // Left to right, then down, each within the page.
+        assert!(first[0].rects[0][2] <= first[1].rects[0][0] + 0.5 && first[1].rects[0][1] < first[3].rects[0][1], "{first:?}");
+        assert_eq!(place_of(&paged, "TARGET"), Some(at), "in any case, as Word finds it");
     }
 
     /// A search reads the layout the pool renders with: laid out once for both, whichever asks

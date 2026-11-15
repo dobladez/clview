@@ -3097,7 +3097,7 @@ fn text_cells_lay_markdown_out_in_columns_too() {
 
 /// Where the reader is, by the last status line drawn: the first page on screen, of how many.
 #[cfg(feature = "word")]
-fn place_now(text: &str) -> Option<(usize, usize)> {
+pub(crate) fn place_now(text: &str) -> Option<(usize, usize)> {
     let line = bar(last_draw(text));
     let at = line.get(line.rfind(" page")?..)?.trim_start_matches(|c: char| !c.is_ascii_digit());
     let (first, count) = at.split_once('/')?;
@@ -3792,7 +3792,7 @@ fn linked(test: &str) -> PathBuf {
 /// A letter of a link's label as placed: the image it is a part of, the cell it is placed at (from
 /// 1, as the cursor is moved there), and where its part is in the image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Letter {
+pub(crate) struct Letter {
     image: u32,
     row: u16,
     col: u16,
@@ -3801,7 +3801,7 @@ struct Letter {
 }
 
 /// The letters of the links' labels placed since they were last taken off the screen, in order.
-fn letters(text: &str) -> Vec<Letter> {
+pub(crate) fn letters(text: &str) -> Vec<Letter> {
     const HIDDEN: &str = "\x1b_Ga=d,d=i,q=2,i=";
     const PLACED_PART: &str = "\x1b_Ga=p,q=1,C=1,z=1,i=";
     let Some(from) = text.rfind(HIDDEN) else { return Vec::new() };
@@ -4087,4 +4087,46 @@ fn links_in_text_cells_are_written_over_the_pages_cells() {
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// In a Markdown document a link to a heading goes to it, and `u` comes back to the paragraph the
+/// reader left, whatever the document is laid out at since: the places to come back to are handed
+/// to the new layout, and found again in it. The labels are read again from the new layout.
+#[cfg(feature = "word")]
+#[test]
+fn links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again() {
+    if !pty_works() {
+        return;
+    }
+    let path = crate::view::tmp("links-relayout", "guide.md");
+    let filler = |from: usize| {
+        (from..from + 60).map(|n| format!("Paragraph {n}, with words enough in it to fill a line or two of a page.\n\n")).collect::<String>()
+    };
+    std::fs::write(
+        &path,
+        format!("# Guide\n\n[install](#install) and [usage](#usage)\n\n{}## Install\n\n{}## Usage\n\nThe end.\n", filler(1), filler(100)),
+    )
+    .unwrap();
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| place_now(t).is_some_and(|(page, _)| page == 1) && last_draw(t).contains("  page 1/"));
+    view.press("f");
+    view.wait_until("the labels", |t| letters(t).len() == 2);
+    // `a`, the second: the heading `Usage`, near the document's end.
+    view.press("a");
+    view.wait_until("the heading", |t| place_now(t).is_some_and(|(page, count)| page > 2 && page + 1 >= count));
+    let (usage, count) = place_now(&view.text()).unwrap();
+    // Narrower pages, more of them: the reader stays at the heading.
+    view.press("40]");
+    view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && place_now(t).is_some_and(|(page, pages)| pages > count && page > usage));
+    // `u` goes back to the first paragraph, which is on the first page of any layout.
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back at the links", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+    // The new layout's links are read from it: `s`, the first, is the heading `Install`.
+    view.press("f");
+    view.wait_until("the labels of the new layout", |t| t.len() > before && letters(&t[before..]).len() == 2);
+    view.press("s");
+    view.wait_until("the other heading", |t| place_now(t).is_some_and(|(page, pages)| page > 2 && page + 3 < pages));
+    view.press("uq");
+    assert!(view.finish().success());
 }

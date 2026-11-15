@@ -163,3 +163,44 @@ surprises, and what a later reader would want.
     `view_pager::links_in_text_cells_are_written_over_the_pages_cells`;
   - the labels dropped while the pages are sent again: `view_tmux::links_inside_tmux_…`, as first
     run (above).
+
+## Task 4: documents' links
+
+- **`Linker`** answers on a queue's thread from the shared layout, as the search's `Reader` does,
+  and keeps the body's paragraph paths and the bookmarks once read. A link is resolved to its
+  place as the page is listed (a `caret` a link), so a place the document hasn't is known then
+  and said through `Target::Other` (`no #usage in this document`).
+- **A path and a `#name` are percent-decoded** by this backend (`decoded`), where that gives UTF-8:
+  pulldown-cmark writes a Markdown link's destination as a URL (`<my file.md>` becomes
+  `my%20file.md`, `café.md` becomes `caf%C3%A9.md`), so "as written" is only had back by decoding,
+  and HTML's and Word's are URLs to begin with. The viewer's `link::local` still takes what it is
+  given as it is: a PDF's file specification is no URL. The address `F` copies is the one the
+  document carries, undecoded.
+- **What starts with a scheme is a `Web`**, whatever the scheme: the viewer's `link::web` says
+  which are opened and names the others. wordcraft's importer itself makes no link of a
+  `javascript:` address.
+- **HTML's ids: the anchor goes before the next text or picture**, not right after the opening
+  tag as the spec's Approach has it. Right after `<div id="x">` the importer starts a paragraph for
+  the anchor alone, an empty line between two blocks; before the next text it joins the paragraph
+  that text starts. `links_of_html_…` holds the layout to what it is without the ids (pages,
+  paragraphs, sizes). An element with nothing after it is no place; `<title>` and what the importer
+  reads no text of are passed over.
+- **A heading's slug is a bookmark named with a private-use character first** (`SLUG`, U+E000), so
+  that "an id the document writes itself wins" is a matter of looking among the document's own
+  names first, wherever in the document each is.
+- **`field_link`**: `\*`, `\#` and `\@` take the word after them, so `REF \* Upper target \h` names
+  `target`; a name never closed in its quotes takes the rest, switches and all, and makes no link.
+- **`Noted` is only there when gridcraft said something of the workbook**: a workbook without notes
+  is the PDF's own source. Its test builds a `Noted` over fake printed pages (the first try, a
+  CSV through the backend, passed with the fix reverted, since it never made a `Noted`).
+- **`tests/it/wordcraft.rs`** drives the pager (`view_pager::Session`), as the task's Verify wants
+  the links followed, so `view_pager`'s `letters` and `place_now` are `pub(crate)`.
+- **Seen failing**, the fixes reverted in copies (`cp` aside, `cmp` after):
+  - repeats not numbered: `slug_of_a_heading_…`, `links_of_markdown_…`; `\h` not read:
+    `field_link_is_…`, `links_of_a_word_document_…`, `wordcraft::links_in_a_word_document_…`;
+    `ids_as_anchors` doing nothing: `links_of_html_…`, `wordcraft::links_in_html_…`; no anchor at a
+    heading: `links_of_markdown_…`, `wordcraft::links_in_markdown_…`,
+    `view_pager::links_followed_in_a_document_…`;
+  - `Noted::links` giving none: `links_of_a_workbook_are_those_of_the_pdf_it_prints_to`;
+  - the jumps not handed to the new level (`Pager::replace`):
+    `view_pager::links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again`.

@@ -501,23 +501,40 @@ Ghostty and WezTerm they are drawn at their links' own places, to the pixel. Ins
 a terminal without colours), written over the page's cells from the cell its link starts in, and
 kept within its page; the cells come back as they were when the labels go.
 
-**A place in the document** (a PDF's link to a page, its table of contents, a named destination)
-is gone to: its page, and on a page taller than the window, scrolled so that the place is a third
+**A place in the document** (a PDF's link to a page, its table of contents, a named destination;
+a Word cross-reference; Markdown's `[see](#usage)`, HTML's `<a href="#usage">`) is gone to: its page, and on a page taller than the window, scrolled so that the place is a third
 of the way down the screen. `u` and `Backspace` go back to where you were before the last link
 followed, the newest first, for the last 100 of them; with none left they go back to the list, as
 they did. A search kept is cleared first, and `Esc` never steps back: it clears the search, or
 leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
 again. With `--pages`, a link to a page that isn't among those given says so (`page 12 isn't
-among --pages`) and goes nowhere, and one to a page given twice goes where it is first.
+among --pages`) and goes nowhere, and one to a page given twice goes where it is first. A place the
+document doesn't have says so too (`no #usage in this document`). A Markdown or HTML document
+laid out again (`]`, the window resized) keeps the places to go back to: each is the paragraph you
+were at, found again in the new pages.
 
 **Anything else** a link may do isn't done, and the status line says what it was: a script, a
 program to start, layers shown or hidden. A link to another file, and a web address, say that
 they aren't followed yet.
 
-PDFs have links: their link annotations, each active where the PDF says, over its quadrilaterals
-or else its rectangle, on a page turned or cropped as on any other. Where a destination puts its
-page is honoured as far as it says how far down: `/XYZ` and `/FitH` by their top, `/FitR` by the
-top of its rectangle, and the rest, or a place left out, at the page's top.
+Which files have links:
+
+- **PDFs:** their link annotations, each active where the PDF says, over its quadrilaterals or
+  else its rectangle, on a page turned or cropped as on any other. Where a destination puts its
+  page is honoured as far as it says how far down: `/XYZ` and `/FitH` by their top, `/FitR` by the
+  top of its rectangle, and the rest, or a place left out, at the page's top. A **spreadsheet**'s
+  are whatever the PDF it prints to carries.
+- **Word documents, OpenDocument texts, RTF, Markdown and HTML:** the links in the body, a
+  table's cells included, each over the lines its text is on; and a Word cross-reference that is a
+  link (a `REF` or `PAGEREF` field with `\h`). Not those in headers, footers, notes or text boxes,
+  which a [search](#searching-a-documents-text) leaves out too. A place is a Word bookmark, by its
+  name, in any case if no bookmark has it exactly.
+- **Places in Markdown and HTML:** in HTML, any element with an `id` (`<h2 id="usage">`,
+  `<div id="usage">`), as well as `<a id>` and `<a name>`. Markdown's headings get the ids GitHub
+  gives them: lower case, punctuation dropped, each space a hyphen, and `-1`, `-2` after it for a
+  heading that repeats, so `[see](#install)` goes to `## Install`; an id the document writes
+  itself (`<a id="install">`) wins over a heading's. A link's path and its `#name` are read as a
+  URL's: `my%20file.md` is `my file.md`.
 
 Printing (`--no-pager`, or a single page) has no labels, and `f` does nothing in a list.
 

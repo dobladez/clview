@@ -20,7 +20,7 @@ use gridcraft_engine::model::Workbook;
 use gridcraft_engine::{DocState, Session, Trust};
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
-use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Opened, Pool, Render, Reopenable, Request, Source, Texts};
+use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Links, Opened, Pool, Render, Reopenable, Request, Source, Texts};
 use crate::args::{OptionSpec, Parsed};
 
 /// Spreadsheets, printed by gridcraft.
@@ -305,6 +305,11 @@ impl Source for Noted {
     fn texts(&self) -> Option<Box<dyn Texts>> {
         self.pages.texts()
     }
+
+    /// The printed pages' own too: a workbook's links are those of the PDF it prints to.
+    fn links(&self) -> Option<Box<dyn Links>> {
+        self.pages.links()
+    }
 }
 
 struct NotedRender<'a> {
@@ -374,6 +379,53 @@ mod tests {
     use super::*;
 
     const COMPOUND_HEAD: [u8; 16] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    /// Printed pages that have links, which answer with their name.
+    struct Printed;
+
+    impl Source for Printed {
+        fn pages(&self) -> usize {
+            1
+        }
+        fn size(&self, page: usize) -> Option<(f32, f32)> {
+            (page == 0).then_some((612.0, 792.0))
+        }
+        fn natural(&self, _page: usize) -> bool {
+            false
+        }
+        fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
+            Err("never rendered".into())
+        }
+        fn pool(&self, _threads: usize) -> Box<dyn Pool> {
+            Box::new(Printed)
+        }
+        fn links(&self) -> Option<Box<dyn Links>> {
+            Some(Box::new(Printed))
+        }
+    }
+
+    impl Pool for Printed {
+        fn set_queue(&self, _requests: Vec<Request>) {}
+        fn try_recv(&self) -> Option<Frame> {
+            None
+        }
+    }
+
+    impl Links for Printed {
+        fn set_queue(&self, _wanted: Vec<crate::source::Ask>) {}
+        fn try_recv(&self) -> Option<crate::source::Told> {
+            Some(crate::source::Told::Name { name: "the printed pages'".into(), at: Ok(None) })
+        }
+    }
+
+    /// A workbook's links are those of the PDF it prints to, with what gridcraft said of it or
+    /// without: its pages' own are handed on.
+    #[test]
+    fn links_of_a_workbook_are_those_of_the_pdf_it_prints_to() {
+        let noted = Noted { pages: Box::new(Printed), notes: vec!["a sheet was cut short".to_owned()].into() };
+        let told = noted.links().and_then(|links| links.try_recv());
+        assert!(matches!(told, Some(crate::source::Told::Name { name, .. }) if name == "the printed pages'"));
+    }
 
     #[test]
     fn an_excel_package_is_a_zip_with_xl_files_first_or_named_so() {

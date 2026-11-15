@@ -266,7 +266,7 @@ followed into.
   `tests/it/view_tmux.rs`, `tests/it/view_pager.rs`. *Verify:* `cargo test -j 2 --test it
   view_tmux::links` (a label over a row's first cell and a middle one, cancelled, a client
   attaching later) and `view_pager::links_in_text_cells`.
-- [ ] **Documents' links** — Word, OpenDocument, RTF, Markdown and HTML; the field parser;
+- [x] **Documents' links** — Word, OpenDocument, RTF, Markdown and HTML; the field parser;
   bookmarks; HTML's ids and Markdown's slugs as bookmarks; `Noted` handing on. *Files:*
   `src/source/wordcraft.rs`, `src/source/gridcraft.rs`, `tests/it/wordcraft.rs`,
   `tests/it/view_pager.rs`, `docs/usage.md`. *Verify:* `cargo test -j 2 --bin clv slug`,

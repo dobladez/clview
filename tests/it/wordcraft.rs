@@ -1016,3 +1016,90 @@ fn a_paragraph_over_a_mebibyte_is_left_unread_and_the_rest_searched() {
     view.press("q");
     assert!(view.finish().success());
 }
+
+/// The first page on screen once `view` has followed the link labelled `label` of the `links`
+/// on its screen: `f`, the label's letter, and the page the status line then says.
+fn followed(view: &mut crate::view_pager::Session, links: usize, label: &str) -> usize {
+    use crate::view_pager::{letters, place_now};
+    let before = view.text().len();
+    view.press("f");
+    view.wait_until("the labels", |t| letters(&t[before..]).len() == links);
+    let before = view.text().len();
+    view.press(label);
+    view.wait_until("the link followed", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page > 1));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    place_now(&view.text()).unwrap().0
+}
+
+/// Back with `u`, to the first page.
+fn back(view: &mut crate::view_pager::Session) {
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back", |t| t.len() > before && crate::view_pager::place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+}
+
+/// A Word document's links are followed: a hyperlink to a bookmark in it, and a cross-reference
+/// field with `\h`, each to the page its bookmark is on.
+#[test]
+fn links_in_a_word_document_go_to_its_bookmarks_by_hyperlink_and_by_cross_reference() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let para = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+    let bookmark = |id: usize, name: &str| {
+        format!(r#"<w:p><w:bookmarkStart w:id="{id}" w:name="{name}"/><w:r><w:t>Here: {name}</w:t></w:r><w:bookmarkEnd w:id="{id}"/></w:p>"#)
+    };
+    let page_break = r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#;
+    let links = r#"<w:p><w:hyperlink w:anchor="second"><w:r><w:t>to the second</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:fldSimple w:instr=" REF fourth \h "><w:r><w:t>the fourth</w:t></w:r></w:fldSimple></w:p>"#;
+    let body = format!("{links}{page_break}{}{page_break}{}{page_break}{}", bookmark(1, "second"), para("Third"), bookmark(2, "fourth"));
+    let path = write(tmp("links-docx", "links.docx"), &docx_of(&body, ""));
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager", "--per-row", "1"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::drawn(t, "page 1/4"));
+    assert_eq!(followed(&mut view, 2, "s"), 2, "the hyperlink");
+    back(&mut view);
+    assert_eq!(followed(&mut view, 2, "a"), 4, "the cross-reference");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In HTML any element with an `id` is a place a link goes to: a heading, and a `<div>` around
+/// other blocks.
+#[test]
+fn links_in_html_go_to_an_h2_and_a_div_with_an_id() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let filler = "<p>Filler, with words enough in it to fill a line of a page.</p>".repeat(80);
+    let html = format!(
+        "<!DOCTYPE html><html><body><p><a href=\"#usage\">usage</a> and <a href=\"#deep\">deeper</a></p>{filler}<h2 id=\"usage\">Usage</h2>{filler}<div id=\"deep\"><div><p>Deep</p></div></div>{filler}</body></html>"
+    );
+    let path = write(tmp("links-html", "page.html"), html.as_bytes());
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::place_now(t).is_some_and(|(page, _)| page == 1));
+    let heading = followed(&mut view, 2, "s");
+    back(&mut view);
+    let div = followed(&mut view, 2, "a");
+    assert!(heading > 1 && div > heading, "the heading on page {heading}, the div on {div}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// In Markdown a link to a heading goes to it by the id GitHub gives it, and to its repeat by that
+/// id numbered.
+#[test]
+fn links_in_markdown_go_to_a_heading_and_to_its_repeat() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let filler = "Filler, with words enough in it to fill a line of a page.\n\n".repeat(80);
+    let markdown = format!("# Notes\n\n[the first](#set-up) and [the second](#set-up-1)\n\n{filler}## Set up\n\n{filler}## Set up!\n\n{filler}");
+    let path = write(tmp("links-md", "notes.md"), markdown.as_bytes());
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::place_now(t).is_some_and(|(page, _)| page == 1));
+    let first = followed(&mut view, 2, "s");
+    back(&mut view);
+    let second = followed(&mut view, 2, "a");
+    assert!(first > 1 && second > first, "the heading on page {first}, its repeat on {second}");
+    view.press("q");
+    assert!(view.finish().success());
+}
