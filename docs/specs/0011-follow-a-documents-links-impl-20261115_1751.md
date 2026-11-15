@@ -279,3 +279,8 @@ surprises, and what a later reader would want.
 - **Still open**, each waiting for a look in a real terminal: task 2's and task 5's manual lines,
   and the Done list's (kitty, Ghostty and WezTerm; inside tmux; `--protocol blocks`). The spec
   stays `Implementing` until the owner has looked.
+- **For the builds CI makes at night** (none is built here): `Link` lost its `expect(dead_code)`
+  for a build without backends, since the core makes links itself (`link::checked`), where `Told`
+  and `Target` keep theirs (the core makes no `Told`, and no `File` nor `Web`); and the pager
+  tests' helpers that only the Markdown tests use are under the `word` feature, as those tests
+  are. Reasoned, not run: `gh workflow run CI` runs both feature sets.

@@ -961,7 +961,6 @@ pub(crate) enum Told {
 
 /// A link on a page.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents have links"))]
 pub(crate) struct Link {
     /// The page it is on (0-based).
     pub(crate) page: usize,

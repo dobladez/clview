@@ -4132,6 +4132,7 @@ fn links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again
 }
 
 /// A directory of the test's own, empty.
+#[cfg(feature = "word")]
 fn empty_dir(test: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -4153,12 +4154,14 @@ fn follow(view: &mut Session, links: usize, label: &str) -> usize {
 /// Whether the file called `name` is on screen with nothing still to come: every page rendered,
 /// and the document not being laid out again for the window, as one just opened from a link is,
 /// which would drop labels asked for meanwhile.
+#[cfg(feature = "word")]
 fn settled(text: &str, name: &str) -> bool {
     let bar = last_bar(text);
     bar.contains(&format!(" {name} ")) && !bar.contains('…')
 }
 
 /// `F` and the letter `label`, likewise.
+#[cfg(feature = "word")]
 fn copy_link(view: &mut Session, links: usize, label: &str) -> usize {
     let before = view.text().len();
     view.press("F");
@@ -4169,6 +4172,7 @@ fn copy_link(view: &mut Session, links: usize, label: &str) -> usize {
 }
 
 /// The text clipboard write `id` carried: its `text/plain` packets' data, put together.
+#[cfg(feature = "word")]
 fn copied_text(text: &str, id: u32) -> String {
     use base64::Engine as _;
     let start = format!("\x1b]5522;type=wdata:mime={}:id=clv-{id};", base64::engine::general_purpose::STANDARD.encode("text/plain"));
