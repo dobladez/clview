@@ -1771,8 +1771,9 @@ struct Pager<'a> {
     stalled_files: Option<Files>,
     /// When the last placements went out: their errors are answered.
     placed_at: Option<Instant>,
-    /// Pages drawn as text: what each row of the screen holds, so that a redraw writes only the
-    /// rows that change. Empty once something else may have written to them.
+    /// Pages drawn as text or as tmux's placeholder cells: what each row of the screen holds, so
+    /// that a redraw writes only the rows that change. Empty once something else may have written
+    /// to them.
     on_glass: Vec<Vec<u8>>,
     /// Copies to the clipboard (`c`), and what the terminal said of its clipboard.
     copier: clip::Copier,
@@ -2571,11 +2572,13 @@ impl Pager<'_> {
     /// Each place on screen has a placement of its own, so a page given twice shows twice.
     fn place(&mut self, out: &mut Vec<u8>, size: WindowSize, area_rows: u16, grid: Grid) {
         let wrap = self.output.wrap();
-        // Drawn as text, each row is written whole, below, and erased only as what replaces it
-        // comes: a terminal may paint between the two, and that shows as tearing, not a blank.
+        // Drawn as text, or as tmux's placeholder cells, each row is written whole, below, only when
+        // it changes, and erased only as what replaces it comes: tmux paints the terminal between
+        // the reads of a long draw, and a screen erased first and filled after showed there as a
+        // blank between two pages.
         let mut text_rows = match self.output {
-            Output::Text(_) => vec![Vec::new(); usize::from(size.rows)],
-            Output::Direct | Output::Tmux(_) => {
+            Output::Text(_) | Output::Tmux(_) => vec![Vec::new(); usize::from(size.rows)],
+            Output::Direct => {
                 // Erasing text never erases images (only clearing the whole screen does, by the
                 // protocol): placements are what show and move them.
                 for row in 1..=size.rows {
@@ -2613,9 +2616,12 @@ impl Pager<'_> {
                 }
                 Output::Tmux(colour) => {
                     for row in 0..visible {
-                        cursor(out, top.saturating_add(row), left);
-                        // Within the placeholders' table: the layout keeps it so.
-                        let _ = kitty::placeholder_row(out, s.id, colour, scroll.saturating_add(row), s.cols);
+                        let at = top.saturating_add(row);
+                        if let Some(line) = text_rows.get_mut(usize::from(at)) {
+                            cursor(line, at, left);
+                            // Within the placeholders' table: the layout keeps it so.
+                            let _ = kitty::placeholder_row(line, s.id, colour, scroll.saturating_add(row), s.cols);
+                        }
                     }
                 }
                 Output::Text(_) => {
@@ -2647,8 +2653,9 @@ impl Pager<'_> {
             let (on, off) = if chosen == Some(v.page) { ("\x1b[7m", "\x1b[0m") } else { ("", "") };
             into.extend_from_slice(format!("{on}{name}{off}").as_bytes());
         }
-        // The rows of text that aren't as they already are.
-        if matches!(self.output, Output::Text(_)) {
+        // The rows of text that aren't as they already are. Inside tmux, a page that leaves the
+        // screen goes with its placeholder cells, erased here or written over.
+        if matches!(self.output, Output::Text(_) | Output::Tmux(_)) {
             for (row, line) in (0u16..).zip(&text_rows) {
                 if self.on_glass.get(usize::from(row)) != Some(line) {
                     cursor(out, row, 0);
@@ -2659,7 +2666,7 @@ impl Pager<'_> {
             self.on_glass = text_rows;
         }
         // The pages before leave the screen; their data stays in the terminal for later. Inside
-        // tmux, erasing their placeholder cells already did it.
+        // tmux, the rows written above already did it.
         if self.output == Output::Direct {
             for (id, placement) in self.placed.iter().filter(|p| !placed.contains(p)) {
                 kitty::hide(out, *id, *placement, wrap);

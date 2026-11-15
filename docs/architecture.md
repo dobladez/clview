@@ -808,6 +808,12 @@ Inside tmux, tmux keeps its own copy of the screen and knows nothing of images:
   pages inside tmux are never bigger.
 - **The terminal.** `TERM` names tmux, so `clv` asks tmux for its client's terminal
   (`#{client_termname}`) and cell size (`#{client_cell_width}`, `#{client_cell_height}`).
+- **Redraws write what changed.** Placeholder cells are text, so `place` builds their rows in
+  `text_rows` and writes only those that differ from `Pager::on_glass`, each erased as it is
+  written, as [text cells](#text-cells-cellsrs) are. tmux paints the terminal from its own copy of
+  the screen, between the reads of a long draw: the screen erased first and filled after showed
+  there as a blank between two pages
+  (`view_tmux::inside_tmux_a_page_turn_erases_no_row_before_what_replaces_it`).
 
 ## Text cells (`cells.rs`)
 

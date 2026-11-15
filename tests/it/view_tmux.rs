@@ -271,6 +271,42 @@ fn inside_tmux_every_page_on_screen_reaches_the_terminal() {
     server.tmux(&["send-keys", "-t", "view:0", "q"]);
 }
 
+/// A page turn inside tmux writes each row's placeholder cells right after erasing that row, never
+/// erasing the screen first and filling it after: tmux paints the terminal between the reads of a
+/// long draw, and the screen erased first showed there as a blank between two pages.
+#[test]
+fn inside_tmux_a_page_turn_erases_no_row_before_what_replaces_it() {
+    let Some((server, output)) = start("turn") else { return };
+    all_arrive(&server, &output, "the first pages");
+    // What `clv` writes to the pane from now on, as it writes it.
+    let piped = std::env::temp_dir().join(format!("clview-tmux-turn-{}", std::process::id())).join("piped");
+    server.tmux(&["pipe-pane", "-O", "-t", "view:0", &format!("cat > '{}'", piped.display())]);
+    std::thread::sleep(Duration::from_millis(300));
+    let before = server.on_screen();
+    server.tmux(&["send-keys", "-t", "view:0", " "]);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while server.on_screen() == before {
+        assert!(Instant::now() < deadline, "the page didn't turn");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    all_arrive(&server, &output, "the next pages");
+    server.tmux(&["send-keys", "-t", "view:0", "q"]);
+    std::thread::sleep(Duration::from_millis(300));
+    let written = String::from_utf8_lossy(&std::fs::read(&piped).unwrap()).into_owned();
+    assert!(written.contains('\u{10EEEE}'), "the page turn wrote no placeholder cells");
+    // Between an erased row and the next row erased, something drawn: not a cursor moved alone.
+    let cursor_alone = |between: &str| {
+        between
+            .strip_prefix("\x1b[")
+            .and_then(|s| s.strip_suffix('H'))
+            .and_then(|s| s.split_once(';'))
+            .is_some_and(|(row, col)| [row, col].iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+    };
+    let erased: Vec<&str> = written.split("\x1b[2K").collect();
+    let blanked = erased.iter().skip(1).rev().skip(1).filter(|between| cursor_alone(between)).count();
+    assert_eq!(blanked, 0, "rows erased one after another, the screen blank until they are filled");
+}
+
 #[test]
 fn pages_turned_while_the_pane_is_hidden_arrive_once_it_shows() {
     let Some((server, output)) = start("hidden") else { return };

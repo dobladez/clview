@@ -51,6 +51,7 @@ works today. A version's section becomes the notes of its
   window, four of the largest pages where there were three.
 - A PDF of more than 100,000 pages is refused, saying how many it has. A file of a few megabytes
   could name a million pages and take several gigabytes to open.
+- Inside tmux, a page turned no longer flashes the screen blank before the next page shows.
 
 ## 0.4.0 (2026-11-10)
 
