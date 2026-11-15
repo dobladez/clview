@@ -195,21 +195,47 @@ pub(crate) fn placeholder_row(out: &mut Vec<u8>, id: u32, color: IdColor, row: u
     if usize::from(cols) > DIACRITICS.len() {
         return false;
     }
-    // The high byte goes in a third diacritic, which only ids above 24 bits need.
-    let high = DIACRITICS.get(usize::try_from(id >> 24).unwrap_or(0)).copied().filter(|_| id >> 24 != 0);
-    let colour = match color {
-        IdColor::Rgb => format!("\x1b[38;2;{};{};{}m", (id >> 16) & 0xff, (id >> 8) & 0xff, id & 0xff),
-        IdColor::Indexed => format!("\x1b[38;5;{}m", id & 0xff),
-    };
-    out.extend_from_slice(colour.as_bytes());
+    out.extend_from_slice(colour_of(id, color).as_bytes());
     let mut utf8 = [0u8; 4];
     if cols > 0 {
-        for c in [PLACEHOLDER, row_mark, DIACRITICS[0]].into_iter().chain(high) {
+        for c in [PLACEHOLDER, row_mark, DIACRITICS[0]].into_iter().chain(high_mark(id)) {
             out.extend_from_slice(c.encode_utf8(&mut utf8).as_bytes());
         }
     }
     for _ in 1..cols {
         out.extend_from_slice(PLACEHOLDER.encode_utf8(&mut utf8).as_bytes());
+    }
+    out.extend_from_slice(b"\x1b[39m");
+    true
+}
+
+/// The foreground colour that names image `id` in its placeholder cells.
+fn colour_of(id: u32, color: IdColor) -> String {
+    match color {
+        IdColor::Rgb => format!("\x1b[38;2;{};{};{}m", (id >> 16) & 0xff, (id >> 8) & 0xff, id & 0xff),
+        IdColor::Indexed => format!("\x1b[38;5;{}m", id & 0xff),
+    }
+}
+
+/// The third diacritic of a placeholder cell for image `id`: its high byte, which only ids above
+/// 24 bits need.
+fn high_mark(id: u32) -> Option<char> {
+    DIACRITICS.get(usize::try_from(id >> 24).unwrap_or(0)).copied().filter(|_| id >> 24 != 0)
+}
+
+/// One placeholder cell of image `id`, for row `row` and column `col` of it, named outright: its
+/// row, its column, and the id's high byte when it has one. For the cell after something written
+/// over a row of them (a link's label): the bare cells of [`placeholder_row`] take their row and
+/// column from the cell to their left, which is no placeholder there, and the cells after this one
+/// take theirs from it again. `false`, with nothing written, when `row` or `col` is past
+/// [`MAX_CELLS`].
+#[must_use]
+pub(crate) fn placeholder_at(out: &mut Vec<u8>, id: u32, color: IdColor, row: u16, col: u16) -> bool {
+    let (Some(&row_mark), Some(&col_mark)) = (DIACRITICS.get(usize::from(row)), DIACRITICS.get(usize::from(col))) else { return false };
+    out.extend_from_slice(colour_of(id, color).as_bytes());
+    let mut utf8 = [0u8; 4];
+    for c in [PLACEHOLDER, row_mark, col_mark].into_iter().chain(high_mark(id)) {
+        out.extend_from_slice(c.encode_utf8(&mut utf8).as_bytes());
     }
     out.extend_from_slice(b"\x1b[39m");
     true
@@ -480,6 +506,31 @@ mod tests {
         let mut wrapped = Vec::new();
         place_part(&mut wrapped, 9, 3, Rect { x: 0, y: 0, w: 1, h: 1 }, (0, 0), Wrap::Tmux);
         assert!(wrapped.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=p,q=1,C=1,z=1,i=9,p=3,"));
+    }
+
+    /// A placeholder cell named outright carries its row and its column, and the id's high byte
+    /// when it has one, in the image's colour: what [`placeholder_ids`] reads back as that image,
+    /// and what the cell after it takes its row and next column from. Past the table, nothing.
+    #[test]
+    fn a_placeholder_cell_names_its_row_and_column_outright() {
+        let mut out = Vec::new();
+        assert!(placeholder_at(&mut out, 0x0012_3456, IdColor::Rgb, 3, 7));
+        let cell: String = [PLACEHOLDER, DIACRITICS[3], DIACRITICS[7]].iter().collect();
+        assert_eq!(String::from_utf8(out).unwrap(), format!("\x1b[38;2;18;52;86m{cell}\x1b[39m"));
+        let mut out = Vec::new();
+        assert!(placeholder_at(&mut out, 0x0500_0042, IdColor::Indexed, 0, 296));
+        let cell: String = [PLACEHOLDER, DIACRITICS[0], DIACRITICS[296], DIACRITICS[5]].iter().collect();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text, format!("\x1b[38;5;66m{cell}\x1b[39m"));
+        assert_eq!(placeholder_ids(&text), HashSet::from([0x0500_0042]));
+        // A row written over in its middle, and taken up again: the same image all along.
+        let mut row = Vec::new();
+        assert!(placeholder_row(&mut row, 0x0500_0042, IdColor::Indexed, 2, 4));
+        row.extend_from_slice(b"\x1b[7mSA\x1b[0m");
+        assert!(placeholder_at(&mut row, 0x0500_0042, IdColor::Indexed, 2, 6));
+        assert_eq!(placeholder_ids(std::str::from_utf8(&row).unwrap()), HashSet::from([0x0500_0042]));
+        let mut none = Vec::new();
+        assert!(!placeholder_at(&mut none, 1, IdColor::Rgb, 297, 0) && !placeholder_at(&mut none, 1, IdColor::Rgb, 0, 297) && none.is_empty());
     }
 
     #[test]

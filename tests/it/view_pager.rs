@@ -4041,3 +4041,50 @@ fn links_where_there_are_none_are_said() {
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
+
+/// In text cells a link's label is written over the page's cells, a capital on yellow in the
+/// colours the terminal has: only the rows that carry one are written again, and again as they were
+/// once the labels go. A label typed goes to its place.
+#[test]
+fn links_in_text_cells_are_written_over_the_pages_cells() {
+    if !pty_works() {
+        return;
+    }
+    // In the palette's colours, as a terminal that says only `xterm-256color` gets them.
+    const LABEL: &str = "\x1b[0;48;5;221;38;5;234m";
+    // A row written again: erased, then its line; and the status line, in reverse.
+    let rows_written = |text: &str| text.matches("\x1b[2K").count() - text.matches("\x1b[2K\x1b[7m").count();
+    let pdf = linked("links-cells");
+    let mut view = Session::start_on(TEXT_ONLY, &pdf, &["--protocol", "blocks"], 80, 40);
+    view.wait_until("page 1 drawn", |t| drawn(t, "page 1/3") && has_cells(t));
+    std::thread::sleep(Duration::from_millis(300));
+    let before = view.text().len();
+    view.press("f");
+    view.wait_until("the labels", |t| t[before..].matches(LABEL).count() == 14 && last_bar(t).contains("esc cancel"));
+    let text = view.text();
+    let labelled = &text[before..];
+    for letter in "SADFJKLEWCMPGH".chars() {
+        assert_eq!(labelled.matches(&format!("{LABEL}{letter}\x1b[0m")).count(), 1, "{letter}");
+    }
+    assert_eq!(rows_written(labelled), 14, "a row for each label, and no other");
+    assert!(!text.contains("\x1b_G"), "an image in text cells");
+    // Esc: the same rows again, as they were.
+    let before = text.len();
+    view.press("\x1b");
+    view.wait_until("the labels gone", |t| rows_written(&t[before..]) == 14);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!view.text()[before..].contains(LABEL) && rows_written(&view.text()[before..]) == 14);
+    // And a label typed is followed.
+    let before = view.text().len();
+    view.press("f");
+    view.wait_until("the labels again", |t| t[before..].matches(LABEL).count() == 14);
+    let before = view.text().len();
+    view.press("s");
+    drawn_since(&view, before, "page 3/3");
+    assert!(!view.text()[before..].contains(LABEL));
+    view.press("u");
+    drawn_since(&view, before, "page 1/3");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}

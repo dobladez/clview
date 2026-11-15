@@ -10,8 +10,11 @@
 //!
 //! Directly, a label is drawn as placements of parts of one image ([`Sheet`]), the letters in
 //! yellow boxes, drawn here from a bitmap font
-//! ([ADR-0035](../../docs/adr/0035-link-labels-as-placements-of-one-image-of-letters.md)).
+//! ([ADR-0035](../../docs/adr/0035-link-labels-as-placements-of-one-image-of-letters.md)). Where
+//! pages are cells (inside tmux, in text cells), it is written over the page's cells as
+//! characters ([`Hints::runs`]).
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::source::{Ask, Link};
@@ -68,6 +71,15 @@ pub(super) struct Label {
     pub(super) code: String,
     pub(super) at: At,
     pub(super) link: Link,
+}
+
+/// Cells on a row of the screen that labels are written over, side by side: the row, the first
+/// cell's column, and each cell's letter, with whether it is typed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Run {
+    pub(super) row: u16,
+    pub(super) col: u16,
+    pub(super) letters: Vec<(char, bool)>,
 }
 
 /// What became of a page's links.
@@ -231,6 +243,34 @@ impl Hints {
     pub(super) fn visible(&self) -> impl Iterator<Item = (&Label, usize)> {
         let typed = self.typed.chars().count();
         self.labels.as_deref().unwrap_or_default().iter().filter(|label| label.code.starts_with(&self.typed)).map(move |label| (label, typed))
+    }
+
+    /// The labels as written over cells, where pages are cells (inside tmux, in text cells): each
+    /// run of cells on a row that labels cover, left to right, with its letters and whether each
+    /// is typed. A label is kept within the cells of the page it is on, of those `shown`, starting
+    /// further left if it must; where two share a cell, the later one's letter shows.
+    pub(super) fn runs(&self, shown: &[Shown]) -> Vec<Run> {
+        let mut cells: BTreeMap<(u16, u16), (char, bool)> = BTreeMap::new();
+        for (label, typed) in self.visible() {
+            let on = |page: &&Shown| {
+                let (right, bottom) = (page.left.saturating_add(page.cols), page.top.saturating_add(page.rows));
+                (page.left..right).contains(&label.at.col) && (page.top..bottom).contains(&label.at.row)
+            };
+            let Some(page) = shown.iter().find(on) else { continue };
+            let length = u16::try_from(label.code.chars().count()).unwrap_or(u16::MAX).min(page.cols);
+            let start = label.at.col.min(page.left.saturating_add(page.cols).saturating_sub(length)).max(page.left);
+            for ((nth, letter), col) in label.code.chars().enumerate().zip(start..start.saturating_add(length)) {
+                cells.insert((label.at.row, col), (letter, nth < typed));
+            }
+        }
+        let mut runs: Vec<Run> = Vec::new();
+        for ((row, col), cell) in cells {
+            match runs.last_mut() {
+                Some(run) if run.row == row && usize::from(run.col).saturating_add(run.letters.len()) == usize::from(col) => run.letters.push(cell),
+                _ => runs.push(Run { row, col, letters: vec![cell] }),
+            }
+        }
+        runs
     }
 
     /// What the status line says of them: that they are waited for; or what the key does, what is
@@ -608,6 +648,56 @@ mod tests {
         hints.told(0, Ok(links()), usize::MAX);
         hints.settle(&[whole(0)], (f32::NAN, 0.0));
         assert_eq!(hints.notes(), [format!("{} links left out", usize::MAX)]);
+    }
+
+    /// Where pages are cells, a label is its letters over the page's cells from its link's cell on:
+    /// kept within its page's cells, a letter typed marked so, labels side by side one run, and of
+    /// two over the same cell the later one's letter.
+    #[test]
+    fn hints_runs_are_the_cells_the_labels_cover_within_their_pages() {
+        // Sixteen links, so two letters a label: at a row's first cell, in its middle, at its last
+        // cell, two side by side, two over the same cells, and ten down the next page.
+        let page = Shown { left: 10, top: 2, ..whole(0) };
+        let next = Shown { page: 1, left: 70, top: 2, ..whole(1) };
+        let at = |x: f32, y: f32| [x, y, x + 1.0, y + 1.0];
+        let mut hints = Hints::new(Aim::Follow, &[0, 1], Instant::now());
+        let first = vec![
+            link(0, at(0.0, 0.0), 0),
+            link(0, at(50.0, 0.0), 1),
+            link(0, at(99.0, 0.0), 2),
+            link(0, at(20.0, 10.0), 3),
+            link(0, at(24.0, 10.0), 4),
+            link(0, at(60.0, 20.0), 5),
+            link(0, at(62.0, 20.0), 6),
+        ];
+        hints.told(0, Ok(first), 0);
+        hints.told(1, Ok((0..9).map(|n| link(1, at(0.0, 10.0 * n as f32), 7 + n)).collect()), 0);
+        assert_eq!(hints.settle(&[page, next], CELL), 16);
+        let plain = |letters: &str| letters.chars().map(|c| (c, false)).collect::<Vec<_>>();
+        let runs = hints.runs(&[page, next]);
+        // `ss` at the page's first cell; `sa` in its middle; `sd` moved left to end at its last cell.
+        assert_eq!(runs[0], Run { row: 2, col: 10, letters: plain("ss") });
+        assert_eq!(runs[1], Run { row: 2, col: 35, letters: plain("sa") });
+        assert_eq!(runs[2], Run { row: 2, col: 58, letters: plain("sd") });
+        // The next page's first, on the same row, after them. Then `sf` and `sj`, two cells apart: one
+        // run; and `sk` and `sl`, a cell apart: the later one over it.
+        assert_eq!(runs[3], Run { row: 2, col: 70, letters: plain("se") });
+        assert_eq!(runs[4], Run { row: 3, col: 20, letters: plain("sfsj") });
+        assert_eq!(runs[6], Run { row: 4, col: 40, letters: plain("ssl") });
+        assert_eq!(runs.len(), 5 + 9);
+        // A letter typed is marked in the labels it starts, and the others are gone.
+        assert_eq!(hints.letter('a'), Typed::More);
+        let runs = hints.runs(&[page, next]);
+        assert_eq!(
+            runs,
+            [Run { row: 9, col: 70, letters: vec![('a', true), ('s', false)] }, Run { row: 10, col: 70, letters: vec![('a', true), ('a', false)] }]
+        );
+        // A page a cell wide holds a letter of each; no page there, no run; none while they are read.
+        let narrow = Shown { cols: 1, ..page };
+        assert!(hints.runs(&[narrow]).is_empty(), "the labels left are on the other page");
+        assert!(hints.backspace());
+        assert_eq!(hints.runs(&[narrow]).first(), Some(&Run { row: 2, col: 10, letters: plain("s") }));
+        assert!(hints.runs(&[]).is_empty() && Hints::new(Aim::Follow, &[0], Instant::now()).runs(&[page]).is_empty());
     }
 
     /// The image of the letters: each in a box of its own, as tall as fits the cell, in the

@@ -1372,7 +1372,24 @@ with the level and the screen they were made for (`Labels`): on any other screen
 relayout, the keys in place of the pages) they go, the image deleted, as when the reader drops
 them or chooses one. A placement of an image the terminal dropped is answered
 (`Key::Missing`): the image is sent again under another id
-([ADR-0035](adr/0035-link-labels-as-placements-of-one-image-of-letters.md)).
+([ADR-0035](adr/0035-link-labels-as-placements-of-one-image-of-letters.md)). While a page on
+screen is still to come (sent again after tmux lost it, or for a terminal that attached), where the
+pages are isn't known, and the labels stay for when it is (`Pager::labels_fit`).
+
+Inside tmux and in text cells there are no placements at pixels, and the labels are characters
+(`Pager::place`, with the rows it writes). `Hints::runs` gives the cells the labels cover, row by
+row: each label from its link's cell on, moved left where it would pass its page's last cell, two
+side by side one run, and of two over the same cell the later one's letter. Each run is written at
+the end of its row's line: the cursor to its first cell, then `cells::label`, capitals dark on
+yellow in the colours the terminal has (24-bit, xterm's 256, or reverse video with none), a letter
+typed paler. Since a row's line is what `on_glass` compares, a row is written again when its labels
+change, and again as it was once they go, and no other row is. Inside tmux a row of a page is
+placeholder cells of which only the first names its row and column
+([Directly, or inside tmux](#directly-or-inside-tmux)), each of the others taking them from the
+cell to its left: a letter written over one would leave the cell after it with nothing to take, so
+that cell is written again after the label, naming its row and column outright
+(`kitty::placeholder_at`), and the bare cells after it follow from it. tmux keeps the letters in its
+grid as it keeps the placeholders, so a terminal that attaches later is drawn both.
 
 **Following.** A `Place` is gone to (`Pager::go_to_place`): the page where it is first among those
 paged through, or said not to be among them (`--pages`); `Nav::jump` keeps where the reader was

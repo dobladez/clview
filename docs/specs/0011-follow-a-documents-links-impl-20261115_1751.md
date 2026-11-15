@@ -126,3 +126,40 @@ surprises, and what a later reader would want.
     (`links_where_there_are_none_are_said`).
 - **The box stays open** at this commit: its commands pass, and its manual check (kitty, Ghostty and
   WezTerm: `f`, a label, its page, `u` back) was asked of the owner and not yet answered.
+
+## Task 3: the labels inside tmux and in text cells
+
+- **The labels are part of their rows' lines** (`Pager::place`): each run of label cells is written
+  at the end of the line of the row it is on, after the page's cells, so `on_glass` sees a row
+  with a label as another row than without, and writes exactly those rows, when the labels show,
+  change and go. Nothing else keeps track of which rows carry labels.
+- **`Hints::runs`** (pure, in `hints.rs`) says which cells: a label starts at its link's cell and
+  is moved left where it would pass its page's last cell; labels side by side are one run; of two
+  over the same cell the later one's letter shows. The pixel offsets `Hints::settle` gives are
+  left unused there.
+- **`kitty::placeholder_at`** writes one placeholder cell with its row, its column and the id's
+  high byte: the cell after a run, when that cell is still a page's (found among `Pager::spots`,
+  with each page's image id kept beside them while `place` runs).
+- **`cells::label`** writes the letters: capitals, as the image has them; dark on yellow in 24-bit
+  colour or in xterm's 256 (221, 234, 100, the nearest to the image's colours), and with no colours
+  reverse video, dim for a letter typed. Inside tmux the colours follow how the pane names its
+  images (`IdColor::Rgb`: 24-bit; otherwise the palette).
+- **`tmux.rs` is untouched**, though the task lists it: nothing is asked of tmux for the labels.
+- **A surprise: a second terminal attaching dropped the labels.** tmux saying a terminal may lack
+  the images makes the pager send every page again; for a moment no page is placed, which the
+  labels took for a screen that changed, so they went, and the test's next `Esc` quit the pager.
+  Now, while a page on screen is still to come, the labels stay as they are
+  (`Pager::labels_fit`, `Pager::ready` set before the pages are placed); once the pages are back,
+  the screen is compared again. The same holds directly, after a resize: the labels go when the
+  new pages are placed, not before.
+- **The fixture** `fixtures::linked_at_its_edges`: a page with a link at its first cell, one in its
+  middle and one at its last cell, for the row cases the task names.
+- **Seen failing**, the fixes reverted in copies (`cp` aside, `cmp` after):
+  - `Hints::runs` not keeping a label within its page: `hints_runs_are_the_cells_the_labels_cover_within_their_pages`;
+    `cells::label` writing the letters as typed: `a_links_label_is_capitals_on_yellow_and_a_letter_typed_is_paler`;
+    `placeholder_at` naming column 0: `a_placeholder_cell_names_its_row_and_column_outright`, and
+    with it `view_tmux::links_inside_tmux_…` (the cell after `S` named the first column);
+  - the runs not written into the rows: `view_tmux::links_inside_tmux_…` and
+    `view_pager::links_in_text_cells_are_written_over_the_pages_cells`;
+  - the labels dropped while the pages are sent again: `view_tmux::links_inside_tmux_…`, as first
+    run (above).

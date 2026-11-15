@@ -29,6 +29,7 @@ use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use super::cells::{self, Colours};
 use super::clip;
 use super::hints::{self, Aim, Hints, Typed};
 use super::launch;
@@ -42,7 +43,7 @@ use crate::source::{
 use super::files::{Files, Written};
 use super::fit::{self, Area, Cell, FALLBACK_CELL, Fit, Grid, Layout, Zoom};
 use super::keys::{self, Key};
-use super::kitty::{self, Rect};
+use super::kitty::{self, IdColor, Rect};
 use super::relayout::{self, Ended, Hold, Relayout};
 use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
@@ -2101,6 +2102,7 @@ impl Pager<'_> {
         // Synchronized output, where the terminal has it, shows the redraw all at once.
         out.extend_from_slice(b"\x1b[?2026h");
         let ready = on_screen.iter().flatten().all(|v| self.sent.iter().any(|s| s.view == *v) || self.failed.iter().any(|(f, _)| f == v));
+        self.ready = ready;
         // A list's tiles go on screen as they come, as a gallery's do.
         if self.level.nav.help {
             self.help(&mut out, size);
@@ -2112,7 +2114,6 @@ impl Pager<'_> {
         out.extend_from_slice(b"\x1b[2K\x1b[7m");
         out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !ready).as_bytes());
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
-        self.ready = ready;
         self.wrote(labels_sent);
         self.tty.write_all(&out)?;
         // A page left as it was, and an old copy gone with this draw's placements: there is room for
@@ -2147,10 +2148,6 @@ impl Pager<'_> {
     /// `f`: labels for the links of the pages on screen, asked of the source, which is asked for its
     /// links the first time. A source with none, or a screen with no page, says so.
     fn start_hints(&mut self, aim: Aim) {
-        if self.output != Output::Direct {
-            self.level.nav.message = Some("the links' labels aren't drawn here yet".into());
-            return;
-        }
         if !self.level.linked {
             self.level.links = self.level.source.links();
             self.level.linked = true;
@@ -2216,16 +2213,14 @@ impl Pager<'_> {
     /// and `area_rows` rows of the pages. How many images went into `out`.
     fn draw_labels(&mut self, out: &mut Vec<u8>, cell: Cell, cols: u16, area_rows: u16) -> u64 {
         let wrap = self.output.wrap();
-        let shown = self.level.nav.hints.as_ref().is_some_and(|hints| !hints.waiting());
-        let fits = self.labels.as_ref().is_some_and(|labels| labels.level == self.level.id && labels.screen == self.spots);
-        if !(shown && fits) {
-            // Labels shown on a screen that changed go, as those the reader dropped did.
-            if shown {
-                self.level.nav.hints = None;
-            }
+        if !self.labels_fit() {
             if let Some((id, _)) = self.labels.take().and_then(|labels| labels.sheet) {
                 delete(out, id, self.output);
             }
+            return 0;
+        }
+        // Where pages are cells, the rows carry them ([`Pager::place`]).
+        if self.output != Output::Direct {
             return 0;
         }
         let (Some(hints), Some(labels)) = (self.level.nav.hints.as_ref(), self.labels.as_mut()) else { return 0 };
@@ -2274,6 +2269,21 @@ impl Pager<'_> {
         labels.drawn = Some(hints.typed().to_owned());
         self.placed_at = Some(Instant::now());
         images
+    }
+
+    /// Whether the links' labels show, on the screen they were made for: the reader hasn't dropped
+    /// them nor chosen one, and the pages are where they were, of the same level. Labels shown on a
+    /// screen that changed are dropped here, as the reader drops them. While a page on screen is
+    /// still to come (sent again: tmux lost it, another terminal attached), where the pages are isn't
+    /// known yet, and the labels stay for when it is.
+    fn labels_fit(&mut self) -> bool {
+        let shown = self.level.nav.hints.as_ref().is_some_and(|hints| !hints.waiting());
+        let placed = |labels: &Labels| !self.ready || labels.screen == self.spots;
+        let fits = self.labels.as_ref().is_some_and(|labels| labels.level == self.level.id && placed(labels));
+        if shown && !fits {
+            self.level.nav.hints = None;
+        }
+        shown && fits
     }
 
     /// The link whose label the reader typed, followed: to its place in the document, the reader's
@@ -2935,6 +2945,8 @@ impl Pager<'_> {
         let scroll = self.level.nav.scroll;
         let mut placed = Vec::new();
         self.spots.clear();
+        // The image each page on screen is, beside where it is ([`Pager::spots`]).
+        let mut images = Vec::new();
         for ((slot, view), placement) in (0u16..).zip(&self.on_screen).zip(1u32..) {
             // Of a page sent twice, the one with the tint of now; before that one has come, the last sent.
             let key = view.map_or(0, |v| self.level.nav.tint(v.page).0.map_or(0, |tint| tint.key));
@@ -2946,6 +2958,7 @@ impl Pager<'_> {
             if let Some(size) = self.level.source.size(s.view.page) {
                 let scroll = if visible < s.rows { scroll } else { 0 };
                 self.spots.push(hints::Shown { page: s.view.page, left, top, cols: s.cols, rows: visible, scroll, of: s.rows, size });
+                images.push(s.id);
             }
             match self.output {
                 Output::Direct => {
@@ -3003,6 +3016,36 @@ impl Pager<'_> {
             let name = printable(&label(&name, grid.cols));
             let (on, off) = if chosen == Some(v.page) { ("\x1b[7m", "\x1b[0m") } else { ("", "") };
             into.extend_from_slice(format!("{on}{name}{off}").as_bytes());
+        }
+        // The links' labels, where pages are cells: written over the page's cells, at the end of
+        // their row's line, so the row is written again when its labels change, and again as it
+        // was once they go. Inside tmux the placeholder cell after a label names its row and column
+        // outright: the bare cells of a row take theirs from the cell to their left, which is a
+        // letter there.
+        if self.output != Output::Direct && self.labels_fit() {
+            let runs = self.level.nav.hints.as_ref().map_or_else(Vec::new, |hints| hints.runs(&self.spots));
+            for run in runs {
+                let Some(line) = text_rows.get_mut(usize::from(run.row)) else { continue };
+                cursor(line, run.row, run.col);
+                match self.output {
+                    Output::Text(style) => cells::label(line, &run.letters, style.colours),
+                    Output::Tmux(colour) => {
+                        let colours = if colour == IdColor::Rgb { Colours::Rgb } else { Colours::Palette };
+                        cells::label(line, &run.letters, colours);
+                        let after = run.col.saturating_add(u16::try_from(run.letters.len()).unwrap_or(u16::MAX));
+                        let within = |page: &&hints::Shown| {
+                            let (right, bottom) = (page.left.saturating_add(page.cols), page.top.saturating_add(page.rows));
+                            (page.left..right).contains(&after) && (page.top..bottom).contains(&run.row)
+                        };
+                        if let Some((page, id)) = self.spots.iter().zip(&images).find(|(page, _)| within(page)) {
+                            let row = page.scroll.saturating_add(run.row.saturating_sub(page.top));
+                            // Within the placeholders' table: the layout keeps it so.
+                            let _ = kitty::placeholder_at(line, *id, colour, row, after.saturating_sub(page.left));
+                        }
+                    }
+                    Output::Direct => {}
+                }
+            }
         }
         // The rows of text that aren't as they already are. Inside tmux, a page that leaves the
         // screen goes with its placeholder cells, erased here or written over.

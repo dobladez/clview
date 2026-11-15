@@ -86,6 +86,24 @@ pub(crate) fn linked() -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A US Letter page with three links, each to the page's own top: at its top left corner
+/// (`/Rect [0 772 80 792]`), in its middle (`/Rect [280 400 360 420]`), and at its right edge, a
+/// little lower (`/Rect [606 370 612 390]`).
+pub(crate) fn linked_at_its_edges() -> Vec<u8> {
+    let link = |rect: &str| format!("<< /Type /Annot /Subtype /Link /Border [0 0 0] /Rect [{rect}] /Dest [4 0 R /Fit] >>");
+    let content = "BT /F1 24 Tf 200 600 Td (Links at the edges) Tj ET";
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [6 0 R 7 0 R 8 0 R] >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        link("0 772 80 792"),
+        link("280 400 360 420"),
+        link("606 370 612 390"),
+    ])
+}
+
 /// A PDF of `objects`, numbered from 1, the first the catalog: a header, the objects, a
 /// cross-reference table that finds each one, and the trailer.
 pub(crate) fn pdf(objects: &[String]) -> Vec<u8> {

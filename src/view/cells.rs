@@ -322,6 +322,35 @@ pub(crate) fn lines(width: u32, height: u32, premultiplied: &[u8], cols: u16, ro
     Ok(out)
 }
 
+/// The colours of a link's label written as text: its ground, a letter, and a letter typed, as
+/// 24-bit colours and as the nearest of xterm's 256.
+const LABEL_RGB: [[u8; 3]; 3] = [[255, 221, 87], [48, 37, 5], [150, 120, 30]];
+const LABEL_PALETTE: [u8; 3] = [221, 234, 100];
+
+/// A link's label as text, at the cursor: its `letters` as capitals, dark on yellow, a letter
+/// already typed paler, in the colours the terminal has; with none, reversed, a letter typed dim.
+/// The colours are put back after it. A letter is one of the labels' own, so nothing a document
+/// shapes is written.
+pub(crate) fn label(out: &mut Vec<u8>, letters: &[(char, bool)], colours: Colours) {
+    let mut pen = None;
+    for (letter, typed) in letters {
+        if pen != Some(*typed) {
+            let ink = usize::from(*typed) + 1;
+            let ([gr, gg, gb], [r, g, b]) = (LABEL_RGB[0], LABEL_RGB[ink]);
+            let _ = match colours {
+                Colours::Rgb => write!(out, "\x1b[0;48;2;{gr};{gg};{gb};38;2;{r};{g};{b}m"),
+                Colours::Palette => write!(out, "\x1b[0;48;5;{};38;5;{}m", LABEL_PALETTE[0], LABEL_PALETTE[ink]),
+                Colours::None if *typed => write!(out, "\x1b[0;7;2m"),
+                Colours::None => write!(out, "\x1b[0;7m"),
+            };
+            pen = Some(*typed);
+        }
+        let mut utf8 = [0u8; 4];
+        out.extend_from_slice(letter.to_ascii_uppercase().encode_utf8(&mut utf8).as_bytes());
+    }
+    out.extend_from_slice(b"\x1b[0m");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +364,30 @@ mod tests {
 
     const BLOCKS: Style = Style { glyphs: Glyphs::Blocks, colours: Colours::Rgb, ground: Ground::Dark };
     const ASCII_PLAIN: Style = Style { glyphs: Glyphs::Ascii, colours: Colours::None, ground: Ground::Dark };
+
+    /// A link's label is its letters as capitals, dark on yellow in the colours the terminal has, a
+    /// letter typed paler, the colours put back after; with no colours, reversed, and dim once typed.
+    #[test]
+    fn a_links_label_is_capitals_on_yellow_and_a_letter_typed_is_paler() {
+        let written = |letters: &[(char, bool)], colours| {
+            let mut out = Vec::new();
+            label(&mut out, letters, colours);
+            String::from_utf8(out).unwrap()
+        };
+        assert_eq!(written(&[('s', false), ('a', false)], Colours::Rgb), "\x1b[0;48;2;255;221;87;38;2;48;37;5mSA\x1b[0m");
+        assert_eq!(
+            written(&[('s', true), ('a', false)], Colours::Rgb),
+            "\x1b[0;48;2;255;221;87;38;2;150;120;30mS\x1b[0;48;2;255;221;87;38;2;48;37;5mA\x1b[0m"
+        );
+        assert_eq!(
+            written(&[('j', true), ('k', true), ('l', false)], Colours::Palette),
+            "\x1b[0;48;5;221;38;5;100mJK\x1b[0;48;5;221;38;5;234mL\x1b[0m"
+        );
+        assert_eq!(written(&[('h', true), ('s', false)], Colours::None), "\x1b[0;7;2mH\x1b[0;7mS\x1b[0m");
+        assert_eq!(written(&[], Colours::Rgb), "\x1b[0m");
+        // The palette's colours are the nearest to the others.
+        assert_eq!(LABEL_RGB.map(|[r, g, b]| palette(r, g, b)), LABEL_PALETTE);
+    }
 
     /// `pixels`, rows of `width`, as text, every line joined by a newline.
     fn drawn(pixels: &[[u8; 4]], width: u32, cols: u16, rows: u16, style: Style) -> String {

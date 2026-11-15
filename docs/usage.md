@@ -495,9 +495,11 @@ page 40 unread`). Any key meanwhile drops them. A file with no links (a picture,
 screen with none on it, says `no links on screen`.
 
 The labels are drawn over the page, which is never changed nor rendered again: a document's
-links look as the document draws them, with no underline or colour of `clv`'s. They are drawn
-directly in kitty, Ghostty and WezTerm; inside tmux and in [text cells](#text-cells) `f` says it
-has no labels there yet.
+links look as the document draws them, with no underline or colour of `clv`'s. Directly in kitty,
+Ghostty and WezTerm they are drawn at their links' own places, to the pixel. Inside tmux and in
+[text cells](#text-cells) a label is characters, a capital to a cell, dark on yellow (reversed on
+a terminal without colours), written over the page's cells from the cell its link starts in, and
+kept within its page; the cells come back as they were when the labels go.
 
 **A place in the document** (a PDF's link to a page, its table of contents, a named destination)
 is gone to: its page, and on a page taller than the window, scrolled so that the place is a third
@@ -966,6 +968,8 @@ What else to know:
 - **`c`** copies the page as it is, not as the cells show it.
 - **A search's matches** are tinted in the cells' colours, since the cells are sampled from the
   tinted page ([Searching a document's text](#searching-a-documents-text)).
+- **The labels of a page's links** (`f`) are capitals over the page's cells, a cell a letter
+  ([Following links](#following-links)).
 - **`--compression`** only applies to what `c` copies.
 - **A terminal that takes no escape codes**, as `TERM` says (`dumb`, `vt…`, or none), isn't asked
   anything and doesn't get the pager: every page is printed, in characters alone unless `COLORTERM`
@@ -1029,6 +1033,9 @@ doesn't, since the app would open on the far machine ([Opening in another app](#
 - Pages turned while the pane is hidden (another window in front, or the window zoomed on another
   pane) arrive when it shows again. A terminal that attaches to the session later gets the pages
   too.
+- The labels of a page's links (`f`, [Following links](#following-links)) are text over the page's
+  placeholders, a cell a letter, so tmux keeps them as it keeps the page: a terminal that attaches
+  while they show gets them too.
 - With more than one terminal showing the pane, pages go as PNGs, not temporary files.
 - tmux throws output away when it decides the terminal can't keep up, images with it. `clv`
   notices and sends the pages again. If tmux keeps dropping them, the status line says so, and

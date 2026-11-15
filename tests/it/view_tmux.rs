@@ -946,3 +946,142 @@ fn inside_tmux_the_pager_draws_text_cells_in_the_pane() {
     assert!(!String::from_utf8_lossy(&output.lock().unwrap()[from..]).contains("\x1bPtmux;"));
     assert_eq!(recorded(&server), "");
 }
+
+/// What a stream shows, once its escape sequences are taken out: control sequences, the string
+/// ones (passthrough among them, its ESCs doubled), which end with ST, and a character set named.
+fn visible(text: &str) -> String {
+    let (mut out, mut chars) = (String::new(), text.chars());
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                chars.by_ref().find(|c| ('@'..='~').contains(c));
+            }
+            Some(']' | '_' | 'P') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x1b' && chars.next() == Some('\\') {
+                        break;
+                    }
+                }
+            }
+            // A character set named, as tmux does around its own drawing: `ESC ( B`.
+            Some('(' | ')') => {
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The marks of the placeholder cell that follows the first `before` in `shown`, a capture with
+/// its escape sequences taken out: the combining characters after it, which name its row, its
+/// column and its image's high byte.
+fn marks_after(shown: &str, before: &str) -> Option<Vec<char>> {
+    let rest = &shown[shown.find(before)? + before.len()..];
+    Some(rest.chars().take_while(|c| !c.is_ascii() && *c != '\u{10EEEE}').collect())
+}
+
+/// What the pane `view:0` shows, its escape sequences taken out.
+fn shown(server: &Server) -> String {
+    visible(&String::from_utf8_lossy(&server.tmux(&["capture-pane", "-p", "-e", "-t", "view:0"])))
+}
+
+/// Wait until `done` holds for what the pane `view:0` shows.
+fn until(server: &Server, what: &str, done: &dyn Fn(&str) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done(&shown(server)) {
+        assert!(Instant::now() < deadline, "{what} never happened: {:?}", shown(server));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Inside tmux a link's label is written over the page's placeholder cells: at a row's first cell
+/// and in a row's middle, the page still showing around it, since the placeholder after a label
+/// names its row and column outright where a bare one would take them from the label. `Esc` writes
+/// the rows as they were, and a terminal that attaches later gets the labels too.
+#[test]
+fn links_inside_tmux_are_written_over_the_placeholders_and_the_cell_after_names_its_place() {
+    if let Some(what) = missing() {
+        eprintln!("warning: skipped: {what} here");
+        return;
+    }
+    // Rows and columns as marks: the first two of the protocol's table.
+    const FIRST: char = '\u{0305}';
+    const SECOND: char = '\u{030D}';
+    const CELL: &str = "\u{10EEEE}";
+    let pdf = fixture("links", 1);
+    std::fs::write(&pdf, crate::fixtures::linked_at_its_edges()).unwrap();
+    let config = pdf.with_file_name("tmux.conf");
+    std::fs::write(&config, "set -g allow-passthrough on\n").unwrap();
+    let mut server = Server::new("links", config);
+    let output = server.client(&format!("new-session -s view \"'{BIN}' '{}' --protocol kitty --pager\"", pdf.display()));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while server.run(&["has-session"]).is_none() {
+        if Instant::now() > deadline {
+            eprintln!("warning: skipped: tmux didn't start here");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.started();
+    all_arrive(&server, &output, "the page");
+    let page = server.on_screen();
+    // As drawn: every row starts with a cell that names its row and column 0, and goes on bare.
+    let plain = shown(&server);
+    let first_row = marks_after(&plain, CELL).unwrap();
+    assert_eq!(first_row.get(..2), Some(&[FIRST, FIRST][..]), "{first_row:?}");
+    assert!(plain.contains(&format!("{CELL}{CELL}{CELL}")));
+    server.tmux(&["send-keys", "-t", "view:0", "f"]);
+    until(&server, "the labels", &|c| c.contains(&format!("S{CELL}")) && c.contains(&format!("{CELL}A{CELL}")) && c.contains(&format!("{CELL}D")));
+    let labelled = shown(&server);
+    // `S` over the page's first cell: the cell after it is its first row's second.
+    let after_s = marks_after(&labelled, &format!("S{CELL}")).unwrap();
+    assert_eq!(after_s.get(..2), Some(&[FIRST, SECOND][..]), "{after_s:?}");
+    assert_eq!(after_s.get(2), first_row.get(2), "the same image");
+    // `A` in a row's middle: bare cells before it, and after it a cell with its row, and a column
+    // that is neither the first nor the second.
+    let row = labelled.lines().find(|line| line.contains(&format!("{CELL}A{CELL}"))).unwrap();
+    let row_starts = marks_after(row, CELL).unwrap();
+    let after_a = marks_after(row, &format!("A{CELL}")).unwrap();
+    assert!(
+        after_a.len() >= 2 && after_a[0] == row_starts[0] && after_a[1] != FIRST && after_a[1] != SECOND,
+        "{after_a:?} in a row of {row_starts:?}"
+    );
+    assert_eq!(after_a.get(2), first_row.get(2), "the same image");
+    assert!(row.contains(&format!("{CELL}{CELL}A")), "bare cells before the label");
+    // `D` at the page's last cell: nothing after it to name.
+    let row = labelled.lines().find(|line| line.contains(&format!("{CELL}D"))).unwrap();
+    assert!(row.trim_end().ends_with('D'), "{row:?}");
+    // The page is the image it was, around the labels.
+    assert_eq!(server.on_screen(), page);
+    // Esc: the rows as they were.
+    server.tmux(&["send-keys", "-t", "view:0", "Escape"]);
+    // But for the status line, the last, which the first key changed.
+    let rows = |shown: &str| shown.trim_end().rsplit_once('\n').map(|(rows, _)| rows.to_owned());
+    until(&server, "the rows as they were", &|c| rows(c).is_some() && rows(c) == rows(&plain));
+    assert_eq!(server.on_screen(), page);
+    // A terminal that attaches while they show is drawn the labels with the page; the page is
+    // sent again for it, and the labels stay through that.
+    server.tmux(&["send-keys", "-t", "view:0", "f"]);
+    until(&server, "the labels again", &|c| c.contains(&format!("S{CELL}")) && c.contains(&format!("{CELL}A{CELL}")));
+    let second = server.client("attach-session -t view");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let drawn = visible(&String::from_utf8_lossy(&second.lock().unwrap()));
+        if drawn.contains(&format!("S{CELL}")) && drawn.contains(&format!("A{CELL}")) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the labels never reached the second terminal: {drawn:?}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    all_arrive(&server, &second, "in the second terminal");
+    until(&server, "the labels still", &|c| c.contains(&format!("S{CELL}")) && c.contains(&format!("{CELL}A{CELL}")) && c.contains("esc cancel"));
+    // And still take the keys: `a` is the middle link, to the page's own top, and the labels go.
+    server.tmux(&["send-keys", "-t", "view:0", "a"]);
+    until(&server, "the labels gone", &|c| !c.is_empty() && !c.contains(&format!("S{CELL}")) && !c.contains(&format!("A{CELL}")));
+    server.tmux(&["send-keys", "-t", "view:0", "q"]);
+}

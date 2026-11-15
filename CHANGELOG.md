@@ -13,7 +13,9 @@ works today. A version's section becomes the notes of its
   PDF's links to a place in it (a table of contents, a cross-reference, a named destination) go
   there, and `u` or `Backspace` come back, through the last 100 links followed, before they go back
   to the list. A link that would run a script or start a program is never followed, and says what
-  it is. The labels are drawn over the page directly in kitty, Ghostty and WezTerm.
+  it is. The labels are drawn over the page, which is never rendered again for them: at their
+  links' own places directly in kitty, Ghostty and WezTerm, and as capitals over the page's cells
+  inside tmux and in text cells.
 - `o` opens the file you are reading in the app the desktop opens it with (`open` on macOS,
   `xdg-open` on Linux and the BSDs), without waiting for it, the status line saying how it went;
   in a list, the tile chosen, a folder in the file manager. A file whose real name doesn't say what

@@ -260,7 +260,7 @@ followed into.
   `cargo test -j 2 --test it view_pager::links` (labels sent as one image, a place gone to, `u`
   back then to the list, a page not in `--pages`, `Esc` while reading), and `Manual: in kitty,
   Ghostty and WezTerm, clv a PDF with a table of contents, press f, type a label: its page; u: back.`
-- [ ] **The labels inside tmux and in text cells** — written over the page's cells, the placeholder
+- [x] **The labels inside tmux and in text cells** — written over the page's cells, the placeholder
   after each label naming its row and column, the rows written again after. *Files:*
   `src/view/pager.rs`, `src/view/cells.rs`, `src/view/tmux.rs`, `src/view/kitty.rs`,
   `tests/it/view_tmux.rs`, `tests/it/view_pager.rs`. *Verify:* `cargo test -j 2 --test it
