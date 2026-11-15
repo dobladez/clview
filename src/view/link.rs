@@ -81,6 +81,7 @@ const LAYERS: usize = 8;
 /// no parameter that names a file to read ([`READS_A_FILE`]), through [`LAYERS`] layers of
 /// percent-encoding. Otherwise what kind of link it is, in words for the reader. It is never
 /// changed: what is launched is `address` as it is, a single argument.
+#[cfg_attr(not(test), expect(dead_code, reason = "web addresses are followed from Spec-0011's last task on"))]
 pub(super) fn web(address: &str) -> Result<(), String> {
     if address.len() > MAX_ADDRESS {
         return Err(TOO_LONG.into());
@@ -209,6 +210,7 @@ pub(super) enum Local {
 /// socket or a device is refused by what the file system says of it, before anything opens it, as
 /// is a path that leads nowhere; why, in words for the reader. The path is taken as written: no
 /// `~`, and no percent-decoding.
+#[cfg_attr(not(test), expect(dead_code, reason = "other files are followed into from Spec-0011's last task on"))]
 pub(super) fn local(document: &Path, path: &str) -> Result<Local, String> {
     if path.is_empty() || path.len() > MAX_ADDRESS || path.contains('\0') {
         return Err("its path is no path to follow".into());

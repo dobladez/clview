@@ -96,6 +96,8 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
 | `search.rs` | A file's search (`/`): what is typed, the text read so far, folded, the matches in it and the one the reader is on ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). No IO of its own |
+| `hints.rs` | The labels over a page's links (`f`): their codes, what is typed of one, the wait for the pages' links, where each label goes on screen, and the image of their letters ([Following a file's links](#following-a-files-links-hintsrs-linkrs-pagerrs)). No IO of its own |
+| `link.rs` | A link checked before anything is done with it: what a source gives as a page's links, a web address, a path. It opens and launches nothing |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `icon.rs` | The icon beside `--help`'s first lines: whether it can show, where it goes, and its escape codes ([The icon in `--help`](#the-icon-in---help-iconrs)) |
 | `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
@@ -122,7 +124,9 @@ failed page.
 
 A source may give its text too, for the reader to search: `Source::texts` is `None` by default,
 and otherwise a `Texts`, which keeps the pool's contract for another kind of work
-([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)).
+([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). And its links, for the
+reader to follow: `Source::links`, `None` by default, otherwise a `Links`, under the same contract
+([Following a file's links](#following-a-files-links-hintsrs-linkrs-pagerrs)).
 
 ## Backends
 
@@ -1310,6 +1314,91 @@ paragraph's `text` (`bytes_of`, the whole object for a character of its text), t
 rectangle a line, or a visual piece of a bidirectional one, on each page it runs over, the hyphen
 drawn at a line's end inside the first, at most 64 (`MAX_LINES`). Its `page_hint` matters only for
 headers, footers and notes: a body paragraph's pieces come from the layout's index of every page.
+
+## Following a file's links (`hints.rs`, `link.rs`, `pager.rs`)
+
+`f` in a file's pages labels the links on screen, and a label typed follows its link
+([Spec-0011](specs/0011-follow-a-documents-links.md)). As with a search, the work is split along
+the layers: a backend says where each page's links are and where they lead, and the viewer
+labels them, checks where they lead and goes there, the same for every backend with links.
+
+**The contract.** `Source::links` gives a `Links`, asked for the first time the reader presses `f`
+in a file and kept with its level (`Level::links`); dropped, its work ends without being waited
+for. It keeps `Pool`'s contract: `set_queue` replaces what is wanted, each an `Ask`: a page's
+links (`Ask::Page`), or where the place a name names is (`Ask::Name`, a link's `#fragment` once the
+file it names is open); `try_recv` never blocks and gives a `Told`. A page's links come as `Link`s,
+at most 1,024 (`MAX_LINKS`), with how many more the page has (`more`): each its page, its
+rectangles in the page's unit from its top left (one a line, at most 64, `MAX_LINK_RECTS`), its
+address as the document writes it, for the reader to copy, and a `Target`: a place in the document
+(`Place`, a page and how far down it), another file (`File`, its path as written, with a fragment
+or a page), a web address (`Web`), or anything else (`Other`), never followed, which carries what
+the reader is told of it, whole, in the backend's words. A backend says what the document says:
+nothing is resolved against the file system, checked or opened there.
+
+**The queue** is the one a backend's `Texts` keeps (`source/texts.rs`), generic over what it gives
+(`Queue<G: Reply>`): a `Reply` says what it answers (`asked`) and what it weighs while it waits
+(`weight`), and the answers waiting are held to 4 MiB (`MAX_WAITING`) whatever they are. A
+backend lends it a closure (`Queue::serve`).
+
+**What a source gives is checked** (`link::checked`) as it is taken: a page's links past 1,024
+are left out and counted; a link on another page, or with no rectangle left once each is clipped
+to its page (one that isn't finite, is empty or lies outside is dropped), is left out; a place on
+a page the document hasn't, and a path, an address or a name past its limit (4 KiB, `MAX_ADDRESS`;
+256 bytes, `MAX_NAME`), becomes an `Other` that says so.
+
+**The labels** (`Hints`, in `Nav`, with no IO). `f` gives `Step::Hints`, and the pager asks the
+source for the links of the pages on screen (`Pager::start_hints`), then takes what comes on each
+pass (`Pager::links_on`), the loop waking every 10 ms meanwhile. Once every page has answered or
+failed, and the pages are on screen, or 2 s have passed (`hints::WAIT`), the labels are made, once
+(`Hints::settle`): for each link, the first of its rectangles, down then across, at least partly
+in the part of its page on screen, clipped to that part, gives where the label goes (`spot`), a
+cell and an offset into it in pixels; they are ordered by the page's place on screen, then by
+that place on the page, in the page's unit, and the first 1,000 (`MAX_LABELS`) get the codes
+(`codes`: counting through `sadfjklewcmpgh`, as many letters as it takes). Where the pages are on
+screen is what `Pager::place` last placed (`Pager::spots`: the page, its cells, how many of its rows
+are scrolled off), so a label is where its link is drawn. While `Nav::hints` is set it takes every
+key (`Nav::hints_key`): a label's next letter narrows them, one left is `Step::Follow`, and
+anything else drops them.
+
+**Drawing them** (`Pager::draw_labels`, in every draw). Directly, one image holds the letters
+(`hints::Sheet`): each in a box of its own, drawn from a bitmap font of five pixels by seven
+(`GLYPHS`), each pixel enlarged by the whole number that fits the cell's height, once in the
+labels' ink and under it once paler, for a letter typed. It is sent as a PNG the first time, made
+room for as a page is (`make_room`), and each letter of each label is a placement of its box of
+it (`kitty::place_part`: `a=p,q=1,C=1,z=1,i=…,p=…,x=…,y=…,w=…,h=…,X=…,Y=…`), at its own size, over
+the pages (`z=1`), within the pages' rows. When what is typed changes, every placement goes
+(`kitty::hide_all`, `a=d,d=i`) and those that still match are placed again. The labels are kept
+with the level and the screen they were made for (`Labels`): on any other screen (a resize, a
+relayout, the keys in place of the pages) they go, the image deleted, as when the reader drops
+them or chooses one. A placement of an image the terminal dropped is answered
+(`Key::Missing`): the image is sent again under another id
+([ADR-0035](adr/0035-link-labels-as-placements-of-one-image-of-letters.md)).
+
+**Following.** A `Place` is gone to (`Pager::go_to_place`): the page where it is first among those
+paged through, or said not to be among them (`--pages`); `Nav::jump` keeps where the reader was
+(a `Jump`: the paragraph at the top of the screen, as `Source::anchor` gives it, and the page and
+how far down it for a source without paragraphs), goes to the page, and asks for the place a
+third of the way down the screen once the page's rows are known (`Nav::land`). `u` and `Backspace`,
+after a kept search, give `Step::Return` while `Nav::jumps` holds any, at most 100 (`MAX_JUMPS`):
+the last is found again (`Source::find` on its anchor, or its page) and scrolled to as it was
+(`Pager::jump_back`). A document laid out again hands its jumps to the new level
+(`Pager::replace`), as it does its search: an anchor is found in any layout of the document.
+
+### A PDF's links (`pdfcraft.rs`)
+
+`Pdf` keeps the links and the pages (`Linked`) of the `inspect` that opening it already runs:
+pdfcraft's link annotations, sorted by page, and each page's `PageInfo`. A link's rectangles are
+the boxes of its quadrilaterals, or else of its `/Rect`, taken through `PageInfo::user_to_view` to
+the page as shown (cropped, turned, in its `/UserUnit`). A destination in the document becomes a
+`Place` through the page it names (`down`): `/XYZ` and `/FitH` by their `top` through
+`PageInfo::dest_fraction`, so that on a page turned a quarter `/XYZ` goes by its `left`; `/FitR` by
+the top of its rectangle as shown; the rest at the page's top. A URI is a `Web`, as written; a
+remote go-to is a `File`, with its named destination or its page, once
+`pdfcraft_engine::links::resolve_remote_document_path` (which does no I/O) says its file
+specification is a local path; a script, a launch, a change of layers and any other action are
+`Other`s. The queue's thread answers a page from what is kept, and a name
+(`pdfcraft_render::named_destination`) by reading the file again, which is why the links have a
+thread.
 
 ## The terminal's state
 

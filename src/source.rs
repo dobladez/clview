@@ -905,7 +905,6 @@ pub(crate) trait Source {
     /// Its links, for the reader to follow (`f`): found on a thread of the source's own from here
     /// on, so asked for only when the reader asks for them, and let go of with the file. `None` for
     /// a source with no links (a picture, a drawing), the default.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
     fn links(&self) -> Option<Box<dyn Links>> {
         None
     }
@@ -931,7 +930,6 @@ pub(crate) const MAX_NAME: usize = 256;
 /// ends its work without waiting for it. Whatever it gives is input like any other: the viewer
 /// checks it, against the limits here ([`MAX_LINKS`], [`MAX_LINK_RECTS`], [`MAX_ADDRESS`],
 /// [`MAX_NAME`]), which a source keeps to as it makes its answer.
-#[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
 pub(crate) trait Links {
     /// Replace what is wanted, the most urgent first. One still waited for is listed again every
     /// time; one given isn't given again while it stays listed.
@@ -955,12 +953,7 @@ pub(crate) enum Ask {
 pub(crate) enum Told {
     /// A page's links, in any order, at most [`MAX_LINKS`], and how many more it has that were
     /// left out. Why not costs that page's links alone.
-    Page {
-        page: usize,
-        links: Result<Vec<Link>, String>,
-        #[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
-        more: usize,
-    },
+    Page { page: usize, links: Result<Vec<Link>, String>, more: usize },
     /// Where the place called `name` is ([`Ask::Name`]): its page (0-based) and how far down it,
     /// in the page's unit from its top; `None` for a name the document doesn't have.
     Name { name: String, at: Result<Option<(usize, f32)>, String> },

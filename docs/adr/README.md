@@ -46,6 +46,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0032 | [A fenced block is drawn by the backend that lists its language](0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md) | Accepted |
 | 0033 | [Backends share a setting by declaring its name, and the viewer says of it only what they declare](0033-backends-share-a-setting-by-declaring-its-name.md) | Accepted |
 | 0034 | [Open a file through the platform's opener, by its real path, only where its name agrees](0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) | Accepted |
+| 0035 | [The links' labels are placements of one image of letters, over the page](0035-link-labels-as-placements-of-one-image-of-letters.md) | Accepted |
 
 ## When to write one
 

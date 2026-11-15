@@ -86,6 +86,21 @@ pub(crate) fn hide(out: &mut Vec<u8>, id: u32, placement: u32, wrap: Wrap) {
     command(out, &format!("a=d,d=i,q=2,i={id},p={placement}"), b"", wrap);
 }
 
+/// Show the `src` rectangle of image `id` at the cursor, `offset` pixels across and down into the
+/// cursor's cell, at the rectangle's own size in pixels (no `c` or `r`), as its placement
+/// `placement`, over the pages (`z=1`: above what is placed without one, whatever the ids). The
+/// cursor stays where it is (`C=1`), and errors are answered (`q=1`), as [`place`]'s are. Its keys
+/// are in another order than [`place`]'s, so that what looks for a page's placement doesn't find it.
+pub(crate) fn place_part(out: &mut Vec<u8>, id: u32, placement: u32, src: Rect, offset: (u16, u16), wrap: Wrap) {
+    let keys = format!("a=p,q=1,C=1,z=1,i={id},p={placement},x={},y={},w={},h={},X={},Y={}", src.x, src.y, src.w, src.h, offset.0, offset.1);
+    command(out, &keys, b"", wrap);
+}
+
+/// Take every placement of image `id` off the screen, and keep its data (`d=i` with no placement).
+pub(crate) fn hide_all(out: &mut Vec<u8>, id: u32, wrap: Wrap) {
+    command(out, &format!("a=d,d=i,q=2,i={id}"), b"", wrap);
+}
+
 /// A virtual placement of image `id` over `cols` × `rows` cells (`U=1`): it shows wherever
 /// [`placeholder_row`] cells for it are drawn.
 pub(crate) fn place_virtual(out: &mut Vec<u8>, id: u32, cols: u16, rows: u16, wrap: Wrap) {
@@ -444,6 +459,27 @@ mod tests {
             }
             assert_eq!(decoded(&codes), data, "{len}");
         }
+    }
+
+    /// A part of an image is placed at its own size, a pixel offset into the cursor's cell, over
+    /// the pages, the cursor left where it is and errors answered; and every placement of an image
+    /// is taken off at once, its data kept.
+    #[test]
+    fn a_part_of_an_image_is_placed_at_a_pixel_offset_over_the_pages() {
+        let mut out = Vec::new();
+        place_part(&mut out, 9, 3, Rect { x: 24, y: 16, w: 12, h: 16 }, (5, 2), Wrap::None);
+        hide_all(&mut out, 9, Wrap::None);
+        let codes = codes(&out);
+        assert_eq!(codes[0], ("a=p,q=1,C=1,z=1,i=9,p=3,x=24,y=16,w=12,h=16,X=5,Y=2".to_string(), Vec::new()));
+        assert_eq!(codes[1], ("a=d,d=i,q=2,i=9".to_string(), Vec::new()));
+        assert!(!codes[0].0.contains("c=") && !codes[0].0.contains("r="), "at its own size");
+        // What looks for a page's placement (`a=p,q=1,i=`) doesn't find a label's.
+        let mut page = Vec::new();
+        place(&mut page, 9, 1, 40, 20, None, Wrap::None);
+        assert!(String::from_utf8_lossy(&page).contains("a=p,q=1,i=9") && !String::from_utf8_lossy(&out).contains("a=p,q=1,i="));
+        let mut wrapped = Vec::new();
+        place_part(&mut wrapped, 9, 3, Rect { x: 0, y: 0, w: 1, h: 1 }, (0, 0), Wrap::Tmux);
+        assert!(wrapped.starts_with(b"\x1bPtmux;\x1b\x1b_Ga=p,q=1,C=1,z=1,i=9,p=3,"));
     }
 
     #[test]

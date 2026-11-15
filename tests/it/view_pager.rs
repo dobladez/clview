@@ -3778,3 +3778,266 @@ fn open_a_document_laid_out_again() {
     view.press("q");
     assert!(view.finish().success());
 }
+
+/// The PDF with links ([`crate::fixtures::linked`]), in a directory of the test's own.
+fn linked(test: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = dir.join("links.pdf");
+    std::fs::write(&pdf, crate::fixtures::linked()).unwrap();
+    pdf
+}
+
+/// A letter of a link's label as placed: the image it is a part of, the cell it is placed at (from
+/// 1, as the cursor is moved there), and where its part is in the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Letter {
+    image: u32,
+    row: u16,
+    col: u16,
+    x: u32,
+    y: u32,
+}
+
+/// The letters of the links' labels placed since they were last taken off the screen, in order.
+fn letters(text: &str) -> Vec<Letter> {
+    const HIDDEN: &str = "\x1b_Ga=d,d=i,q=2,i=";
+    const PLACED_PART: &str = "\x1b_Ga=p,q=1,C=1,z=1,i=";
+    let Some(from) = text.rfind(HIDDEN) else { return Vec::new() };
+    let mut found = Vec::new();
+    let mut rest = &text[from..];
+    while let Some(at) = rest.find(PLACED_PART) {
+        // The cursor is moved to its cell just before: `ESC [ row ; col H`.
+        let before = &rest[..at];
+        let cell = before.rfind("\x1b[").and_then(|c| before[c + 2..].strip_suffix('H')).and_then(|c| c.split_once(';'));
+        let code = &rest[at + PLACED_PART.len()..];
+        let Some(end) = code.find("\x1b\\") else { break };
+        let key = |k: &str| code[..end].split(',').find_map(|kv| kv.strip_prefix(k)?.parse::<u32>().ok());
+        let image = code[..end].split(',').next().and_then(|id| id.parse().ok());
+        if let (Some(image), Some((row, col)), Some(x), Some(y)) = (image, cell, key("x="), key("y=")) {
+            found.push(Letter { image, row: row.parse().unwrap(), col: col.parse().unwrap(), x, y });
+        }
+        rest = &code[end..];
+    }
+    found
+}
+
+/// The images of the labels' letters sent so far: at the tests' cell of 10 × 20 pixels, fourteen
+/// boxes of 12 × 16, twice.
+fn sheets(text: &str) -> Vec<(u32, ::image::RgbImage)> {
+    pngs(text).into_iter().filter(|(_, image)| image.dimensions() == (168, 32)).collect()
+}
+
+/// Wait until the status line, since `from` bytes of output, has said `place` with nothing left to
+/// render.
+fn drawn_since(view: &Session, from: usize, place: &str) {
+    view.wait_until(place, |t| t.get(from..).is_some_and(|t| drawn(t, place)));
+}
+
+/// `f` labels the links on screen: one image of letters is sent, and each label is a placement of
+/// its letter's part of it, over the page, down the page in reading order. A label typed goes to its
+/// link's place, the labels gone and their image deleted; `u` comes back, and at the top goes
+/// nowhere. A link that is never followed says what it is, `Esc` drops the labels, and `?` lists
+/// the key.
+#[test]
+fn links_are_labelled_from_one_image_and_a_label_typed_goes_to_its_place() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links");
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the first page", |t| drawn(t, "page 1/3"));
+    assert!(sheets(&view.text()).is_empty() && letters(&view.text()).is_empty());
+    view.press("f");
+    view.wait_until("the labels", |t| letters(t).len() == 14 && sheets(t).len() == 1);
+    let text = view.text();
+    let (sheet, image) = sheets(&text).remove(0);
+    // Yellow boxes, dark letters.
+    assert_eq!(image.get_pixel(0, 1).0, [255, 221, 87]);
+    assert!(image.pixels().any(|p| p.0 == [48, 37, 5]));
+    let placed = letters(&text);
+    // One letter each, in the letters' order, each from its own box of the image's first row.
+    for (nth, letter) in placed.iter().enumerate() {
+        assert_eq!((letter.image, letter.x, letter.y), (sheet, 12 * nth as u32, 0), "label {nth}");
+    }
+    // Down the page, every link starting at the same place across it.
+    assert!(placed.windows(2).all(|pair| pair[0].row < pair[1].row && pair[0].col == pair[1].col), "{placed:?}");
+    assert!(placed[0].row > 1 && placed[13].row < 60 && placed[0].col > 1, "{placed:?}");
+    assert!(last_bar(&text).contains(" f: type a label to follow its link · esc cancel "), "{}", last_bar(&text));
+    // `s`, the first: to page 3, by `/XYZ`.
+    let before = text.len();
+    view.press("s");
+    drawn_since(&view, before, "page 3/3");
+    view.wait_until("the labels' image deleted", |t| t[before..].contains(&format!("{DELETED}{sheet}\x1b")));
+    // `u` comes back, and then has nowhere to go: the pager stays.
+    let before = view.text().len();
+    view.press("u");
+    drawn_since(&view, before, "page 1/3");
+    view.press("u\x7f");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(view.child.try_wait().unwrap().is_none(), "u quit");
+    // `a`, the second: the named destination, on page 2; Backspace comes back as `u` does.
+    view.press("f");
+    view.wait_until("the labels again", |t| sheets(t).len() == 2 && letters(t).len() == 14);
+    let before = view.text().len();
+    view.press("a");
+    drawn_since(&view, before, "page 2/3");
+    let before = view.text().len();
+    view.press("\x7f");
+    drawn_since(&view, before, "page 1/3");
+    // `p`, the twelfth: a script, said and not run.
+    view.press("f");
+    view.wait_until("the labels a third time", |t| sheets(t).len() == 3 && letters(t).len() == 14);
+    let before = view.text().len();
+    view.press("p");
+    said_since(&view, before, "a script, which clv doesn't run");
+    // Esc drops them, and does nothing else.
+    view.press("f");
+    view.wait_until("the labels a fourth time", |t| sheets(t).len() == 4 && letters(t).len() == 14);
+    let (last, before) = (sheets(&view.text()).last().unwrap().0, view.text().len());
+    view.press("\x1b");
+    view.wait_until("the labels dropped", |t| t[before..].contains(&format!("{DELETED}{last}\x1b")));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(view.child.try_wait().unwrap().is_none(), "Esc quit");
+    assert!(last_bar(&view.text()).contains(" page 1/3 "));
+    // A picture's page, or a list, has no links; `?` lists the key.
+    view.press("?");
+    view.wait_until("the keys", |t| t.contains("label the links on screen") && t.contains("back to where the last link followed was"));
+    view.press("qq");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// With more links on screen than letters, every label has two: the first typed greys it in the
+/// labels it starts and hides the others, Backspace brings them back, and the label left alone by
+/// its first letter is followed by it. Here two pages side by side, fifteen links between them.
+#[test]
+fn links_on_two_pages_side_by_side_have_two_letters_and_typing_narrows_them() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links-two");
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 200, 60);
+    view.wait_until("two pages", |t| drawn(t, "pages 1–2/3"));
+    view.press("f");
+    view.wait_until("the labels", |t| letters(t).len() == 30);
+    let placed = letters(&view.text());
+    // `ss`, `sa`, … on the first page, `as` on the second, to its right.
+    assert!(placed.iter().all(|letter| letter.y == 0));
+    assert_eq!((placed[0].x, placed[1].x, placed[2].x, placed[3].x), (0, 0, 0, 12));
+    assert_eq!((placed[28].x, placed[29].x), (12, 0));
+    // Two letters side by side: 12 pixels apart, in cells of 10.
+    assert!(placed[28].col > placed[0].col + 50 && (1..=2).contains(&(placed[1].col - placed[0].col)), "{placed:?}");
+    let before = view.text().len();
+    view.press("s");
+    view.wait_until("the labels narrowed", |t| t.len() > before && letters(t).len() == 28 && last_bar(t).contains("its link · s · esc cancel"));
+    let narrowed = letters(&view.text());
+    assert!(narrowed.chunks(2).all(|label| label[0].y == 16 && label[0].x == 0 && label[1].y == 0), "the letter typed, greyed: {narrowed:?}");
+    let before = view.text().len();
+    view.press("\x7f");
+    view.wait_until("the labels back", |t| t.len() > before && letters(t).len() == 30 && letters(t).iter().all(|letter| letter.y == 0));
+    // `a` alone is the second page's link, which leads to the first page: on screen already.
+    let before = view.text().len();
+    view.press("a");
+    view.wait_until("the labels gone", |t| t[before..].contains(DELETED));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// In a file opened from a list, `u` goes back through the links followed, and then to the list;
+/// and `f` in the list labels nothing.
+#[test]
+fn links_followed_in_a_file_from_a_list_are_gone_back_through_before_the_list() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links-list");
+    let other = pdf.with_file_name("other.pdf");
+    std::fs::write(&other, crate::fixtures::letter("Other", 3)).unwrap();
+    let mut view = Session::start(&pdf, &[other.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    view.press("f");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(sheets(&view.text()).is_empty(), "labels in a list");
+    view.press("\r");
+    view.wait_until("the file", |t| drawn(t, "page 1/3"));
+    view.press("f");
+    view.wait_until("the labels", |t| letters(t).len() == 14);
+    let before = view.text().len();
+    view.press("s");
+    drawn_since(&view, before, "page 3/3");
+    let before = view.text().len();
+    view.press("u");
+    drawn_since(&view, before, "page 1/3");
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back to the list", |t| t.get(before..).is_some_and(|t| bar(t).contains(" links.pdf 1/2 · 2 per row ")));
+    // Gone into again, there is nothing to go back through: `u` is the list at once.
+    view.press("\r");
+    let before = view.text().len();
+    drawn_since(&view, before.saturating_sub(1), "page 1/3");
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("the list again", |t| t.get(before..).is_some_and(|t| bar(t).contains(" links.pdf 1/2 · 2 per row ")));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// With `--pages`, a link to a page given goes where that page is first among them, and one to a
+/// page not given says so and goes nowhere.
+#[test]
+fn links_to_a_page_not_among_pages_are_said_and_not_gone_to() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links-pages");
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--pages", "2,1,2,1"], 100, 60);
+    view.wait_until("the second page, given first", |t| drawn(t, "page 2/3 · 1 of 4"));
+    // Its one link leads to page 1.
+    view.press("f");
+    view.wait_until("its label", |t| letters(t).len() == 1);
+    let before = view.text().len();
+    view.press("s");
+    drawn_since(&view, before, "page 1/3 · 2 of 4");
+    // From there, the named destination on page 2: where it is given first.
+    view.press("f");
+    view.wait_until("the first page's labels", |t| letters(t).len() == 14);
+    let before = view.text().len();
+    view.press("a");
+    drawn_since(&view, before, "page 2/3 · 1 of 4");
+    let before = view.text().len();
+    view.press("u");
+    drawn_since(&view, before, "page 1/3 · 2 of 4");
+    // And page 3, which isn't given.
+    view.press("f");
+    view.wait_until("the labels again", |t| sheets(t).len() == 3 && letters(t).len() == 14);
+    let before = view.text().len();
+    view.press("s");
+    said_since(&view, before, "page 3 isn't among --pages");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(last_bar(&view.text()).contains(" page 1/3 · 2 of 4 "), "{}", last_bar(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
+/// A file with no links says so, as does a screen with none on it.
+#[test]
+fn links_where_there_are_none_are_said() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("links-none", 2);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the first page", |t| drawn(t, "page 1/2"));
+    let before = view.text().len();
+    view.press("f");
+    said_since(&view, before, "no links on screen");
+    assert!(sheets(&view.text()).is_empty());
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}

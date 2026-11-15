@@ -30,10 +30,13 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::clip;
+use super::hints::{self, Aim, Hints, Typed};
 use super::launch;
-use crate::encode::PngEffort;
+use super::link;
+use crate::encode::{self, PngEffort};
 use crate::source::{
-    Bounds, Container, Effect, Frame, Handle, Keys, Later, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source, Texts, Value, Values,
+    Anchor, Bounds, Container, Effect, Frame, Handle, Keys, Later, Link, Links, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting, Source,
+    Target, Texts, Told, Value, Values,
 };
 
 use super::files::{Files, Written};
@@ -68,6 +71,9 @@ const SEARCH_KEYS: &str = "⏎ search · esc cancel";
 /// What `/` says in the pages of a file with no text to search, and `N` without a search.
 const NO_TEXT: &str = "no text to search";
 const NO_SEARCH: &str = "no search: / starts one";
+/// The most places the reader comes back to with `u`, the links followed last: an older one is
+/// forgotten.
+const MAX_JUMPS: usize = 100;
 /// What a relayout setting's keys say in a list, and while `--pages` picks the pages.
 const REFLOW_IN_LIST: &str = "open a document to reflow it";
 const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
@@ -129,7 +135,7 @@ const KEYS: [&str; 4] = [
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucogGbjknNphl +=-_,.r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofgGbjknNphl +=-_,.r/\u{c}";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -146,6 +152,8 @@ const PAGE_HELP: &[(&str, &str)] = &[
     (", .  3.", "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto"),
     ("/", "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
     ("n  N p  3n", "with a search: the next match, or with N or p the one before; 3n the third on"),
+    ("f", "label the links on screen: type a label to follow its link, Esc drops the labels"),
+    ("u  Backspace", "back to where the last link followed was"),
     ("r  Ctrl-L", "render the pages again"),
     ("c", "copy the page to the clipboard"),
     ("o", "open the file in the app the desktop opens it with"),
@@ -253,6 +261,8 @@ pub(super) fn run(
         bounds_for: None,
         ready: false,
         replaced: false,
+        spots: Vec::new(),
+        labels: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -287,6 +297,9 @@ pub(super) fn run(
             POLL
         } else if pager.level.nav.search.as_ref().is_some_and(Search::expecting) {
             // A search's text being read or matched, or a match's place asked for: taken between keys.
+            POLL
+        } else if pager.level.nav.hints.as_ref().is_some_and(Hints::waiting) {
+            // The links of the pages on screen, asked for: taken between keys.
             POLL
         } else {
             TICK
@@ -359,6 +372,9 @@ pub(super) fn run(
                         let texts = pager.level.source.texts();
                         pager.level.nav.start_search(texts);
                     }
+                    Step::Hints(aim) => pager.start_hints(aim),
+                    Step::Follow => pager.follow(),
+                    Step::Return => pager.jump_back(),
                 }
                 if quit {
                     break;
@@ -388,6 +404,7 @@ pub(super) fn run(
         redraw |= pager.launch_on();
         let (searched, moved) = pager.search_on();
         redraw |= moved;
+        redraw |= pager.links_on();
         let lost = pager.lost_files()?;
         // Nothing goes through tmux while the pane is hidden: it would be thrown away.
         let arrived = !pager.hidden && pager.receive()?;
@@ -423,6 +440,25 @@ enum Step {
     Again(Key),
     /// `/` in a file's pages: a search of the source's text, if it has any ([`Nav::start_search`]).
     Search,
+    /// `f` in a file's pages: labels for the links on screen, if the source has links
+    /// ([`Pager::start_hints`]).
+    Hints(Aim),
+    /// A label typed whole: the link chosen ([`Nav::chosen`]) is followed.
+    Follow,
+    /// Backspace or `u` with a link followed: back to where the reader was before the last one
+    /// ([`Nav::jumps`]).
+    Return,
+}
+
+/// Where the reader was when a link was followed, to come back to (`u`): the paragraph at the top of
+/// the screen, for a source that knows its paragraphs ([`Source::anchor`]), which finds it again
+/// however the document is laid out since; and the page and how far down it, in the page's unit,
+/// for one that doesn't.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Jump {
+    anchor: Option<Anchor>,
+    page: usize,
+    y: f32,
 }
 
 /// Where the reader is, and what keys do to it: in a file's pages, or in a list, where the reader
@@ -491,6 +527,16 @@ struct Nav {
     /// Where to scroll to once the page's rows are known, if it isn't on screen: the match the reader
     /// went to, from its top to its bottom as shares of the page's height.
     reveal: Option<(f32, f32)>,
+    /// The labels of the links on screen (`f`), while they are waited for or shown: they take the keys.
+    hints: Option<Hints>,
+    /// The link whose label was typed, and what for, until the pager takes it ([`Step::Follow`]).
+    chosen: Option<(Link, Aim)>,
+    /// Where the reader was before each link followed in this file, the last one last: `u` goes back
+    /// through them, at most [`MAX_JUMPS`].
+    jumps: Vec<Jump>,
+    /// Where to scroll to once the page's rows are known: the place a link led to, as a share of the
+    /// page's height, which comes a third of the way down the screen.
+    land: Option<f32>,
 }
 
 /// A list narrowed to the tiles whose names hold some text, typed after `/`. The list is whole
@@ -727,6 +773,10 @@ impl Nav {
             relaying: None,
             search: None,
             reveal: None,
+            hints: None,
+            chosen: None,
+            jumps: Vec::new(),
+            land: None,
         }
     }
 
@@ -841,6 +891,10 @@ impl Nav {
         if std::mem::take(&mut self.help) && key != Key::Interrupt {
             return Step::Continue;
         }
+        // The links' labels take every key, waited for or shown.
+        if self.hints.is_some() {
+            return self.hints_key(key);
+        }
         // A filter being typed takes every key that types a character.
         if self.filter.as_ref().is_some_and(|filter| filter.typing) {
             return self.filter_key(key);
@@ -863,15 +917,21 @@ impl Nav {
             Key::Escape => self.typed.clear(),
             // Past MAX_TYPED digits, more are ignored (no other arm takes a digit).
             Key::Char(c @ '0'..='9') if self.typed.len() < MAX_TYPED => self.typed.push(c),
-            Key::Backspace if !typing => return Step::Back,
+            // The links followed are gone back through before the file is left.
+            Key::Backspace if !typing => return self.back_step(),
             Key::Backspace => {
                 self.typed.pop();
             }
-            Key::Char('u') => return Step::Back,
+            Key::Char('u') => return self.back_step(),
             Key::Enter | Key::Char('g') if typing => self.go_typed(),
             Key::Char('c') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
             Key::Char('o') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
             _ if self.list => return self.list_key(key),
+            // A number typed before it is dropped.
+            Key::Char('f') => {
+                self.typed.clear();
+                return Step::Hints(Aim::Follow);
+            }
             Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
             Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
             Key::Char('j') | Key::Down | Key::Enter => self.forward(STEP, self.row()),
@@ -904,6 +964,48 @@ impl Nav {
             _ => return self.setting_key(key),
         }
         Step::Continue
+    }
+
+    /// Backspace or `u` with nothing typed and no search kept: back through the links followed,
+    /// then out of the file.
+    fn back_step(&self) -> Step {
+        if self.jumps.is_empty() { Step::Back } else { Step::Return }
+    }
+
+    /// What `key` does while the links' labels are waited for or shown: a label's next letter
+    /// narrows them, and the last one's chooses its link ([`Step::Follow`]); Backspace takes a letter
+    /// back; Ctrl-C still quits; and Esc, or any key in no label, drops them and does nothing else,
+    /// as any key does while they are waited for.
+    fn hints_key(&mut self, key: Key) -> Step {
+        let Some(hints) = self.hints.as_mut() else { return Step::Continue };
+        match key {
+            Key::Interrupt => return Step::Quit,
+            Key::Char(c) if !hints.waiting() => match hints.letter(c) {
+                Typed::More => {}
+                Typed::Dropped => self.hints = None,
+                Typed::Chosen(link) => {
+                    self.chosen = Some((*link, hints.aim()));
+                    self.hints = None;
+                    return Step::Follow;
+                }
+            },
+            Key::Backspace if hints.backspace() => {}
+            _ => self.hints = None,
+        }
+        Step::Continue
+    }
+
+    /// The reader follows a link to the page at `index` in `pages`, `share` of the way down it, from
+    /// `from`, which `u` comes back to: the place comes a third of the way down the screen, where the
+    /// page scrolls. Of the places to come back to, the last [`MAX_JUMPS`] are kept.
+    fn jump(&mut self, index: usize, share: Option<f32>, from: Jump) {
+        if self.jumps.len() >= MAX_JUMPS {
+            self.jumps.remove(0);
+        }
+        self.jumps.push(from);
+        self.go(index);
+        // Only a page alone on screen scrolls.
+        self.land = share.filter(|_| self.first() == index);
     }
 
     /// `/` in a file's pages: a search to type, of `texts`, the source's text; or with none, a word
@@ -1382,6 +1484,12 @@ impl Nav {
             // A share of the rows, so within them.
             self.scroll = (share.clamp(0.0, 1.0) * f32::from(rows)).round() as u16;
         }
+        if let Some(share) = self.land.take() {
+            // A share of the rows, so within them: the place a link led to, a third of the way down
+            // the screen, as far as the page scrolls.
+            let top = (share.clamp(0.0, 1.0) * f32::from(rows)) as u16;
+            self.scroll = top.saturating_sub(visible / 3);
+        }
         if let Some((top, bottom)) = self.reveal.take() {
             // Shares of the rows, so within them. A match off screen comes a third of the way down it,
             // as far as the page scrolls; one on screen leaves the view where it is.
@@ -1446,6 +1554,8 @@ impl Nav {
             }
             None => String::new(),
         };
+        // The links' labels, waited for or shown, are what the line says.
+        let said = self.hints.as_ref().map_or(said, Hints::status);
         // A filter being typed is what the line says, with how to keep it or not when there is
         // room; one kept, when there is nothing else to say.
         let said = match &self.filter {
@@ -1678,6 +1788,10 @@ struct Level {
     from: Option<Rc<dyn Container>>,
     /// For a file's pages, the file on disk, for another app to open (`o`), or why there is none.
     on_disk: Place,
+    /// The source's links, asked for the first time the reader asks for them (`f`), then kept with
+    /// the file: `None` until then (`linked`), and for a source with none.
+    links: Option<Box<dyn Links>>,
+    linked: bool,
 }
 
 impl Level {
@@ -1696,7 +1810,7 @@ impl Level {
         let room = Room { per_row: nav.columns_in(&room), ..room };
         nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
         nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
-        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk }
+        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk, links: None, linked: false }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
@@ -1791,6 +1905,23 @@ struct Pager<'a> {
     ready: bool,
     /// Whether the last placements took a page's old copy out of the terminal ([`Pager::place`]).
     replaced: bool,
+    /// The pages as the last placements put them on screen ([`Pager::place`]): where the links'
+    /// labels go. None while the keys are up in their place.
+    spots: Vec<hints::Shown>,
+    /// The links' labels as drawn, while they show ([`Pager::draw_labels`]).
+    labels: Option<Labels>,
+}
+
+/// The links' labels on screen: what they were made for, and what the terminal holds of them.
+struct Labels {
+    /// The level whose links they are, and the pages on screen as they were when the labels were
+    /// made: on any other screen they go.
+    level: u64,
+    screen: Vec<hints::Shown>,
+    /// The image of their letters in the terminal, once sent, and a letter's box in it.
+    sheet: Option<(u32, hints::Sheet)>,
+    /// What was typed of a label when they were last placed: placed again when it is another.
+    drawn: Option<String>,
 }
 
 /// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
@@ -1825,6 +1956,9 @@ impl Drop for Pager<'_> {
         let mut out = Vec::new();
         for sent in &self.sent {
             delete(&mut out, sent.id, self.output);
+        }
+        if let Some((id, _)) = self.labels.as_ref().and_then(|labels| labels.sheet.as_ref()) {
+            delete(&mut out, *id, self.output);
         }
         let _ = self.screen.tty.write_all(&out);
     }
@@ -1973,12 +2107,13 @@ impl Pager<'_> {
         } else if ready || self.placed.is_empty() || self.level.nav.list {
             self.place(&mut out, size, area_rows, grid);
         }
+        let labels_sent = self.draw_labels(&mut out, cell, size.cols, area_rows);
         cursor(&mut out, size.rows.saturating_sub(1), 0);
         out.extend_from_slice(b"\x1b[2K\x1b[7m");
         out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !ready).as_bytes());
         out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
         self.ready = ready;
-        self.wrote(0);
+        self.wrote(labels_sent);
         self.tty.write_all(&out)?;
         // A page left as it was, and an old copy gone with this draw's placements: there is room for
         // it now, or it goes first. Each time round one copy fewer is held twice, so it ends.
@@ -2007,6 +2142,187 @@ impl Pager<'_> {
     fn search_on(&mut self) -> (bool, bool) {
         let source = self.level.source.clone();
         self.level.nav.search_on(&|page| source.size(page))
+    }
+
+    /// `f`: labels for the links of the pages on screen, asked of the source, which is asked for its
+    /// links the first time. A source with none, or a screen with no page, says so.
+    fn start_hints(&mut self, aim: Aim) {
+        if self.output != Output::Direct {
+            self.level.nav.message = Some("the links' labels aren't drawn here yet".into());
+            return;
+        }
+        if !self.level.linked {
+            self.level.links = self.level.source.links();
+            self.level.linked = true;
+        }
+        let pages: Vec<usize> = self.level.nav.on_screen().into_iter().flatten().collect();
+        match &self.level.links {
+            Some(links) if !pages.is_empty() => {
+                let hints = Hints::new(aim, &pages, Instant::now());
+                links.set_queue(hints.wanted());
+                self.level.nav.hints = Some(hints);
+            }
+            _ => self.level.nav.message = Some(hints::NONE.into()),
+        }
+    }
+
+    /// Take what the source gives of the links asked for, checked ([`link::checked`]), and make the
+    /// labels once every page on screen has answered and is on screen, or the wait is over
+    /// ([`Hints::settle`]): whether the screen is to be drawn again. With no link to label, the
+    /// status line says so.
+    fn links_on(&mut self) -> bool {
+        let Some(hints) = self.level.nav.hints.as_mut().filter(|hints| hints.waiting()) else { return false };
+        let Some(links) = self.level.links.as_ref() else {
+            self.level.nav.hints = None;
+            return true;
+        };
+        let source = self.level.source.clone();
+        let pages = source.pages();
+        // One answer for each page asked, at most: the source gives none twice.
+        while let Some(told) = links.try_recv() {
+            let Told::Page { page, links, more } = told else { continue };
+            match links {
+                Ok(links) => {
+                    let (links, over) = link::checked(links, page, pages, &|page| source.size(page));
+                    hints.told(page, Ok(links), more.saturating_add(over));
+                }
+                Err(why) => hints.told(page, Err(why), more),
+            }
+        }
+        let now = Instant::now();
+        if !(hints.due(now) && (self.ready || hints.late(now))) {
+            links.set_queue(hints.wanted());
+            return false;
+        }
+        links.set_queue(Vec::new());
+        let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
+        let cell = Cell::from_window(size.cols, size.rows, size.xpixel, size.ypixel).or(self.cell).unwrap_or(FALLBACK_CELL);
+        let cell = self.output.fitting(cell);
+        if hints.settle(&self.spots, (cell.w, cell.h)) == 0 {
+            let said = std::iter::once(hints::NONE.to_owned()).chain(hints.notes().iter().cloned()).collect::<Vec<_>>().join(" · ");
+            self.level.nav.hints = None;
+            self.level.nav.message = Some(said);
+            return true;
+        }
+        self.labels = Some(Labels { level: self.level.id, screen: self.spots.clone(), sheet: None, drawn: None });
+        true
+    }
+
+    /// The links' labels, in a draw: placed where they are to show and haven't been, or as what is
+    /// typed of one leaves them; and gone, the image of their letters with them, once the reader
+    /// has dropped them, chosen one, or the screen is no longer the one they were made for (a
+    /// resize, a relayout, the keys). Each letter of a label is a placement of its part of one image
+    /// ([`hints::Sheet`]), sent the first time, `cell` pixels to a cell, within the `cols` columns
+    /// and `area_rows` rows of the pages. How many images went into `out`.
+    fn draw_labels(&mut self, out: &mut Vec<u8>, cell: Cell, cols: u16, area_rows: u16) -> u64 {
+        let wrap = self.output.wrap();
+        let shown = self.level.nav.hints.as_ref().is_some_and(|hints| !hints.waiting());
+        let fits = self.labels.as_ref().is_some_and(|labels| labels.level == self.level.id && labels.screen == self.spots);
+        if !(shown && fits) {
+            // Labels shown on a screen that changed go, as those the reader dropped did.
+            if shown {
+                self.level.nav.hints = None;
+            }
+            if let Some((id, _)) = self.labels.take().and_then(|labels| labels.sheet) {
+                delete(out, id, self.output);
+            }
+            return 0;
+        }
+        let (Some(hints), Some(labels)) = (self.level.nav.hints.as_ref(), self.labels.as_mut()) else { return 0 };
+        if labels.drawn.as_deref() == Some(hints.typed()) {
+            return 0;
+        }
+        let mut images = 0;
+        if labels.sheet.is_none() {
+            let sheet = hints::Sheet::new(cell.h);
+            // Opaque, so premultiplied as it is. One image more in the terminal, within what it keeps.
+            let Ok(png) = encode::encode_png(sheet.width, sheet.height, &sheet.rgba, self.effort) else { return 0 };
+            let bytes = u64::try_from(sheet.rgba.len()).unwrap_or(u64::MAX);
+            for gone in make_room(&mut self.sent, bytes, self.budget, self.kept.saturating_sub(1).max(1), &self.on_screen) {
+                delete(out, gone, self.output);
+                self.placed.retain(|(placed, _)| *placed != gone);
+            }
+            let id = self.output.ids().id(self.first_id.wrapping_add(self.next_id));
+            self.next_id = self.next_id.wrapping_add(1);
+            kitty::transmit(out, id, &png, wrap);
+            labels.sheet = Some((id, sheet));
+            images = 1;
+        }
+        let Some((id, sheet)) = labels.sheet.as_ref() else { return images };
+        // Every placement of it goes, and those that still match come back, a letter typed greyed.
+        kitty::hide_all(out, *id, wrap);
+        let (cell_w, cell_h) = (cell.w.max(1.0), cell.h.max(1.0));
+        let (box_w, box_h) = (f32::from(sheet.box_w), f32::from(sheet.box_h));
+        let mut placement = 0u32;
+        for (label, typed) in hints.visible() {
+            // In pixels from the screen's top left, within the pages' cells: never over the status
+            // line, nor past the window's edge.
+            let letters = label.code.chars().count() as f32;
+            let across = (f32::from(label.at.col) * cell_w + f32::from(label.at.x)).min(f32::from(cols) * cell_w - letters * box_w).max(0.0);
+            let down = (f32::from(label.at.row) * cell_h + f32::from(label.at.y)).min(f32::from(area_rows) * cell_h - box_h).max(0.0);
+            for (nth, letter) in label.code.chars().enumerate() {
+                let Some((x, y, w, h)) = sheet.letter(letter, nth < typed) else { continue };
+                let across = across + nth as f32 * box_w;
+                // Whole cells, and what is left of a cell: both finite, and within u16.
+                let (col, row) = ((across / cell_w).floor(), (down / cell_h).floor());
+                let offset = ((across - col * cell_w).clamp(0.0, cell_w - 1.0) as u16, (down - row * cell_h).clamp(0.0, cell_h - 1.0) as u16);
+                placement = placement.saturating_add(1);
+                cursor(out, row as u16, col as u16);
+                kitty::place_part(out, *id, placement, Rect { x, y, w, h }, offset, wrap);
+            }
+        }
+        labels.drawn = Some(hints.typed().to_owned());
+        self.placed_at = Some(Instant::now());
+        images
+    }
+
+    /// The link whose label the reader typed, followed: to its place in the document, the reader's
+    /// place kept to come back to; or what it is, said, when it leads nowhere the pager goes.
+    fn follow(&mut self) {
+        let Some((link, _aim)) = self.level.nav.chosen.take() else { return };
+        match link.target {
+            Target::Place { page, y } => self.go_to_place(page, y),
+            Target::Other(says) => self.level.nav.message = Some(says),
+            Target::File { .. } => self.level.nav.message = Some("a link to another file, which isn't followed yet".into()),
+            Target::Web(_) => self.level.nav.message = Some("a web address, which isn't followed yet".into()),
+        }
+    }
+
+    /// To page `page` of the document, `y` of its unit down it, as a link leads there: where it is
+    /// first among the pages paged through, the place a third of the way down the screen where the
+    /// page scrolls; the place the reader leaves is kept, for `u`. A page that isn't among those
+    /// given (`--pages`) is said, and not gone to.
+    fn go_to_place(&mut self, page: usize, y: f32) {
+        let number = page.saturating_add(1);
+        let Some(index) = self.level.nav.pages.iter().position(|given| *given == page) else {
+            let picked = self.level.nav.picked;
+            self.level.nav.message = Some(if picked { format!("page {number} isn't among --pages") } else { format!("no page {number} to go to") });
+            return;
+        };
+        let Some(from) = self.here() else { return };
+        let height = self.level.source.size(page).map_or(0.0, |(_, height)| height);
+        self.level.nav.jump(index, (height > 0.0).then(|| y / height), from);
+    }
+
+    /// Where the reader is, to come back to: the first page on screen and how far down it the screen
+    /// starts, and the paragraph there, where the source knows it.
+    fn here(&self) -> Option<Jump> {
+        let drawn = self.on_screen.first().copied().flatten().and_then(|view| Some((view, self.rows(&view)?)));
+        let (page, y) = place(&self.level.nav, self.level.id, drawn, |page| self.level.source.size(page).map_or(0.0, |(_, h)| h))?;
+        Some(Jump { anchor: self.level.source.anchor(page, y), page, y })
+    }
+
+    /// `u` or Backspace with a link followed: back to where the reader was before the last one, by
+    /// its paragraph where the source finds it ([`Source::find`]), as the document is laid out now,
+    /// or else by its page; scrolled as it was.
+    fn jump_back(&mut self) {
+        let Some(jump) = self.level.nav.jumps.pop() else { return };
+        let (page, y) = jump.anchor.and_then(|anchor| self.level.source.find(&anchor)).unwrap_or((jump.page, jump.y));
+        let nav = &mut self.level.nav;
+        let Some(index) = nav.pages.iter().position(|given| *given == page) else { return };
+        nav.go(index);
+        let height = self.level.source.size(page).map_or(0.0, |(_, height)| height);
+        nav.scroll_to = (height > 0.0 && nav.first() == index).then(|| y / height);
     }
 
     /// How the pages share the window's `area`: as the reader zoomed, from where the reader is,
@@ -2335,6 +2651,8 @@ impl Pager<'_> {
         level.nav.hint = false;
         level.nav.help = self.level.nav.help;
         level.nav.message.clone_from(&self.level.nav.message);
+        // The places to come back to are the file's, whatever its layout: each by its paragraph.
+        level.nav.jumps = std::mem::take(&mut self.level.nav.jumps);
         // The search goes on in the new layout, on its text, the old one's let go of with it.
         if let Some((search, follow)) = search {
             let texts = level.source.texts();
@@ -2514,6 +2832,18 @@ impl Pager<'_> {
     /// the same answer.
     fn missing(&mut self, id: u32) -> bool {
         const DROPPING: &str = "the terminal is dropping images; r sends them again";
+        // The image of the labels' letters: sent again, under another id, by the next draw; an
+        // answer to each of its placements comes, and only the first finds it under this id.
+        if let Some(labels) = self.labels.as_mut().filter(|labels| labels.sheet.as_ref().is_some_and(|(sheet, _)| *sheet == id)) {
+            labels.sheet = None;
+            labels.drawn = None;
+            if self.resends >= MAX_RESENDS {
+                self.level.nav.hints = None;
+                self.level.nav.message = Some(DROPPING.into());
+            }
+            self.resends = self.resends.saturating_add(1);
+            return true;
+        }
         if !self.sent.iter().any(|s| s.id == id) {
             return false;
         }
@@ -2555,6 +2885,7 @@ impl Pager<'_> {
         }
         self.placed.clear();
         self.on_glass.clear();
+        self.spots.clear();
         let help = self.level.nav.help_lines();
         let keys = help.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
         let lines = std::iter::once(String::from("Keys")).chain(help.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
@@ -2603,6 +2934,7 @@ impl Pager<'_> {
         // Only a page as wide as the window scrolls; the draw keeps the others' scroll at 0.
         let scroll = self.level.nav.scroll;
         let mut placed = Vec::new();
+        self.spots.clear();
         for ((slot, view), placement) in (0u16..).zip(&self.on_screen).zip(1u32..) {
             // Of a page sent twice, the one with the tint of now; before that one has come, the last sent.
             let key = view.map_or(0, |v| self.level.nav.tint(v.page).0.map_or(0, |tint| tint.key));
@@ -2610,6 +2942,11 @@ impl Pager<'_> {
             let visible = s.rows.min(area_rows);
             let left = left.saturating_add((slot % per_row).saturating_mul(across)).saturating_add(grid.cols.saturating_sub(s.cols) / 2);
             let top = top.saturating_add((slot / per_row).saturating_mul(down)).saturating_add(grid.page_rows.saturating_sub(visible) / 2);
+            // Where the page is, for its links' labels: only one taller than the window is scrolled.
+            if let Some(size) = self.level.source.size(s.view.page) {
+                let scroll = if visible < s.rows { scroll } else { 0 };
+                self.spots.push(hints::Shown { page: s.view.page, left, top, cols: s.cols, rows: visible, scroll, of: s.rows, size });
+            }
             match self.output {
                 Output::Direct => {
                     cursor(out, top, left);
@@ -4121,6 +4458,123 @@ mod tests {
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('9'); 30]);
         assert_eq!(nav.typed.len(), MAX_TYPED);
+    }
+
+    /// A link over `rect` of page `page`, leading to the top of page `to`.
+    fn link(page: usize, rect: [f32; 4], to: usize) -> Link {
+        Link { page, rects: vec![rect], address: None, target: Target::Place { page: to, y: 0.0 } }
+    }
+
+    /// `nav` with the labels of `links`, all on its first page on screen, 100 by 200 units in 50
+    /// columns and 20 rows, shown.
+    fn labelled(mut nav: Nav, links: Vec<Link>) -> Nav {
+        let page = page(&nav);
+        let mut hints = Hints::new(Aim::Follow, &[page], Instant::now());
+        hints.told(page, Ok(links), 0);
+        hints.settle(&[hints::Shown { page, left: 0, top: 0, cols: 50, rows: 20, scroll: 0, of: 20, size: (100.0, 200.0) }], (10.0, 20.0));
+        nav.hints = Some(hints);
+        nav
+    }
+
+    /// `f` in a file's pages asks for the labels of the links on screen, a number typed before it
+    /// dropped; in a list it does nothing. While they are waited for, any key drops them and does
+    /// nothing else, Esc included, but Ctrl-C, which quits; and the status line says they are read.
+    #[test]
+    fn hints_f_asks_for_the_labels_and_esc_while_they_are_read_drops_them() {
+        let mut nav = reader(1, 12, 20, 40);
+        assert_eq!(press(&mut nav, &[Key::Char('7'), Key::Char('f')]), Step::Hints(Aim::Follow));
+        assert_eq!(nav.typed, "");
+        assert_eq!(press(&mut tiles(10, 3, 2), &[Key::Char('f')]), Step::Continue, "in a list");
+        for key in [Key::Escape, Key::Char(' '), Key::Char('s'), Key::Char('q'), Key::Backspace, Key::Enter, Key::Char('u')] {
+            let mut nav = reader(1, 12, 20, 40);
+            nav.hints = Some(Hints::new(Aim::Follow, &[1], Instant::now()));
+            assert!(squeezed(&nav.status("a.pdf", 120, false)).contains(" reading links… "));
+            assert_eq!((nav.key(key), nav.hints.is_none(), page(&nav), nav.scroll), (Step::Continue, true, 1, 0), "{key:?}");
+        }
+        let mut nav = reader(1, 12, 20, 40);
+        nav.hints = Some(Hints::new(Aim::Follow, &[1], Instant::now()));
+        assert_eq!(nav.key(Key::Interrupt), Step::Quit);
+    }
+
+    /// While the labels show they take the keys: a label's letters narrow them, the last one's
+    /// chooses its link for the pager to follow, and Backspace takes a letter back; Esc, or a key in
+    /// no label, drops them and does nothing else, whatever the key does without them.
+    #[test]
+    fn hints_take_the_keys_and_a_label_typed_chooses_its_link() {
+        let links = || (0..15).map(|n| link(1, [0.0, 10.0 * n as f32, 10.0, 10.0 * n as f32 + 5.0], n)).collect::<Vec<_>>();
+        let mut nav = labelled(reader(1, 12, 20, 40), links());
+        assert!(squeezed(&nav.status("a.pdf", 140, false)).contains(" f: type a label to follow its link · esc cancel "));
+        // `s` is a label's first letter here, not a setting's key, and `j` its second, not a move.
+        assert_eq!(press(&mut nav, &[Key::Char('s')]), Step::Continue);
+        assert!(squeezed(&nav.status("a.pdf", 140, false)).contains(" f: type a label to follow its link · s · esc cancel "));
+        assert_eq!(press(&mut nav, &[Key::Backspace, Key::Char('s'), Key::Char('j')]), Step::Follow);
+        assert_eq!((nav.chosen.take(), nav.hints.is_none()), (Some((link(1, [0.0, 40.0, 10.0, 45.0], 4), Aim::Follow)), true));
+        assert_eq!((page(&nav), nav.scroll), (1, 0), "the pager follows it, not the keys");
+        // The fifteenth alone starts with `a`.
+        let mut nav = labelled(reader(1, 12, 20, 40), links());
+        assert_eq!(press(&mut nav, &[Key::Char('a')]), Step::Follow);
+        assert_eq!(nav.chosen.take().map(|(link, _)| link.target), Some(Target::Place { page: 14, y: 0.0 }));
+        // What drops them does nothing else: no move, no quit, no leaving.
+        for key in
+            [Key::Escape, Key::Char(' '), Key::Char('q'), Key::Char('u'), Key::Char('x'), Key::Char('G'), Key::Enter, Key::PageDown, Key::Backspace]
+        {
+            let mut nav = labelled(reader(1, 12, 20, 40), links());
+            assert_eq!(
+                (nav.key(key), nav.hints.is_none(), page(&nav), nav.scroll, nav.chosen.is_none()),
+                (Step::Continue, true, 1, 0, true),
+                "{key:?}"
+            );
+        }
+        let mut nav = labelled(reader(1, 12, 20, 40), links());
+        assert_eq!(press(&mut nav, &[Key::Char('s'), Key::Char('x')]), Step::Continue, "a letter no label goes on with");
+        assert!(nav.hints.is_none());
+        assert_eq!(labelled(reader(1, 12, 20, 40), links()).key(Key::Interrupt), Step::Quit);
+    }
+
+    /// A link followed takes the reader to its page, the place a third of the way down the screen
+    /// where the page scrolls, and `u` and Backspace come back through the places left, the last
+    /// first, before they leave the file; a search kept is cleared first, and Esc never steps back.
+    #[test]
+    fn u_goes_back_through_the_links_followed_before_it_leaves_the_file() {
+        let from = |page| Jump { anchor: None, page, y: 0.0 };
+        let mut nav = reader(1, 12, 30, 100);
+        nav.jump(7, Some(0.5), from(1));
+        nav.shown(30, 100);
+        assert_eq!((page(&nav), nav.scroll, nav.land), (7, 40, None), "half way down 100 rows, 10 rows under the top");
+        nav.jump(2, Some(0.05), from(7));
+        nav.shown(30, 100);
+        assert_eq!((page(&nav), nav.scroll), (2, 0), "as far as the page scrolls");
+        nav.jump(3, None, from(2));
+        nav.shown(30, 100);
+        assert_eq!((page(&nav), nav.scroll), (3, 0));
+        nav.jump(4, Some(f32::NAN), from(3));
+        nav.shown(30, 100);
+        assert_eq!((page(&nav), nav.scroll), (4, 0));
+        assert_eq!(nav.jumps, [from(1), from(7), from(2), from(3)]);
+        // The pager pops them: here, what the keys ask.
+        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Return);
+        assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Return);
+        assert_eq!(press(&mut nav, &[Key::Escape]), Step::Leave, "Esc leaves, with places to come back to");
+        assert_eq!(press(&mut nav, &[Key::Char('5'), Key::Backspace]), Step::Continue, "a number typed is edited first");
+        nav.typed.clear();
+        nav.search = Some(Search::new(Box::new(search::tests::Fake::of(&["text"])), &nav.pages, nav.count));
+        nav.search.as_mut().unwrap().typed('t');
+        nav.search.as_mut().unwrap().enter(&search::Screen { top: 4, pages: &[4], near: &[], visible: None });
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), nav.search.is_none(), nav.jumps.len()), (Step::Continue, true, 4), "the search first");
+        nav.jumps.clear();
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), press(&mut nav, &[Key::Backspace])), (Step::Back, Step::Back));
+        // Two pages side by side don't scroll: the place's page comes on screen, at its top.
+        let mut nav = reader(0, 12, 40, 40);
+        nav.grid(2, 1, 8);
+        nav.jump(5, Some(0.9), from(0));
+        nav.shown(40, 40);
+        assert_eq!((nav.on_screen(), nav.scroll, nav.land), (vec![Some(4), Some(5)], 0, None));
+        // The last hundred places are kept.
+        let mut nav = reader(0, 300, 40, 40);
+        for to in 1..=150 {
+            nav.jump(to, None, from(to - 1));
+        }
+        assert_eq!((nav.jumps.len(), nav.jumps.first(), nav.jumps.last()), (MAX_JUMPS, Some(&from(50)), Some(&from(149))));
     }
 
     #[test]

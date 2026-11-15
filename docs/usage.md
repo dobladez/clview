@@ -101,6 +101,7 @@ In a file's pages:
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
 | `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto`. On a Markdown or HTML file, columns: the document laid out again on that many pages to a row ([Documents](#a-page-the-windows-size)) |
 | `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
+| `f` | label the links on screen; type a label to follow its link ([Following links](#following-links)) |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
@@ -109,7 +110,7 @@ In a file's pages:
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace`, `u` | clear the search, if one is kept; otherwise back to the list, for a file opened from one |
+| `Esc`, `Backspace`, `u` | clear the search, if one is kept; then `Backspace` and `u` go back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one |
 | `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
 
 A Markdown or HTML page is as tall as the window ([Documents](#documents)), so it has nothing to
@@ -472,6 +473,51 @@ What is searched in a PDF is the text pdfcraft reads on each page, in its readin
   printed.
 
 Printing (`--no-pager`, or a single page) has no search.
+
+## Following links
+
+In a file's pages, `f` labels every link on screen, as the Vimium browser extension does: a small
+yellow box of dark letters at the top left of each link, on every page shown side by side, and on
+a page taller than the window, on the part of it that shows. Type a label and its link is
+followed. The letters are Vimium's, the home row first (`sadfjklewcmpgh`), and every label is the
+same length, the shortest that gives each link its own: one letter for up to 14 links, two for up
+to 196, three past that. Each letter typed hides the labels it rules out and pales in the others,
+and the link is followed as soon as one label is left, which may be before its last letter.
+`Backspace` takes a letter back. `Esc`, or any key that is in no label, drops the labels and does
+nothing else (`Ctrl-C` still quits), and so does anything that changes the screen: the window
+resized, the document laid out again.
+
+The labels are in reading order: page by page, down each, then across. At most 1,000 links are
+labelled, and the status line says how many were left out. It says `reading links…` until every
+page on screen has given its links, for two seconds at the most; the labels are then made once,
+and a page that answers later, or can't be read, has none, the status line naming it (`links on
+page 40 unread`). Any key meanwhile drops them. A file with no links (a picture, a drawing), or a
+screen with none on it, says `no links on screen`.
+
+The labels are drawn over the page, which is never changed nor rendered again: a document's
+links look as the document draws them, with no underline or colour of `clv`'s. They are drawn
+directly in kitty, Ghostty and WezTerm; inside tmux and in [text cells](#text-cells) `f` says it
+has no labels there yet.
+
+**A place in the document** (a PDF's link to a page, its table of contents, a named destination)
+is gone to: its page, and on a page taller than the window, scrolled so that the place is a third
+of the way down the screen. `u` and `Backspace` go back to where you were before the last link
+followed, the newest first, for the last 100 of them; with none left they go back to the list, as
+they did. A search kept is cleared first, and `Esc` never steps back: it clears the search, or
+leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
+again. With `--pages`, a link to a page that isn't among those given says so (`page 12 isn't
+among --pages`) and goes nowhere, and one to a page given twice goes where it is first.
+
+**Anything else** a link may do isn't done, and the status line says what it was: a script, a
+program to start, layers shown or hidden. A link to another file, and a web address, say that
+they aren't followed yet.
+
+PDFs have links: their link annotations, each active where the PDF says, over its quadrilaterals
+or else its rectangle, on a page turned or cropped as on any other. Where a destination puts its
+page is honoured as far as it says how far down: `/XYZ` and `/FitH` by their top, `/FitR` by the
+top of its rectangle, and the rest, or a place left out, at the page's top.
+
+Printing (`--no-pager`, or a single page) has no labels, and `f` does nothing in a list.
 
 ## Which files it shows
 
@@ -1048,6 +1094,10 @@ limit, it does as the last column says. How large a page is drawn is under
 | The matches tinted at a time, on the pages on screen and those kept ready around them | 256, and 64 lines of one match | the rest aren't tinted; `n`, `N` and `p` still go to them |
 | The pages on screen and a page sent again with its tint, together | 256 MiB of pixels, what the terminal is given to keep | the page waits for another's old copy to go; where none will, it is blank until its tinted copy arrives |
 | What is typed after `/`, to filter or to search | 256 characters | more are ignored |
+| A page's [links](#following-links) | 1,024, each active over 64 rectangles at most; an address or a path of 4 KiB, a place's name of 256 bytes | past 1,024, the rest have no label, and the status line says how many; past 64, the rest of a link's rectangles are left out; a link whose address, path or name is longer isn't followed, and says so |
+| The links labelled at once | 1,000, in reading order | the rest have no label, and the status line says how many |
+| The wait for the links of the pages on screen | 2 s | a page that hasn't answered has no labels, and the status line names it |
+| The places `u` goes back to | the last 100 links followed in a file | an older one is forgotten |
 
 ## Known issues
 

@@ -38,7 +38,6 @@ pub(crate) fn letter(title: &str, pages: usize) -> Vec<u8> {
 ///   `mailto:someone@example.com`, at `/Rect [30 240 130 270]`.
 ///
 /// The catalog names the destination `chapter` in its `/Names` tree.
-#[allow(dead_code, reason = "the pager's tests read it from Spec-0011's next task on")]
 pub(crate) fn linked() -> Vec<u8> {
     let link = |rect: &str, rest: &str| format!("<< /Type /Annot /Subtype /Link /Border [0 0 0] /Rect [{rect}] {rest} >>");
     let first = [

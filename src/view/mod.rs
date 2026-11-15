@@ -7,11 +7,11 @@ mod clip;
 mod detect;
 mod files;
 mod fit;
+mod hints;
 mod icon;
 mod keys;
 mod kitty;
 mod launch;
-#[cfg_attr(not(test), expect(dead_code, reason = "the pager follows links from Spec-0011's next task on"))]
 mod link;
 mod pager;
 mod relayout;
