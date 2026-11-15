@@ -1408,13 +1408,15 @@ grid as it keeps the placeholders, so a terminal that attaches later is drawn bo
 
 **Following.** A `Place` is gone to (`Pager::go_to_place`): the page where it is first among those
 paged through, or said not to be among them (`--pages`); `Nav::jump` keeps where the reader was
-(a `Jump`: the paragraph at the top of the screen, as `Source::anchor` gives it, and the page and
-how far down it for a source without paragraphs), goes to the page, and asks for the place a
-third of the way down the screen once the page's rows are known (`Nav::land`). `u` and `Backspace`,
-after a kept search, give `Step::Return` while `Nav::jumps` holds any, at most 100 (`MAX_JUMPS`):
-the last is found again (`Source::find` on its anchor, or its page) and scrolled to as it was
-(`Pager::jump_back`). A document laid out again hands its jumps to the new level
-(`Pager::replace`), as it does its search: an anchor is found in any layout of the document.
+(a `Jump`: the level, the page and how far down it, and the paragraph at the top of the screen, as
+`Source::anchor` gives it), goes to the page, and asks for the place a third of the way down the
+screen once the page's rows are known (`Nav::land`). `u` and `Backspace`, after a kept search,
+give `Step::Return` while `Nav::jumps` holds any, at most 100 (`MAX_JUMPS`): the last is gone back
+to and scrolled to as it was (`Pager::jump_back`), by its page while the level is the one it was
+made in, since an anchor is found where its paragraph starts and a paragraph may run over several
+pages. A document laid out again hands its jumps to the new level (`Pager::replace`), as it does
+its search, and there a jump is found by its anchor (`Source::find`), which any layout of the
+document knows.
 
 A `File` is checked in the core (`link::local`): its path joined to the directory of the
 document's own real path (`Level::on_disk`, so a document with none follows no such link), made
@@ -1485,10 +1487,11 @@ wordcraft's HTML importer makes a bookmark of an `<a>`'s `id` or `name`, and of 
 the places HTML and Markdown have are written as such anchors before it reads them.
 `ids_as_anchors`, a pass over the HTML as the fenced blocks' scanner is (`blocks_drawn`, the same
 `Piece`s), writes an `<a id="…"></a>` for every other element with an `id`, before the next text or
-picture after its tag: there it joins the paragraph the element starts, where right after the tag
-it would make an empty paragraph of its own between two blocks. `markdown_as_html` holds a
-heading's events until its end, and writes an anchor at its start named by the id GitHub gives it
-(`slugged`), with a private-use character before it (`SLUG`), which keeps a heading's place apart
+picture after its tag (a picture's own before the picture itself): there it joins the paragraph
+the element starts, where right after the tag it would make an empty paragraph of its own between
+two blocks. `markdown_as_html` holds a heading's events until its end, and writes an anchor at its
+start named by the id GitHub gives its text (`slugged`; a line's end within the heading is a
+space), with a private-use character before it (`SLUG`), which keeps a heading's place apart
 from the ids a document writes itself, looked for first.
 
 A spreadsheet's `Noted` hands `links` on to the PDF it prints to, as it does `texts`.

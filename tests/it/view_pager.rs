@@ -4490,3 +4490,47 @@ fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
     assert!(view.finish().success());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `u` comes back to the page the reader left, where a paragraph runs over several pages: a link
+/// followed from the middle of a long paragraph is come back to on its own page, not on the page
+/// the paragraph starts on.
+#[cfg(feature = "word")]
+#[test]
+fn links_followed_from_the_middle_of_a_long_paragraph_are_come_back_to_on_their_page() {
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("links-long");
+    let long = dir.join("long.md");
+    let words = |count: usize| "lots of words in one paragraph ".repeat(count);
+    std::fs::write(&long, format!("{}[jump](#end) {}\n\n# End\n", words(400), words(400))).unwrap();
+    let mut view = Session::start_on(KITTY, &long, &["--pager"], 100, 40);
+    view.wait_until("the first page", |t| settled(t, "long.md") && place_now(t).is_some_and(|(page, pages)| page == 1 && pages > 4));
+    // On to the page the link is on: the first with a label.
+    let mut on = 1;
+    loop {
+        let before = view.text().len();
+        view.press("f");
+        view.wait_until("its links", |t| letters(&t[before..]).len() == 1 || t[before..].contains("no links on screen"));
+        if letters(&view.text()[before..]).len() == 1 {
+            break;
+        }
+        on += 1;
+        assert!(on < 20, "no page has the link");
+        let before = view.text().len();
+        view.press("n");
+        view.wait_until("the next page", |t| settled(t, "long.md") && place_now(&t[before..]).is_some_and(|(page, _)| page == on));
+    }
+    assert!(on > 1, "the link is on the paragraph's first page");
+    let before = view.text().len();
+    view.press("s");
+    view.wait_until("the end", |t| place_now(&t[before..]).is_some_and(|(page, pages)| page == pages));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back", |t| t.len() > before && place_now(&t[before..]).is_some());
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(place_now(&view.text()).map(|(page, _)| page), Some(on), "back on the page the link is on");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

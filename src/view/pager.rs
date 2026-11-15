@@ -460,12 +460,15 @@ enum Step {
     Return,
 }
 
-/// Where the reader was when a link was followed, to come back to (`u`): the paragraph at the top of
-/// the screen, for a source that knows its paragraphs ([`Source::anchor`]), which finds it again
-/// however the document is laid out since; and the page and how far down it, in the page's unit,
-/// for one that doesn't.
+/// Where the reader was when a link was followed, to come back to (`u`): the page and how far down
+/// it, in the page's unit, which is where to come back to while the layout is the one it was
+/// (`level`); and the paragraph at the top of the screen, for a source that knows its paragraphs
+/// ([`Source::anchor`]), which finds it again once the document is laid out otherwise. A paragraph
+/// is found where it starts, so within a layout the page counts: a paragraph may run over several.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Jump {
+    /// The level it was made in: another by now means the document was laid out again.
+    level: u64,
     anchor: Option<Anchor>,
     page: usize,
     y: f32,
@@ -2523,15 +2526,17 @@ impl Pager<'_> {
     fn here(&self) -> Option<Jump> {
         let drawn = self.on_screen.first().copied().flatten().and_then(|view| Some((view, self.rows(&view)?)));
         let (page, y) = place(&self.level.nav, self.level.id, drawn, |page| self.level.source.size(page).map_or(0.0, |(_, h)| h))?;
-        Some(Jump { anchor: self.level.source.anchor(page, y), page, y })
+        Some(Jump { level: self.level.id, anchor: self.level.source.anchor(page, y), page, y })
     }
 
-    /// `u` or Backspace with a link followed: back to where the reader was before the last one, by
-    /// its paragraph where the source finds it ([`Source::find`]), as the document is laid out now,
-    /// or else by its page; scrolled as it was.
+    /// `u` or Backspace with a link followed: back to where the reader was before the last one: the
+    /// page and the place on it, while the document is laid out as it was then; once it has been
+    /// laid out again, its paragraph where the source finds it now ([`Source::find`]), or else its
+    /// page. Scrolled as it was.
     fn jump_back(&mut self) {
         let Some(jump) = self.level.nav.jumps.pop() else { return };
-        let (page, y) = jump.anchor.and_then(|anchor| self.level.source.find(&anchor)).unwrap_or((jump.page, jump.y));
+        let found = jump.anchor.filter(|_| jump.level != self.level.id).and_then(|anchor| self.level.source.find(&anchor));
+        let (page, y) = found.unwrap_or((jump.page, jump.y));
         let nav = &mut self.level.nav;
         let Some(index) = nav.pages.iter().position(|given| *given == page) else { return };
         nav.go(index);
@@ -4818,7 +4823,7 @@ mod tests {
     /// first, before they leave the file; a search kept is cleared first, and Esc never steps back.
     #[test]
     fn u_goes_back_through_the_links_followed_before_it_leaves_the_file() {
-        let from = |page| Jump { anchor: None, page, y: 0.0 };
+        let from = |page| Jump { level: 0, anchor: None, page, y: 0.0 };
         let mut nav = reader(1, 12, 30, 100);
         nav.jump(7, Some(0.5), from(1));
         nav.shown(30, 100);

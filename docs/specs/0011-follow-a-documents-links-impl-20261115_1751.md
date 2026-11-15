@@ -312,3 +312,24 @@ surprises, and what a later reader would want.
   `hints_letters_are_drawn_in_boxes_that_fit_the_cell` and
   `view_pager::links_are_labelled_from_one_image_and_a_label_typed_goes_to_its_place`.
 - **Still open**: task 5's manual line, and the Done list's.
+
+## Three fixes after a review's probes
+
+While the padding's gates ran, three tests named `review_…` appeared in `src/source/wordcraft.rs`'s
+working copy, failing, and were gone again a little later: someone else's probes, not this
+session's. Each pointed at a real defect, fixed here with a test of its own:
+
+- **A picture's own `id` was no place** (`<img id="fig">`): `ids_as_anchors` wrote an anchor before
+  the next text or picture *after* a tag, and for a picture's own tag that was never. Its own id is
+  now written before the picture itself. `links_of_html_…` has it.
+- **A heading over two lines got the wrong id** (`Hello` / `wide world` / `=====`): its text was its
+  `Text` events run together, `hellowide-world`. A line's end within a heading is now a space, as
+  GitHub reads it: `hello-wide-world`. `slug_of_a_heading_…` has it.
+- **`u` went back to the first page of a long paragraph**: a jump was found again by its anchor, and
+  an anchor is found where its paragraph starts (`Source::find`'s contract, which a relayout needs).
+  A link followed from the fifth page of a paragraph came back to its first. A `Jump` now keeps the
+  level it was made in, and goes back by its page while the level is that one; by its anchor only
+  once the document has been laid out again.
+  `view_pager::links_followed_from_the_middle_of_a_long_paragraph_…` has it (back on page 1, not 5,
+  with the fix reverted).
+- **Seen failing**, each fix reverted in a copy: the three tests above.

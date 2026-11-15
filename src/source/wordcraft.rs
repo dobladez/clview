@@ -1801,7 +1801,7 @@ const MAX_IDS_WAITING: usize = 64;
 /// wordcraft's importer makes a bookmark of, where it makes one only of an `<a>`'s own `id` or
 /// `name`. The anchor is written before the next text or picture after the element's tag, so that
 /// it lands in the paragraph the element starts and makes none of its own: an element with nothing
-/// after it is no place. Its `id` is written as the document has it, entities and all. An `<a>` is
+/// after it is no place. A picture's own `id` goes before the picture itself. Its `id` is written as the document has it, entities and all. An `<a>` is
 /// left to the importer, what the importer reads no text of ([`SKIPPED`], and a page's `<title>`)
 /// is passed over, and an id past [`MAX_NAME`] is none. One pass, as [`blocks_drawn`]'s.
 fn ids_as_anchors(html: &str) -> Cow<'_, str> {
@@ -1811,11 +1811,16 @@ fn ids_as_anchors(html: &str) -> Cow<'_, str> {
     while let Some((piece, next)) = Piece::at(html, at) {
         let from = at;
         at = next;
-        let shows = match &piece {
-            Piece::Text(text) => !text.trim().is_empty(),
-            Piece::Start(tag) => tag.is("img"),
-            Piece::End(_) | Piece::Other => false,
+        // The id of the tag here, if it is to be a place; a picture's own goes before the picture.
+        let own = match &piece {
+            Piece::Start(tag) => tag.id.filter(|id| !id.is_empty() && id.len() <= MAX_NAME && !tag.is("a")),
+            Piece::Text(_) | Piece::End(_) | Piece::Other => None,
         };
+        let picture = matches!(&piece, Piece::Start(tag) if tag.is("img"));
+        if let Some(id) = own.filter(|_| picture && waiting.len() < MAX_IDS_WAITING) {
+            waiting.push(id);
+        }
+        let shows = picture || matches!(&piece, Piece::Text(text) if !text.trim().is_empty());
         if shows && !waiting.is_empty() {
             out.push_str(html.get(written..from).unwrap_or_default());
             for id in waiting.drain(..) {
@@ -1828,8 +1833,7 @@ fn ids_as_anchors(html: &str) -> Cow<'_, str> {
             at = past_end_tag(html, at, tag.name);
             continue;
         }
-        let id = tag.id.filter(|id| !id.is_empty() && id.len() <= MAX_NAME && !tag.is("a"));
-        if let Some(id) = id.filter(|_| waiting.len() < MAX_IDS_WAITING) {
+        if let Some(id) = own.filter(|_| !picture && waiting.len() < MAX_IDS_WAITING) {
             waiting.push(id);
         }
     }
@@ -2103,8 +2107,16 @@ fn markdown_as_html(text: &str, pictures: &Pictures<'_>, fit: (f32, f32)) -> Str
             Vec::new()
         }
         (Some(mut held), end @ Event::End(TagEnd::Heading(_))) => {
-            let text: String =
-                held.iter().filter_map(|event| if let Event::Text(text) | Event::Code(text) = event { Some(&**text) } else { None }).collect();
+            // Its text as it reads: a line's end within it (a heading underlined, over two lines) is
+            // a space.
+            let text: String = held
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Text(text) | Event::Code(text) => Some(&**text),
+                    Event::SoftBreak | Event::HardBreak => Some(" "),
+                    _ => None,
+                })
+                .collect();
             let slug = slugged(&text, &mut seen);
             if !slug.is_empty() && slug.len() < MAX_NAME {
                 // Letters, numbers, hyphens and underscores: nothing to escape.
@@ -4317,6 +4329,9 @@ mod tests {
         // A heading that is another's number: the next free one.
         assert_eq!((slug("Install 1"), slug("Install")), ("install-1-1".into(), "install-4".into()));
         assert_eq!((slug("?!"), slug("")), (String::new(), "-1".into()));
+        // A heading written over two lines, underlined: its lines' end is a space, as GitHub reads it.
+        let underlined = paged("slug.md", b"[see](#hello-wide-world)\n\nHello\nwide world\n=====\n");
+        assert!(place_of(&underlined, "hello-wide-world").is_some() && place_of(&underlined, "hellowide-world").is_none());
     }
 
     /// A cross-reference field is a link when it says so: `REF` and `PAGEREF` with `\h`, to the
@@ -4489,6 +4504,11 @@ mod tests {
         assert!(plain.iter().filter(|(_, held, _)| !written(held)).all(|(_, _, target)| matches!(target, Target::Other(_))), "{plain:?}");
         // The pass itself: an anchor before the next text or picture, as the document writes the id.
         assert_eq!(ids_as_anchors("<h2 id=\"a\">A</h2>"), "<h2 id=\"a\"><a id=\"a\"></a>A</h2>");
+        // A picture's own id is a place too, before the picture, with nothing after it either.
+        assert_eq!(ids_as_anchors("<p><img id=\"fig\" src=i></p>"), "<p><a id=\"fig\"></a><img id=\"fig\" src=i></p>");
+        let figure = paged("fig.html", b"<p><a href='#fig'>the figure</a></p><p><img id='fig' src='missing.png' width='100' height='100'></p>");
+        assert!(place_of(&figure, "fig").is_some());
+        assert!(matches!(links_of(&figure)[..], [(0, _, Target::Place { .. })]));
         assert_eq!(
             ids_as_anchors("<div id='x\"y'>\n <p ID=b><img src=i></p></div>"),
             "<div id='x\"y'>\n <p ID=b><a id=\"x&quot;y\"></a><a id=\"b\"></a><img src=i></p></div>"
