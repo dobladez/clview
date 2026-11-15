@@ -1920,7 +1920,8 @@ fn ids_as_anchors(html: &str) -> Cow<'_, str> {
             waiting.push(id);
         }
     }
-    if written == 0 {
+    // By what was written, not by where: an anchor may go before the HTML's very first byte.
+    if out.is_empty() {
         return Cow::Borrowed(html);
     }
     out.push_str(html.get(written..).unwrap_or_default());
@@ -4601,6 +4602,10 @@ mod tests {
         assert!(plain.iter().filter(|(_, held, _)| !written(held)).all(|(_, _, target)| matches!(target, Target::Other(_))), "{plain:?}");
         // The pass itself: an anchor before the next text or picture, as the document writes the id.
         assert_eq!(ids_as_anchors("<h2 id=\"a\">A</h2>"), "<h2 id=\"a\"><a id=\"a\"></a>A</h2>");
+        // At the very start of the HTML too, where the anchor goes before everything.
+        assert_eq!(ids_as_anchors("<img id=\"fig\" src=i>"), "<a id=\"fig\"></a><img id=\"fig\" src=i>");
+        let first = paged("first.html", b"<img id='fig' src='missing.png' width='100' height='100'><p><a href='#fig'>the figure</a></p>");
+        assert!(place_of(&first, "fig").is_some() && matches!(links_of(&first)[..], [(0, _, Target::Place { .. })]));
         // A picture's own id is a place too, before the picture, with nothing after it either.
         assert_eq!(ids_as_anchors("<p><img id=\"fig\" src=i></p>"), "<p><a id=\"fig\"></a><img id=\"fig\" src=i></p>");
         let figure = paged("fig.html", b"<p><a href='#fig'>the figure</a></p><p><img id='fig' src='missing.png' width='100' height='100'></p>");

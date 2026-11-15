@@ -387,3 +387,12 @@ redirected into `/dev/stdin` from a file is laid out from nothing in the pager (
   was.
 - **Seen failing first**: `slug_of_a_heading_is_githubs_and_repeats_are_numbered`, on `Cafe` with
   U+0301 (`cafe-noir`), before the table was written.
+
+## After Done: the Codex review's third round
+
+- **An anchor written at the HTML's first byte was dropped** (2026-11-15): `ids_as_anchors` told
+  whether it had written anything by where it had written up to (`written == 0`), and an anchor
+  before a picture that starts the HTML (`<img id="fig" …>` first) is written at 0, so the HTML
+  came back as it was and `#fig` was said missing. It now goes by whether anything was written.
+  Seen failing first: `links_of_html_lead_to_any_element_with_an_id`, on
+  `ids_as_anchors("<img id=\"fig\" src=i>")`, before the fix.
