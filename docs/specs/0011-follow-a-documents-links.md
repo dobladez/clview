@@ -1,6 +1,6 @@
 # Spec-0011: Follow a document's links with hints
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-15
 - **Related:** [Spec-0006](0006-search-a-pdfs-text.md) and [Spec-0007](0007-search-markdown-html-and-word-documents.md)
   (a backend's text and its rectangles, the pattern `Links` follows);
@@ -298,3 +298,4 @@ followed into.
   numbers, the labels as placements of one image, Word's fields parsed by the backend, HTML's ids
   as places, a PDF's destinations through their page, what `F` copies, `--pages` and relayout, OSC
   52, when the labels show, tmux's placeholders after a label, five tasks (spec-update).
+- 2026-11-15 — Implementing ([notes](0011-follow-a-documents-links-impl-20261115_1751.md)).
