@@ -13,37 +13,30 @@ when available: kitty, Ghostty and WezTerm, locally or over SSH, and inside tmux
 runs on macOS, Linux and FreeBSD. Other terminals get a preview in text cells.
 
 ```sh
-clv report.pdf             # page through it, like less
-clv --per-row 4 report.pdf # four pages to a row
-clv --no-pager report.pdf  # print every page and exit, like cat
-clv photo.jpg              # an image, printed at the cursor
-clv diagram.svg            # a drawing, as large as the window and sharp at that size
-clv flow.mmd               # a Mermaid diagram, drawn as Mermaid draws it (.mermaid too)
-clv letter.docx            # a Word document's pages, laid out as Word prints them (odt, rtf too)
-clv notes.md               # Markdown, laid out into pages (HTML too)
-clv budget.xlsx            # a workbook's sheets, printed as its app prints them (xls, ods, csv too)
-clv *.pdf                  # several files: a tile each, Enter opens one
-clv ~/Photos               # a directory: its files, and its subdirectories as folders
-clv -r ~/Photos            # its subdirectories' files too, as tiles of their own
-clv comics.zip             # an archive: its files and directories, as a directory's
-clv photos.tar.xz          # a tar too, plain or compressed, read through once with progress
-clv paper.pdf.gz           # a file compressed alone: the PDF it unpacks to
-clv --protocol ascii photo.jpg > photo.txt  # as plain text, for a log or a mail
+clv report.pdf    # page through it, like less
+clv notes.md      # Markdown, laid out into pages
+clv ~/Photos      # a directory: a tile for each file, Enter opens one
 ```
 
-A file with more than one page opens in a pager. The pager shows one page, or two pages side by
-side when the window is wide enough. Use `-` to zoom out to rows of pages. Use `+` to zoom in. Use
-`?` to show the keys.
+After you open a file, you can do these things:
 
-Two or more files, a directory or an archive open as a list of tiles. A file's tile shows its first
-page and its name. Use the arrow keys to select a tile. Use `Enter` to open it. A file opens to its
-pages, and a folder opens to its own list. Use `Esc` or `u` (up) to go back.
+- **Paging.** A file with more than one page opens in a pager. The pager shows one page. It shows
+  two pages side by side when the window is wide enough. Use `-` to zoom out to rows of pages. Use
+  `+` to zoom in. Use `?` to show the keys.
+- **Lists.** Two or more files, a directory or an archive open as a list of tiles. A tile shows
+  the first page of a file and its name. Use the arrow keys to select a tile. Use `Enter` to open
+  it. Use `Esc` or `u` (up) to go back.
+- **Copying.** Use `c` to copy the current page or tile to the clipboard as a picture.
+- **Searching.** Use `/` to search the text of a document. Type the text and push `Enter`. Use `n`
+  and `N` to go to the next and previous match.
+- **Links.** Use `f` to label the links on the screen. Type a label to follow its link: to a place
+  in the document, to another file, or to a web address. This works like Vimium in a browser. Use
+  `u` to go back. Use `F` to copy the link's address.
+- **Dark and light.** On a dark terminal, Markdown, HTML and Mermaid diagrams show light text on a
+  dark background. Use `d` to change between dark and light.
 
-Use `c` to copy the current page or tile to the clipboard as a picture.
-
-Markdown, HTML and Mermaid diagrams go light on dark on a dark terminal. Use `d` to switch them between dark and light.
-
-See [`docs/usage.md`](docs/usage.md) for all options and more details.
+Options such as `--no-pager`, `--per-row` and `--protocol ascii`, and every key, are in
+[`docs/usage.md`](docs/usage.md).
 
 ## What it shows
 
