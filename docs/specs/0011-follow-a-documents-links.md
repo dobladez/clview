@@ -284,11 +284,13 @@ followed into.
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them. (Named, with what was
+  reverted, under each task's "Seen failing" in the
+  [notes](0011-follow-a-documents-links-impl-20261115_1751.md).)
 - [ ] Manual: in kitty, Ghostty and WezTerm, `f` on a PDF and a Markdown file, following a place,
   a local file and a web address, `u` back; inside tmux and with `--protocol blocks`, the labels.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 

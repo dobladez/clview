@@ -503,11 +503,12 @@ a terminal without colours), written over the page's cells from the cell its lin
 kept within its page; the cells come back as they were when the labels go.
 
 **A place in the document** (a PDF's link to a page, its table of contents, a named destination;
-a Word cross-reference; Markdown's `[see](#usage)`, HTML's `<a href="#usage">`) is gone to: its page, and on a page taller than the window, scrolled so that the place is a third
-of the way down the screen. `u` and `Backspace` go back to where you were before the last link
-followed, the newest first, for the last 100 of them; with none left they go back to the list, as
-they did. A search kept is cleared first, and `Esc` never steps back: it clears the search, or
-leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
+a Word cross-reference; Markdown's `[see](#usage)`, HTML's `<a href="#usage">`) is gone to: its
+page, and on a page taller than the window, scrolled so that the place is a third of the way down
+the screen. `u` and `Backspace` go back to where you were before the last link followed, the
+newest first, for the last 100 of them; with none left they go back to the list, as they did, or
+to the document a link led from. A search kept is cleared first, and `Esc` never steps back: it
+clears the search, or leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
 again. With `--pages`, a link to a page that isn't among those given says so (`page 12 isn't
 among --pages`) and goes nowhere, and one to a page given twice goes where it is first. A place the
 document doesn't have says so too (`no #usage in this document`). A Markdown or HTML document
@@ -571,7 +572,7 @@ Which files have links:
   itself (`<a id="install">`) wins over a heading's. A link's path and its `#name` are read as a
   URL's: `my%20file.md` is `my file.md`.
 
-Printing (`--no-pager`, or a single page) has no labels, and `f` does nothing in a list.
+Printing (`--no-pager`, or a single page) has no labels, and `f` and `F` do nothing in a list.
 
 ## Which files it shows
 

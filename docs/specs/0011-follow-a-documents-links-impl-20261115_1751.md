@@ -265,3 +265,17 @@ surprises, and what a later reader would want.
 - **The box stays open** at this commit: its commands pass, and its manual check (in kitty on macOS,
   `f` on a Markdown file's web link opens the browser; over `ssh localhost`, copied) is the
   owner's.
+
+## The Done checklist
+
+- **The gates** were run on each task's tree before its commit, and on the last: `cargo fmt
+  --check`, `cargo clippy --all-targets -j 2 -- -D warnings`, `cargo test -j 2` (559 unit tests, 13
+  of the docs, 275 through the viewer).
+- **The docs**: `CHANGELOG.md` (one entry, rewritten as the tasks landed), `docs/usage.md` (Keys,
+  Following links, Inside tmux, Text cells, On this machine or over SSH, Limits),
+  `docs/architecture.md` (the viewer's files, Sources, Copying to the clipboard, Opening in another
+  app, Following a file's links with a PDF's and a document's), ADR-0035 in the ADRs' index.
+  README's Plans had no bullet for this.
+- **Still open**, each waiting for a look in a real terminal: task 2's and task 5's manual lines,
+  and the Done list's (kitty, Ghostty and WezTerm; inside tmux; `--protocol blocks`). The spec
+  stays `Implementing` until the owner has looked.

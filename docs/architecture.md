@@ -100,7 +100,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `link.rs` | A link checked before anything is done with it: what a source gives as a page's links, a web address, a path. It opens and launches nothing |
 | `files.rs` | Temporary files for a terminal on this machine, on a thread of their own |
 | `icon.rs` | The icon beside `--help`'s first lines: whether it can show, where it goes, and its escape codes ([The icon in `--help`](#the-icon-in---help-iconrs)) |
-| `clip.rs` | Copying a page to the clipboard (`c`): the clipboard protocol's escape codes, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
+| `clip.rs` | Copying a page to the clipboard (`c`), and a link's address (`F`): the clipboard protocol's escape codes and OSC 52's, the scale a page is copied at, and a copy's way from the pool to the terminal's clipboard or the system's, on threads of its own |
 
 The viewer is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
 
