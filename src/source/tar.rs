@@ -190,6 +190,17 @@ impl Codec {
         Format::of(name, &[]).named_by(names)
     }
 
+    /// What the plate on a tar's folder says, packed this way: the short extension such a tar
+    /// goes by (`.tgz`, `.tbz`, `.txz`).
+    fn label(self) -> &'static str {
+        match self {
+            Self::None => "TAR",
+            Self::Gzip => "TGZ",
+            Self::Bzip2 => "TBZ",
+            Self::Xz => "TXZ",
+        }
+    }
+
     /// `raw`, unpacked as it reads. Several compressed streams one after another (`pigz`, `pbzip2`,
     /// `xz -T`) read as one.
     fn decode(self, raw: Box<dyn Read + Send>) -> Box<dyn Read + Send> {
@@ -888,9 +899,10 @@ impl Container for Directory {
         Ok(Input::held_bounded(path, head, again, bounded))
     }
 
-    /// The archive itself is a parcel; a directory in it, a folder as any directory is.
+    /// The archive itself is zipped, its plate saying how it is packed; a directory in it, a
+    /// folder as any directory is.
     fn badge(&self) -> Badge {
-        if self.at.is_empty() { Badge::Parcel } else { Badge::None }
+        if self.at.is_empty() { Badge::Archive(self.handle.0.codec.label()) } else { Badge::None }
     }
 
     fn ready(&self) -> Ready {
@@ -1084,7 +1096,14 @@ mod tests {
         for codec in [Codec::None, Codec::Gzip, Codec::Bzip2, Codec::Xz] {
             let path = on_disk("list", &format!("t-{codec:?}.tar"), &compress(&plain, codec));
             let top = opened(&path).unwrap();
-            assert_eq!((top.path(), top.badge()), (path.as_str(), Badge::Parcel));
+            let label = match codec {
+                Codec::None => "TAR",
+                Codec::Gzip => "TGZ",
+                Codec::Bzip2 => "TBZ",
+                Codec::Xz => "TXZ",
+            };
+            assert_eq!((top.path(), top.badge()), (path.as_str(), Badge::Archive(label)));
+            assert!(top.badge().spelled(), "{label}");
             let listing = top.list(false).unwrap();
             assert_eq!(names(&listing), ["b9.png", "b10.png", &format!("{deep}/"), "sub/", "z.txt"], "{codec:?}");
             assert!(listing.unread.is_empty() && !listing.cut, "{listing:?}");

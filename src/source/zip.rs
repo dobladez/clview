@@ -186,9 +186,10 @@ impl Container for Directory {
         Ok(Input::held_bounded(path, head, again, bounded))
     }
 
-    /// The archive itself is a parcel; a directory in it, a folder as any directory is.
+    /// The archive itself is zipped, its plate saying `ZIP`; a directory in it, a folder as any
+    /// directory is.
     fn badge(&self) -> Badge {
-        if self.at.is_empty() { Badge::Parcel } else { Badge::None }
+        if self.at.is_empty() { Badge::Archive("ZIP") } else { Badge::None }
     }
 }
 
@@ -320,8 +321,9 @@ mod tests {
         assert_eq!(top.path(), path);
         let listing = top.list(false).unwrap();
         assert_eq!(names(&listing), ["b9.png", "b10.png", "empty/", "m/", "sub/"]);
-        // The archive is a parcel, a directory in it a plain folder.
-        assert_eq!((top.badge(), inner(&listing, "sub").badge()), (Badge::Parcel, Badge::None));
+        // The archive is zipped and says its kind, a directory in it a plain folder.
+        assert_eq!((top.badge(), inner(&listing, "sub").badge()), (Badge::Archive("ZIP"), Badge::None));
+        assert!(top.badge().spelled());
         assert!(listing.unread.is_empty() && !listing.cut, "{listing:?}");
         // Each directory a container of its own, named from the archive.
         let sub = inner(&listing, "sub");

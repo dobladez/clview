@@ -78,8 +78,8 @@ fn an_archive_is_a_list_of_its_files_and_its_directories_are_folders() {
 }
 
 /// In a directory an archive is a folder, even recursing: `-r` goes through directories, not
-/// into every archive (a jar, a document that is a zip inside). Its folder is tied up as a
-/// parcel; a directory's is plain.
+/// into every archive (a jar, a document that is a zip inside). Its folder carries a plate
+/// saying its kind; a directory's is plain.
 #[test]
 fn in_a_directory_an_archive_is_a_folder_even_recursing() {
     let dir = tmp("zip-dir", "shelf");
@@ -89,14 +89,14 @@ fn in_a_directory_an_archive_is_a_folder_even_recursing() {
     assert_eq!(shown(&dir, &[]).1, [" a.png sub/"]);
     assert_eq!(shown(&dir, &["-r"]).1, [" a.png sub/trip.zip/"]);
     // The second tile: the directory's folder, then the archive's.
-    let tied = |args: &[&str]| {
+    let plated = |args: &[&str]| {
         let out = view(&dir, &[&["--protocol", "kitty"], args].concat());
         let folder = image::load_from_memory(&images(&out.stdout)[1].png).unwrap().to_rgba8();
-        // Where the tape crosses: brown on a parcel, the folder's blue on a plain one.
-        let [r, _, b, _] = folder.get_pixel(folder.width() / 2, folder.height() * 6 / 10).0;
+        // On the plate, under its letters: orange on an archive, the folder's blue on a plain one.
+        let [r, _, b, _] = folder.get_pixel(folder.width() * 56 / 100, folder.height() * 9 / 10).0;
         r > b
     };
-    assert_eq!((tied(&[]), tied(&["-r"])), (false, true));
+    assert_eq!((plated(&[]), plated(&["-r"])), (false, true));
 }
 
 /// An archive with nothing to show says so; one that isn't one after all is the error.

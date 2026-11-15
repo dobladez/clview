@@ -44,6 +44,9 @@ works today. A version's section becomes the notes of its
 
 ### Changed
 
+- An archive's folder in a list has a zipper down its front and a plate at its corner saying which
+  kind it is (`ZIP`, `TAR`, or `TGZ`, `TBZ`, `TXZ` for a compressed tar), where it was tied up
+  with tape and a bow.
 - The pager keeps up to 256 MiB of pages ready in the terminal, where it kept 192 MiB: in a large
   window, four of the largest pages where there were three.
 - A PDF of more than 100,000 pages is refused, saying how many it has. A file of a few megabytes

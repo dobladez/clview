@@ -1,5 +1,5 @@
 //! The tar backend, through the viewer: a tar, plain or compressed with gzip, bzip2 or xz, is a
-//! list as a directory is, and a folder, tied up as a parcel, to go into, read on a thread of its
+//! list as a directory is, and a folder, with a plate saying its kind, to go into, read on a thread of its
 //! own while the pager says how far it has got; a file compressed alone is what it unpacks to. Its
 //! own tests (`src/source/tar.rs`) read archives directly.
 #![cfg(all(unix, feature = "tar", feature = "image"))]
@@ -131,20 +131,21 @@ fn a_file_compressed_alone_is_shown_as_what_it_unpacks_to() {
     assert_eq!(text(&out.stderr), format!("clv: {}: it unpacks to a file that clv doesn't show\n", notes.display()));
 }
 
-/// In a directory a tar is a folder tied up as a parcel, as a zip is.
+/// In a directory a tar is a folder with a plate saying its kind, as a zip is.
 #[test]
-fn in_a_directory_a_tar_is_a_parcel() {
+fn in_a_directory_a_tar_is_a_folder_with_a_plate() {
     let dir = tmp("tar-dir", "shelf");
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     write(dir.join("trip.tar.gz"), &gzip(&tar(&[("b.png", png(30, 20))])));
     let out = view(&dir, &["--protocol", "kitty"]);
     assert_eq!(names(&out.stdout), [" sub/ trip.tar.gz/"]);
-    let tied = |at: usize| {
+    let plated = |at: usize| {
         let folder = image::load_from_memory(&images(&out.stdout)[at].png).unwrap().to_rgba8();
-        let [r, _, b, _] = folder.get_pixel(folder.width() / 2, folder.height() * 6 / 10).0;
+        // On the plate, under its letters: orange on an archive, the folder's blue on a plain one.
+        let [r, _, b, _] = folder.get_pixel(folder.width() * 56 / 100, folder.height() * 9 / 10).0;
         r > b
     };
-    assert_eq!((tied(0), tied(1)), (false, true));
+    assert_eq!((plated(0), plated(1)), (false, true));
 }
 
 /// A tar.gz of `zeros` GiB of zeros (fewer than 8, as an octal size goes), then a picture: small

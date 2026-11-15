@@ -317,9 +317,9 @@ folder at its place among the arguments (with `-r`, its files, named from it: `p
 
 A zip archive is shown as a directory is: a list of the files in it that a backend opens, read
 from the archive, and a folder for each directory in it. Given alone it is that list; among other
-files, or in a directory, it is a folder, tied up as a parcel (tape down and across it, and a bow)
-where a directory's is plain, which Enter goes into, and the status line names its files from it
-(`trip.zip/2024/beach.jpg`). `-r` lists its directories' files instead of folders when the archive
+files, or in a directory, it is a folder with a zipper down its front and a plate at its corner
+saying which kind it is (`ZIP`), where a directory's is plain, which Enter goes into, and the
+status line names its files from it (`trip.zip/2024/beach.jpg`). `-r` lists its directories' files instead of folders when the archive
 is given; an archive in a directory stays a folder even then, since `-r` goes through directories,
 not into every archive (a jar, a document that is a zip inside). An archive in an archive is a
 folder too.
@@ -331,7 +331,8 @@ is macOS's `__MACOSX` directory. It reads deflate, deflate64, bzip2, LZMA and XZ
 out with a warning, as a broken picture in a directory is.
 
 A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
-`.tar.xz`, `.cbt`…), is shown the same way. A compressed tar has no list of its files and can't be
+`.tar.xz`, `.cbt`…), is shown the same way, its plate saying `TAR`, or `TGZ`, `TBZ` or `TXZ` as
+it is compressed, whatever its name. A compressed tar has no list of its files and can't be
 read from the middle, so its files are found by reading it through, once, when it is given or gone
 into: the status line says how far (`reading photos.tar.xz/… 40%`), then how many of its files are
 opened, and Esc stops it (`q` still quits). Given on the command line, it says so on stderr
