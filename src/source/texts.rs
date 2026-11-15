@@ -3,6 +3,10 @@
 //! while its request is still listed. A backend lends it how its text is read and its matches
 //! placed, and what to do when the search ends ([`Ending`]), as `threads.rs` serves [`Pool`].
 //!
+//! A backend's [`Links`] keeps one too: the queue is the same whatever is asked of it and
+//! answered ([`Reply`]), a search's [`Got`] or a page's links ([`Told`]), a backend lending it
+//! how each is answered ([`Queue::serve`]).
+//!
 //! Nothing here is looked up by going through a list: a document has as many requests as it has
 //! chunks, and the lock is the one the viewer takes between keys ([`Texts::try_recv`],
 //! [`Texts::set_queue`]).
@@ -10,11 +14,12 @@
 //! [`Pool`]: super::Pool
 
 use std::collections::{HashSet, VecDeque};
+use std::hash::Hash;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
+use super::{Ask, Got, Link, Target, Told, Want};
 #[cfg(doc)]
-use super::Texts;
-use super::{Got, Want};
+use super::{Links, Texts};
 
 /// The most bytes of answers that wait to be taken: at it, no more is read until the viewer has
 /// taken some. What a viewer busy elsewhere (writing to a slow terminal) leaves waiting is that
@@ -29,46 +34,71 @@ pub(crate) trait Answer: Send + 'static {
     fn rects(&mut self, chunk: usize, from: usize, to: usize) -> Result<Vec<(usize, [f32; 4])>, String>;
 }
 
+/// What a queue's thread gives: an answer that says what it answers, and what it weighs while
+/// it waits to be taken.
+pub(crate) trait Reply: Send + 'static {
+    /// What is asked for it.
+    type Asked: Clone + Eq + Hash + Send + 'static;
+    /// What this answers.
+    fn asked(&self) -> Self::Asked;
+    /// The bytes it holds while it waits, near enough: what it gives, or why not, and itself.
+    fn weight(&self) -> usize;
+}
+
 /// The queue: what is wanted, and the answers waiting for the viewer. A backend's [`Texts`] hands
-/// it [`Texts::set_queue`] and [`Texts::try_recv`]. Dropped, the thread stops at its next request,
-/// and what the backend set to be done when the search ends ([`Ending::on_end`]) is done, without
-/// waiting for the thread.
-pub(crate) struct Queue {
-    shared: Arc<Shared>,
+/// it [`Texts::set_queue`] and [`Texts::try_recv`], and its [`Links`] theirs. Dropped, the thread
+/// stops at its next request, and what the backend set to be done when the search ends
+/// ([`Ending::on_end`]) is done, without waiting for the thread.
+pub(crate) struct Queue<G: Reply = Got> {
+    shared: Arc<Shared<G>>,
 }
 
 /// The reader's hold on its queue: what to do when the search ends, which may change as it reads
 /// (a PDF's worker, started and killed).
-pub(crate) struct Ending(Arc<Shared>);
+pub(crate) struct Ending<G: Reply = Got>(Arc<Shared<G>>);
 
-struct Shared {
-    state: Mutex<State>,
+struct Shared<G: Reply> {
+    state: Mutex<State<G>>,
     /// Work wanted, room for its answer, or time to stop.
     wake: Condvar,
 }
 
-#[derive(Default)]
-struct State {
+struct State<G: Reply> {
     /// The latest queue, the most urgent first; what it lists, to look one up; and how far into it
     /// every request has been given, where the next one to read is looked for from.
-    queue: Vec<Want>,
-    listed: HashSet<Want>,
+    queue: Vec<G::Asked>,
+    listed: HashSet<G::Asked>,
     from: usize,
     /// Given while still in the queue: not read again when listed again.
-    given: HashSet<Want>,
+    given: HashSet<G::Asked>,
     /// The answers given and not yet taken, each to a request still in the queue, and the bytes
-    /// they hold ([`weight`]): the thread reads no more while that is [`MAX_WAITING`] or over.
-    answers: VecDeque<Got>,
+    /// they hold ([`Reply::weight`]): the thread reads no more while that is [`MAX_WAITING`] or over.
+    answers: VecDeque<G>,
     waiting: usize,
     /// What to do when the search ends, as the reader last set it.
     end: Option<Box<dyn FnOnce() + Send>>,
     stop: bool,
 }
 
-impl Shared {
+impl<G: Reply> Default for State<G> {
+    fn default() -> Self {
+        Self {
+            queue: Vec::new(),
+            listed: HashSet::new(),
+            from: 0,
+            given: HashSet::new(),
+            answers: VecDeque::new(),
+            waiting: 0,
+            end: None,
+            stop: false,
+        }
+    }
+}
+
+impl<G: Reply> Shared<G> {
     /// The most urgent thing wanted and not yet given, waited for, and for room for its answer.
     /// `None` when the search has ended.
-    fn next(&self) -> Option<Want> {
+    fn next(&self) -> Option<G::Asked> {
         let mut state = lock(&self.state);
         loop {
             if state.stop {
@@ -77,7 +107,7 @@ impl Shared {
             // Past what was given, each looked at once for a queue: a request given is never ungiven
             // while its queue stands.
             while state.waiting < MAX_WAITING
-                && let Some(want) = state.queue.get(state.from).copied()
+                && let Some(want) = state.queue.get(state.from).cloned()
             {
                 if !state.given.contains(&want) {
                     return Some(want);
@@ -91,57 +121,100 @@ impl Shared {
     /// The answer to `want`, for the viewer to take, if it is still wanted: under the lock the queue
     /// is replaced under, so none is ever given for a request no longer listed. Whether the search
     /// goes on.
-    fn give(&self, want: Want, got: Got) -> bool {
+    fn give(&self, want: G::Asked, got: G) -> bool {
         let mut state = lock(&self.state);
         if state.listed.contains(&want) && !state.stop {
             state.given.insert(want);
-            state.waiting = state.waiting.saturating_add(weight(&got));
+            state.waiting = state.waiting.saturating_add(got.weight());
             state.answers.push_back(got);
         }
         !state.stop
     }
 }
 
-/// What `got` answers.
-fn asked(got: &Got) -> Want {
-    match got {
-        Got::Text(chunk, _) => Want::Text(*chunk),
-        Got::Rects(want, _) => *want,
+impl Reply for Got {
+    type Asked = Want;
+
+    fn asked(&self) -> Want {
+        match self {
+            Self::Text(chunk, _) => Want::Text(*chunk),
+            Self::Rects(want, _) => *want,
+        }
+    }
+
+    /// Its text or its rectangles, or why not, and itself.
+    fn weight(&self) -> usize {
+        let held = match self {
+            Self::Text(_, Ok(text)) | Self::Text(_, Err(text)) | Self::Rects(_, Err(text)) => text.len(),
+            Self::Rects(_, Ok(rects)) => rects.len().saturating_mul(std::mem::size_of::<(usize, [f32; 4])>()),
+        };
+        held.saturating_add(std::mem::size_of::<Self>())
     }
 }
 
-/// The bytes an answer holds while it waits, near enough: its text or its rectangles, or why not,
-/// and itself.
-fn weight(got: &Got) -> usize {
-    let held = match got {
-        Got::Text(_, Ok(text)) | Got::Text(_, Err(text)) | Got::Rects(_, Err(text)) => text.len(),
-        Got::Rects(_, Ok(rects)) => rects.len().saturating_mul(std::mem::size_of::<(usize, [f32; 4])>()),
-    };
-    held.saturating_add(std::mem::size_of::<Got>())
+impl Reply for Told {
+    type Asked = Ask;
+
+    fn asked(&self) -> Ask {
+        match self {
+            Self::Page { page, .. } => Ask::Page(*page),
+            Self::Name { name, .. } => Ask::Name(name.clone()),
+        }
+    }
+
+    /// Its links, each with its rectangles, its address and where it leads, or why not, its name,
+    /// and itself.
+    fn weight(&self) -> usize {
+        let link = |link: &Link| {
+            let target = match &link.target {
+                Target::Place { .. } => 0,
+                Target::File { path, fragment, .. } => path.len().saturating_add(fragment.as_ref().map_or(0, String::len)),
+                Target::Web(text) | Target::Other(text) => text.len(),
+            };
+            let rects = link.rects.len().saturating_mul(std::mem::size_of::<[f32; 4]>());
+            let held = rects.saturating_add(link.address.as_ref().map_or(0, String::len)).saturating_add(target);
+            held.saturating_add(std::mem::size_of::<Link>())
+        };
+        let held = match self {
+            Self::Page { links: Ok(links), .. } => links.iter().map(link).fold(0, usize::saturating_add),
+            Self::Page { links: Err(why), .. } => why.len(),
+            Self::Name { name, at } => name.len().saturating_add(at.as_ref().err().map_or(0, String::len)),
+        };
+        held.saturating_add(std::mem::size_of::<Self>())
+    }
 }
 
 impl Queue {
-    /// A queue with nothing wanted and no thread yet ([`Queue::start`]).
+    /// Answer what is wanted with `read`, on a thread named `name`. A thread that can't start
+    /// leaves the text unread, which the search shows as still reading.
+    pub(crate) fn start(&self, name: &str, mut read: impl Answer) {
+        self.serve(name, move |want| match want {
+            Want::Text(chunk) => Got::Text(chunk, read.text(chunk)),
+            Want::Rects { chunk, from, to } => Got::Rects(want, read.rects(chunk, from, to)),
+        });
+    }
+}
+
+impl<G: Reply> Queue<G> {
+    /// A queue with nothing wanted and no thread yet ([`Queue::start`], [`Queue::serve`]).
     pub(crate) fn new() -> Self {
         Self { shared: Arc::new(Shared { state: Mutex::new(State::default()), wake: Condvar::new() }) }
     }
 
     /// The hold a reader of this queue keeps on it.
     #[cfg_attr(not(any(feature = "pdf", test)), expect(dead_code, reason = "only a PDF's reader has something to end"))]
-    pub(crate) fn ending(&self) -> Ending {
+    pub(crate) fn ending(&self) -> Ending<G> {
         Ending(self.shared.clone())
     }
 
-    /// Answer what is wanted with `read`, on a thread named `name`. A thread that can't start
-    /// leaves the text unread, which the search shows as still reading.
-    pub(crate) fn start(&self, name: &str, mut read: impl Answer) {
+    /// Answer what is wanted with `answer`, on a thread named `name`: what it gives is held as the
+    /// answer to what it was asked, whatever it says it answers. A thread that can't start leaves
+    /// everything unanswered.
+    pub(crate) fn serve(&self, name: &str, mut answer: impl FnMut(G::Asked) -> G + Send + 'static) {
         let shared = self.shared.clone();
         let _ = std::thread::Builder::new().name(name.into()).spawn(move || {
             while let Some(want) = shared.next() {
-                let got = match want {
-                    Want::Text(chunk) => Got::Text(chunk, read.text(chunk)),
-                    Want::Rects { chunk, from, to } => Got::Rects(want, read.rects(chunk, from, to)),
-                };
+                let got = answer(want.clone());
                 if !shared.give(want, got) {
                     return;
                 }
@@ -151,13 +224,13 @@ impl Queue {
 
     /// [`Texts::set_queue`]. An answer waiting for a request no longer listed is dropped with it:
     /// listed again, it is read again.
-    pub(crate) fn set_queue(&self, wanted: Vec<Want>) {
+    pub(crate) fn set_queue(&self, wanted: Vec<G::Asked>) {
         // Made before the lock is taken: the thread reads on meanwhile.
-        let listed: HashSet<Want> = wanted.iter().copied().collect();
+        let listed: HashSet<G::Asked> = wanted.iter().cloned().collect();
         let mut state = lock(&self.shared.state);
         state.given.retain(|given| listed.contains(given));
-        state.answers.retain(|got| listed.contains(&asked(got)));
-        state.waiting = state.answers.iter().map(weight).fold(0, usize::saturating_add);
+        state.answers.retain(|got| listed.contains(&got.asked()));
+        state.waiting = state.answers.iter().map(Reply::weight).fold(0, usize::saturating_add);
         state.queue = wanted;
         state.listed = listed;
         state.from = 0;
@@ -165,17 +238,17 @@ impl Queue {
     }
 
     /// [`Texts::try_recv`].
-    pub(crate) fn try_recv(&self) -> Option<Got> {
+    pub(crate) fn try_recv(&self) -> Option<G> {
         let mut state = lock(&self.shared.state);
         let got = state.answers.pop_front()?;
-        state.waiting = state.waiting.saturating_sub(weight(&got));
+        state.waiting = state.waiting.saturating_sub(got.weight());
         // Room again, maybe: the thread reads on.
         self.shared.wake.notify_all();
         Some(got)
     }
 }
 
-impl Drop for Queue {
+impl<G: Reply> Drop for Queue<G> {
     /// The search has ended: the thread stops, and what the reader set to be done is done, outside
     /// the lock; nothing waits for the thread.
     fn drop(&mut self) {
@@ -191,7 +264,7 @@ impl Drop for Queue {
     }
 }
 
-impl Ending {
+impl<G: Reply> Ending<G> {
     /// What to do when the search ends, from now on, in place of what was set before; nothing,
     /// for `None`. `false` if it has ended already, when `end` is left undone: the reader is to do
     /// it itself.
@@ -207,7 +280,7 @@ impl Ending {
 }
 
 /// The lock, even after a thread panicked holding it: the state stays consistent between statements.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+fn lock<G: Reply>(state: &Mutex<State<G>>) -> MutexGuard<'_, State<G>> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -251,7 +324,7 @@ mod tests {
     /// listed, and what isn't wanted any more never.
     #[test]
     fn what_is_wanted_is_read_in_order_and_given_once() {
-        let queue = Queue::new();
+        let queue: Queue = Queue::new();
         queue.start("text", Two);
         let rects = Want::Rects { chunk: 0, from: 1, to: 3 };
         let got = gave(&queue, vec![Want::Text(1), rects, Want::Text(0), Want::Text(7)]);
@@ -269,7 +342,7 @@ mod tests {
     /// counted as given: listed again, it is read again, and given once.
     #[test]
     fn an_answer_whose_request_was_dropped_never_comes() {
-        let queue = Queue::new();
+        let queue: Queue = Queue::new();
         queue.start("text", Two);
         let rects = Want::Rects { chunk: 0, from: 1, to: 3 };
         queue.set_queue(vec![Want::Text(0), Want::Text(1), rects]);
@@ -395,11 +468,63 @@ mod tests {
         assert!(relisted < Duration::from_millis(500), "the queue set again in {relisted:?}");
     }
 
+    /// The queue serves a source's links as it does its text: what is asked, a page's links or a
+    /// name's place, is answered once while listed, and what waits is weighed by what it holds, its
+    /// links' rectangles, addresses and paths among it.
+    #[test]
+    fn a_queue_of_links_answers_pages_and_names_and_weighs_what_waits() {
+        let queue: Queue<Told> = Queue::new();
+        let link = |page| Link {
+            page,
+            rects: vec![[0.0; 4]; 3],
+            address: Some("x".repeat(100)),
+            target: Target::File { path: "y".repeat(1000), fragment: Some("z".repeat(10)), page: None },
+        };
+        queue.serve("links", move |ask| match ask {
+            Ask::Page(page) if page < 2 => Told::Page { page, links: Ok(vec![link(page), link(page)]), more: 0 },
+            Ask::Page(page) => Told::Page { page, links: Err(format!("no page {page}")), more: 0 },
+            Ask::Name(name) => Told::Name { at: Ok((name == "usage").then_some((1, 5.0))), name },
+        });
+        let wanted = vec![Ask::Name("usage".into()), Ask::Page(1), Ask::Page(7), Ask::Name("nowhere".into())];
+        queue.set_queue(wanted.clone());
+        let begun = Instant::now();
+        while lock(&queue.shared.state).answers.len() < 4 {
+            assert!(begun.elapsed() < Duration::from_secs(10), "its answers never came");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Two links of 48 bytes of rectangles, 100 of address and 1,010 of path and fragment, in one
+        // answer; the others weigh their words.
+        let held = 2 * (3 * 16 + 100 + 1010 + std::mem::size_of::<Link>()) + "usage".len() + "no page 7".len() + "nowhere".len();
+        assert_eq!(lock(&queue.shared.state).waiting, held + 4 * std::mem::size_of::<Told>());
+        // Listed again while they wait: given once, in the order asked.
+        queue.set_queue(wanted);
+        let got: Vec<Told> = std::iter::from_fn(|| queue.try_recv()).collect();
+        let [
+            Told::Name { name, at: Ok(Some((1, y))) },
+            Told::Page { page: 1, links: Ok(links), .. },
+            Told::Page { page: 7, links: Err(why), .. },
+            Told::Name { at: Ok(None), .. },
+        ] = &got[..]
+        else {
+            panic!("{} told", got.len())
+        };
+        assert_eq!((name.as_str(), *y, links.len(), why.as_str()), ("usage", 5.0, 2, "no page 7"));
+        assert_eq!(lock(&queue.shared.state).waiting, 0);
+        // An answer to what is no longer asked never comes.
+        queue.set_queue(vec![Ask::Page(0)]);
+        while lock(&queue.shared.state).answers.is_empty() {
+            assert!(begun.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        queue.set_queue(vec![Ask::Name("usage".into())]);
+        assert!(!matches!(queue.try_recv(), Some(Told::Page { .. })));
+    }
+
     /// What the reader set to be done when the search ends is done when the queue is dropped, the
     /// latest of what it set, once; set after, it is refused, for the reader to do itself.
     #[test]
     fn the_search_ending_does_what_the_reader_set_last() {
-        let queue = Queue::new();
+        let queue: Queue = Queue::new();
         let ending = queue.ending();
         let (first, last) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
         let flag = |done: &Arc<AtomicBool>| {

@@ -902,6 +902,103 @@ pub(crate) trait Source {
     fn texts(&self) -> Option<Box<dyn Texts>> {
         None
     }
+    /// Its links, for the reader to follow (`f`): found on a thread of the source's own from here
+    /// on, so asked for only when the reader asks for them, and let go of with the file. `None` for
+    /// a source with no links (a picture, a drawing), the default.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
+    fn links(&self) -> Option<Box<dyn Links>> {
+        None
+    }
+}
+
+/// The most links a page gives ([`Told::Page`]): a source stops there, and says how many more
+/// there were; the viewer keeps no more of what it is given either.
+pub(crate) const MAX_LINKS: usize = 1024;
+/// The most rectangles a link has ([`Link::rects`]): one for each line it runs over.
+pub(crate) const MAX_LINK_RECTS: usize = 64;
+/// The longest address or path of a link ([`Link::address`], [`Target::Web`], [`Target::File`]),
+/// in bytes: a link with a longer one isn't followed.
+pub(crate) const MAX_ADDRESS: usize = 4 << 10;
+/// The longest name of a place ([`Ask::Name`], a [`Target::File`]'s fragment), in bytes.
+pub(crate) const MAX_NAME: usize = 256;
+
+/// A source's links, for the viewer to follow ([`Source::links`]): where each page's are and where
+/// they lead, and where the place a `#name` names is. The viewer labels them, checks where they
+/// lead and goes there, the same for every backend.
+///
+/// The work keeps [`Pool`]'s contract: [`Links::set_queue`] replaces what is wanted,
+/// [`Links::try_recv`] never blocks, a result arrives only while it is wanted, and dropping this
+/// ends its work without waiting for it. Whatever it gives is input like any other: the viewer
+/// checks it, against the limits here ([`MAX_LINKS`], [`MAX_LINK_RECTS`], [`MAX_ADDRESS`],
+/// [`MAX_NAME`]), which a source keeps to as it makes its answer.
+#[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
+pub(crate) trait Links {
+    /// Replace what is wanted, the most urgent first. One still waited for is listed again every
+    /// time; one given isn't given again while it stays listed.
+    fn set_queue(&self, wanted: Vec<Ask>);
+    /// Something wanted, if it is ready. Never blocks.
+    fn try_recv(&self) -> Option<Told>;
+}
+
+/// What the viewer wants of a source's links ([`Links::set_queue`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Ask {
+    /// The links on a page (0-based).
+    Page(usize),
+    /// Where the place called this is: a link's `#fragment`, without its `#`, once the file it
+    /// names is open.
+    Name(String),
+}
+
+/// What a source gives of its links ([`Links::try_recv`]), or why not, in words for the reader.
+#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents have links"))]
+pub(crate) enum Told {
+    /// A page's links, in any order, at most [`MAX_LINKS`], and how many more it has that were
+    /// left out. Why not costs that page's links alone.
+    Page {
+        page: usize,
+        links: Result<Vec<Link>, String>,
+        #[cfg_attr(not(test), expect(dead_code, reason = "the pager asks for links from Spec-0011's next task on"))]
+        more: usize,
+    },
+    /// Where the place called `name` is ([`Ask::Name`]): its page (0-based) and how far down it,
+    /// in the page's unit from its top; `None` for a name the document doesn't have.
+    Name { name: String, at: Result<Option<(usize, f32)>, String> },
+}
+
+/// A link on a page.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents have links"))]
+pub(crate) struct Link {
+    /// The page it is on (0-based).
+    pub(crate) page: usize,
+    /// Where it is on that page, one rectangle for each line it runs over, at most
+    /// [`MAX_LINK_RECTS`]: left, top, right and bottom, in the page's unit from its top left, y
+    /// down, as [`Source::size`] measures it ([`Got::Rects`]'s).
+    pub(crate) rects: Vec<[f32; 4]>,
+    /// Its address as the document writes it, for the reader to copy (`F`): a web address, a file's
+    /// path with its `#fragment`, a place in the document as its `#name`. `None` where the
+    /// document writes none (a PDF's link to a page).
+    pub(crate) address: Option<String>,
+    /// Where it leads.
+    pub(crate) target: Target,
+}
+
+/// Where a link leads, as the source reads it: nothing here is checked, nor opened.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents have links"))]
+pub(crate) enum Target {
+    /// A place in this document: its page (0-based), and how far down it, in the page's unit from
+    /// its top.
+    Place { page: usize, y: f32 },
+    /// Another file: its path as the document writes it, to be found beside the document; and
+    /// where in it, the place a `#fragment` names (without its `#`), or a page (0-based).
+    File { path: String, fragment: Option<String>, page: Option<usize> },
+    /// A web address, as the document writes it.
+    Web(String),
+    /// Anything else, never followed: what the reader is told of it, whole (`a script, which clv
+    /// doesn't run`, `no #usage in this document`).
+    Other(String),
 }
 
 /// A source's text, for the viewer to search ([`Source::texts`]): in chunks, in the document's

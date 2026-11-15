@@ -21,6 +21,72 @@ pub(crate) fn letter(title: &str, pages: usize) -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A PDF with links, for following them: three pages, each reading its number.
+///
+/// - **Page 1**, US Letter. Down its left side, a link every 40 pt, each 200 pt wide and 20 high,
+///   the first with its top 72 pt down the page as shown (`/Rect [72 700 272 720]`), in this order:
+///   to page 3 by `/XYZ`, its top at 200 of that page's 300 units; to the named destination
+///   `chapter` (page 2, `/XYZ 300 400`); to `https://example.com/a?b=c`; to `other.pdf`'s
+///   destination `intro` (`/GoToR`), and to its third page; then to page 2 by `/FitH 400`,
+///   `/FitV 300`, `/FitR 200 300 400 500`, `/Fit` and `/XYZ` with nothing given; to page 1 itself
+///   by `/FitR 72 500 300 700`; a script; a program to launch (`run.sh`); and last, at
+///   `/Rect [72 160 300 200]`, a link to page 3 active only over two lines of that
+///   (`/QuadPoints`), 228 pt wide and then 128 pt, 20 pt high each.
+/// - **Page 2**, US Letter cropped to `[100 100 500 700]` and turned a quarter (`/Rotate 90`), so
+///   600 × 400 pt as shown: a link to page 1, at `/Rect [150 600 250 650]`.
+/// - **Page 3**, 300 × 300 units of 2 pt (`/UserUnit 2`), so 600 × 600 pt as shown: a link to
+///   `mailto:someone@example.com`, at `/Rect [30 240 130 270]`.
+///
+/// The catalog names the destination `chapter` in its `/Names` tree.
+#[allow(dead_code, reason = "the pager's tests read it from Spec-0011's next task on")]
+pub(crate) fn linked() -> Vec<u8> {
+    let link = |rect: &str, rest: &str| format!("<< /Type /Annot /Subtype /Link /Border [0 0 0] /Rect [{rect}] {rest} >>");
+    let first = [
+        "/Dest [8 0 R /XYZ 0 200 0]",
+        "/A << /S /GoTo /D (chapter) >>",
+        "/A << /S /URI /URI (https://example.com/a?b=c) >>",
+        "/A << /S /GoToR /F (other.pdf) /D (intro) >>",
+        "/A << /S /GoToR /F (other.pdf) /D [2 /Fit] >>",
+        "/Dest [6 0 R /FitH 400]",
+        "/Dest [6 0 R /FitV 300]",
+        "/Dest [6 0 R /FitR 200 300 400 500]",
+        "/Dest [6 0 R /Fit]",
+        "/Dest [6 0 R /XYZ null null null]",
+        "/Dest [4 0 R /FitR 72 500 300 700]",
+        "/A << /S /JavaScript /JS (app.alert\\(1\\)) >>",
+        "/A << /S /Launch /F (run.sh) >>",
+    ];
+    let mut annotations: Vec<String> =
+        first.iter().enumerate().map(|(i, rest)| link(&format!("72 {} 272 {}", 700 - 40 * i, 720 - 40 * i), rest)).collect();
+    let lines = "/QuadPoints [72 180 300 180 72 200 300 200 72 160 200 160 72 180 200 180] /Dest [8 0 R /Fit]";
+    annotations.push(link("72 160 300 200", lines));
+    let first = annotations.len();
+    annotations.push(link("150 600 250 650", "/Dest [4 0 R /Fit]"));
+    annotations.push(link("30 240 130 270", "/A << /S /URI /URI (mailto:someone@example.com) >>"));
+    // The catalog, the page tree and the font; each page and its content; then the annotations.
+    let numbers = |range: std::ops::Range<usize>| range.map(|n| format!("{} 0 R", 10 + n)).collect::<Vec<_>>().join(" ");
+    let page = |boxes: &str, content: usize, annotations: String| {
+        format!("<< /Type /Page /Parent 2 0 R {boxes} /Contents {content} 0 R /Resources << /Font << /F1 3 0 R >> >> /Annots [{annotations}] >>")
+    };
+    let content = |at: &str, number: usize| {
+        let content = format!("BT /F1 24 Tf {at} Td (Links, page {number}) Tj ET");
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
+    };
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Names << /Dests << /Names [(chapter) [6 0 R /XYZ 300 400 null]] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        page("/MediaBox [0 0 612 792]", 5, numbers(0..first)),
+        content("320 740", 1),
+        page("/MediaBox [0 0 612 792] /CropBox [100 100 500 700] /Rotate 90", 7, numbers(first..first + 1)),
+        content("120 400", 2),
+        page("/MediaBox [0 0 300 300] /UserUnit 2", 9, numbers(first + 1..first + 2)),
+        content("150 270", 3),
+    ];
+    objects.append(&mut annotations);
+    pdf(&objects)
+}
+
 /// A PDF of `objects`, numbered from 1, the first the catalog: a header, the objects, a
 /// cross-reference table that finds each one, and the trailer.
 pub(crate) fn pdf(objects: &[String]) -> Vec<u8> {

@@ -7,18 +7,35 @@
 //! three million glyphs took 870 MiB), so the worker's heap and CPU time are, as they are spent,
 //! and a page past them costs the search that page
 //! ([ADR-0027](../../docs/adr/0027-a-pdfs-text-read-in-a-worker-process-for-its-heap-cap.md)).
+//!
+//! Their links are the link annotations pdfcraft read as the file was opened, kept with what places
+//! them on their pages as shown ([`Linked`]); only a named destination, looked up when a link to
+//! another file names one here, reads the file again, on the links' own thread ([`PageLinks`]).
 
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pdfcraft_engine::links::resolve_remote_document_path;
 use pdfcraft_render::text::TextFilter;
-use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage, RequestKind};
+use pdfcraft_render::{
+    DestView, LinkTarget, PageInfo, PageRenderer, PageText, RemoteDestination, RenderConfig, RenderPool, RenderRequest, RenderWarning, RenderedPage,
+    RequestKind,
+};
 
 use super::texts::{Answer, Ending, Queue};
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
-use super::{Backend, Deferred, Format, Frame, Got, Input, Opened, Pixels, Request, Source, Texts, Want};
+use super::{
+    Ask, Backend, Deferred, Format, Frame, Got, Input, Links, MAX_ADDRESS, MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Opened, Pixels, Request, Source,
+    Target, Texts, Told, Want,
+};
 use crate::args::{OptionSpec, Parsed};
+
+/// The integration tests' PDFs, written by hand: the one with links is read by the tests here too.
+#[cfg(test)]
+#[path = "../../tests/it/fixtures.rs"]
+#[expect(dead_code, reason = "only the PDF with links is read here")]
+mod fixtures;
 
 /// PDFs, rendered by pdfcraft.
 pub(super) struct Pdfcraft;
@@ -77,12 +94,132 @@ fn is_pdf(head: &[u8]) -> bool {
 /// bytes a name, so a file of a few megabytes can have millions; real documents stay far below.
 const MAX_PAGES: usize = 100_000;
 
-/// An open PDF: the display copy the renderers read, and each page's size as shown.
+/// An open PDF: the display copy the renderers read, each page's size as shown, and its links.
 pub(super) struct Pdf {
     bytes: Arc<Vec<u8>>,
     config: RenderConfig,
     /// In points, after `/Rotate` and `/UserUnit`.
     sizes: Vec<(f32, f32)>,
+    linked: Arc<Linked>,
+}
+
+/// A PDF's links as pdfcraft read them when the file was opened, and what places them on their
+/// pages as shown: each page's box and turn.
+struct Linked {
+    pages: Vec<PageInfo>,
+    /// The links, a page's together, in the pages' order.
+    links: Vec<pdfcraft_render::Link>,
+    /// Where each page's links start in `links`, and after the last page, where they end.
+    from: Vec<usize>,
+}
+
+impl Linked {
+    fn new(pages: Vec<PageInfo>, mut links: Vec<pdfcraft_render::Link>) -> Self {
+        links.sort_by_key(|link| link.page);
+        let from = (0..=pages.len()).map(|page| links.partition_point(|link| link.page < page)).collect();
+        Self { pages, links, from }
+    }
+
+    /// Page `page`'s links, at most [`MAX_LINKS`], and how many more it has.
+    fn on(&self, page: usize) -> (Vec<super::Link>, usize) {
+        let (Some(info), Some(from), Some(to)) = (self.pages.get(page), self.from.get(page), self.from.get(page.saturating_add(1))) else {
+            return (Vec::new(), 0);
+        };
+        let on = self.links.get(*from..*to).unwrap_or_default();
+        let links = on.iter().take(MAX_LINKS).map(|link| self.link(page, info, link)).collect();
+        (links, on.len().saturating_sub(MAX_LINKS))
+    }
+
+    /// `link`, on page `page`, as the viewer follows it: where it is active on the page as shown
+    /// (its quadrilaterals' boxes, or else its rectangle), and where it leads.
+    fn link(&self, page: usize, info: &PageInfo, link: &pdfcraft_render::Link) -> super::Link {
+        let [x0, y0, x1, y1] = link.rect;
+        let rects: Vec<[f32; 4]> = match link.quads.is_empty() {
+            true => shown(info, &[(x0, y0), (x1, y1)]).into_iter().collect(),
+            false => {
+                let corners = |quad: &[f32; 8]| [(quad[0], quad[1]), (quad[2], quad[3]), (quad[4], quad[5]), (quad[6], quad[7])];
+                link.quads.iter().take(MAX_LINK_RECTS).filter_map(|quad| shown(info, &corners(quad))).collect()
+            }
+        };
+        let (address, target) = self.target(&link.target);
+        super::Link { page, rects, address, target }
+    }
+
+    /// Where a link of pdfcraft's leads, and its address for the reader to copy, if it has one.
+    fn target(&self, target: &LinkTarget) -> (Option<String>, Target) {
+        let other = |says: &str| (None, Target::Other(says.into()));
+        match target {
+            LinkTarget::Page(page, view) => match self.pages.get(*page) {
+                Some(info) => (None, Target::Place { page: *page, y: down(info, *view) }),
+                None => other("a link to a page this document doesn't have"),
+            },
+            LinkTarget::Uri(address) if address.len() > MAX_ADDRESS => other("a web address too long to follow"),
+            LinkTarget::Uri(address) => (Some(address.clone()), Target::Web(address.clone())),
+            LinkTarget::JavaScript(_) => other(SCRIPT),
+            LinkTarget::SetLayers { .. } => other("a link that shows or hides layers, which clv doesn't"),
+            LinkTarget::RemoteGoTo { file, destination, .. } => {
+                // Whether it is a local path at all, pdfcraft says, against a document that stands
+                // for any: nothing is looked for on disk here, and what the path leads to is the
+                // viewer's to check.
+                if let Err(why) = resolve_remote_document_path(Some(std::path::Path::new("/a/document.pdf")), file) {
+                    return other(&format!("a link to another file, not followed: {why}"));
+                }
+                let (fragment, page) = match destination {
+                    RemoteDestination::Default => (None, None),
+                    RemoteDestination::Page { page, .. } => (None, Some(*page)),
+                    RemoteDestination::Named(name) if name.len() > MAX_NAME => return other("a link to a place whose name is too long to follow"),
+                    RemoteDestination::Named(name) => (Some(name.clone()), None),
+                };
+                let address = fragment.as_ref().map_or_else(|| file.clone(), |name| format!("{file}#{name}"));
+                (Some(address), Target::File { path: file.clone(), fragment, page })
+            }
+            LinkTarget::Other(kind) => match kind.as_str() {
+                "JavaScript" => other(SCRIPT),
+                "Launch" => other("a link that starts a program, which clv doesn't"),
+                "URI" => other("a web address that can't be read"),
+                "GoToR" => other("a link to another file that can't be read"),
+                "" => other("a link that leads nowhere"),
+                kind => {
+                    let kind: String = kind.chars().filter(char::is_ascii_alphanumeric).take(32).collect();
+                    other(&format!("a link of a kind clv doesn't follow ({kind})"))
+                }
+            },
+        }
+    }
+}
+
+/// What the reader is told of a link that runs a script.
+const SCRIPT: &str = "a script, which clv doesn't run";
+
+/// The box, on `page` as shown, of the points `corners` in its user space: left, top, right and
+/// bottom in points from its top left. `None` if any of it isn't a number.
+fn shown(page: &PageInfo, corners: &[(f32, f32)]) -> Option<[f32; 4]> {
+    let mut rect = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for (x, y) in corners {
+        let [across, down] = page.user_to_view(*x, *y);
+        if !across.is_finite() || !down.is_finite() {
+            return None;
+        }
+        rect = [rect[0].min(across), rect[1].min(down), rect[2].max(across), rect[3].max(down)];
+    }
+    rect.iter().all(|side| side.is_finite()).then_some(rect)
+}
+
+/// How far down `page` as shown the destination `view` is, in points from its top: by its `top`
+/// for `/XYZ` and `/FitH`, by its rectangle's top as shown for `/FitR`, and the page's top for the
+/// rest and for an operand left out. Through the page's box and turn, so that on a page turned a
+/// quarter, where the user space's `left` runs down the page shown, `/XYZ` goes by its `left`.
+fn down(page: &PageInfo, view: DestView) -> f32 {
+    let by = |left: Option<f32>, top: Option<f32>| page.dest_fraction(left, top, 0)[1].map_or(0.0, |share| share * page.height);
+    let y = match view {
+        DestView::Top | DestView::Fit | DestView::FitV { .. } => 0.0,
+        DestView::Xyz { left, top, .. } => by(left, top),
+        DestView::FitH { top } => by(None, top),
+        DestView::FitR { rect: [x0, y0, x1, y1] } => shown(page, &[(x0, y0), (x1, y1)]).map_or(0.0, |rect| rect[1]),
+    };
+    // `clamp` takes no bound that isn't a number, nor a top under zero.
+    let height = if page.height.is_finite() { page.height.max(0.0) } else { 0.0 };
+    if y.is_finite() { y.clamp(0.0, height) } else { 0.0 }
 }
 
 impl Pdf {
@@ -101,6 +238,7 @@ impl Pdf {
             bytes: display.bytes,
             config: RenderConfig { password: display.password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
             sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
+            linked: Arc::new(Linked::new(info.pages, info.links)),
         })
     }
 }
@@ -135,6 +273,47 @@ impl Source for Pdf {
     /// password that opened it.
     fn texts(&self) -> Option<Box<dyn Texts>> {
         Some(Box::new(PagesText::new(self.bytes.clone(), self.config.password.clone(), self.sizes.len())))
+    }
+
+    /// Its link annotations, as read when it was opened; a named destination is looked up in the
+    /// copy shown, with the password that opened it.
+    fn links(&self) -> Option<Box<dyn Links>> {
+        Some(Box::new(PageLinks::new(self.bytes.clone(), self.config.password.clone(), self.linked.clone())))
+    }
+}
+
+/// A PDF's links for the viewer ([`Links`]), answered on the queue's thread: a page's from what
+/// was read as the file was opened, and where a named destination is by reading the file again,
+/// which is why it has a thread.
+struct PageLinks {
+    queue: Queue<Told>,
+}
+
+impl PageLinks {
+    fn new(bytes: Arc<Vec<u8>>, password: Option<Arc<str>>, linked: Arc<Linked>) -> Self {
+        let queue = Queue::new();
+        queue.serve("pdf links", move |ask| match ask {
+            Ask::Page(page) => {
+                let (links, more) = linked.on(page);
+                Told::Page { page, links: Ok(links), more }
+            }
+            Ask::Name(name) => {
+                let found = (name.len() <= MAX_NAME).then(|| pdfcraft_render::named_destination(bytes.clone(), password.as_deref(), &name)).flatten();
+                let at = found.and_then(|(page, view)| linked.pages.get(page).map(|info| (page, down(info, view))));
+                Told::Name { name, at: Ok(at) }
+            }
+        });
+        Self { queue }
+    }
+}
+
+impl Links for PageLinks {
+    fn set_queue(&self, wanted: Vec<Ask>) {
+        self.queue.set_queue(wanted);
+    }
+
+    fn try_recv(&self) -> Option<Told> {
+        self.queue.try_recv()
     }
 }
 
@@ -423,7 +602,7 @@ struct PagesText {
 
 impl PagesText {
     fn new(bytes: Arc<Vec<u8>>, password: Option<Arc<str>>, pages: usize) -> Self {
-        let queue = Queue::new();
+        let queue: Queue = Queue::new();
         let mut reader = Reader { end: queue.ending(), bytes, password, link: None, kills: 0, spent: Duration::ZERO, ended: None };
         if reader.bytes.len() > MAX_PDF {
             let (size, most) = (reader.bytes.len() >> 20, MAX_PDF >> 20);
@@ -818,7 +997,7 @@ mod tests {
     #[test]
     fn past_the_documents_time_the_rest_of_its_text_is_left_unread() {
         let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
-        let queue = Queue::new();
+        let queue: Queue = Queue::new();
         let bytes = Arc::new(pdf(&[LINES, LINES]));
         let mut reader = Reader { end: queue.ending(), bytes, password: None, link: None, kills: 0, spent: Duration::ZERO, ended: None };
         assert_eq!(reader.text(0).as_deref(), Ok("Search words well- known here"));
@@ -839,6 +1018,197 @@ mod tests {
         let texts = PagesText::new(source.bytes.clone(), Some(Arc::from("x".repeat(MAX_PASSWORD + 1))), 1);
         let got = gave(&texts, vec![Want::Text(0)]);
         assert!(matches!(&got[..], [Got::Text(0, Err(why))] if why == "its password is too long for its text to be read"));
+    }
+
+    /// What `links` gives for `wanted`, each once, within ten seconds.
+    fn told(links: &dyn Links, wanted: Vec<Ask>) -> Vec<Told> {
+        let (mut got, begun) = (Vec::new(), Instant::now());
+        while got.len() < wanted.len() && begun.elapsed() < Duration::from_secs(10) {
+            links.set_queue(wanted.clone());
+            match links.try_recv() {
+                Some(one) => got.push(one),
+                None => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(links.try_recv().is_none(), "given twice");
+        got
+    }
+
+    /// Page `page`'s links, as its source gives them.
+    fn links_on(links: &dyn Links, page: usize) -> Vec<super::super::Link> {
+        let mut got = told(links, vec![Ask::Page(page)]);
+        let Some(Told::Page { page: answered, links: Ok(links), more: 0 }) = got.pop() else { panic!("no links for page {page}") };
+        assert_eq!(answered, page);
+        links
+    }
+
+    /// A PDF's links are its link annotations, each where it is active on its page as shown, in
+    /// points from the page's top left: on a page as it is, on one cropped and turned a quarter, on
+    /// one in units of two points; a link active over its quadrilaterals has a rectangle for each.
+    #[test]
+    fn a_pdfs_links_are_where_they_are_active_on_their_pages_as_shown() {
+        let source = Pdf::open("links.pdf", Arc::new(fixtures::linked()), None).unwrap();
+        assert_eq!((source.size(0), source.size(1), source.size(2)), (Some((612.0, 792.0)), Some((600.0, 400.0)), Some((600.0, 600.0))));
+        let links = source.links().unwrap();
+        let first = links_on(&*links, 0);
+        assert_eq!(first.len(), 14);
+        let near = |rect: [f32; 4], to: [f32; 4]| rect.iter().zip(to).all(|(side, to)| (side - to).abs() < 0.01);
+        for (i, link) in first.iter().take(13).enumerate() {
+            let top = 72.0 + 40.0 * i as f32;
+            assert!(link.page == 0 && link.rects.len() == 1 && near(link.rects[0], [72.0, top, 272.0, top + 20.0]), "link {i}: {:?}", link.rects);
+        }
+        let lines = &first[13].rects;
+        assert!(
+            lines.len() == 2 && near(lines[0], [72.0, 592.0, 300.0, 612.0]) && near(lines[1], [72.0, 612.0, 200.0, 632.0]),
+            "a rectangle a line: {lines:?}"
+        );
+        // `/Rect [150 600 250 650]` in a box `[100 100 500 700]` turned a quarter clockwise: what
+        // was 50 to 100 units under the box's top is as far from the right edge of the 600 pt shown.
+        let turned = links_on(&*links, 1);
+        assert_eq!(turned.len(), 1);
+        assert!(near(turned[0].rects[0], [500.0, 50.0, 550.0, 150.0]), "{:?}", turned[0].rects);
+        // `/Rect [30 240 130 270]` of 300 × 300 units of 2 pt.
+        let doubled = links_on(&*links, 2);
+        assert!(doubled.len() == 1 && near(doubled[0].rects[0], [60.0, 60.0, 260.0, 120.0]), "{:?}", doubled[0].rects);
+        // A page the document hasn't has none.
+        assert!(links_on(&*links, 3).is_empty() && links_on(&*links, usize::MAX).is_empty());
+    }
+
+    /// Where a PDF's links lead: a page and how far down it as shown, for each kind of destination,
+    /// on a page turned and cropped too, where `/XYZ` goes by its `left`; a web address; another
+    /// file, with the place or the page in it; and what is never followed, said in words. Only a
+    /// web address and a file have an address to copy.
+    #[test]
+    fn a_pdfs_links_lead_to_places_addresses_and_files() {
+        let source = Pdf::open("links.pdf", Arc::new(fixtures::linked()), None).unwrap();
+        let links = source.links().unwrap();
+        let first = links_on(&*links, 0);
+        let leads: Vec<(Option<&str>, &Target)> = first.iter().map(|link| (link.address.as_deref(), &link.target)).collect();
+        let place = |page: usize, y: f32| Target::Place { page, y };
+        let file =
+            |fragment: Option<&str>, page: Option<usize>| Target::File { path: "other.pdf".into(), fragment: fragment.map(String::from), page };
+        // `/XYZ 0 200` of 300 units, each 2 pt: a third of the way down 600 pt.
+        assert_eq!(leads[0], (None, &place(2, 200.0)));
+        // The destination `chapter`, `/XYZ 300 400` on the turned page: half way along the 400
+        // units its box is wide, which run down the 400 pt it is tall as shown.
+        assert_eq!(leads[1], (None, &place(1, 200.0)));
+        assert_eq!(leads[2], (Some("https://example.com/a?b=c"), &Target::Web("https://example.com/a?b=c".into())));
+        assert_eq!(leads[3], (Some("other.pdf#intro"), &file(Some("intro"), None)));
+        assert_eq!(leads[4], (Some("other.pdf"), &file(None, Some(2))));
+        // On the turned page: `/FitH`'s top runs across it, and `/FitV`, `/Fit` and nothing given
+        // are its top; `/FitR 200 300 400 500` is the box from 100 to 300 pt down it.
+        assert_eq!((leads[5], leads[6]), ((None, &place(1, 0.0)), (None, &place(1, 0.0))));
+        let (None, Target::Place { page: 1, y }) = leads[7] else { panic!("{:?}", leads[7]) };
+        assert!((y - 100.0).abs() < 0.01, "{y}");
+        assert_eq!((leads[8], leads[9]), ((None, &place(1, 0.0)), (None, &place(1, 0.0))));
+        // On a page as it is, `/FitR 72 500 300 700` is 92 pt under its top.
+        assert_eq!(leads[10], (None, &place(0, 92.0)));
+        assert_eq!(leads[11], (None, &Target::Other("a script, which clv doesn't run".into())));
+        assert_eq!(leads[12], (None, &Target::Other("a link that starts a program, which clv doesn't".into())));
+        assert_eq!(leads[13], (None, &place(2, 0.0)));
+        let turned = links_on(&*links, 1);
+        assert_eq!((turned[0].address.as_deref(), &turned[0].target), (None, &place(0, 0.0)));
+        let doubled = links_on(&*links, 2);
+        assert_eq!(doubled[0].target, Target::Web("mailto:someone@example.com".into()));
+    }
+
+    /// Each kind of destination on a page as it is, turned each way, cropped, and in larger units:
+    /// how far down the page as shown it is. `/XYZ` goes by its `top`, or on a page turned a
+    /// quarter by its `left`; `/FitH` by its `top`; `/FitR` by the top of its rectangle as shown;
+    /// the rest, and an operand left out or off the page, by the page's top or its nearest edge.
+    #[test]
+    fn links_destinations_go_down_the_page_as_shown() {
+        // A box of 400 × 600 units at (100, 100), as it is and turned; as shown, 400 × 600 or 600 × 400.
+        let page = |rotation: u16, unit: f32| {
+            let (width, height) = if rotation.is_multiple_of(180) { (400.0, 600.0) } else { (600.0, 400.0) };
+            PageInfo { width: width * unit, height: height * unit, label: String::new(), crop: [100.0, 100.0, 500.0, 700.0], rotation }
+        };
+        let xyz = |left: Option<f32>, top: Option<f32>| DestView::Xyz { left, top, zoom: None };
+        let near = |y: f32, to: f32| (y - to).abs() < 0.01;
+        let rect = DestView::FitR { rect: [200.0, 300.0, 400.0, 500.0] };
+        // As it is: by `top`, 700 the page's top edge.
+        assert!(near(down(&page(0, 1.0), xyz(Some(300.0), Some(550.0))), 150.0));
+        assert!(near(down(&page(0, 1.0), DestView::FitH { top: Some(550.0) }), 150.0));
+        assert!(near(down(&page(0, 1.0), rect), 200.0));
+        assert!(near(down(&page(0, 2.0), xyz(None, Some(550.0))), 300.0), "in units of 2 pt");
+        // Turned a quarter clockwise: `left` runs down the page shown; anticlockwise, up it.
+        assert!(near(down(&page(90, 1.0), xyz(Some(200.0), Some(550.0))), 100.0));
+        assert!(near(down(&page(270, 1.0), xyz(Some(200.0), Some(550.0))), 300.0));
+        assert!(near(down(&page(90, 1.0), rect), 100.0) && near(down(&page(270, 1.0), rect), 100.0));
+        // Upside down: `top` runs up the page shown.
+        assert!(near(down(&page(180, 1.0), xyz(Some(200.0), Some(550.0))), 450.0));
+        assert!(near(down(&page(180, 1.0), rect), 200.0));
+        for turn in [0, 90, 180, 270] {
+            let page = page(turn, 1.0);
+            for top in [DestView::Top, DestView::Fit, DestView::FitV { left: Some(300.0) }, xyz(None, None), DestView::FitH { top: None }] {
+                assert_eq!(down(&page, top), 0.0, "{top:?} turned {turn}");
+            }
+            // Off the page, or no number: an edge of the page, never past it.
+            for wild in [f32::NAN, f32::INFINITY, -1e30, 1e30] {
+                let y = down(&page, xyz(Some(wild), Some(wild)));
+                assert!((0.0..=page.height).contains(&y), "{wild} turned {turn}: {y}");
+                let y = down(&page, DestView::FitR { rect: [wild, wild, 300.0, 300.0] });
+                assert!((0.0..=page.height).contains(&y), "{wild} turned {turn}: {y}");
+            }
+        }
+        let broken = PageInfo { height: f32::NAN, ..page(0, 1.0) };
+        assert_eq!(down(&broken, xyz(None, Some(550.0))), 0.0);
+    }
+
+    /// A page's links past the most a page gives are counted, not given; a web address or a
+    /// place's name too long to follow, a page the document hasn't, and a path that is no local
+    /// file's are said rather than given; and a rectangle that isn't numbers is left out.
+    #[test]
+    fn links_past_the_caps_are_left_out_and_said() {
+        let page = PageInfo { width: 100.0, height: 100.0, label: String::new(), crop: [0.0, 0.0, 100.0, 100.0], rotation: 0 };
+        let link = |target: LinkTarget| pdfcraft_render::Link { page: 0, index: 0, rect: [10.0, 10.0, 20.0, 20.0], quads: Vec::new(), target };
+        let many = (0..MAX_LINKS + 5).map(|_| link(LinkTarget::Page(0, DestView::Top))).collect();
+        let linked = Linked::new(vec![page.clone(), page.clone()], many);
+        let (links, more) = linked.on(0);
+        assert_eq!((links.len(), more, linked.on(1).0.len(), linked.on(2).0.len()), (MAX_LINKS, 5, 0, 0));
+        let remote =
+            |file: &str, destination: RemoteDestination| LinkTarget::RemoteGoTo { launch: false, file: file.into(), destination, new_window: None };
+        let said = |target: LinkTarget| match linked.target(&target) {
+            (None, Target::Other(says)) => says,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(said(LinkTarget::Uri("x".repeat(MAX_ADDRESS + 1))), "a web address too long to follow");
+        assert_eq!(said(LinkTarget::Page(2, DestView::Top)), "a link to a page this document doesn't have");
+        assert_eq!(said(remote("a.pdf", RemoteDestination::Named("x".repeat(MAX_NAME + 1)))), "a link to a place whose name is too long to follow");
+        for file in ["", "https://example.com/a.pdf", "file:///a.pdf", "a\u{202e}fdp.pdf", &"x".repeat(MAX_ADDRESS + 1)] {
+            assert!(said(remote(file, RemoteDestination::Default)).starts_with("a link to another file, not followed: "), "{file:?}");
+        }
+        assert_eq!(said(LinkTarget::Other("SubmitForm".into())), "a link of a kind clv doesn't follow (SubmitForm)");
+        assert_eq!(said(LinkTarget::Other("Sub\x1b[2Jmit".repeat(20))).len(), "a link of a kind clv doesn't follow ()".len() + 32);
+        assert_eq!(said(LinkTarget::Other(String::new())), "a link that leads nowhere");
+        assert_eq!(said(LinkTarget::JavaScript("app.alert(1)".into())), SCRIPT);
+        // Sixty-four of a link's quadrilaterals, and none that isn't numbers.
+        let quads = pdfcraft_render::Link {
+            quads: vec![[10.0, 10.0, 20.0, 10.0, 10.0, 20.0, 20.0, 20.0]; MAX_LINK_RECTS + 9],
+            ..link(LinkTarget::Other(String::new()))
+        };
+        assert_eq!(linked.link(0, &page, &quads).rects.len(), MAX_LINK_RECTS);
+        let broken = pdfcraft_render::Link { rect: [f32::NAN, 10.0, 20.0, 20.0], ..link(LinkTarget::Other(String::new())) };
+        assert!(linked.link(0, &page, &broken).rects.is_empty());
+        let odd = pdfcraft_render::Link { quads: vec![[f32::INFINITY; 8], [10.0, 10.0, 20.0, 10.0, 10.0, 20.0, 20.0, 20.0]], ..broken };
+        assert_eq!(linked.link(0, &page, &odd).rects, [[10.0, 80.0, 20.0, 90.0]]);
+    }
+
+    /// A named destination is found in the file, by its name alone: the page it is on and how far
+    /// down it; a name the document hasn't, or one too long to be one, is nowhere.
+    #[test]
+    fn links_named_destinations_are_looked_up_in_the_file() {
+        let source = Pdf::open("links.pdf", Arc::new(fixtures::linked()), None).unwrap();
+        let links = source.links().unwrap();
+        let asked = vec![Ask::Name("chapter".into()), Ask::Name("Chapter".into()), Ask::Name("x".repeat(MAX_NAME + 1)), Ask::Page(1)];
+        let got = told(&*links, asked);
+        let [Told::Name { name, at: Ok(Some((1, y))) }, Told::Name { at: Ok(None), .. }, Told::Name { at: Ok(None), .. }, Told::Page { page: 1, .. }] =
+            &got[..]
+        else {
+            panic!("{} told", got.len())
+        };
+        assert!(name == "chapter" && (y - 200.0).abs() < 0.01, "{name} at {y}");
     }
 
     #[test]

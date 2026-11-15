@@ -243,7 +243,7 @@ followed into.
 
 ## Tasks
 
-- [ ] **The contract and PDF links** — `Links`, `Link`, `Target`, the queue made generic, the
+- [x] **The contract and PDF links** — `Links`, `Link`, `Target`, the queue made generic, the
   checks on what a source gives; pdfcraft's links, their destinations and named destinations;
   `link.rs`'s checks. No key yet. *Files:* `src/source.rs`, `src/source/texts.rs`,
   `src/source/pdfcraft.rs`, `src/view/link.rs`, `tests/it/fixtures.rs` (a PDF written by hand: a link
