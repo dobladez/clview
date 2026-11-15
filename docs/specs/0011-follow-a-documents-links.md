@@ -1,6 +1,6 @@
 # Spec-0011: Follow a document's links with hints
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-15
 - **Related:** [Spec-0006](0006-search-a-pdfs-text.md) and [Spec-0007](0007-search-markdown-html-and-word-documents.md)
   (a backend's text and its rectangles, the pattern `Links` follows);
@@ -304,3 +304,4 @@ followed into.
 - 2026-11-15 — Implementing ([notes](0011-follow-a-documents-links-impl-20261115_1751.md)).
 - 2026-11-15 — Task 2's manual check passed in kitty, Ghostty and WezTerm; the labels padded, as
   the owner asked on seeing them (implementation).
+- 2026-11-15 — Done.

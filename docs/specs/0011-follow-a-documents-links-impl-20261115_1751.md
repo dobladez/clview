@@ -360,3 +360,12 @@ session's. Each pointed at a real defect, fixed here with a test of its own:
   waited after `u` for any redraw, then looked 300 ms later, and in one full run the key hadn't been
   handled by then (page 10, not 5). It now waits until the view has left the last page, and then
   says which page it is on. With the fix reverted it still fails as before, on page 1.
+
+## Done
+
+Every task's box and every Done item is ticked, each once checked: the commands by running them,
+the manual lines by the owner's look in kitty, Ghostty and WezTerm, inside tmux, with `--protocol
+blocks` and over SSH. The gates passed on the last tree that changed code (`547fc0e`: 559 unit
+tests, 13 of the docs, 276 through the viewer, three more runs of the last without a failure).
+Left for the owner outside this spec: the nightly feature sets weren't built here, and a document
+redirected into `/dev/stdin` from a file is laid out from nothing in the pager (Task 5's notes).
