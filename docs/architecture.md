@@ -526,9 +526,12 @@ through its command) and that a key means one setting
   percent-encoded, since the pictures' reader decodes it; an `<svg>` that holds one `<image>` and
   nothing else (`wrapped_picture`) is written as an `<img>` of it; an element written short that
   isn't one of HTML's void ones gets its end tag (`<div/>` as `<div></div>`), since read as HTML
-  it would stay open; an `href` that is a path is marked as a
-  file the book holds or one it doesn't (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the
-  top. It counts as it writes, and stops before the chapter that would take the document past
+  it would stay open; an `href` that is a path to a chapter, by the spine's files (`Written::chapters`), is written as
+  that chapter's place in the document (`place`: `#c3`, its `<div>`, or `#c3-s1` for its `id="s1"`),
+  and a `#name` alone as a place in its own chapter; an `id`, or a link to one, that would pass
+  256 bytes (`MAX_NAME`) with its chapter's number is left out, the link marked `NO_SUCH_PLACE`;
+  an `href` that is a path to anything else is marked as a file the book holds or one it doesn't
+  (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the top. It counts as it writes, and stops before the chapter that would take the document past
   bounds of its own (`MAX_WRITTEN`, `MAX_MARKS`, `MAX_TEXT`: 48 MiB, 400,000 marks, 6 MiB of
   text), below those the Word backend refuses a file past, so a long book shows its start. The
   document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,

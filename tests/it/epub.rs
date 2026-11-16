@@ -105,7 +105,7 @@ pub(crate) fn three_chapters() -> Vec<(String, Vec<u8>)> {
 }
 
 /// The bodies and the pictures of [`three_chapters`]'s book.
-fn coloured_chapters() -> (Vec<String>, Vec<(&'static str, Vec<u8>)>) {
+pub(crate) fn coloured_chapters() -> (Vec<String>, Vec<(&'static str, Vec<u8>)>) {
     let chapters: Vec<String> = ["red", "blue", "green"]
         .iter()
         .enumerate()

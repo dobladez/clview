@@ -210,3 +210,32 @@ Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
 A trap met on the way, for whoever reverts a fix to see a test fail: a file copied back with its
 old time (`cp -p`, `shutil.copy2`) is older than the binary built from the revert, and cargo then
 builds nothing, so the next run tests the reverted code. Copy it back with a new time.
+
+## Task 4: a book's links
+
+**Changed from the plan**
+
+- **A link to an id too long to be a place says `no such place in this book`**, through a third
+  mark (`clv-no-such-place/`) that `Book` answers, as it answers a link to a file: left as a
+  `#name` of more than 256 bytes, the documents' backend would say its name is too long to follow,
+  not that the place is missing.
+- **A link to a chapter the reading order has and the book doesn't** (missing, protected, cut) is
+  still written as that chapter's place: the document then says it has no such place, as it does
+  of any `#name` it hasn't.
+- **A link's `?query` is dropped** with its path, when the path is a chapter's.
+- The spec's test names are kept: `epub::tests::links_…` and `view_pager::epub_links_…`.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| a link to a chapter left a link to a file | `epub::tests::links_between_chapters_are_places_in_the_book`, `…links_lead_to_ids_made_the_books_own`, `view_pager::epub_links_between_chapters_are_followed_and_u_comes_back` |
+| a `#name` alone not its own chapter's | all three of `epub::tests::links_…` |
+| a name of any length a place | `epub::tests::links_to_an_id_too_long_once_made_the_books_own_say_so` |
+| a place too long answered as a missing file | the same |
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (589 unit, 13 docs, 292 integration), all passing.
+
+The task's manual check (in kitty, a Gutenberg epub's contents page, `f`, a label: its chapter)
+is the owner's, and its box stays open until it is confirmed.

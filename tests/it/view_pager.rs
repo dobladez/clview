@@ -4683,3 +4683,40 @@ fn epub_a_link_to_a_file_is_said_and_no_file_beside_the_book_is_opened() {
     view.press("q");
     assert!(view.finish().success());
 }
+
+/// A book's links between its chapters are places in it: `f` and a label on a page of contents
+/// lands on the chapter it names, at its heading, `u` comes back, and `F` copies the place's name
+/// as the book's document has it.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_links_between_chapters_are_followed_and_u_comes_back() {
+    use crate::epub::{Mimetype, book_of, coloured_chapters, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let (mut chapters, pictures) = coloured_chapters();
+    // The book's own page of contents, its first chapter: the others are the second to the fourth.
+    let contents = r##"<h1>Contents</h1><p><a href="ch2.xhtml">Chapter 1</a></p><p><a href="ch3.xhtml#start">Chapter 2</a></p><p><a href="../Text/ch4.xhtml#start">Chapter 3</a></p>"##;
+    chapters.insert(0, contents.to_owned());
+    let path = write(crate::view::tmp("pager-epub-links", "book.epub"), &zipped(&book_of(&chapters, &pictures), Mimetype::Stored));
+    let terminal = Terminal { clipboard: Some(true), ..KITTY };
+    let mut view = Session::start_on(terminal, &path, &["--pager"], 100, 60);
+    view.wait_until("the book", |t| drawn(t, "page 1/4"));
+    let before = follow(&mut view, 3, "a");
+    view.wait_until("the third chapter", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 3));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+    let before = follow(&mut view, 3, "d");
+    view.wait_until("the fourth chapter, by a path with ..", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 4));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back again", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+    let before = copy_link(&mut view, 3, "a");
+    said_since(&view, before, "copied #c3-start");
+    assert_eq!(copied_text(&view.text(), 1), "#c3-start");
+    let before = copy_link(&mut view, 3, "s");
+    said_since(&view, before, "copied #c2");
+    view.press("q");
+    assert!(view.finish().success());
+}

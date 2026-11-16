@@ -18,6 +18,7 @@
 //! own, pictures' and links' paths resolved from the book's top, stylesheets dropped. It is handed
 //! on as a file held here, whose pictures are read from the book ([`Near`]).
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{Cursor, Write as _};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -28,8 +29,8 @@ use super::markup::{Piece, SKIPPED, StartTag, past_end_tag};
 use super::worker::{self, Died, FAILED, Link as Worked, Session, WALL, Worker};
 use super::zipped::Zipped;
 use super::{
-    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Links, Named, Near,
-    Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values,
+    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Links, MAX_NAME, Named,
+    Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -676,6 +677,13 @@ fn start() -> String {
 fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     let mut out = start();
     let (mut left, mut marks, mut text) = (Left::default(), 0usize, 0usize);
+    // Each chapter's number in the reading order, from 1, by its file: where a link to it leads.
+    let mut numbers: HashMap<&str, usize> = HashMap::new();
+    for (number, chapter) in plan.chapters.iter().enumerate() {
+        if let Some(path) = chapter.path.as_deref() {
+            numbers.entry(path).or_insert(number.saturating_add(1));
+        }
+    }
     // The cover, as a picture the book holds and may show.
     let cover = plan.cover.as_deref().filter(|cover| zipped.index_of(cover).is_some() && !plan.protects(cover));
     for (number, chapter) in plan.chapters.iter().enumerate() {
@@ -714,7 +722,8 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
                     left.unreadable = left.unreadable.saturating_add(1);
                     continue;
                 };
-                let written = Written { chapter: number, directory: path.rsplit_once('/').map_or("", |(directory, _)| directory), zipped };
+                let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
+                let written = Written { chapter: number, directory, zipped, chapters: &numbers };
                 written.body(&xhtml)
             }
         };
@@ -774,11 +783,13 @@ const DROPPED: [&str; 2] = ["head", "title"];
 /// book has one of, and what would load a stylesheet or say where paths start from.
 const UNWRAPPED: [&str; 5] = ["html", "body", "link", "meta", "base"];
 
-/// What marks a link's path, in the book assembled, as a file of the book that is no chapter, and
-/// as a file the book doesn't hold: written by [`Written::linked`] for every link to a file, so
-/// that [`Book`] answers each without reading the book, and none is ever looked for on disk.
+/// What marks a link's path, in the book assembled, as a file of the book that is no chapter, as
+/// a file the book doesn't hold, and as a place whose name is too long to be one: written by
+/// [`Written::linked`] for every link that leads to no place in the book, so that [`Book`] answers
+/// each without reading the book, and none is ever looked for on disk.
 const IN_THE_BOOK: &str = "clv-in-the-book/";
 const NOT_IN_THE_BOOK: &str = "clv-not-in-the-book/";
+const NO_SUCH_PLACE: &str = "clv-no-such-place/";
 
 /// What is written before a table that is the first thing a chapter shows: a paragraph of one
 /// zero-width space, a point high. A page break on the chapter's `<div>` reaches the first
@@ -824,6 +835,9 @@ struct Written<'a> {
     /// The directory its file is in, from the book's top: what its paths start from.
     directory: &'a str,
     zipped: &'a Zipped,
+    /// The book's chapters, each by its file's path from the book's top: its number in the reading
+    /// order, from 1.
+    chapters: &'a HashMap<&'a str, usize>,
 }
 
 impl Written<'_> {
@@ -898,7 +912,12 @@ impl Written<'_> {
         for attribute in tag.attributes() {
             let name = attribute.name;
             let value = match name {
-                name if name.eq_ignore_ascii_case("id") => format!("c{}-{}", self.chapter, attribute.value),
+                // The book's own: its chapter's number before it. One too long to be a place's
+                // name once it has that is left out, and a link to it says so.
+                name if name.eq_ignore_ascii_case("id") => match place(self.chapter, Some(attribute.value)) {
+                    Some(id) => id,
+                    None => continue,
+                },
                 name if name.eq_ignore_ascii_case("src") => self.pictured(attribute.value),
                 name if name.eq_ignore_ascii_case("href") => self.linked(attribute.value),
                 _ => attribute.value.to_owned(),
@@ -943,18 +962,36 @@ impl Written<'_> {
         }
     }
 
-    /// A link's `href` as the book's document writes it: a web address as it is; a path, marked as
-    /// a file of the book or as none ([`IN_THE_BOOK`], [`NOT_IN_THE_BOOK`]) and written from the
-    /// book's top, so that it is never a path on disk.
+    /// A link's `href` as the book's document writes it: a web address as it is; a link to a
+    /// chapter, or to a place in one, as that place in the document (`#c3`, a chapter's start, or
+    /// `#c3-s1`, the chapter's `id="s1"`), this chapter's for a `#name` alone; a link to any other
+    /// file, marked as a file of the book or as none ([`IN_THE_BOOK`], [`NOT_IN_THE_BOOK`]) and
+    /// written from the book's top, so that it is never a path on disk.
     fn linked(&self, href: &str) -> String {
-        match self.resolved(href) {
-            None => href.to_owned(),
-            // To a place in this chapter.
-            Some((_, rest)) if href.trim().starts_with('#') => rest.to_owned(),
-            Some((Some(path), _)) if self.zipped.index_of(&path).is_some() => format!("{IN_THE_BOOK}{}", percent_encoded(&path)),
-            Some((path, _)) => format!("{NOT_IN_THE_BOOK}{}", percent_encoded(path.as_deref().unwrap_or_default())),
+        let reference = href.trim();
+        let Some((path, rest)) = self.resolved(reference) else { return href.to_owned() };
+        let fragment = rest.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty());
+        // Its chapter: this one, for a place alone or a link to nowhere else.
+        let own = reference.is_empty() || reference.starts_with(['#', '?']);
+        let chapter = if own { Some(self.chapter) } else { path.as_deref().and_then(|path| self.chapters.get(path).copied()) };
+        match (chapter, path) {
+            (Some(chapter), _) => place(chapter, fragment).map_or_else(|| NO_SUCH_PLACE.to_owned(), |name| format!("#{name}")),
+            (None, Some(path)) if self.zipped.index_of(&path).is_some() => format!("{IN_THE_BOOK}{}", percent_encoded(&path)),
+            (None, path) => format!("{NOT_IN_THE_BOOK}{}", percent_encoded(path.as_deref().unwrap_or_default())),
         }
     }
+}
+
+/// The name, in the book's document, of a place in the chapter numbered `chapter`: the chapter's
+/// start, or what the chapter calls `name` there, with the chapter's number before it, since two
+/// chapters may call a place the same. `None` for a name longer, so made, than a place's may be
+/// ([`MAX_NAME`]).
+fn place(chapter: usize, name: Option<&str>) -> Option<String> {
+    let place = match name {
+        Some(name) => format!("c{chapter}-{name}"),
+        None => format!("c{chapter}"),
+    };
+    (place.len() <= MAX_NAME).then_some(place)
 }
 
 /// `text` with its `%XX` escapes undone, if that leaves text.
@@ -1134,13 +1171,15 @@ impl Links for InTheBook {
 /// is, and its address as the chapter wrote the file's path, from the book's top.
 fn in_the_book(mut link: super::Link) -> super::Link {
     let Target::File { path, .. } = &link.target else { return link };
-    let (said, marker) = match path.starts_with(IN_THE_BOOK) {
-        true => (format!("a file in the book, which {} doesn't open alone", crate::NAME), IN_THE_BOOK),
-        false => ("not in this book".to_owned(), NOT_IN_THE_BOOK),
+    let (said, marker) = match path {
+        path if path.starts_with(IN_THE_BOOK) => (format!("a file in the book, which {} doesn't open alone", crate::NAME), IN_THE_BOOK),
+        path if path.starts_with(NO_SUCH_PLACE) => ("no such place in this book".to_owned(), NO_SUCH_PLACE),
+        _ => ("not in this book".to_owned(), NOT_IN_THE_BOOK),
     };
-    link.address = link.address.map(|address| match address.strip_prefix(marker) {
-        Some(path) => path.to_owned(),
-        None => address,
+    link.address = link.address.and_then(|address| match address.strip_prefix(marker) {
+        Some("") => None,
+        Some(path) => Some(path.to_owned()),
+        None => Some(address),
     });
     link.target = Target::Other(said);
     link
@@ -1572,7 +1611,7 @@ mod tests {
         assert_eq!(assembled(&plan, &book).0, html);
         // A chapter that starts with a table starts its page with a paragraph, which takes the
         // break; a table after anything else needs none.
-        let written = Written { chapter: 1, directory: "", zipped: &book };
+        let written = Written { chapter: 1, directory: "", zipped: &book, chapters: &HashMap::new() };
         let starts = |body: &str| written.body(&chapter(body)).0.contains(BEFORE_A_TABLE);
         assert!(starts("<table><tr><td>a</td></tr></table>") && starts("\n <div><section>\n<table><tr><td>a</td></tr></table></section></div>"));
         assert!(!starts("<p>first</p><table></table>") && !starts("<div><img src='a.png'/></div><table></table>") && !starts("text<table></table>"));
@@ -1661,7 +1700,7 @@ mod tests {
     #[test]
     fn a_chapters_references_are_paths_from_the_books_top() {
         let book = book(&[("OEBPS/images/a b.png", b"png"), ("OEBPS/text/two.xhtml", b"x"), ("cover.jpg", b"jpeg")]);
-        let written = Written { chapter: 3, directory: "OEBPS/text", zipped: &book };
+        let written = Written { chapter: 3, directory: "OEBPS/text", zipped: &book, chapters: &HashMap::new() };
         for (src, pictured) in [
             ("../images/a%20b.png", "./OEBPS/images/a%20b.png"),
             ("../images/a b.png", "./OEBPS/images/a%20b.png"),
@@ -1679,20 +1718,98 @@ mod tests {
         ] {
             assert_eq!(written.pictured(src), pictured, "{src}");
         }
+    }
+
+    /// A link to a chapter, or to a place in one, is that place in the book: by a path from the
+    /// chapter that writes it, `..` and `%XX` undone, with its fragment or without; a `#name` alone
+    /// is a place in its own chapter. A link to a file that is no chapter is marked as a file of
+    /// the book, or as none; never left a path.
+    #[test]
+    fn links_between_chapters_are_places_in_the_book() {
+        let book = book(&[
+            ("OEBPS/front/one.xhtml", b"x"),
+            ("OEBPS/text/chapter two.xhtml", b"x"),
+            ("OEBPS/text/three.xhtml", b"x"),
+            ("OEBPS/images/a b.png", b"png"),
+            ("OEBPS/style.css", b"css"),
+            ("cover.jpg", b"jpeg"),
+        ]);
+        // The fourth is in the reading order, and not in the book.
+        let chapters = HashMap::from([
+            ("OEBPS/front/one.xhtml", 1),
+            ("OEBPS/text/chapter two.xhtml", 2),
+            ("OEBPS/text/three.xhtml", 3),
+            ("OEBPS/text/gone.xhtml", 4),
+        ]);
+        let written = Written { chapter: 3, directory: "OEBPS/text", zipped: &book, chapters: &chapters };
         for (href, linked) in [
+            ("chapter%20two.xhtml", "#c2"),
+            ("chapter%20two.xhtml#s3", "#c2-s3"),
+            ("./chapter two.xhtml#", "#c2"),
+            ("chapter%20two.xhtml?x=1#s3", "#c2-s3"),
+            ("../front/one.xhtml#top", "#c1-top"),
+            ("../../OEBPS/front/../front/one.xhtml", "#c1"),
+            ("/OEBPS/front/one.xhtml#top", "#c1-top"),
+            ("  ../front/one.xhtml#top ", "#c1-top"),
+            ("#s3", "#c3-s3"),
+            ("#", "#c3"),
+            ("", "#c3"),
+            ("three.xhtml#s3", "#c3-s3"),
+            ("gone.xhtml#s1", "#c4-s1"),
             ("../images/a%20b.png", "clv-in-the-book/OEBPS/images/a%20b.png"),
-            ("two.xhtml#s3", "clv-in-the-book/OEBPS/text/two.xhtml"),
+            ("../style.css#x", "clv-in-the-book/OEBPS/style.css"),
             ("../../cover.jpg", "clv-in-the-book/cover.jpg"),
-            ("three.xhtml", "clv-not-in-the-book/OEBPS/text/three.xhtml"),
+            ("missing.xhtml#s1", "clv-not-in-the-book/OEBPS/text/missing.xhtml"),
             ("../../../../etc/passwd", "clv-not-in-the-book/"),
             ("/etc/passwd", "clv-not-in-the-book/etc/passwd"),
             ("clv-in-the-book/x", "clv-not-in-the-book/OEBPS/text/clv-in-the-book/x"),
-            ("#s3", "#s3"),
             ("https://example.com/a?b=c#d", "https://example.com/a?b=c#d"),
             ("mailto:a@example.com", "mailto:a@example.com"),
         ] {
             assert_eq!(written.linked(href), linked, "{href}");
         }
+    }
+
+    /// Two chapters' ids don't meet: each has its chapter's number before it, and so has every link
+    /// to it, from its own chapter or from another. A chapter's start is a place too.
+    #[test]
+    fn links_lead_to_ids_made_the_books_own() {
+        let one = chapter(
+            r##"<h1 id="start">One</h1><p><a href="#start">here</a>, <a href="two.xhtml#start">there</a>, <a href="two.xhtml">its start</a></p>"##,
+        );
+        let two = chapter(r##"<h1 id="start">Two</h1><p><a href="one.xhtml#start">back</a></p>"##);
+        let book = book(&[("text/one.xhtml", one.as_bytes()), ("text/two.xhtml", two.as_bytes())]);
+        let (html, _) = assembled(&plan(&[("text/one.xhtml", Kind::Xhtml), ("text/two.xhtml", Kind::Xhtml)]), &book);
+        assert_eq!(
+            &html[HEAD as usize..],
+            concat!(
+                r##"<div id="c1" style="page-break-before: always"><h1 id="c1-start">One</h1><p><a href="#c1-start">here</a>, <a href="#c2-start">there</a>, <a href="#c2">its start</a></p></div>"##,
+                "\n",
+                r##"<div id="c2" style="page-break-before: always"><h1 id="c2-start">Two</h1><p><a href="#c1-start">back</a></p></div>"##,
+                "\n",
+            )
+        );
+    }
+
+    /// An id that would be longer than a place's name may be, once it has its chapter's number, is
+    /// left out, and a link to it says that no such place is in the book.
+    #[test]
+    fn links_to_an_id_too_long_once_made_the_books_own_say_so() {
+        let book = book(&[]);
+        let written = Written { chapter: 12, directory: "", zipped: &book, chapters: &HashMap::new() };
+        let (fits, long) = ("a".repeat(MAX_NAME - 4), "a".repeat(MAX_NAME - 3));
+        assert_eq!(written.linked(&format!("#{fits}")), format!("#c12-{fits}"));
+        assert_eq!(written.linked(&format!("#{long}")), NO_SUCH_PLACE);
+        let (body, _) = written.body(&chapter(&format!(r##"<p id="{fits}" class="a">one</p><p id="{long}" class="b">two</p>"##)));
+        assert!(body.contains(&format!(r#"<p id="c12-{fits}" class="a">"#)) && body.contains(r#"<p class="b">two</p>"#), "{body}");
+        let link = super::super::Link {
+            page: 0,
+            rects: Vec::new(),
+            address: Some(NO_SUCH_PLACE.to_owned()),
+            target: Target::File { path: NO_SUCH_PLACE.to_owned(), fragment: None, page: None },
+        };
+        let answered = in_the_book(link);
+        assert_eq!((answered.address, answered.target), (None, Target::Other("no such place in this book".into())));
     }
 
     /// A link the book's document reads as one to a file is answered here, as a file of the book
@@ -1789,7 +1906,7 @@ mod tests {
     #[test]
     fn an_svg_that_only_wraps_a_picture_is_that_picture() {
         let book = book(&[]);
-        let written = Written { chapter: 1, directory: "text", zipped: &book };
+        let written = Written { chapter: 1, directory: "text", zipped: &book, chapters: &HashMap::new() };
         let body = |svg: &str| {
             let body = written.body(&chapter(svg)).0;
             body.strip_prefix(r#"<div id="c1" style="page-break-before: always">"#).and_then(|body| body.strip_suffix("</div>\n")).unwrap().to_owned()
@@ -1823,7 +1940,7 @@ mod tests {
     #[test]
     fn an_element_written_short_is_read_as_empty() {
         let book = book(&[]);
-        let written = Written { chapter: 2, directory: "", zipped: &book };
+        let written = Written { chapter: 2, directory: "", zipped: &book, chapters: &HashMap::new() };
         let (body, _) = written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#));
         assert_eq!(
             body,

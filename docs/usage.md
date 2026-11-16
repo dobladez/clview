@@ -996,10 +996,17 @@ The book's look is `clv`'s own ([ADR-0016](adr/0016-how-markdown-and-html-look.m
 markup says on top through `style` attributes. **Its stylesheets are not read**, linked or in a
 chapter's `<style>`: a book made to look a certain way comes out plainer, as its words in order.
 
+Its links are [followed](#following-links) as any document's. A link from one chapter to another
+(`ch2.xhtml`, `ch2.xhtml#s3`, `../Text/ch2.xhtml#s3`), or to a place in its own (`#s3`), is a place
+in the book: `f` and its label go there, `u` comes back, and `F` copies it as the book's document
+names it, `#c2` for the second chapter's start and `#c2-s3` for its `id="s3"`, since two chapters
+may each have an `s3`. A web address is followed as in any document.
+
 **No link from a book is followed to a file**, and none is ever looked for beside the `.epub` on
 disk. A link to a file in the book that is no chapter (a picture, a stylesheet) says `a file in the
 book, which clv doesn't open alone`, one to a file the book doesn't hold says `not in this book`. A
-web address is [followed](#following-links) as in any document.
+link to a chapter the book lists but doesn't show, or to a place a chapter doesn't have, says the
+place isn't in the document, as in any document.
 
 **Protected chapters** (DRM) are left out, and the first page says how many are (`3 chapters are
 protected (DRM)`): a chapter the book's `META-INF/encryption.xml` says is encrypted, by anything
@@ -1226,6 +1233,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | A book's chapter | 16 MiB | that chapter is left out, and the first page says so |
 | A book, its chapters joined | 48 MiB; 400,000 lines and tags; 6 MiB of text between its tags, some 3,700 pages: below what any HTML file may be, above | the chapter that would pass one is left out, with those after it, and the first page says how many |
 | A book through a pipe, or in an archive | 256 MiB | refused |
+| A place in a book: a chapter's `id`, with its chapter's number before it | 256 bytes | that `id` is no place, and a link to it says `no such place in this book` |
 | The process that reads a book's package: its CPU time, and its memory | 2 s, or three times that on the clock; 256 MiB | the process is killed and the book refused: `its package couldn't be read` |
 | A fenced block drawn as a picture | what a file of its kind may be: a Mermaid diagram's 1 MiB, and merman's limits | it stays code, and the first page says how many did |
 | A document's page | 64 million pixels | the page fails with why |
