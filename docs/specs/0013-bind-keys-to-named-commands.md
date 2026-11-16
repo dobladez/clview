@@ -198,11 +198,11 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: name them.
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: name them.
 - [ ] Manual: in kitty and inside tmux, `d`, `u`, `C-v`, `M-v` and `D` on a PDF, a Markdown file and
   a list, and `?` listing the keys from the keymap.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 

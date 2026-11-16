@@ -139,3 +139,31 @@ As planned, with these readings of what the spec leaves to the code:
 - **Manual check: not done.** The task's *Verify:* asks for kitty: `d`, `u`, `Ctrl-V`, `Alt-V`
   (with `macos_option_as_alt`), `D` on Markdown, `Ctrl-F` and `Ctrl-N` in a list, Backspace leaving
   a file where `u` doesn't. It is the owner's to confirm, so the task's box stays open.
+
+## The Done checklist (2026-11-16)
+
+- **The gates** pass on the last commit: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
+  warnings`, `cargo test -j 2` (568 unit tests, 13 docs tests, 277 integration tests).
+- **Tests added, each seen failing** (how, under each task above):
+  `keys::tests::ctrl_and_a_letter_is_a_key`, `esc_and_a_printable_character_in_one_read_is_alt`, and
+  the Ctrl and Alt parts of `answers_among_keys_cut_anywhere_are_never_keys`;
+  `commands::tests::every_command_has_a_name_of_its_own_in_kebab_case`,
+  `the_default_keymaps_bind_each_key_once_and_every_command_where_it_applies`,
+  `a_key_is_its_command_and_with_a_number_the_one_bound_with_one`,
+  `a_settings_keys_are_suggestions_the_keymaps_take_after_the_viewers`,
+  `the_keys_listed_and_the_reminders_are_read_from_the_keymap`;
+  `pager::tests::a_key_does_what_it_is_bound_to_and_nothing_otherwise` (in place of
+  `the_viewers_keys_are_those_listed`), `d_u_and_emacss_keys_do_what_the_keys_they_stand_beside_do`,
+  `a_command_with_many_keys_doesnt_narrow_every_line_of_the_keys`;
+  `source::tests::a_settings_keys_are_its_own_in_every_backend`, rewritten on the keymaps; and in
+  `tests/it/view_pager.rs`, `d_u_and_emacss_keys_page_and_move_and_u_goes_back_nowhere`.
+- **The docs say what shipped:** `CHANGELOG.md` (Keys changed; Emacs's keys; Alt), `docs/usage.md`
+  (both tables of Keys, and every place that named `d` or `u`), `docs/architecture.md` (Commands and
+  keymaps, the viewer's files, Settings, the decoder), ADR-0036 in the index with ADR-0015's and
+  ADR-0021's status lines, README's `D` and Backspace. No bullet of README's Plans was this spec's.
+- **Open: the manual checks**, task 3's and the Done list's. In kitty, and again inside tmux, with
+  `macos_option_as_alt yes` for the Alt key: on a PDF, `d`, `u`, `Ctrl-V` and `Alt-V` go a screen
+  down and up; on a Markdown file `D` turns the paper and `d` pages; in a list `Ctrl-F` and `Ctrl-N`
+  go to the next tile and the one below; Backspace leaves a file and `u` doesn't; `?` lists the keys,
+  the new ones among them. Until the owner has seen them, task 3's box and that item stay open and
+  the spec stays `Implementing`.
