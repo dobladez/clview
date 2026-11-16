@@ -422,6 +422,30 @@ fn a_books_contents_page_is_its_last_page_whatever_the_book_has_of_its_own() {
     assert!(said.contains("its Contents page has the first 4096 entries") && pages.len() > 5 && yellow(&pages[0]), "{said}: {} pages", pages.len());
 }
 
+/// What a chapter's pictures say for a reader who can't see them is text of the book: a book whose
+/// second chapter holds 9 MiB of it in one `alt`, more than a document's text may be, is cut at
+/// that chapter and says so, and isn't refused whole.
+#[test]
+fn a_book_with_more_alt_text_than_a_document_holds_is_cut_at_that_chapter() {
+    let (mut chapters, pictures) = coloured_chapters();
+    chapters[1] = format!(r#"<p><img src="../Images/none.png" alt="{}"/></p>"#, "a".repeat(9 << 20));
+    let path = write(tmp("epub-alt", "book.epub"), &zipped(&book_of(&chapters, &pictures), Mimetype::Stored));
+    let (pages, said) = pages(&path, &[]);
+    assert_eq!(colours(&pages), [IN_ORDER[0]], "{said}");
+    assert_eq!(said, "warning: page 1: 2 chapters are left out: the book is longer than clv lays out\n");
+}
+
+/// A picture's path is read as the text it is: `red&amp;one.png`, as XHTML must write it, is the
+/// book's file `red&one.png`, and a link written the same way leads to its chapter.
+#[test]
+fn a_path_written_with_an_entity_is_the_file_it_names() {
+    let chapters = [r#"<h1>One</h1><p><img src="../Images/red&amp;one.png" alt="red"/></p>"#.to_owned(), "<h1>Two</h1>".to_owned()];
+    let book = book_of(&chapters, &[("OEBPS/Images/red&one.png", plain(120, RED))]);
+    let path = write(tmp("epub-entity", "book.epub"), &zipped(&book, Mimetype::Stored));
+    let (pages, said) = pages(&path, &[]);
+    assert_eq!((colours(&pages), said.as_str()), (vec![IN_ORDER[0], [false; 3]], ""));
+}
+
 /// `--help` lists the format, by its extension, and credits what reads it.
 #[test]
 fn help_lists_books_and_credits_rbook() {

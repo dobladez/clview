@@ -494,3 +494,49 @@ label on a chapter, Backspace twice back to where `T` was pressed.
 Gates on 2026-11-16, after the rebase and with this task: `cargo fmt --check`, `cargo clippy
 --all-targets -j 2 -- -D warnings`, `cargo test -j 2` (607 unit, 13 docs, 297 integration), all
 passing. Tasks 5 and 7 stay open for their checks in kitty.
+
+## Codex review, round 1 (of 354cb19)
+
+Three findings, relayed by the lead, each fixed with a test seen failing without its fix.
+
+1. **[P1] A chapter rewritten was built whole before the book's limits were checked**: paths are
+   written from the book's top, so 20,000 `<img src="x"/>` in a directory 4,000 bytes deep, 280
+   KiB, come to 80 MB, and a chapter within its 16 MiB to gigabytes, in the viewer's process.
+   `Written::body` now takes the bytes the book has left (the Contents page's kept) and stops at
+   the piece that passes them; and a path that comes to more than `MAX_PATH` from the top is none
+   of the book's, so one piece never writes more than a few of them. The chapter is where the book
+   is cut, with those after it (`Left::past`), as a chapter past the book's bounds already was:
+   Codex suggested counting it as too large, which is what a chapter past 16 MiB as it is read is
+   called; this one is within that, and it is the book that is too long with it.
+2. **[P2] A picture's `alt` wasn't counted as text**, and the importer writes it where it has no
+   picture: 9 MiB of it passed assembly and the documents' backend refused the whole book. It is
+   counted now. Which attributes are text was probed through the documents' backend, 8 MiB in each
+   of some 40 attributes and elements (`alt`, `title`, `value`, `placeholder`, `label`, `summary`,
+   `abbr`, `standby`, `content`, `cite`, `aria-label`, `data-*`, `name`, `href`, `src`…): an
+   `<img>`'s `alt` alone is, with a picture or without. The probe was a test of the moment and is
+   not kept.
+3. **[P2] Paths were resolved with their XML entities**: `a&amp;b.ppm` beside `a&b.ppm` was said
+   to be missing. An `id`, a `src` and an `href` are now read with `unescaped`, which was there for
+   the package's path (bounded: an entity is at most 10 bytes, and what is none stays as written),
+   and written with `&`, `<` and `"` as entities, always between double quotes. No double escape:
+   what is rewritten is unescaped first, and what isn't is written as the chapter wrote it, with
+   the quote it had. The same for a cover's `<svg><image>` path. Found on the way: the Contents
+   page wrote an entry's place into its `href` as it came from the worker; it is escaped too.
+
+| Reverted | Failed |
+|---|---|
+| its room checked once the chapter is whole; a path of any length | `epub::tests::a_chapter_stops_being_written_where_it_passes_the_books_room` |
+| a picture's `alt` no text | `epub::tests::a_pictures_alt_is_text_of_its_chapter`, `epub::a_book_with_more_alt_text_than_a_document_holds_is_cut_at_that_chapter` |
+| any element's `alt` | `epub::tests::a_pictures_alt_is_text_of_its_chapter` |
+| a picture's path with its entities | `epub::tests::references_are_read_as_their_text_and_written_as_text_again`, `epub::a_path_written_with_an_entity_is_the_file_it_names` |
+| a link, an id, a wrapped picture's path with their entities; written back with no entity; the Contents page's link as it is | `epub::tests::references_are_read_as_their_text_and_written_as_text_again` |
+
+Not held by a test that fails without it: that `assembled` hands `body` the room left. With all
+the room in the world the book is cut at the same chapter, by the check after it, and only the
+memory spent differs; `body` itself is tested to stop within a piece of its room.
+
+Dismissed by the lead, not this branch's: a piped book read without a bound in
+`Input::reopenable`, which every backend shares.
+
+Gates on 2026-11-16 with the review's fixes: `cargo fmt --check`, `cargo clippy --all-targets -j 2
+-- -D warnings`, `cargo test -j 2` (610 unit, 13 docs, 299 integration), all passing.

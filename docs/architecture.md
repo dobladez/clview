@@ -565,9 +565,19 @@ through its command) and that a key means one setting
   and a `#name` alone as a place in its own chapter; an `id`, or a link to one, that would pass
   256 bytes (`MAX_NAME`) with its chapter's number is left out, the link marked `NO_SUCH_PLACE`;
   an `href` that is a path to anything else is marked as a file the book holds or one it doesn't
-  (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the top. It counts as it writes, and stops before the chapter that would take the document past
+  (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the top. An `id`, a `src` and an `href` are
+  read as the text they are, their entities undone (`unescaped`: `a&amp;b.png` is the file
+  `a&b.png`), and written as text again (`escaped`: `&`, `<` and the quote as entities); any other
+  attribute is written as the chapter wrote it. A path that comes to more than 4 KiB from the top
+  (`MAX_PATH`) is none of the book's. It counts as it writes, and stops before the chapter that would take the document past
   bounds of its own (`MAX_WRITTEN`, `MAX_MARKS`, `MAX_TEXT`: 48 MiB, 400,000 marks, 6 MiB of
   text), below those the Word backend refuses a file past, so a long book shows its start. The
+  text is the chapter's text and its pictures' `alt`, which the importer writes where it has no
+  picture, and no other attribute (probed: of some 40 attributes given 8 MiB each, `alt` on an
+  `<img>` alone was text of the document). A chapter written again may come to many times
+  its size, each short path written from the book's top (20,000 pictures in a directory 4,000
+  bytes deep are 280 KiB that come to 80 MB), so `Written::body` is given the bytes the book has
+  left and stops at the piece that passes them, never holding more than that and a piece. The
   document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,
   for the first render and each relayout, asking the worker nothing; its `Near` (`epub::near`)
   reads a picture from the book by its very name in the zip, with its first bytes alone for its

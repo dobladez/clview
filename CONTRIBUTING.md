@@ -270,7 +270,9 @@ CodeQL's default setup scans the Rust and the workflows.
   the tile in a list, not twice where a chapter wraps it in a drawing; two chapters of five
   protected left out and said, a book all protected refused, a fixed-layout one said; the
   Contents page last, where the spine holds the nav document too, an NCX nested
-  100,000 deep leaving the book whole and saying so; and that nothing else names rbook.
+  100,000 deep leaving the book whole and saying so; a book with 9 MiB of `alt` text cut at that
+  chapter, not refused; a picture whose path is written with an entity; and that nothing else
+  names rbook.
   In `tests/it/view_pager.rs` (`epub_…`): a word of the third chapter found from the first, the
   worker gone once the book shows and none started by a relayout (`ps`); a link to a file
   said, with files where a path beside the `.epub` would lead never opened; links from a page
@@ -286,7 +288,9 @@ CodeQL's default setup scans the Rust and the workflows.
   read from a nav and from an NCX, kept within its limits, its page last with its room kept, the
   chapter a book marks as its own page of contents, where `T` leads (marked, guessed by a
   chapter's links, or the page made here), a chapter of 100,000 links costing the guess no more
-  than a few, and a table of contents unread without costing the book (fake workers that die on
+  than a few, a chapter that stops being written where it passes the book's room, a picture's
+  `alt` counted as text, paths and ids read with their entities undone and written with them
+  again, and a table of contents unread without costing the book (fake workers that die on
   it), and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
   lexer's attributes are in `src/source/markup.rs`.
 

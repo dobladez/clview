@@ -965,7 +965,16 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
                 };
                 let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
                 let written = Written { chapter: number, directory, zipped, chapters: &numbers };
-                written.body(&xhtml)
+                // What is left of the book's bytes, the Contents page's kept: the chapter stops
+                // being written where it would pass them, however far it would have gone.
+                let room = MAX_WRITTEN.saturating_sub(out.len()).saturating_sub(contents.len());
+                match written.body(&xhtml, room) {
+                    Ok(body) => body,
+                    Err(_) => {
+                        left.past = plan.chapters.len().saturating_add(1).saturating_sub(number);
+                        break;
+                    }
+                }
             }
         };
         // Before the first chapter shown: the cover, unless that chapter shows it.
@@ -1033,7 +1042,7 @@ fn contents_page(entries: &[Entry], leads: impl Fn(&Entry) -> Option<String>) ->
         let label = if label.trim().is_empty() { "\u{2026}".to_owned() } else { label };
         match leads(entry) {
             Some(place) => {
-                let _ = write!(out, "<a href=\"#{place}\">{label}</a>");
+                let _ = write!(out, "<a href=\"#{}\">{label}</a>", escaped(&place));
             }
             None => out.push_str(&label),
         }
@@ -1141,8 +1150,10 @@ struct Written<'a> {
 impl Written<'_> {
     /// The chapter `xhtml` as its part of the book: what its `<body>` holds (all of it, where it has
     /// none), in a `<div>` that starts a page; how many bytes of text that is; and what its links say
-    /// of it.
-    fn body(&self, xhtml: &str) -> (String, usize, Tally) {
+    /// of it. Within `room` bytes: written again, a chapter may come to many times its size (a
+    /// short path is written from the book's top wherever it is referred to), so the writing stops
+    /// at the piece that takes it past them, and gives how many bytes it had come to.
+    fn body(&self, xhtml: &str, room: usize) -> Result<(String, usize, Tally), usize> {
         let mut out = format!("<div id=\"c{}\" style=\"page-break-before: always\">", self.chapter);
         let (mut text, mut at) = (0usize, 0usize);
         let mut tally = Tally::default();
@@ -1159,6 +1170,9 @@ impl Written<'_> {
         }
         while let Some((piece, next)) = Piece::at(xhtml, at) {
             at = next;
+            if out.len() > room {
+                return Err(out.len());
+            }
             match piece {
                 // A `<` that starts no tag is written so that it starts none once the tags around
                 // it are written again.
@@ -1193,48 +1207,70 @@ impl Written<'_> {
                     // A drawing that only wraps a picture, as a cover's page does, is that picture.
                     match Some(&tag).filter(|tag| tag.is("svg") && !tag.self_closed).and_then(|_| wrapped_picture(xhtml, at)) {
                         Some((picture, past)) => {
-                            let _ = write!(out, "<img src=\"{}\" alt=\"\"/>", self.pictured(picture));
+                            let _ = write!(out, "<img src=\"{}\" alt=\"\"/>", escaped(&self.pictured(&unescaped(picture))));
                             at = past;
                         }
-                        None => self.start_tag(&tag, &mut out, &mut tally),
+                        // What it shows as text is text of the chapter's.
+                        None => text = text.saturating_add(self.start_tag(&tag, &mut out, &mut tally)),
                     }
                 }
             }
         }
         out.push_str("</div>\n");
-        (out, text, tally)
+        if out.len() > room {
+            return Err(out.len());
+        }
+        Ok((out, text, tally))
     }
 
     /// The start tag `tag` written again: its ids the book's own, its paths from the book's top. A
     /// link (`<a href>`) is counted in `tally`, and before the first that leads to another chapter,
     /// in a chapter that may be guessed to be the book's page of contents, a place is written, for
-    /// the key that goes to the contents ([`first_link`]).
-    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String, tally: &mut Tally) {
+    /// the key that goes to the contents ([`first_link`]). An id, a picture's path and a link are
+    /// read as the text they are, their entities undone (`a&amp;b.png` is the file `a&b.png`), and
+    /// written as text again ([`escaped`]). Gives how many bytes of text the tag shows: a
+    /// picture's `alt`, which the importer writes where it has no picture, and no other attribute.
+    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String, tally: &mut Tally) -> usize {
         let from = out.len();
+        let mut text = 0usize;
         out.push('<');
         out.push_str(tag.name);
         for attribute in tag.attributes() {
             let name = attribute.name;
-            let value = match name {
+            let is = |attribute: &str| name.eq_ignore_ascii_case(attribute);
+            if is("alt") && tag.is("img") {
+                text = text.saturating_add(attribute.value.len());
+            }
+            let rewritten = if is("id") {
                 // The book's own: its chapter's number before it. One too long to be a place's
                 // name once it has that is left out, and a link to it says so.
-                name if name.eq_ignore_ascii_case("id") => match place(self.chapter, Some(attribute.value)) {
-                    Some(id) => id,
+                match place(self.chapter, Some(&unescaped(attribute.value))) {
+                    Some(id) => Some(id),
                     None => continue,
-                },
-                name if name.eq_ignore_ascii_case("src") => self.pictured(attribute.value),
-                name if name.eq_ignore_ascii_case("href") => {
-                    let (written, chapter) = self.linked(attribute.value);
-                    if tag.is("a") && tally.link(self.chapter, chapter) && self.chapter <= GUESS_AMONG {
-                        out.insert_str(from, &format!("<a id=\"{}\"></a>", first_link(self.chapter)));
-                    }
-                    written
                 }
-                _ => attribute.value.to_owned(),
+            } else if is("src") {
+                Some(self.pictured(&unescaped(attribute.value)))
+            } else if is("href") {
+                let (written, chapter) = self.linked(&unescaped(attribute.value));
+                if tag.is("a") && tally.link(self.chapter, chapter) && self.chapter <= GUESS_AMONG {
+                    out.insert_str(from, &format!("<a id=\"{}\"></a>", first_link(self.chapter)));
+                }
+                Some(written)
+            } else {
+                None
             };
-            // As written, a value holds no quote of the kind around it; one written again may.
-            let quote = if value.contains('"') { '\'' } else { '"' };
-            let _ = write!(out, " {name}={quote}{}{quote}", value.replace('\'', if quote == '\'' { "&#39;" } else { "'" }));
+            match rewritten {
+                Some(value) => {
+                    let _ = write!(out, " {name}=\"{}\"", escaped(&value));
+                }
+                // As the chapter wrote it, entities and all: a value holds no quote of the kind
+                // around it, so one that holds the other kind keeps its own.
+                None => {
+                    let quote = if attribute.value.contains('"') { '\'' } else { '"' };
+                    let value = attribute.value.replace('\'', if quote == '\'' { "&#39;" } else { "'" });
+                    let _ = write!(out, " {name}={quote}{value}{quote}");
+                }
+            }
         }
         // XHTML writes any element short when it is empty; read as HTML, only a void one ends
         // there, and any other would stay open over what follows it.
@@ -1245,11 +1281,13 @@ impl Written<'_> {
             (true, true) => out.push_str("/>"),
             (false, _) => out.push('>'),
         }
+        text
     }
 
     /// The path `reference` names, from this chapter, as a path from the book's top, and what
     /// follows it (its `?query` and `#fragment`): `None` for what is no path in the book, a web
-    /// address or anything else with a scheme, which is left as written.
+    /// address or anything else with a scheme, which is left as written. A path longer than any
+    /// file's in a book ([`MAX_PATH`]) is none of the book's, as one that leads above its top.
     fn resolved<'r>(&self, reference: &'r str) -> Option<(Option<String>, &'r str)> {
         let reference = reference.trim();
         let end = reference.find(['?', '#']).unwrap_or(reference.len());
@@ -1258,7 +1296,8 @@ impl Written<'_> {
         if scheme || path.starts_with("//") {
             return None;
         }
-        Some((percent_decoded(path).and_then(|path| from_the_top(self.directory, &path)), rest))
+        let from_the_top = percent_decoded(path).and_then(|path| from_the_top(self.directory, &path));
+        Some((from_the_top.filter(|path| path.len() <= MAX_PATH), rest))
     }
 
     /// A picture's `src` as the book's document writes it: its path from the book's top, written
@@ -1292,6 +1331,12 @@ impl Written<'_> {
         };
         (written, chapter)
     }
+}
+
+/// `text` as an attribute's value between double quotes: what would end the value, or start an
+/// entity or a tag, written as an entity.
+fn escaped(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")
 }
 
 /// The name, in the book's document, of a place in the chapter numbered `chapter`: the chapter's
@@ -1995,10 +2040,10 @@ mod tests {
         // A chapter that starts with a table starts its page with a paragraph, which takes the
         // break; a table after anything else needs none.
         let written = Written { chapter: 1, directory: "", zipped: &book, chapters: &HashMap::new() };
-        let starts = |body: &str| written.body(&chapter(body)).0.contains(BEFORE_A_TABLE);
+        let starts = |body: &str| written.body(&chapter(body), MAX_WRITTEN).unwrap().0.contains(BEFORE_A_TABLE);
         assert!(starts("<table><tr><td>a</td></tr></table>") && starts("\n <div><section>\n<table><tr><td>a</td></tr></table></section></div>"));
         assert!(!starts("<p>first</p><table></table>") && !starts("<div><img src='a.png'/></div><table></table>") && !starts("text<table></table>"));
-        assert_eq!(written.body(&chapter("<table></table><table></table>")).0.matches(BEFORE_A_TABLE).count(), 1);
+        assert_eq!(written.body(&chapter("<table></table><table></table>"), MAX_WRITTEN).unwrap().0.matches(BEFORE_A_TABLE).count(), 1);
     }
 
     /// A chapter that is missing, unreadable, too large, or not XHTML is left out, and counted for
@@ -2186,7 +2231,8 @@ mod tests {
         let (fits, long) = ("a".repeat(MAX_NAME - 4), "a".repeat(MAX_NAME - 3));
         assert_eq!(written.linked(&format!("#{fits}")).0, format!("#c12-{fits}"));
         assert_eq!(written.linked(&format!("#{long}")).0, NO_SUCH_PLACE);
-        let (body, ..) = written.body(&chapter(&format!(r##"<p id="{fits}" class="a">one</p><p id="{long}" class="b">two</p>"##)));
+        let (body, ..) =
+            written.body(&chapter(&format!(r##"<p id="{fits}" class="a">one</p><p id="{long}" class="b">two</p>"##)), MAX_WRITTEN).unwrap();
         assert!(body.contains(&format!(r#"<p id="c12-{fits}" class="a">"#)) && body.contains(r#"<p class="b">two</p>"#), "{body}");
         let link = super::super::Link {
             page: 0,
@@ -2294,7 +2340,7 @@ mod tests {
         let book = book(&[]);
         let written = Written { chapter: 1, directory: "text", zipped: &book, chapters: &HashMap::new() };
         let body = |svg: &str| {
-            let body = written.body(&chapter(svg)).0;
+            let body = written.body(&chapter(svg), MAX_WRITTEN).unwrap().0;
             body.strip_prefix(r#"<div id="c1" style="page-break-before: always">"#).and_then(|body| body.strip_suffix("</div>\n")).unwrap().to_owned()
         };
         for wraps in [
@@ -2327,7 +2373,8 @@ mod tests {
     fn an_element_written_short_is_read_as_empty() {
         let book = book(&[]);
         let written = Written { chapter: 2, directory: "", zipped: &book, chapters: &HashMap::new() };
-        let (body, ..) = written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#));
+        let (body, ..) =
+            written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#), MAX_WRITTEN).unwrap();
         assert_eq!(
             body,
             concat!(
@@ -2755,6 +2802,95 @@ mod tests {
         assert_eq!((led(&bodies, Some(9), true).1, led(&bodies, Some(9), false).1), (Leads::Page, Leads::Nowhere));
     }
 
+    /// A chapter written again may come to many times its size: a path is written from the book's
+    /// top wherever the chapter refers to it. It stops being written at the piece that takes it
+    /// past the room the book has left, not once it is whole, and the book is cut there.
+    #[test]
+    fn a_chapter_stops_being_written_where_it_passes_the_books_room() {
+        let (numbers, none) = (HashMap::new(), book(&[]));
+        let deep = "d/".repeat(2_000);
+        let written = Written { chapter: 1, directory: deep.trim_end_matches('/'), zipped: &none, chapters: &numbers };
+        let pictures = chapter(&r#"<img src="x"/>"#.repeat(20_000));
+        assert!(pictures.len() < 300 << 10);
+        let whole = written.body(&pictures, usize::MAX).unwrap().0.len();
+        assert!(whole > 80_000_000, "{whole}");
+        let room = 1 << 20;
+        let stopped = written.body(&pictures, room).unwrap_err();
+        assert!(stopped > room && stopped <= room + 2 * MAX_PATH, "stopped at {stopped}, a piece past {room}");
+        assert!(written.body(&pictures, whole).is_ok() && written.body(&pictures, whole - 1).is_err());
+        // In a book: cut at that chapter, with the one after it, before the book is past its bytes.
+        let (short, name) = (chapter("<p>short</p>"), format!("{deep}two.xhtml"));
+        let files: [(&str, &[u8]); 3] = [("one.xhtml", short.as_bytes()), (&name, pictures.as_bytes()), ("three.xhtml", short.as_bytes())];
+        let (html, left) = assembled(&plan(&[("one.xhtml", Kind::Xhtml), (&name, Kind::Xhtml), ("three.xhtml", Kind::Xhtml)]), &book(&files));
+        assert_eq!(left, Left { shown: 1, past: 2, ..Left::default() });
+        assert!(html.len() < 1 << 20 && html.contains("short"), "{}", html.len());
+        // A path longer than any file's in a book is none of the book's, however it is escaped.
+        let long = "a/".repeat(MAX_PATH);
+        let top = Written { chapter: 1, directory: "", zipped: &none, chapters: &numbers };
+        assert_eq!((top.pictured(&long).as_str(), top.linked(&long).0.as_str()), ("../above-the-book", NOT_IN_THE_BOOK));
+        let within = format!("{}b", "a/".repeat(MAX_PATH / 2 - 1));
+        assert_eq!((within.len(), top.pictured(&within)), (MAX_PATH - 1, format!("./{within}")));
+    }
+
+    /// A picture's `alt` is text of its chapter, which the importer writes where it has no picture:
+    /// counted with the chapter's text, so that a book whose alt text would pass what a document
+    /// may hold is cut at that chapter, where it would be refused whole. No other attribute is.
+    #[test]
+    fn a_pictures_alt_is_text_of_its_chapter() {
+        let (numbers, none) = (HashMap::new(), book(&[]));
+        let written = Written { chapter: 1, directory: "", zipped: &none, chapters: &numbers };
+        let text = |body: &str| written.body(&chapter(body), MAX_WRITTEN).unwrap().1;
+        let plain = text(r#"<p>ab<img src="a.png"/></p>"#);
+        assert_eq!(text(r#"<p>ab<img src="a.png" alt="four"/></p>"#), plain + 4);
+        assert_eq!(text(r#"<p>ab<img src="a.png" ALT="four"/><IMG alt='two' src="b.png"></p>"#), plain + 7);
+        assert_eq!(text(r#"<p title="none">ab<img src="a.png" title="none"/><input alt="none"/><area alt="none"/></p>"#), plain);
+        let (short, long) = (chapter("<p>short</p>"), chapter(&format!(r#"<p><img src="a.png" alt="{}"/></p>"#, "a".repeat(MAX_TEXT))));
+        let files: [(&str, &[u8]); 3] = [("one.xhtml", short.as_bytes()), ("two.xhtml", long.as_bytes()), ("three.xhtml", short.as_bytes())];
+        let (html, left) = assembled(&plan(&[("one.xhtml", Kind::Xhtml), ("two.xhtml", Kind::Xhtml), ("three.xhtml", Kind::Xhtml)]), &book(&files));
+        assert_eq!(left, Left { shown: 1, past: 2, ..Left::default() });
+        assert!(html.contains("short") && !html.contains("aaaa"));
+    }
+
+    /// An id, a picture's path and a link are read as the text they are, their entities undone,
+    /// whichever way each was written, and written as text again: `a&amp;b.png` is the file
+    /// `a&b.png`, and what would end an attribute or start an entity is an entity. What is no
+    /// entity stays as it is, and any other attribute is as the chapter wrote it.
+    #[test]
+    fn references_are_read_as_their_text_and_written_as_text_again() {
+        let numbers: HashMap<&str, usize> = [("text/one.xhtml", 1), ("text/two.xhtml", 2)].into();
+        let book = book(&[("text/a&b.png", b"png")]);
+        let written = Written { chapter: 1, directory: "text", zipped: &book, chapters: &numbers };
+        let (body, ..) = written
+            .body(
+                &chapter(concat!(
+                    r##"<p id="x&amp;y"><img src="a&amp;b.png"/><img src="a&#38;b.png"/><img src="a&#x26;b.png"/>"##,
+                    r##"<a href="two.xhtml#p&amp;q">a</a><a href="#x&#x26;y">b</a>"##,
+                    r##"<a href="https://example.org/?a=1&amp;b=&quot;2&quot;&lt;3">c</a>"##,
+                    r##"<img src="a&bogus;b&amp.png"/><a title="kept &amp; as &quot;written&quot;" class='its "own" quotes' href="x&amp;y.txt">d</a>"##,
+                    r##"<a href="&amp;amp;.xhtml">e</a></p>"##,
+                )),
+                MAX_WRITTEN,
+            )
+            .unwrap();
+        for part in [
+            r##"<p id="c1-x&amp;y">"##,
+            r##"<img src="./text/a%26b.png"/><img src="./text/a%26b.png"/><img src="./text/a%26b.png"/>"##,
+            r##"<a href="#c2-p&amp;q">a</a>"##,
+            r##"<a href="#c1-x&amp;y">b</a>"##,
+            r##"<a href="https://example.org/?a=1&amp;b=&quot;2&quot;&lt;3">c</a>"##,
+            r##"<img src="./text/a%26bogus;b%26amp.png"/>"##,
+            r##"<a title="kept &amp; as &quot;written&quot;" class='its "own" quotes' href="clv-not-in-the-book/text/x%26y.txt">d</a>"##,
+            r##"<a href="clv-not-in-the-book/text/%26amp;.xhtml">e</a>"##,
+        ] {
+            assert!(body.contains(part), "{part} in {body}");
+        }
+        // A cover's drawing that wraps a picture, and an entry of the Contents page, the same.
+        let (cover, ..) = written.body(&chapter(r#"<svg><image xlink:href="a&amp;b.png"/></svg>"#), MAX_WRITTEN).unwrap();
+        assert!(cover.contains(r#"<img src="./text/a%26b.png" alt=""/>"#), "{cover}");
+        let page = contents_page(&[entry(1, "One", Some("text/one.xhtml"), Some("x\"y<z&"))], |entry| place(1, entry.fragment.as_deref()));
+        assert!(page.contains(r##"<a href="#c1-x&quot;y&lt;z&amp;">One</a>"##), "{page}");
+    }
+
     /// The guess costs a chapter nothing that grows with it: its links are counted as they are
     /// written, the chapters they lead to kept only as far as the guess asks, and one place written.
     #[test]
@@ -2764,7 +2900,7 @@ mod tests {
         let book = book(&[]);
         let written = Written { chapter: 1, directory: "", zipped: &book, chapters: &numbers };
         let links: String = (0..100_000).map(|n| format!(r#"<a href="{}.xhtml">x</a>"#, n % MAX_CHAPTERS + 1)).collect();
-        let (body, _, tally) = written.body(&chapter(&links));
+        let (body, _, tally) = written.body(&chapter(&links), MAX_WRITTEN).unwrap();
         // One in 4096 leads to this chapter itself.
         let own = 100_000usize.div_ceil(MAX_CHAPTERS);
         assert_eq!(tally, Tally { links: 100_000, away: 100_000 - own, chapters: vec![2, 3, 4] });
