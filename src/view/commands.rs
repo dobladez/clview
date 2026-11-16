@@ -59,6 +59,8 @@ pub(super) enum Command {
     Follow,
     /// Label them, to copy one's address.
     CopyLink,
+    /// To where what is shown lists its contents, where it says it has such a place.
+    Contents,
     Copy,
     OpenInApp,
     Rerender,
@@ -124,6 +126,7 @@ pub(super) const VIEWER: &[Command] = &[
     Command::Search,
     Command::Follow,
     Command::CopyLink,
+    Command::Contents,
     Command::Copy,
     Command::OpenInApp,
     Command::Rerender,
@@ -173,6 +176,7 @@ impl Command {
             Self::Search => "search",
             Self::Follow => "follow",
             Self::CopyLink => "copy-link",
+            Self::Contents => "contents",
             Self::Copy => "copy",
             Self::OpenInApp => "open-in-app",
             Self::Rerender => "rerender",
@@ -199,7 +203,7 @@ impl Command {
             Self::GoTo | Self::Next | Self::Previous | Self::PreviousMatch => Count::Taken,
             Self::ZoomIn | Self::ZoomOut | Self::MorePerRow | Self::FewerPerRow => Count::Taken,
             Self::Setting(setting, _) if setting.numbers.is_some() => Count::Taken,
-            Self::Search | Self::Filter | Self::Follow | Self::CopyLink => Count::Dropped,
+            Self::Search | Self::Filter | Self::Follow | Self::CopyLink | Self::Contents => Count::Dropped,
             _ => Count::Left,
         }
     }
@@ -210,7 +214,7 @@ impl Command {
             Self::ScrollDown | Self::ScrollUp | Self::Next | Self::Previous | Self::NextPage | Self::PreviousPage | Self::PreviousMatch => {
                 mode == Mode::Pages
             }
-            Self::Search | Self::Follow | Self::CopyLink => mode == Mode::Pages,
+            Self::Search | Self::Follow | Self::CopyLink | Self::Contents => mode == Mode::Pages,
             Self::TileLeft | Self::TileRight | Self::TileUp | Self::TileDown | Self::Open | Self::Filter => mode == Mode::List,
             _ => true,
         }
@@ -269,6 +273,7 @@ const PAGES: &[(Command, &[Chord])] = &[
     (Command::Search, &[ch('/')]),
     (Command::Follow, &[ch('f')]),
     (Command::CopyLink, &[ch('F')]),
+    (Command::Contents, &[ch('T')]),
     (Command::Copy, &[ch('c')]),
     (Command::OpenInApp, &[ch('o')]),
     (Command::Rerender, &[ch('r'), key(Key::Ctrl('l'))]),
@@ -632,11 +637,16 @@ pub(super) const PAGE_LINES: &[Line] = &[
     .with(3, 0),
     line(&[Command::Follow], "label the links on screen: type a label to follow its link, Esc drops the labels"),
     line(&[Command::CopyLink], "label them, and copy the address of the one whose label is typed"),
+    CONTENTS_LINE,
     line(&[Command::Back], "back to where the last link followed was"),
     line(&[Command::Rerender], "render the pages again"),
     line(&[Command::Copy], "copy the page to the clipboard"),
     line(&[Command::OpenInApp], "open the file in the app the desktop opens it with"),
 ];
+
+/// The line of the command that goes to the contents: listed only where what is shown says where
+/// its contents are.
+pub(super) const CONTENTS_LINE: Line = line(&[Command::Contents], "to the contents: {back} comes back");
 
 /// The zoom's line in a file's pages: a setting on the zoom keys has its own in its place, where
 /// the keys are its own.
@@ -910,6 +920,7 @@ mod tests {
                 "n  N p  3n",
                 "f",
                 "F",
+                "T",
                 "Backspace",
                 "r  Ctrl-L",
                 "c",

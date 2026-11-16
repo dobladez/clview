@@ -375,30 +375,33 @@ pub(crate) const NAV_ITEM: &str = r#"<item id="nav" href="nav.xhtml" media-type=
 /// A nav's list of [`three_chapters`]'s chapters, as a nav at `OEBPS/nav.xhtml` writes them.
 pub(crate) const THREE_ENTRIES: &str = r##"<ol><li><a href="Text/ch1.xhtml">The red one</a></li><li><a href="Text/ch2.xhtml#start">The blue one</a></li><li><a href="Text/ch3.xhtml">The green one</a></li></ol>"##;
 
-/// A book's table of contents is a Contents page after its cover, before its first chapter; none
-/// is made for a book whose own page of contents is in its reading order. A table of contents
-/// that can't be read (an NCX nested 100,000 deep, more than is read of one) leaves the book
-/// without the page, its first page saying so; one nested as deep as fits is read.
+/// A book's table of contents is a Contents page at its end, after its last chapter, so that the
+/// book's own pages are where they were; a book whose own page of contents is in its reading
+/// order has it too. A table of contents that can't be read (an NCX nested 100,000 deep, more than
+/// is read of one) leaves the book without the page, its first page saying so; one nested as deep
+/// as fits is read.
 #[test]
-fn a_books_contents_page_comes_after_its_cover_and_isnt_made_twice() {
+fn a_books_contents_page_is_its_last_page_whatever_the_book_has_of_its_own() {
     let yellow = |page: &image::RgbImage| of(page, YELLOW) > 0;
     let cover = r#"<item id="cover" href="Images/cover.png" media-type="image/png" properties="cover-image"/>"#;
     let (chapters, mut pictures) = coloured_chapters();
     pictures.push(("OEBPS/Images/cover.png", plain(200, YELLOW)));
     let shown = |name: &str, files: &[(String, Vec<u8>)]| pages(&write(tmp("epub-contents", name), &zipped(files, Mimetype::Stored)), &[]);
     let with = |more: &[(&'static str, Vec<u8>)]| [pictures.clone(), more.to_vec()].concat();
-    // The cover, the Contents page, then the three chapters.
+    // The cover, the three chapters, then the Contents page.
     let book = book_with(&chapters, &with(&[("OEBPS/nav.xhtml", nav(THREE_ENTRIES))]), "", &format!("{cover}{NAV_ITEM}"));
     let (pages, said) = shown("book.epub", &book);
     assert_eq!((pages.len(), said.as_str()), (5, ""));
-    assert!(yellow(&pages[0]) && !yellow(&pages[1]) && colours(&pages[1..2]) == [[false; 3]], "the Contents page, of text alone");
-    assert_eq!(colours(&pages[2..]), IN_ORDER);
-    // The nav document in the reading order is the book's own: a chapter, and no page of clv's.
+    assert!(yellow(&pages[0]) && !yellow(&pages[4]) && colours(&pages[4..]) == [[false; 3]], "the Contents page, of text alone");
+    assert_eq!(colours(&pages[1..4]), IN_ORDER);
+    // The nav document in the reading order is the book's own, a chapter where the book has it; the
+    // page made here is still its last.
     let mut own = book.clone();
     let package = own.iter_mut().find(|(name, _)| name == "OEBPS/content.opf").unwrap();
     package.1 = String::from_utf8(package.1.clone()).unwrap().replace("<spine>", r#"<spine><itemref idref="nav"/>"#).into_bytes();
     let (pages, said) = shown("own.epub", &own);
-    assert_eq!((pages.len(), said.as_str()), (5, ""), "the cover, the book's own contents, its chapters");
+    assert_eq!((pages.len(), said.as_str()), (6, ""), "the cover, the book's own contents, its chapters, the Contents page");
+    assert_eq!((colours(&pages[1..2]), colours(&pages[2..5]), colours(&pages[5..])), (vec![[false; 3]], IN_ORDER.to_vec(), vec![[false; 3]]));
     // An NCX nested 100,000 deep: past what is read of one, so never given to the worker.
     let point = r#"<navPoint><navLabel><text>x</text></navLabel><content src="Text/ch1.xhtml"/>"#;
     let deep = format!(

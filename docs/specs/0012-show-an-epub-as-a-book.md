@@ -35,9 +35,9 @@ whichever backend opens HTML, found by what it opens, as Mermaid hands its SVG o
 everything a document has: a page the window's size, `width`, `font`, `margin`, `d`'s dark paper,
 `s`'s fenced blocks, `/`'s search across chapters, and `f`'s links, rewritten so a link from one
 chapter to another lands in the book and none opens a file beside it. Its table of contents (EPUB
-3's nav, EPUB 2's NCX), read by rbook in the same worker, becomes a Contents page after the cover
-when the book doesn't have one among its chapters: a list of links, `f` going to a chapter, `u`
-back. For its pictures, the contract
+3's nav, EPUB 2's NCX), read by rbook in the same worker, becomes a Contents page at the book's
+end: a list of links, `f` going to a chapter, `u` back; and a key goes to the book's contents from
+any page, its own page of them where it has one, else that page. For its pictures, the contract
 lets a held file read what is beside it in its holder, which the epub gives its chapters, and
 which zips and tars give the documents they hold too: a README in a zip shows its screenshots.
 
@@ -106,14 +106,23 @@ which zips and tars give the documents they hold too: a README in a zip shows it
 
 **Contents**
 
-- **A Contents page** after the cover (first, without one), headed `Contents`, of the book's table of
-  contents as rbook reads it: EPUB 3's nav (`toc`), else EPUB 2's NCX. Its entries are nested lists
-  as deep as the book's, each its label as a link to the place it names (a chapter, or a place in
-  one, rewritten as the chapters' links are), so `f` goes there and `u` comes back, and `/` finds a
-  chapter's title. An entry whose place isn't in the book is its label, not a link.
-- **Not twice:** no page is made when a chapter is already the book's table of contents, as the OPF
-  says (the nav document in the spine, or the guide's or landmarks' `toc`), since most books carry
-  one of their own; then `f` on it works as on any chapter.
+- **A Contents page** at the book's end, after its last chapter, so that it moves none of the
+  book's own pages (the owner's, 2026-11-16; it was after the cover): headed `Contents`, with a
+  line under that saying clv made it from the book's table of contents, of the table of contents
+  as rbook reads it: EPUB 3's nav (`toc`), else EPUB 2's NCX. Its entries are nested lists as
+  deep as the book's, each its label as a link to the place it names (a chapter, or a place in
+  one, rewritten as the chapters' links are), so `f` goes there and Backspace comes back, and `/`
+  finds a chapter's title. An entry whose place isn't in the book is its label, not a link. It is
+  made for every book that has a table of contents, one with a page of contents among its
+  chapters too.
+- **A key goes to the contents** (the owner's, 2026-11-16): `T`, the `contents` command
+  ([Spec-0013](0013-bind-keys-to-named-commands.md)), from any page, Backspace coming back. To the
+  book's own page of contents where it has one: the chapter the OPF marks (the nav document in the
+  spine, or the guide's or landmarks' `toc`), or else one guessed, among the book's first
+  chapters, by its links leading mostly to other chapters, within bounds a hostile chapter can't
+  make costly. Otherwise to the Contents page. The viewer knows no format: a source declares where
+  its contents are, and the viewer offers the key, lists it in `?` and says it on the status line
+  for a second when the file opens (`Contents: T`) only where one is declared.
 - **A table of contents rbook can't read** leaves the book without the page, the first page saying
   so; it never refuses the book.
 - Limits: 4,096 entries, 256 bytes a label (cut at a character), 8 levels shown (deeper ones at the
@@ -397,17 +406,18 @@ over left out, and said:
   3's heading, `u` back, `F` copies its `#name`); `Manual: in kitty, a Gutenberg epub's contents page,
   f, a label: its chapter`.
 - [ ] **A book's Contents page** — the worker's `CONTENTS` (nav, else NCX; walked with its own
-  stack; its limits), the page written after the cover with links to places, not made when a chapter
-  is the book's own, a table of contents unread or killing the worker leaving the book whole; usage,
+  stack; its limits), the page written at the book's end with links to places and a line saying
+  clv made it (revised 2026-11-16: it was after the cover, and not made when a chapter is the
+  book's own), a table of contents unread or killing the worker leaving the book whole; usage,
   the changelog. *Files:* `src/source/epub.rs`, `tests/it/epub.rs`, `tests/it/view_pager.rs`,
   `docs/usage.md`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv epub::tests::contents` (an
   EPUB 3 nav and an EPUB 2 NCX nested three deep; a label with markup escaped; 4,097 entries; a
-  level past 8; an entry to a missing chapter its label alone); `cargo test -j 2 --test it epub`
-  (the page after the cover and none where the spine holds the nav; an NCX nested 100,000 deep
-  killing the worker, the book shown without the page and said); `cargo test -j 2 --test it
-  view_pager::epub_contents` (`f` on the Contents page's third entry lands on its chapter, `u`
-  back); `Manual: in kitty, a Standard Ebooks epub (its own contents in the spine): no second page;
-  a publisher's epub without one: the Contents page, f, a chapter`.
+  level past 8; an entry to a missing chapter its label alone; the page last, its room kept);
+  `cargo test -j 2 --test it epub` (the page last, where the spine holds the nav too; an NCX
+  nested 100,000 deep killing the worker, the book shown without the page and said); `cargo test
+  -j 2 --test it view_pager::epub_t_goes` (`f` on the Contents page's third entry lands on its
+  chapter, Backspace back); `Manual: in kitty, a Standard Ebooks epub: the Contents page its last
+  page, saying clv made it; f, a chapter`.
 - [x] **A shorter sentence where a setting isn't, on the whole status line** (the owner's, 2026-11-16,
   the sentence having outgrown 80 columns with one more format in it) — `this format doesn't
   reflow (Markdown, HTML and others do)`, two formats named from what the backends declare; it has
@@ -419,16 +429,35 @@ over left out, and said:
   message alone on the line at any width; a moment of a second, started over by a key) and `cargo
   test -j 2 --test it view_pager` (at 80 columns, `D`, `]` and `s` on a PDF: the sentence on the
   whole line, the status line back after a second, and at once with a key).
+- [ ] **A key that goes to the contents** (the owner's, 2026-11-16) — the contract's
+  `Source::contents` (a `Landmark`: what the place is called and its name among the source's
+  links); the viewer's `contents` command, `T`, through Spec-0013's catalog and keymaps, offered
+  only where a place is declared (`?`, and `Contents: T` on the status line for a second when the
+  file opens), going there as a link followed does, so Backspace comes back; the book's place: the
+  chapter its package marks, else one guessed by its links (the first eight chapters; three other
+  chapters or more; most of its links), else the Contents page; usage, architecture, the
+  changelog, an update to ADR-0038 with the guess measured on the 22 books. *Files:*
+  `src/source.rs`, `src/source/epub.rs`, `src/view/commands.rs`, `src/view/pager.rs`,
+  `tests/it/view_pager.rs`, `docs/`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv
+  epub::tests` (`a_book_marks_its_own_page_of_contents`, `the_contents_are_the_books_own_page_…`,
+  `a_chapter_of_links_costs_the_guess_…`), `cargo test -j 2 --bin clv view::` (the command only
+  where a place is declared) and `cargo test -j 2 --test it view_pager` (`epub_t_goes_…`: from a
+  page in the middle to the Contents page, to the book's own marked, to it guessed, Backspace
+  back, the status line's `Contents: T` at opening; `t_is_offered_…`: never for a PDF); `Manual:
+  in kitty, a Project Gutenberg EPUB 3 book: "Contents: T" for a second when it opens, T from a
+  chapter lands on the book's own contents, Backspace back; a Standard Ebooks book: T lands on
+  the last page`.
 
 ## Done
 
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: `a_documents_pictures` (zip and tar),
   `epub::tests`, `tests/it/epub.rs`, `view_pager::epub`, `view_pager::epub_links`,
-  `view_pager::epub_contents`.
+  `view_pager::epub_t_goes`, `view_pager::t_is_offered`.
 - [ ] Manual: in kitty, a Gutenberg epub with pictures and a contents page: the cover first, chapters
-  a page each, its pictures, `/` across chapters, `d`, `+`, and `f` to a chapter; a book without a
-  contents page of its own: the Contents page after the cover, `f` to a chapter; a directory of 20
+  a page each, its pictures, `/` across chapters, `D`, `+`, and `f` to a chapter, `T` to its own
+  contents and Backspace back; a book without a contents page of its own: `T` to the Contents page
+  at its end, `f` to a chapter; a directory of 20
   epubs as a list, timed, its tiles their covers; a Markdown README in a zip with its screenshots.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
@@ -449,3 +478,6 @@ over left out, and said:
   the whole status line for a second.
 - 2026-11-16 — Rebased onto main after Spec-0013: where this spec says `d` for the paper and `u`
   to come back from a link, the keys are now `D` and Backspace.
+- 2026-11-16 — The owner's decisions on the contents: the Contents page at the book's end, for
+  every book with a table of contents, saying clv made it (task 5 and its requirement revised);
+  a seventh task, a key that goes to the contents, the book's own where marked or guessed.

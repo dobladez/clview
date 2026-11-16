@@ -199,8 +199,9 @@ that is the first thing a chapter shows.
     books that for each tile wanted.
   - A chapter whose first content is a table starts a point lower than any other.
   - A book past the bounds shows its first chapters only: 6 MiB of text is some 3,700 pages.
-  - A book that has a contents page among its chapters and doesn't say so has two: Project
-    Gutenberg's EPUB 3 editions, of the books looked at.
+  - A book that has a contents page among its chapters and doesn't say so had two, one after its
+    cover: Project Gutenberg's EPUB 3 editions, of the books looked at. Since the update below,
+    clv's is every book's last page, and `T` goes to the book's own.
   - A fixed-layout book is laid out flowing, and says so
     ([backlog](../backlog.md#fixed-layout-epubs-through-blitz)).
   - A book's tile in a list costs the whole book's layout: 22 real books printed as a list take
@@ -213,3 +214,57 @@ that is the first thing a chapter shows.
   with a chain of `refines`); the documents' backend can be given a stylesheet for a part of a
   document; or its importer stops carrying a page break from a `<div>` (`an_epub_is_a_book_its_chapters_in_order_each_on_a_new_page`
   fails then).
+
+## Update 2026-11-16: the Contents page last, and a key that goes to the contents
+
+The owner's decisions, 2026-11-16, on the book that got two pages of contents (decisions 9 and 10,
+and the consequence that Project Gutenberg's EPUB 3 editions had both):
+
+- **The Contents page is the book's last page**, not its second, so that it moves none of the
+  book's own pages, and it is made for every book that has a table of contents, whether or not a
+  chapter is one already. It says who made it, under its heading (`Made by clv from the book's
+  table of contents.`). Decision 10 goes: nothing is left out for a chapter being a page of
+  contents. The page is counted against the book's bounds before the chapters, so that a long
+  book still ends with it.
+- **A key goes to the contents**, `T`, from any page, Backspace coming back: the `contents`
+  command of the viewer ([ADR-0036](0036-keys-are-bound-to-named-commands.md)), which the viewer
+  offers wherever a source says where its contents are (`Source::contents`), knowing no format. A
+  book says: its own page of contents where it has one, else the Contents page. When a file with
+  such a place opens, the status line says the key for a second (`Contents: T`).
+- **The book's own page of contents is the chapter its package marks** (the nav document in the
+  spine, the landmarks' or the guide's `toc`), **or else one guessed**: among the first eight
+  chapters, the first whose links lead to three other chapters or more, and most of whose links
+  lead to another chapter. `T` lands at its first link to another chapter.
+
+**The guess, measured** on the 22 books above, each chapter's `<a href>` counted as the book is
+assembled (how many, how many of them lead to another chapter, to how many chapters):
+
+| | Chapters like it | Links to other chapters | Their share of the chapter's links |
+|---|---|---|---|
+| A page of contents (18 books: 9 of Project Gutenberg's titles, both editions) | the 2nd chapter in 14, the 3rd in 4 | 12 to 155 | 76% to 100% |
+| Any other chapter among the first twelve | | 0 to 2; 161 in one title's list of illustrations | |
+
+No chapter of the two Standard Ebooks books, nor of the two editions of Gutenberg's
+*Metamorphosis* (pg5200), which have no page of contents among their chapters, has more than one
+link to another chapter. In the
+7 EPUB 2 editions whose guide names a contents chapter, the guess names the same chapter. One
+title (pg74) has two such chapters, its contents and its list of illustrations: the first is
+taken. The bounds leave room on both sides: three chapters where the pages measured lead to 12 or
+more and nothing else to more than 2, and more than half where they have three in four. The share
+of a chapter's text that is such links doesn't tell them apart: in pg1342's EPUB 3 edition the
+contents share a file of 116 KiB with the book's first chapters, 0.4% of it links.
+
+The guess costs nothing that grows with a chapter: a count per link, the first three chapters led
+to, and one empty anchor written in each of a book's first eight chapters, in the pass that writes
+the chapter anyway.
+
+Alternatives considered:
+
+- **Leaving out clv's page where a chapter is guessed to be the contents** (the owner's first
+  answer, replaced the same day): a wrong guess would cost a book its only whole table of
+  contents; a page at the end costs nothing where the guess is right.
+- **The page first, as it was**: every page number of the book moves by its length, and a book
+  with its own page of contents opens on two.
+- **The key going always to clv's page**: the book's own, where it has one, is where its author
+  put it, with what the author wrote around it.
+

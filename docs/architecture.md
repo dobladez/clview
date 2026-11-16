@@ -515,14 +515,16 @@ through its command) and that a key means one setting
   worker a request, gone once it has answered, one at a time (`TURN`), so a list of books takes
   one of the six workers' places. A second request, `CONTENTS`, reads the table of contents, for a
   book whose answer names the file that holds one (`Answer::toc`: the manifest's `nav` item, else
-  its NCX) and doesn't have that file in its spine: the package again, and that file (1 MiB at
+  its NCX): the package again, and that file (1 MiB at
   most, `MAX_TOC`), which rbook now reads with it. It is answered `ENTRIES` (`Listed::written`):
   the entries of `toc().contents()`, walked with a stack of the worker's own, since rbook's own
   counts of them recurse, each its depth, its label and where it leads, 4,096 at most; and the
   file the landmarks, or EPUB 2's guide, call `toc`. `epub::contents` checks it (`Listed::read`)
-  and keeps the entries in the `Plan`, or nothing where that file is a chapter (`Contents::None`),
-  or that it couldn't be read (`Contents::Unread`): a worker that refuses, dies or answers
-  otherwise costs the Contents page, never the book. The answer is checked as any input is (`Plan::read`: 4,096 chapters,
+  and keeps the entries in the `Plan` (`Contents::Listed`), or that it couldn't be read
+  (`Contents::Unread`): a worker that refuses, dies or answers otherwise costs the Contents page,
+  never the book. With them it keeps the chapter the book marks as its own page of contents
+  (`Plan::own`): the nav document itself where the spine has it, else that file of the landmarks or
+  the guide, where it is a chapter. The answer is checked as any input is (`Plan::read`: 4,096 chapters,
   4 KiB a path, each path brought to one from the book's top or dropped) and kept with the book
   (`Plan`), with where the book's bytes are (`Kept`: the zip's directory, for a file on disk or
   one come through a pipe; how to read it again, for one held in another file). `assembled` writes
@@ -533,10 +535,22 @@ through its command) and that a key means one setting
   a table is none, so one that is the first thing a chapter shows gets a paragraph of a zero-width
   space before it, `BEFORE_A_TABLE`). A chapter that is a picture is a `<div>` of an `<img>` of it
   (`page_of`), and so is the cover, before the first chapter shown, unless that chapter's body
-  refers to the cover's path as written from the book's top. After the cover comes the Contents
-  page (`contents_page`): a `<div id="contents">` of a heading and nested lists, each entry its
+  refers to the cover's path as written from the book's top. After the last chapter comes the Contents
+  page (`contents_page`), so that it moves none of the book's own pages: a `<div id="contents">` of
+  a heading, a line saying clv made it, and nested lists, each entry its
   label, escaped, as a link to its place (`place`, as a chapter's own links are written) where it
-  leads to a chapter the book shows, no deeper than the entry before it by more than a level. A chapter the book protects
+  leads to a chapter the book shows, no deeper than the entry before it by more than a level. It is
+  counted against the book's bounds before the chapters are, so they leave it its room. As it
+  writes, `assembled` finds where the book's contents are (`Leads`, in `Left::contents`), which
+  `Book::contents` declares by its name in the document (`Leads::place`): the chapter the book
+  marks, if it is shown; else the first chapter that looks like a page of contents
+  (`Tally::lists_the_book`: among the first eight, `GUESS_AMONG`, one whose links lead to three
+  other chapters or more, `GUESS_CHAPTERS`, and most of whose links lead to another chapter); else
+  the Contents page; else nowhere. `Written::start_tag` counts each chapter's links in a `Tally`
+  as it writes them, keeping no more than the three chapters the guess asks for, and in the first
+  eight chapters writes an empty `<a id="contents-in-c2">` before the first link to another chapter
+  (`first_link`): the place such a chapter is gone to at, since a book's first chapter may be its
+  title page and its contents both. A chapter the book protects
   (`Plan::protects`) is left out and counted, and a book with none shown and some protected is
   refused.
   `Written::body` goes through the chapter with `markup.rs`'s lexer, tag by tag: `<head>`,
@@ -841,7 +855,7 @@ What the pager can do is apart from the keys that do it, as in Emacs
 
 - **The catalog.** A `Command` is one thing the reader can ask for, known by its name
   (`Command::name`, kebab-case): the viewer's own (`VIEWER`: `screen-down`, `tile-left`, `go-to`,
-  `back`, `quit`…) and, for each setting a build declares, one or two built from the setting's name,
+  `contents`, `back`, `quit`…) and, for each setting a build declares, one or two built from the setting's name,
   `Command::Setting(&Setting, Turn)`: `paper` for a `Keys::Cycle`, `width-down` and `width-up` for a
   `Keys::Step`. The viewer names none of a backend's commands. A setting on the zoom keys
   (`Keys::Zoom`) has none of its own: `zoom-in` and `zoom-out` hand over to it where it applies
@@ -1613,6 +1627,21 @@ when they answer (`Pager::seek_on`); a key meanwhile stops the wait. A document 
 laid out for a list's preview and then again for the window, so the wait is handed to the new
 level and asked of its layout (`Pager::replace`). Each such level is one deeper (`Level::depth`,
 which a relayout keeps), 16 at the most (`MAX_DEPTH`).
+
+**A source's contents.** A source may say where its contents are listed (`Source::contents`, none
+by default): a `Landmark`, what the place is called for the reader (`called`: `Contents`) and its
+name, as a link's `#name` names a place, so one only of a source with links. The viewer knows no
+more of it, and no format: `Level::new` keeps it with the file's `Nav` (`Nav::contents`; none in a
+list, nor one whose name is empty or past `MAX_NAME`), and the `contents` command, `T` by default,
+gives `Step::Contents` where there is one, and says there are none where there isn't
+(`NO_CONTENTS`). `Pager::go_to_contents` asks the file's links where the name is, as a link's
+fragment is asked (`Ask::Name`, `Level::seeking`), with where the reader is (`Pager::here`) kept
+meanwhile (`Level::leaving`); `Pager::seek_on` then goes there as a link followed does
+(`Nav::jump`), so `back` comes back. Its line in `?` (`commands::CONTENTS_LINE`) is listed only
+with a place (`Nav::help_lines`), and when a file with one opens the status line says what the
+source calls the place and the key bound to the command (`Nav::offer`: `Contents: T`), as a
+message that has the whole line for a second (`Nav::notice`, [Settings](#settings)), which a
+layout again doesn't say again (`Pager::replace` keeps the notice of the level it replaces).
 
 A `Web` is checked too (`link::web`): at most 4 KiB; no character that `hidden` names (a control
 character, any whitespace, a bidirectional mark, a soft hyphen, a zero-width or filler character,

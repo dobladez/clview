@@ -966,6 +966,25 @@ pub(crate) trait Source {
     fn links(&self) -> Option<Box<dyn Links>> {
         None
     }
+    /// Where its contents are listed, for the reader to go to from any page: a place its links
+    /// know by name ([`Links`], [`Ask::Name`]), so one only of a source that has links. `None` for
+    /// a source with no such place, the default: the viewer offers the command only where one is
+    /// declared.
+    fn contents(&self) -> Option<Landmark> {
+        None
+    }
+}
+
+/// A place in a source that the reader goes to by a command of its own, from any page
+/// ([`Source::contents`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(feature = "epub", test)), expect(dead_code, reason = "only books declare one"))]
+pub(crate) struct Landmark {
+    /// What it is, for the reader, as the status line says it before the key that goes there:
+    /// `Contents`.
+    pub(crate) called: &'static str,
+    /// Its name, as a link's `#name` names a place, without its `#`: at most [`MAX_NAME`] bytes.
+    pub(crate) name: String,
 }
 
 /// The most links a page gives ([`Told::Page`]): a source stops there, and says how many more

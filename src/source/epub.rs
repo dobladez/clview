@@ -29,8 +29,8 @@ use super::markup::{Piece, SKIPPED, StartTag, past_end_tag};
 use super::worker::{self, Died, FAILED, Link as Worked, Session, WALL, Worker};
 use super::zipped::Zipped;
 use super::{
-    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Links, MAX_NAME, Named,
-    Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values,
+    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Landmark, Links, MAX_NAME,
+    Named, Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -329,7 +329,10 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
         None => backend.open(document, options)?,
     };
     match shown {
-        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes(plan.fixed, &plan.contents).into() }))),
+        Opened::Pages(pages) => {
+            let contents = left.contents.place().map(|name| Landmark { called: "Contents", name });
+            Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes(plan.fixed, &plan.contents).into(), contents })))
+        }
         Opened::Files(_) => Err(error("its chapters' HTML holds files".into())),
     }
 }
@@ -376,12 +379,16 @@ struct Plan {
     toc: Option<String>,
     /// The table of contents read from it, for the book's Contents page.
     contents: Contents,
+    /// The chapter the book marks as its own page of contents, by its path from the book's top: the
+    /// nav document itself in the reading order, or the chapter the package's landmarks, or its
+    /// guide, call its `toc`.
+    own: Option<String>,
 }
 
 /// A book's table of contents, as its Contents page is made from it.
 #[derive(Debug, Default, PartialEq, Eq)]
 enum Contents {
-    /// None to show: the book has none, or one of its chapters is its table of contents already.
+    /// None to show: the book has none.
     #[default]
     None,
     /// Its entries, in order, and whether there were more than are kept.
@@ -475,33 +482,31 @@ fn planned(zipped: &Zipped, read: Read) -> Result<Plan, String> {
         Err(Died::Unstarted(why)) => Err(format!("the process that reads its package couldn't be started ({})", cut(&why, MAX_WHY))),
         Err(_) => Err(UNREAD.into()),
     }?;
-    plan.contents = contents(&plan, zipped, &opf_path, &opf, read);
+    (plan.contents, plan.own) = contents(&plan, zipped, &opf_path, &opf, read);
     Ok(plan)
 }
 
 /// The table of contents of the book `plan` orders, for its Contents page: read by a second worker,
 /// through `read`, which is given the package again (`path`, `opf`) with the file that holds it. None
-/// where the book has none, or has a chapter that is it already: the nav document itself in the
-/// reading order, or the chapter the package's landmarks, or its guide, call its `toc`. Whatever
-/// goes wrong costs the Contents page, never the book.
-fn contents(plan: &Plan, zipped: &Zipped, path: &str, opf: &[u8], read: Read) -> Contents {
-    let Some(toc) = plan.toc.as_deref() else { return Contents::None };
+/// where the book has none. With it, the chapter the book marks as its own page of contents, if it
+/// has one: the nav document itself in the reading order, or the chapter the package's landmarks,
+/// or its guide, call its `toc`. Whatever goes wrong costs the Contents page, never the book.
+fn contents(plan: &Plan, zipped: &Zipped, path: &str, opf: &[u8], read: Read) -> (Contents, Option<String>) {
+    let Some(toc) = plan.toc.as_deref() else { return (Contents::None, None) };
     let chapter = |file: &str| plan.chapters.iter().any(|chapter| chapter.path.as_deref() == Some(file));
-    if chapter(toc) {
-        return Contents::None;
-    }
+    let in_order = chapter(toc).then(|| toc.to_owned());
     let held = zipped.index_of(toc).filter(|_| !plan.protects(toc)).and_then(|index| zipped.within(index, MAX_TOC).ok().flatten());
-    let Some(held) = held else { return Contents::Unread };
+    let Some(held) = held else { return (Contents::Unread, in_order) };
     let mut request = Vec::new();
     for field in [path.as_bytes(), opf, toc.as_bytes(), &held] {
         put(&mut request, field);
     }
-    let Ok((ENTRIES, answer)) = read(CONTENTS, request) else { return Contents::Unread };
-    match Listed::read(&answer) {
-        Some(listed) if listed.own.as_deref().is_some_and(chapter) => Contents::None,
-        Some(listed) if listed.entries.is_empty() => Contents::None,
-        Some(listed) => Contents::Listed { entries: listed.entries, more: listed.more },
-        None => Contents::Unread,
+    let Ok((ENTRIES, answer)) = read(CONTENTS, request) else { return (Contents::Unread, in_order) };
+    let Some(listed) = Listed::read(&answer) else { return (Contents::Unread, in_order) };
+    let own = in_order.or(listed.own.filter(|own| chapter(own)));
+    match listed.entries.is_empty() {
+        true => (Contents::None, own),
+        false => (Contents::Listed { entries: listed.entries, more: listed.more }, own),
     }
 }
 
@@ -731,7 +736,7 @@ impl Plan {
         }
         files.sort_unstable();
         let toc = path(fields.next()?)?;
-        fields.next().is_none().then_some(Self { chapters: read, cover, fixed, protected: files, toc, contents: Contents::None })
+        fields.next().is_none().then_some(Self { chapters: read, cover, fixed, protected: files, toc, contents: Contents::None, own: None })
     }
 }
 
@@ -753,6 +758,87 @@ struct Left {
     protected: usize,
     /// The chapters written into the book.
     shown: usize,
+    /// Where the book's contents are, in it as assembled.
+    contents: Leads,
+}
+
+/// Where a book's contents are, for the key that goes there ([`Source::contents`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Leads {
+    /// Nowhere: the book has no table of contents, and no chapter that looks like one.
+    #[default]
+    Nowhere,
+    /// The chapter of this number, the book's own page of contents, at its start.
+    Chapter(usize),
+    /// The chapter of this number, the book's own page of contents, at the first of its links to
+    /// another chapter ([`first_link`]): a book's first chapter may be its title page, its
+    /// contents and its preface, one after the other.
+    Links(usize),
+    /// The Contents page made here from the book's table of contents, its last page.
+    Page,
+}
+
+impl Leads {
+    /// The place's name in the book's document.
+    fn place(self) -> Option<String> {
+        match self {
+            Self::Nowhere => None,
+            Self::Chapter(chapter) => place(chapter, None),
+            Self::Links(chapter) => Some(first_link(chapter)),
+            Self::Page => Some(CONTENTS_PAGE.to_owned()),
+        }
+    }
+}
+
+/// The id of the Contents page made here: no chapter's, each of whose ids starts with its number
+/// ([`place`]).
+const CONTENTS_PAGE: &str = "contents";
+
+/// The name of the place before the first link, in the chapter numbered `chapter`, that leads to
+/// another chapter: where a page of contents starts. Written in the first [`GUESS_AMONG`] chapters.
+fn first_link(chapter: usize) -> String {
+    format!("contents-in-c{chapter}")
+}
+
+/// How many chapters, from the first of the reading order, may be guessed to be the book's own page
+/// of contents, which its package doesn't mark: one is at a book's start. Of 22 books measured, the
+/// page was the second or the third chapter of each of the 18 that have one (ADR-0038).
+const GUESS_AMONG: usize = 8;
+/// How many other chapters such a chapter's links lead to, at least: the pages of contents
+/// measured had 12 links to other chapters or more, and no other chapter more than 2.
+const GUESS_CHAPTERS: usize = 3;
+
+/// What a chapter's links say of it, for the guess that it is the book's own page of contents:
+/// counted as the chapter is written, and no more kept than the guess asks for, however many
+/// links a chapter has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Tally {
+    /// Its links (`<a href>`), and those of them that lead to other chapters.
+    links: usize,
+    away: usize,
+    /// The other chapters they lead to, each once, the first [`GUESS_CHAPTERS`] of them.
+    chapters: Vec<usize>,
+}
+
+impl Tally {
+    /// A link met, which leads to the chapter numbered `to`, if to any, from the one numbered
+    /// `from`: whether it is the chapter's first to another.
+    fn link(&mut self, from: usize, to: Option<usize>) -> bool {
+        self.links = self.links.saturating_add(1);
+        let Some(to) = to.filter(|to| *to != from) else { return false };
+        self.away = self.away.saturating_add(1);
+        if self.chapters.len() < GUESS_CHAPTERS && !self.chapters.contains(&to) {
+            self.chapters.push(to);
+        }
+        self.away == 1
+    }
+
+    /// Whether the chapter looks like the book's own page of contents: its links lead to
+    /// [`GUESS_CHAPTERS`] other chapters or more, and most of its links lead to another chapter
+    /// (three in four did, or more, in the pages of contents measured).
+    fn lists_the_book(&self) -> bool {
+        self.chapters.len() >= GUESS_CHAPTERS && self.away.saturating_mul(2) > self.links
+    }
 }
 
 impl Left {
@@ -804,7 +890,9 @@ fn start() -> String {
 /// The book `plan` orders, read from `zipped`, as one HTML document: each chapter's body in a
 /// `<div>` that starts a page, in the spine's order, a chapter that is a picture as a page of it;
 /// before them the cover, a page of its own, when the package names one that the first chapter
-/// shown doesn't show already. And how many chapters were left out, and why.
+/// shown doesn't show already; after them the Contents page made from the book's table of
+/// contents, its last page, so that it moves none of the book's own. And how many chapters were
+/// left out, and why, and where the book's contents are.
 fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     let mut out = start();
     let mut left = Left::default();
@@ -817,8 +905,7 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     }
     // The cover, as a picture the book holds and may show.
     let cover = plan.cover.as_deref().filter(|cover| zipped.index_of(cover).is_some() && !plan.protects(cover));
-    // The Contents page, after the cover: an entry leads to its chapter where the book has that
-    // chapter to show.
+    // The Contents page: an entry leads to its chapter where the book has that chapter to show.
     let contents = match &plan.contents {
         Contents::Listed { entries, .. } => {
             let shows = |path: &str| {
@@ -833,8 +920,13 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
         }
         Contents::None | Contents::Unread => String::new(),
     };
-    // What the book comes to as it is written.
-    let (mut marks, mut text) = (0usize, 0usize);
+    // What the book comes to as it is written: the Contents page, which comes last, is counted
+    // first, whole as text, so that the chapters leave it its room.
+    let count = |html: &str| html.bytes().filter(|b| matches!(b, b'<' | b'\r' | b'\n')).count();
+    let (mut marks, mut text) = (count(&contents), contents.len());
+    // The chapter the book marks as its own page of contents, and the first that looks like one.
+    let own = plan.own.as_deref().and_then(|own| numbers.get(own).copied());
+    let (mut marked, mut guessed) = (None, None);
     for (number, chapter) in plan.chapters.iter().enumerate() {
         let Some(path) = chapter.path.as_deref() else {
             left.missing = left.missing.saturating_add(1);
@@ -853,8 +945,8 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
             continue;
         }
         let number = number.saturating_add(1);
-        let (body, body_text) = match chapter.kind {
-            Kind::Picture => (page_of(&format!("c{number}"), path), 0),
+        let (body, body_text, tally) = match chapter.kind {
+            Kind::Picture => (page_of(&format!("c{number}"), path), 0, Tally::default()),
             _ => {
                 let bytes = match zipped.within(index, MAX_CHAPTER) {
                     Ok(Some(bytes)) => bytes,
@@ -876,18 +968,14 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
                 written.body(&xhtml)
             }
         };
-        // Before the first chapter shown: the cover, unless that chapter shows it, then the
-        // Contents page.
+        // Before the first chapter shown: the cover, unless that chapter shows it.
         let first = match (left.shown, cover.filter(|cover| !body.contains(&pictured_from_the_top(cover)))) {
-            (0, Some(cover)) => format!("{}{contents}", page_of("cover", cover)),
-            (0, None) => contents.clone(),
+            (0, Some(cover)) => page_of("cover", cover),
             _ => String::new(),
         };
-        let body_marks = first.bytes().chain(body.bytes()).filter(|b| matches!(b, b'<' | b'\r' | b'\n')).count();
-        // The Contents page, written with the first chapter shown, counted whole as text.
-        let first_text = if left.shown == 0 { contents.len() } else { 0 };
-        let (marks_now, text_now) = (marks.saturating_add(body_marks), text.saturating_add(body_text).saturating_add(first_text));
-        if out.len().saturating_add(first.len()).saturating_add(body.len()) > MAX_WRITTEN || marks_now > MAX_MARKS || text_now > MAX_TEXT {
+        let (marks_now, text_now) = (marks.saturating_add(count(&first)).saturating_add(count(&body)), text.saturating_add(body_text));
+        let written = out.len().saturating_add(first.len()).saturating_add(body.len()).saturating_add(contents.len());
+        if written > MAX_WRITTEN || marks_now > MAX_MARKS || text_now > MAX_TEXT {
             // With those after it: a book cut short reads to where it is cut.
             left.past = plan.chapters.len().saturating_add(1).saturating_sub(number);
             break;
@@ -896,15 +984,33 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
         out.push_str(&first);
         out.push_str(&body);
         left.shown = left.shown.saturating_add(1);
+        // At its first link to another chapter, where it has one and the place was written.
+        let at = if number <= GUESS_AMONG && tally.away > 0 { Leads::Links(number) } else { Leads::Chapter(number) };
+        if own == Some(number) {
+            marked = Some(at);
+        }
+        if guessed.is_none() && number <= GUESS_AMONG && tally.lists_the_book() {
+            guessed = Some(at);
+        }
     }
+    // A book none of whose chapters shows has no Contents page either.
+    let page = left.shown > 0 && !contents.is_empty();
+    if page {
+        out.push_str(&contents);
+    }
+    // The book's own page of contents, as it marks it, else as guessed; else the page made here.
+    left.contents = marked.or(guessed).unwrap_or(if page { Leads::Page } else { Leads::Nowhere });
     (out, left)
 }
 
-/// The book's Contents page, of `entries`: a heading, and nested lists as deep as the entries are,
-/// each entry its label, as a link to the place `leads` says it leads to in the book's document, or
-/// alone where it leads to none.
+/// The book's Contents page, of `entries`: a heading, a line saying who made the page, since the
+/// book didn't, and nested lists as deep as the entries are, each entry its label, as a link to the
+/// place `leads` says it leads to in the book's document, or alone where it leads to none.
 fn contents_page(entries: &[Entry], leads: impl Fn(&Entry) -> Option<String>) -> String {
-    let mut out = String::from("<div id=\"contents\" style=\"page-break-before: always\"><h1>Contents</h1>");
+    let mut out = format!(
+        "<div id=\"{CONTENTS_PAGE}\" style=\"page-break-before: always\"><h1>Contents</h1><p><em>Made by {} from the book's table of contents.</em></p>",
+        crate::NAME
+    );
     // How many lists are open, each with an item open in it.
     let mut open = 0u8;
     for entry in entries {
@@ -1034,10 +1140,12 @@ struct Written<'a> {
 
 impl Written<'_> {
     /// The chapter `xhtml` as its part of the book: what its `<body>` holds (all of it, where it has
-    /// none), in a `<div>` that starts a page; and how many bytes of text that is.
-    fn body(&self, xhtml: &str) -> (String, usize) {
+    /// none), in a `<div>` that starts a page; how many bytes of text that is; and what its links say
+    /// of it.
+    fn body(&self, xhtml: &str) -> (String, usize, Tally) {
         let mut out = format!("<div id=\"c{}\" style=\"page-break-before: always\">", self.chapter);
         let (mut text, mut at) = (0usize, 0usize);
+        let mut tally = Tally::default();
         // Whether anything of the chapter shows yet: text, or an element that shows without any.
         let mut shown = false;
         // From its `<body>`, where it has one.
@@ -1088,17 +1196,21 @@ impl Written<'_> {
                             let _ = write!(out, "<img src=\"{}\" alt=\"\"/>", self.pictured(picture));
                             at = past;
                         }
-                        None => self.start_tag(&tag, &mut out),
+                        None => self.start_tag(&tag, &mut out, &mut tally),
                     }
                 }
             }
         }
         out.push_str("</div>\n");
-        (out, text)
+        (out, text, tally)
     }
 
-    /// The start tag `tag` written again: its ids the book's own, its paths from the book's top.
-    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String) {
+    /// The start tag `tag` written again: its ids the book's own, its paths from the book's top. A
+    /// link (`<a href>`) is counted in `tally`, and before the first that leads to another chapter,
+    /// in a chapter that may be guessed to be the book's page of contents, a place is written, for
+    /// the key that goes to the contents ([`first_link`]).
+    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String, tally: &mut Tally) {
+        let from = out.len();
         out.push('<');
         out.push_str(tag.name);
         for attribute in tag.attributes() {
@@ -1111,7 +1223,13 @@ impl Written<'_> {
                     None => continue,
                 },
                 name if name.eq_ignore_ascii_case("src") => self.pictured(attribute.value),
-                name if name.eq_ignore_ascii_case("href") => self.linked(attribute.value),
+                name if name.eq_ignore_ascii_case("href") => {
+                    let (written, chapter) = self.linked(attribute.value);
+                    if tag.is("a") && tally.link(self.chapter, chapter) && self.chapter <= GUESS_AMONG {
+                        out.insert_str(from, &format!("<a id=\"{}\"></a>", first_link(self.chapter)));
+                    }
+                    written
+                }
                 _ => attribute.value.to_owned(),
             };
             // As written, a value holds no quote of the kind around it; one written again may.
@@ -1158,19 +1276,21 @@ impl Written<'_> {
     /// chapter, or to a place in one, as that place in the document (`#c3`, a chapter's start, or
     /// `#c3-s1`, the chapter's `id="s1"`), this chapter's for a `#name` alone; a link to any other
     /// file, marked as a file of the book or as none ([`IN_THE_BOOK`], [`NOT_IN_THE_BOOK`]) and
-    /// written from the book's top, so that it is never a path on disk.
-    fn linked(&self, href: &str) -> String {
+    /// written from the book's top, so that it is never a path on disk. With it, the number of the
+    /// chapter it leads to, if it leads to one.
+    fn linked(&self, href: &str) -> (String, Option<usize>) {
         let reference = href.trim();
-        let Some((path, rest)) = self.resolved(reference) else { return href.to_owned() };
+        let Some((path, rest)) = self.resolved(reference) else { return (href.to_owned(), None) };
         let fragment = rest.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty());
         // Its chapter: this one, for a place alone or a link to nowhere else.
         let own = reference.is_empty() || reference.starts_with(['#', '?']);
         let chapter = if own { Some(self.chapter) } else { path.as_deref().and_then(|path| self.chapters.get(path).copied()) };
-        match (chapter, path) {
+        let written = match (chapter, path) {
             (Some(chapter), _) => place(chapter, fragment).map_or_else(|| NO_SUCH_PLACE.to_owned(), |name| format!("#{name}")),
             (None, Some(path)) if self.zipped.index_of(&path).is_some() => format!("{IN_THE_BOOK}{}", percent_encoded(&path)),
             (None, path) => format!("{NOT_IN_THE_BOOK}{}", percent_encoded(path.as_deref().unwrap_or_default())),
-        }
+        };
+        (written, chapter)
     }
 }
 
@@ -1233,6 +1353,8 @@ fn percent_encoded(path: &str) -> String {
 struct Book {
     pages: Box<dyn Source + Send>,
     notes: Arc<[String]>,
+    /// Where its contents are: its own page of them, or the one made here.
+    contents: Option<Landmark>,
 }
 
 /// Everything is the document's, as its backend shows it; but the first page's notes, and where
@@ -1276,8 +1398,8 @@ impl Source for Book {
 
     /// The document laid out again is a book again.
     fn relayout(&self, values: Values, room: Room) -> Option<Job> {
-        let (job, notes) = (self.pages.relayout(values, room)?, self.notes.clone());
-        Some(Box::new(move || job().map(|pages| Box::new(Book { pages, notes }) as Box<dyn Source + Send>)))
+        let (job, notes, contents) = (self.pages.relayout(values, room)?, self.notes.clone(), self.contents.clone());
+        Some(Box::new(move || job().map(|pages| Box::new(Book { pages, notes, contents }) as Box<dyn Source + Send>)))
     }
 
     fn largest_scale(&self, page: usize) -> Option<f32> {
@@ -1302,6 +1424,10 @@ impl Source for Book {
 
     fn links(&self) -> Option<Box<dyn Links>> {
         Some(Box::new(InTheBook(self.pages.links()?)))
+    }
+
+    fn contents(&self) -> Option<Landmark> {
+        self.contents.clone()
     }
 }
 
@@ -2026,7 +2152,7 @@ mod tests {
             ("https://example.com/a?b=c#d", "https://example.com/a?b=c#d"),
             ("mailto:a@example.com", "mailto:a@example.com"),
         ] {
-            assert_eq!(written.linked(href), linked, "{href}");
+            assert_eq!(written.linked(href).0, linked, "{href}");
         }
     }
 
@@ -2043,9 +2169,9 @@ mod tests {
         assert_eq!(
             &html[HEAD as usize..],
             concat!(
-                r##"<div id="c1" style="page-break-before: always"><h1 id="c1-start">One</h1><p><a href="#c1-start">here</a>, <a href="#c2-start">there</a>, <a href="#c2">its start</a></p></div>"##,
+                r##"<div id="c1" style="page-break-before: always"><h1 id="c1-start">One</h1><p><a href="#c1-start">here</a>, <a id="contents-in-c1"></a><a href="#c2-start">there</a>, <a href="#c2">its start</a></p></div>"##,
                 "\n",
-                r##"<div id="c2" style="page-break-before: always"><h1 id="c2-start">Two</h1><p><a href="#c1-start">back</a></p></div>"##,
+                r##"<div id="c2" style="page-break-before: always"><h1 id="c2-start">Two</h1><p><a id="contents-in-c2"></a><a href="#c1-start">back</a></p></div>"##,
                 "\n",
             )
         );
@@ -2058,9 +2184,9 @@ mod tests {
         let book = book(&[]);
         let written = Written { chapter: 12, directory: "", zipped: &book, chapters: &HashMap::new() };
         let (fits, long) = ("a".repeat(MAX_NAME - 4), "a".repeat(MAX_NAME - 3));
-        assert_eq!(written.linked(&format!("#{fits}")), format!("#c12-{fits}"));
-        assert_eq!(written.linked(&format!("#{long}")), NO_SUCH_PLACE);
-        let (body, _) = written.body(&chapter(&format!(r##"<p id="{fits}" class="a">one</p><p id="{long}" class="b">two</p>"##)));
+        assert_eq!(written.linked(&format!("#{fits}")).0, format!("#c12-{fits}"));
+        assert_eq!(written.linked(&format!("#{long}")).0, NO_SUCH_PLACE);
+        let (body, ..) = written.body(&chapter(&format!(r##"<p id="{fits}" class="a">one</p><p id="{long}" class="b">two</p>"##)));
         assert!(body.contains(&format!(r#"<p id="c12-{fits}" class="a">"#)) && body.contains(r#"<p class="b">two</p>"#), "{body}");
         let link = super::super::Link {
             page: 0,
@@ -2201,7 +2327,7 @@ mod tests {
     fn an_element_written_short_is_read_as_empty() {
         let book = book(&[]);
         let written = Written { chapter: 2, directory: "", zipped: &book, chapters: &HashMap::new() };
-        let (body, _) = written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#));
+        let (body, ..) = written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#));
         assert_eq!(
             body,
             concat!(
@@ -2404,38 +2530,32 @@ mod tests {
         assert!(Listed::read(&[]).is_none() && Listed::read(&[0xFF; 40]).is_none());
     }
 
-    /// No Contents page is made for a book one of whose chapters is its table of contents already,
-    /// as its package says: the nav document in the reading order, for which no worker is asked;
-    /// or the chapter its landmarks, or its guide, call `toc`.
+    /// The chapter a book marks as its own page of contents is known: its nav document in the
+    /// reading order, the chapter its landmarks call its `toc`, or EPUB 2's guide. Its table of
+    /// contents is read all the same, for the Contents page at the book's end.
     #[test]
-    fn contents_are_not_made_twice() {
-        fn never_contents(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
-            assert_ne!(kind, CONTENTS, "asked for a table of contents the book shows itself");
-            in_a_thread(kind, payload)
-        }
+    fn a_book_marks_its_own_page_of_contents() {
         let list = r#"<ol><li><a href="text/one.xhtml">One</a></li></ol>"#;
         let container = container("OEBPS/content.opf");
-        let planned_with = |package: &str, nav: &str, read: Read| {
+        let planned_with = |package: &str, nav: &str| {
             let files =
                 [("META-INF/container.xml", container.as_bytes()), ("OEBPS/content.opf", package.as_bytes()), ("OEBPS/nav.xhtml", nav.as_bytes())];
-            planned(&book(&files), read).unwrap()
+            let plan = planned(&book(&files), in_a_thread).unwrap();
+            assert!(matches!(plan.contents, Contents::Listed { .. }), "{:?}", plan.contents);
+            plan.own
         };
         let in_spine = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="nav"/><itemref idref="one"/>"#);
-        assert_eq!(planned_with(&in_spine, &nav(list, ""), never_contents).contents, Contents::None);
+        assert_eq!(planned_with(&in_spine, &nav(list, "")).as_deref(), Some("OEBPS/nav.xhtml"));
         let apart = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="one"/>"#);
-        assert!(matches!(planned_with(&apart, &nav(list, ""), in_a_thread).contents, Contents::Listed { .. }));
+        assert_eq!(planned_with(&apart, &nav(list, "")), None);
         let landmarks = |kind: &str, href: &str| {
             format!(r#"<nav epub:type="landmarks"><ol><li><a epub:type="{kind}" href="{href}">Table of contents</a></li></ol></nav>"#)
         };
-        assert_eq!(planned_with(&apart, &nav(list, &landmarks("toc", "text/one.xhtml#contents")), in_a_thread).contents, Contents::None);
-        assert!(matches!(
-            planned_with(&apart, &nav(list, &landmarks("bodymatter", "text/one.xhtml")), in_a_thread).contents,
-            Contents::Listed { .. }
-        ));
-        assert!(matches!(
-            planned_with(&apart, &nav(list, &landmarks("toc", "text/not-a-chapter.xhtml")), in_a_thread).contents,
-            Contents::Listed { .. }
-        ));
+        assert_eq!(planned_with(&apart, &nav(list, &landmarks("toc", "text/one.xhtml#contents"))).as_deref(), Some("OEBPS/text/one.xhtml"));
+        assert_eq!(planned_with(&apart, &nav(list, &landmarks("bodymatter", "text/one.xhtml"))), None);
+        assert_eq!(planned_with(&apart, &nav(list, &landmarks("toc", "text/not-a-chapter.xhtml"))), None, "no chapter of the book");
+        // The nav document in the reading order comes before what the landmarks say.
+        assert_eq!(planned_with(&in_spine, &nav(list, &landmarks("toc", "text/one.xhtml"))).as_deref(), Some("OEBPS/nav.xhtml"));
         // EPUB 2's guide says the same.
         let ncx = r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap><navPoint><navLabel><text>One</text></navLabel><content src="text/one.xhtml"/></navPoint></navMap></ncx>"#;
         let ncx_item = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
@@ -2443,11 +2563,16 @@ mod tests {
             let package = package("2.0", "", &format!("{CHAPTER_ITEM}{ncx_item}"), r#"<itemref idref="one"/>"#)
                 .replace("<spine>", r#"<spine toc="ncx">"#)
                 .replace("</package>", &format!("{guide}</package>"));
-            planned_of(&package, &[("OEBPS/toc.ncx", ncx.as_bytes())]).unwrap().contents
+            let plan = planned_of(&package, &[("OEBPS/toc.ncx", ncx.as_bytes())]).unwrap();
+            assert!(matches!(plan.contents, Contents::Listed { .. }), "{:?}", plan.contents);
+            plan.own
         };
-        assert_eq!(guided(r#"<guide><reference type="toc" title="Contents" href="text/one.xhtml#contents"/></guide>"#), Contents::None);
-        assert!(matches!(guided(r#"<guide><reference type="cover" title="Cover" href="text/one.xhtml"/></guide>"#), Contents::Listed { .. }));
-        assert!(matches!(guided(""), Contents::Listed { .. }));
+        assert_eq!(
+            guided(r#"<guide><reference type="toc" title="Contents" href="text/one.xhtml#contents"/></guide>"#).as_deref(),
+            Some("OEBPS/text/one.xhtml")
+        );
+        assert_eq!(guided(r#"<guide><reference type="cover" title="Cover" href="text/one.xhtml"/></guide>"#), None);
+        assert_eq!(guided(""), None);
     }
 
     /// A table of contents that can't be read costs the book its Contents page, never the book:
@@ -2496,11 +2621,12 @@ mod tests {
         assert_eq!(Left::default().notes(false, &Contents::Unread), ["its table of contents couldn't be read: it has no Contents page"]);
     }
 
-    /// The Contents page comes after the cover, before the first chapter: a heading, and lists
-    /// nested as the entries are, each its label, markup in it no markup, as a link to its place
-    /// in the book; an entry that leads to no chapter the book shows is its label alone.
+    /// The Contents page is the book's last, after its chapters, so that it moves none of them: a
+    /// heading, a line saying clv made it, and lists nested as the entries are, each its label,
+    /// markup in it no markup, as a link to its place in the book; an entry that leads to no
+    /// chapter the book shows is its label alone.
     #[test]
-    fn contents_are_a_page_of_links_after_the_cover() {
+    fn contents_are_a_page_of_links_at_the_books_end() {
         let (one, two) = (chapter(r#"<h1 id="s1">One</h1>"#), chapter("<h1>Two</h1>"));
         let files: [(&str, &[u8]); 4] =
             [("text/one.xhtml", one.as_bytes()), ("text/two.xhtml", two.as_bytes()), ("cover.jpg", b"jpeg"), ("notes.txt", b"x")];
@@ -2520,24 +2646,131 @@ mod tests {
         };
         let (html, left) = assembled(&plan, &book(&files));
         let page = concat!(
-            r##"<div id="contents" style="page-break-before: always"><h1>Contents</h1><ul>"##,
+            r##"<div id="contents" style="page-break-before: always"><h1>Contents</h1><p><em>Made by clv from the book's table of contents.</em></p><ul>"##,
             r##"<li><a href="#c1">One &lt;b&gt;&amp;&lt;/b&gt; only</a><ul><li><a href="#c1-s1">Its start</a><ul><li><a href="#c2-x">Deeper</a></li></ul></li><li>Missing</li></ul></li>"##,
             r##"<li>Not a chapter</li><li>Nowhere</li><li><a href="#c2">…</a></li></ul></div>"##,
             "\n",
         );
         let text = &html[HEAD as usize..];
-        let cover = text.find(r#"<div id="cover""#).unwrap();
-        let (contents, first) = (text.find(page).expect(text), text.find(r#"<div id="c1""#).unwrap());
-        assert!(cover == 0 && cover < contents && contents + page.len() == first, "{text}");
-        assert_eq!((left.shown, left.missing), (2, 1));
-        // Without a cover it is the first page; and a book with no chapter shown has none.
-        plan.cover = None;
-        assert!(assembled(&plan, &book(&files)).0[HEAD as usize..].starts_with(page));
-        assert_eq!(assembled(&plan, &book(&[])).0.len(), HEAD as usize);
+        // The cover, the chapters, then the page, the book's last: none of the book's own is moved.
+        let (cover, first) = (text.find(r#"<div id="cover""#).unwrap(), text.find(r#"<div id="c1""#).unwrap());
+        let (second, contents) = (text.find(r#"<div id="c2""#).unwrap(), text.find(page).expect(text));
+        assert!(cover == 0 && cover < first && first < second && second < contents && text.ends_with(page), "{text}");
+        assert_eq!((left.shown, left.missing, left.contents), (2, 1, Leads::Page));
+        assert_eq!(left.contents.place().as_deref(), Some("contents"));
+        // A book with no chapter shown has none, and nowhere for the key to go.
+        let (html, left) = assembled(&plan, &book(&[]));
+        assert_eq!((html.len(), left.contents), (HEAD as usize, Leads::Nowhere));
+        // The chapters leave the page its room: one that would fit without it is where the book is cut.
+        let long = chapter(&format!("<p>{}</p>", "a".repeat(MAX_TEXT - page.len() / 2)));
+        let filling: [(&str, &[u8]); 2] = [("text/one.xhtml", one.as_bytes()), ("text/two.xhtml", long.as_bytes())];
+        let (html, left) = assembled(&plan, &book(&filling));
+        assert!((left.shown, left.past) == (1, 2) && html.ends_with(page) && !html.contains("aaaa"), "{left:?}");
+        // Nor has a book with no table of contents.
+        plan.contents = Contents::None;
+        let (html, left) = assembled(&plan, &book(&filling));
+        assert!((left.shown, left.past) == (2, 0) && html.contains("aaaa"), "{left:?}");
+        let (html, left) = assembled(&plan, &book(&files));
+        assert!(!html.contains("Contents") && left.contents == Leads::Nowhere && left.contents.place().is_none());
         // Any depths, in any order, make lists that close.
         let odd = [entry(3, "a", None, None), entry(1, "b", None, None), entry(8, "c", None, None), entry(2, "d", None, None)];
         let page = contents_page(&odd, |_| None);
-        assert!(page.ends_with("<h1>Contents</h1><ul><li>a</li><li>b<ul><li>c</li><li>d</li></ul></li></ul></div>\n"), "{page}");
+        assert!(page.ends_with("table of contents.</em></p><ul><li>a</li><li>b<ul><li>c</li><li>d</li></ul></li></ul></div>\n"), "{page}");
+    }
+
+    /// A book of `bodies`, a chapter each, named `1.xhtml` on: assembled, with `own` (a chapter's
+    /// number) marked as its page of contents, and a table of contents if `listed`.
+    fn led(bodies: &[String], own: Option<usize>, listed: bool) -> (String, Leads) {
+        let named: Vec<String> = (1..=bodies.len()).map(|n| format!("{n}.xhtml")).collect();
+        let chapters: Vec<String> = bodies.iter().map(|body| chapter(body)).collect();
+        let files: Vec<(&str, &[u8])> = named.iter().zip(&chapters).map(|(name, chapter)| (name.as_str(), chapter.as_bytes())).collect();
+        let order: Vec<(&str, Kind)> = named.iter().map(|name| (name.as_str(), Kind::Xhtml)).collect();
+        let mut plan = plan(&order);
+        plan.own = own.map(|number| format!("{number}.xhtml"));
+        if listed {
+            plan.contents = Contents::Listed { entries: vec![entry(1, "One", Some("1.xhtml"), None)], more: false };
+        }
+        let (html, left) = assembled(&plan, &book(&files));
+        (html, left.contents)
+    }
+
+    /// Links to the chapters numbered `to`, a paragraph each.
+    fn links_to(to: &[usize]) -> String {
+        to.iter().map(|number| format!(r#"<p><a href="{number}.xhtml">Chapter {number}</a></p>"#)).collect()
+    }
+
+    /// The key that goes to the contents goes to the book's own page of them: the chapter it
+    /// marks, or else one of its first chapters whose links are mostly to other chapters, three
+    /// of them or more, at the first of those links. Only with neither, to the Contents page made
+    /// here; and nowhere in a book with none of the three.
+    #[test]
+    fn the_contents_are_the_books_own_page_marked_or_guessed_else_the_page_made_here() {
+        let text = |number: usize| format!("<p>Chapter {number}</p>");
+        let plain: Vec<String> = (1..=10).map(text).collect();
+        let with = |number: usize, body: String| {
+            let mut bodies = plain.clone();
+            bodies[number - 1] = body;
+            bodies
+        };
+        // Neither marked nor guessed: the page made here, or nowhere.
+        assert_eq!((led(&plain, None, true).1, led(&plain, None, false).1), (Leads::Page, Leads::Nowhere));
+        // Marked: its start, or its first link to another chapter, where a place is written.
+        assert_eq!(led(&plain, Some(2), true).1, Leads::Chapter(2));
+        assert_eq!(Leads::Chapter(2).place().as_deref(), Some("c2"));
+        let (html, leads) = led(&with(2, format!("<h1>A title</h1>{}", links_to(&[3]))), Some(2), true);
+        assert_eq!((leads, leads.place().as_deref()), (Leads::Links(2), Some("contents-in-c2")));
+        assert!(html.contains(r##"<h1>A title</h1><p><a id="contents-in-c2"></a><a href="#c3">Chapter 3</a></p>"##), "{html}");
+        // Guessed, as Project Gutenberg's EPUB 3 books need: a title page, then the chapters listed.
+        let lists = format!(r#"<h1>A title</h1><p><a href="https://example.org/">a library</a></p>{}"#, links_to(&[3, 4, 5]));
+        let (html, leads) = led(&with(2, lists.clone()), None, true);
+        assert_eq!(leads, Leads::Links(2));
+        assert_eq!(html.matches(r#"<a id="contents-in-c2"></a>"#).count(), 1, "one place, at the first of them");
+        assert_eq!(led(&with(2, lists.clone()), None, false).1, Leads::Links(2), "with no table of contents too");
+        // The first that looks like one, and what the book marks before any guess.
+        let both = with(3, links_to(&[1, 2, 4, 5, 6]));
+        assert_eq!(led(&both, None, true).1, Leads::Links(3));
+        let mut two = both.clone();
+        two[4] = links_to(&[6, 7, 8]);
+        assert_eq!(
+            (led(&two, None, true).1, led(&two, Some(5), true).1, led(&two, Some(7), true).1),
+            (Leads::Links(3), Leads::Links(5), Leads::Chapter(7))
+        );
+        // A few links between chapters make no page of contents: to two other chapters, to one
+        // however often, or among more links that lead elsewhere.
+        let few = with(2, links_to(&[3, 4]));
+        let one = with(2, links_to(&[3, 3, 3, 3]));
+        let elsewhere =
+            format!("{}{}", links_to(&[3, 4, 5]), r##"<p><a href="https://example.org/">a</a> <a href="#x">b</a> <a href="2.xhtml">c</a></p>"##);
+        for not in [few, one, with(2, elsewhere)] {
+            assert_eq!(led(&not, None, true).1, Leads::Page, "{:?}", not[1]);
+        }
+        // Nor is one looked for past a book's first chapters, where no place is written either.
+        let (html, leads) = led(&with(GUESS_AMONG + 1, links_to(&[1, 2, 3])), None, true);
+        assert!(leads == Leads::Page && !html.contains("contents-in-c"), "{leads:?}");
+        assert_eq!(led(&with(GUESS_AMONG + 1, links_to(&[1, 2, 3])), Some(GUESS_AMONG + 1), true).1, Leads::Chapter(GUESS_AMONG + 1));
+        assert_eq!(led(&with(GUESS_AMONG, links_to(&[1, 2, 3])), None, true).1, Leads::Links(GUESS_AMONG));
+        // A page of contents the book marks and doesn't show is none.
+        let mut bodies = plain.clone();
+        bodies.truncate(3);
+        assert_eq!((led(&bodies, Some(9), true).1, led(&bodies, Some(9), false).1), (Leads::Page, Leads::Nowhere));
+    }
+
+    /// The guess costs a chapter nothing that grows with it: its links are counted as they are
+    /// written, the chapters they lead to kept only as far as the guess asks, and one place written.
+    #[test]
+    fn a_chapter_of_links_costs_the_guess_no_more_than_a_few_of_them() {
+        let names: Vec<String> = (1..=MAX_CHAPTERS).map(|n| format!("{n}.xhtml")).collect();
+        let numbers: HashMap<&str, usize> = names.iter().enumerate().map(|(n, name)| (name.as_str(), n + 1)).collect();
+        let book = book(&[]);
+        let written = Written { chapter: 1, directory: "", zipped: &book, chapters: &numbers };
+        let links: String = (0..100_000).map(|n| format!(r#"<a href="{}.xhtml">x</a>"#, n % MAX_CHAPTERS + 1)).collect();
+        let (body, _, tally) = written.body(&chapter(&links));
+        // One in 4096 leads to this chapter itself.
+        let own = 100_000usize.div_ceil(MAX_CHAPTERS);
+        assert_eq!(tally, Tally { links: 100_000, away: 100_000 - own, chapters: vec![2, 3, 4] });
+        assert!(tally.lists_the_book() && tally.chapters.capacity() <= 8);
+        assert_eq!(body.matches("contents-in-c1").count(), 1);
+        assert!(body.contains(r##"<a href="#c1">x</a><a id="contents-in-c1"></a><a href="#c2">x</a>"##));
     }
 
     /// Which zips are books: one that says so in its first file, stored, whatever its name; one

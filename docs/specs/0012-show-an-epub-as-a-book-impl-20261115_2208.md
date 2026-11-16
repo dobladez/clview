@@ -401,3 +401,96 @@ rebase are kept on `backup-spec-0012-before-rebase`.
   CONTRIBUTING say `D` and Backspace. The spec's own text still says `d` and `u`, as it was
   written before Spec-0013: its Changelog says so.
 - Three tests failed after the rebase, all for those keys, and pass with them.
+
+## Task 7 (and task 5 revised): the Contents page last, and a key that goes to the contents
+
+**The owner's decisions, 2026-11-16**, through the lead, in three messages, the last standing:
+
+1. clv's Contents page always goes at the end of the book, its last page, so that it never moves
+   the book's own; made whenever the book has a table of contents, whether or not the book has a
+   contents chapter; labelled as made by clv from the book's table of contents; its limits and
+   the worker's handling as they were. (First it was: leave clv's page out where a chapter is
+   guessed to be the contents. Replaced the same day.)
+2. A key goes to the contents: the book's own contents chapter when there is one, marked in the
+   package or guessed (one of the first few spine chapters mostly links to other chapters, with
+   bounded thresholds and tests), otherwise clv's page; Backspace comes back (`u`, as the message
+   said, before Spec-0013). General in the contract: a source may declare a contents place, and
+   the viewer offers the key only when one is declared.
+3. The status bar says the key when a book opens, for about a second, only when a place is
+   declared, the wording put together from what the source declares.
+4. The key is `T`, and the command is built through Spec-0013's named commands, after a rebase
+   onto main.
+
+**Spec-0013's overlap.** Main had Spec-0013 merged by then, so nothing is left to merge by hand:
+the command is `Command::Contents`, named `contents`, in `VIEWER`, bound to `T` in `PAGES` (a
+file's pages only; a list has no such place), its line in `?` a `Line` like any other
+(`CONTENTS_LINE`), and what names its key reads the keymap (`Nav::offer`). `T` was bound to
+nothing, in either keymap, and no setting suggests it. A number typed before it is dropped
+(`Count::Dropped`), as `f`'s is.
+
+**Choices made on the way**:
+
+- **The contract's declaration is a `Landmark`**: what the place is called, for the reader
+  (`Contents`), and its name among the source's links (`Ask::Name`), which the documents' backend
+  already answers. The viewer's `Level::seeking` already waited for such a name, for a link into
+  a file; it now also keeps where the reader was (`Level::leaving`), so that going to the
+  contents is a jump `back` returns from. No new thread, no new request of a backend.
+- **The status line's words are `{called}: {key}`**, the source's word and the keymap's key:
+  `Contents: T`. Said through `Nav::notice`, task 6's message that has the whole line for a
+  second. A relayout doesn't say it again (it makes a new `Level`): `Pager::replace` keeps the
+  old level's notice, said or not.
+- **Where no place is declared, `T` says `no contents to go to here`**, an ordinary message, as
+  `N` without a search says there is none; `?` doesn't list it, and nothing is said at opening.
+- **The guess** is by links alone: among the book's first 8 chapters, the first whose links lead
+  to 3 other chapters or more and most of whose links (more than half) lead to another chapter.
+  Measured on the 22 books (ADR-0038's update has the table): the 18 that have a page of
+  contents have 12 to 155 such links there, 76% of the chapter's links or more, and no other
+  chapter has more than 2, but one title's list of illustrations, which comes after its
+  contents. The 7 EPUB 2 editions that mark a contents chapter in their guide mark the chapter
+  the guess finds. The share of a chapter's text that is links was measured too and tells
+  nothing: Gutenberg's files hold the contents with the chapters after them.
+- **`T` lands at the chapter's first link to another chapter**, where one is written in the
+  first 8 chapters (an empty `<a id="contents-in-c2">`), not at the chapter's start: Gutenberg's
+  second file is its title page, then its contents. The chapter a package marks is gone to the
+  same way where it has such a link, at its start otherwise (past the first 8, or a page of
+  contents that links nowhere).
+- **What the book marks comes before the guess**, and a marked chapter the book doesn't show
+  (protected, cut) is no place: then the guess, then clv's page.
+- **The Contents page's room is kept first**: it is counted against the book's bounds before any
+  chapter, so a book cut short still ends with it. (It was counted with the first chapter.)
+- **The nav document in the spine no longer saves the second worker**: the table of contents is
+  read for every book that has one, since the page is made for every book.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| the Contents page first again | `epub::tests::contents_are_a_page_of_links_at_the_books_end`, `epub::a_books_contents_page_is_its_last_page_whatever_the_book_has_of_its_own`, `view_pager::epub_t_goes_to_the_contents_page_at_the_books_end_and_backspace_comes_back` |
+| no room kept for the page | `epub::tests::contents_are_a_page_of_links_at_the_books_end` |
+| no line saying who made the page | the same |
+| only a nav in the reading order is the book's own; or only the landmarks' and the guide's | `epub::tests::a_book_marks_its_own_page_of_contents` |
+| no chapter marked | `view_pager::epub_t_goes_to_the_books_own_contents_marked_or_guessed` (once its marked book listed two chapters: listing three, it was guessed all the same, and the test passed) |
+| no guess | `epub::tests::the_contents_are_the_books_own_page_marked_or_guessed_else_the_page_made_here`, `view_pager::epub_t_goes_to_the_books_own_contents_marked_or_guessed` |
+| one other chapter is enough; whatever share of its links; guessed anywhere in the book; the last guess, not the first; a place in every chapter; the chapter's start, never its first link | `epub::tests::the_contents_are_the_books_own_page_…` |
+| every chapter led to is kept | `epub::tests::a_chapter_of_links_costs_the_guess_no_more_than_a_few_of_them` |
+| a place before every link away | both of those |
+| the book declares no place | both `view_pager::epub_t_goes_…` |
+| the command wherever, declared or not; its line in `?` whatever is shown | `view::pager::tests::the_contents_command_is_offered_only_where_a_place_is_declared`, `view_pager::t_is_offered_only_where_contents_are_declared_never_on_a_pdf` |
+| nothing said when the file opens | `view::pager::tests::the_contents_command_…`, `view_pager::epub_t_goes_to_the_contents_page_…` |
+| no place kept to come back to; said again for every layout | `view_pager::epub_t_goes_to_the_contents_page_…` |
+
+One revert failed nothing and was a condition too many: `Nav::offer` asked whether the reader is
+in a list, where no key is bound to the command anyway. Taken out.
+
+**Seen**, printed through `--protocol kitty` and read back as a PNG: Standard Ebooks' *Alice* at
+`--width 60`, its Contents page on pages 189 and 190 of 190, the heading, `Made by clv from the
+book's table of contents.` in italics under it, the entries as nested links.
+
+**In kitty, for the owner** (task 7's Manual): a Project Gutenberg EPUB 3 book: `Contents: T` for
+a second when it opens; `T` from a chapter lands on the book's own contents, a third of the way
+down the screen, Backspace back. A Standard Ebooks book: `T` lands on the last page, `f` and a
+label on a chapter, Backspace twice back to where `T` was pressed.
+
+Gates on 2026-11-16, after the rebase and with this task: `cargo fmt --check`, `cargo clippy
+--all-targets -j 2 -- -D warnings`, `cargo test -j 2` (607 unit, 13 docs, 297 integration), all
+passing. Tasks 5 and 7 stay open for their checks in kitty.

@@ -37,8 +37,8 @@ use super::launch;
 use super::link;
 use crate::encode::{self, PngEffort};
 use crate::source::{
-    Anchor, Ask, Bounds, Container, Effect, Frame, Handle, Keys, Later, Link, Links, Named, Numbers, Openers, Pool, Ready, Request, Room, Setting,
-    Source, Target, Texts, Told, Value, Values,
+    Anchor, Ask, Bounds, Container, Effect, Frame, Handle, Keys, Landmark, Later, Link, Links, MAX_NAME, Named, Numbers, Openers, Pool, Ready,
+    Request, Room, Setting, Source, Target, Texts, Told, Value, Values,
 };
 
 use super::files::{Files, Written};
@@ -77,6 +77,8 @@ const SEARCH_KEYS: &str = "⏎ search · esc cancel";
 /// that starts one named from the keymap ([`Keymap::fill`]).
 const NO_TEXT: &str = "no text to search";
 const NO_SEARCH: &str = "no search: {search} starts one";
+/// What the command that goes to the contents says of what declares no such place.
+const NO_CONTENTS: &str = "no contents to go to here";
 /// The most places the reader comes back to with `back`, the links followed last: an older one is
 /// forgotten.
 const MAX_JUMPS: usize = 100;
@@ -325,6 +327,7 @@ pub(super) fn run(
                     }
                     Step::Hints(aim) => pager.start_hints(aim),
                     Step::Follow => pager.follow(opener)?,
+                    Step::Contents => pager.go_to_contents(),
                     Step::Return => pager.jump_back(),
                 }
                 if quit {
@@ -397,6 +400,8 @@ enum Step {
     Hints(Aim),
     /// A label typed whole: the link chosen ([`Nav::chosen`]) is followed.
     Follow,
+    /// `contents`, where the source says where its contents are ([`Pager::go_to_contents`]).
+    Contents,
     /// `back` with a link followed: back to where the reader was before the last one
     /// ([`Nav::jumps`]).
     Return,
@@ -457,6 +462,9 @@ struct Nav {
     /// key, whichever comes first. Apart from [`Nav::message`], which may come meanwhile from
     /// elsewhere (a page's warning) and is there when this goes.
     notice: Option<String>,
+    /// Where what is shown lists its contents, if it says ([`Source::contents`]): where the
+    /// `contents` command goes, offered only with one.
+    contents: Option<Landmark>,
     /// Whether the status line still reminds of the keys: until the first key.
     hint: bool,
     /// Whether the keys are on screen, in place of the pages (`?`).
@@ -788,6 +796,7 @@ impl Nav {
             typed: String::new(),
             message: None,
             notice: None,
+            contents: None,
             hint: true,
             help: false,
             rerender: false,
@@ -827,10 +836,12 @@ impl Nav {
     fn help_lines(&self) -> Vec<(String, String)> {
         let keymap = self.keymap();
         let lines = if self.list { commands::LIST_LINES } else { commands::PAGE_LINES };
+        // The contents' line only where there is such a place to go to.
+        let lines = lines.iter().filter(|line| self.contents.is_some() || line.commands != commands::CONTENTS_LINE.commands);
         let leave = if self.nested { commands::BACK_LINES } else { commands::QUIT_LINES };
         let (zoomed, reflows) = (self.zoom_setting(), self.reflows());
         let said = |line: &Line| (keymap.shown(line), keymap.fill(line.says));
-        let own = lines.iter().map(|line| match zoomed {
+        let own = lines.map(|line| match zoomed {
             Some(setting) if line.commands == commands::ZOOM => {
                 (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting))
             }
@@ -1034,6 +1045,8 @@ impl Nav {
             // In a file's pages.
             Command::Follow => return Step::Hints(Aim::Follow),
             Command::CopyLink => return Step::Hints(Aim::Copy),
+            Command::Contents if self.contents.is_some() => return Step::Contents,
+            Command::Contents => self.message = Some(NO_CONTENTS.into()),
             Command::ScreenDown => self.forward(self.visible.max(1), per),
             Command::ScreenUp => self.back(self.visible.max(1), per),
             Command::ScrollDown => self.forward(STEP, row),
@@ -1055,6 +1068,14 @@ impl Nav {
             },
         }
         Step::Continue
+    }
+
+    /// What the status line says, whole and for a moment, when what is shown has a place where its
+    /// contents are listed: what the source calls the place, and the key that goes there (`Contents:
+    /// T`). Nothing where it has none, or no key is bound to the command here, as in a list.
+    fn offer(&self) -> Option<String> {
+        let (place, key) = (self.contents.as_ref()?, self.keymap().first(Command::Contents));
+        (!key.is_empty()).then(|| format!("{}: {key}", place.called))
     }
 
     /// `back` with no search kept: back through the links followed, then out of the file.
@@ -1856,9 +1877,12 @@ struct Level {
     /// the file: `None` until then (`linked`), and for a source with none.
     links: Option<Box<dyn Links>>,
     linked: bool,
-    /// The place a link into this file named (its `#fragment`), asked of the source and not yet
-    /// answered: gone to once it is.
+    /// The place a link into this file named (its `#fragment`), or the place of its contents, asked
+    /// of the source and not yet answered: gone to once it is.
     seeking: Option<String>,
+    /// Where the reader was when the place sought was asked for from within the file (`contents`),
+    /// to come back to: none for a place a link into the file named.
+    leaving: Option<Jump>,
     /// How many links to other files were followed to get here: at most [`MAX_DEPTH`].
     depth: usize,
 }
@@ -1872,14 +1896,31 @@ impl Level {
         let Shown { pages: Pages { source, name, pages, picked, on_disk }, items } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
-        let mut nav = Nav { list, nested, hint: !(list && nested), names, settings, has, picked, ..Nav::new(pages, source.pages(), zoom) };
+        // A place it can't be asked by, as a name is asked, is none.
+        let contents = source.contents().filter(|place| !list && !place.name.is_empty() && place.name.len() <= MAX_NAME);
+        let mut nav = Nav { list, nested, hint: !(list && nested), names, settings, has, picked, contents, ..Nav::new(pages, source.pages(), zoom) };
+        nav.notice = nav.offer();
         if nav.reflows() && nav.zoom == Zoom::Width {
             nav.zoom_to(Some(Zoom::PerRow(1)), "");
         }
         let room = Room { per_row: nav.columns_in(&room), ..room };
         nav.bounds = bounds_in(&nav.settings, &*source, &nav.has, room, nav.settings.values.get());
         nav.laid = (!list).then(|| laid_at(&nav.settings, &*source, &nav.has, &nav.bounds)).flatten();
-        Self { id, pool: source.pool(THREADS), source, nav, items, name, from: None, on_disk, links: None, linked: false, seeking: None, depth: 0 }
+        Self {
+            id,
+            pool: source.pool(THREADS),
+            source,
+            nav,
+            items,
+            name,
+            from: None,
+            on_disk,
+            links: None,
+            linked: false,
+            seeking: None,
+            leaving: None,
+            depth: 0,
+        }
     }
 
     /// What the status line calls what the reader is on: the file, or the tile chosen.
@@ -2538,22 +2579,53 @@ impl Pager<'_> {
         };
         links.set_queue(Vec::new());
         let name = self.level.seeking.take().unwrap_or_default();
+        let leaving = self.level.leaving.take();
         let nav = &mut self.level.nav;
         let place = at.map(|at| at.and_then(|(page, y)| Some((nav.pages.iter().position(|given| *given == page)?, page, y))));
         match place {
             Ok(Some((index, page, y))) => {
                 let height = self.level.source.size(page).map_or(0.0, |(_, height)| height);
-                nav.go(index);
-                nav.land = (height > 0.0 && y.is_finite() && nav.first() == index).then(|| y / height);
+                let share = (height > 0.0 && y.is_finite()).then(|| y / height);
+                match leaving {
+                    // From within the file: the place left is kept, for `back`.
+                    Some(from) => nav.jump(index, share, from),
+                    None => {
+                        nav.go(index);
+                        nav.land = share.filter(|_| nav.first() == index);
+                    }
+                }
             }
+            // The contents, where the file says they are and they aren't: among `--pages`, or at all.
+            Ok(None) if nav.contents.as_ref().is_some_and(|place| place.name == name) => nav.message = Some(NO_CONTENTS.into()),
             Ok(None) => nav.message = Some(format!("no #{name} in this document")),
             Err(why) => nav.message = Some(why),
         }
         true
     }
 
+    /// `contents`: to where the source says its contents are, a place its links know by name, asked
+    /// of them and gone to when they answer ([`Pager::seek_on`]), the place the reader leaves kept,
+    /// for `back`.
+    fn go_to_contents(&mut self) {
+        let Some(place) = self.level.nav.contents.clone() else { return };
+        let from = self.here();
+        if !self.level.linked {
+            self.level.links = self.level.source.links();
+            self.level.linked = true;
+        }
+        match &self.level.links {
+            Some(links) => {
+                links.set_queue(vec![Ask::Name(place.name.clone())]);
+                self.level.seeking = Some(place.name);
+                self.level.leaving = from;
+            }
+            None => self.level.nav.message = Some(NO_CONTENTS.into()),
+        }
+    }
+
     /// The reader pressed a key: the place a link named is no longer waited for.
     fn stop_seeking(&mut self) {
+        self.level.leaving = None;
         if self.level.seeking.take().is_some()
             && let Some(links) = &self.level.links
         {
@@ -2953,6 +3025,9 @@ impl Pager<'_> {
         // for, is asked of the new layout.
         level.depth = self.level.depth;
         level.seeking = self.level.seeking.take();
+        level.leaving = self.level.leaving.take();
+        // What the status line was saying whole, it goes on saying: a layout is no file opened.
+        level.nav.notice = self.level.nav.notice.take();
         if let Some(name) = &level.seeking {
             level.links = level.source.links();
             level.linked = true;
@@ -5034,6 +5109,28 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('s'), Key::Char('x')]), Step::Continue, "a letter no label goes on with");
         assert!(nav.hints.is_none());
         assert_eq!(labelled(reader(1, 12, 20, 40), links()).key(Key::Interrupt), Step::Quit);
+    }
+
+    /// `contents` is offered only where what is shown says where its contents are: its key asks
+    /// the pager to go there, `?` lists it, and the status line says the key, after what the source
+    /// calls the place, when the file opens. Elsewhere the key says there is none, `?` doesn't
+    /// list it, and nothing is said; nor in a list.
+    #[test]
+    fn the_contents_command_is_offered_only_where_a_place_is_declared() {
+        let place = || Some(Landmark { called: "Contents", name: "contents".to_owned() });
+        let mut nav = Nav { contents: place(), ..reader(4, 12, 40, 40) };
+        assert_eq!(nav.offer().as_deref(), Some("Contents: T"));
+        assert_eq!(press(&mut nav, &[Key::Char('T')]), Step::Contents);
+        assert!(nav.help_lines().contains(&("T".into(), "to the contents: Backspace comes back".into())), "{:?}", nav.help_lines());
+        // A number typed before it means nothing to it, and is dropped.
+        assert_eq!(press(&mut nav, &[Key::Char('3'), Key::Char('T')]), Step::Contents);
+        assert!(nav.typed.is_empty() && nav.message.is_none());
+        let mut without = reader(4, 12, 40, 40);
+        assert_eq!((press(&mut without, &[Key::Char('T')]), without.message.as_deref()), (Step::Continue, Some(NO_CONTENTS)));
+        assert!(without.offer().is_none() && !without.help_lines().iter().any(|(keys, _)| keys == "T"), "{:?}", without.help_lines());
+        let mut tiles = Nav { contents: place(), ..list(9) };
+        assert_eq!((press(&mut tiles, &[Key::Char('T')]), tiles.message.clone(), tiles.offer()), (Step::Continue, None, None));
+        assert!(!tiles.help_lines().iter().any(|(keys, _)| keys == "T"));
     }
 
     /// A link followed takes the reader to its page, the place a third of the way down the screen

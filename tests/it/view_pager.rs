@@ -4742,11 +4742,19 @@ fn epub_links_between_chapters_are_followed_and_backspace_comes_back() {
     assert!(view.finish().success());
 }
 
-/// A book's Contents page, made from its table of contents, is a page of links: `f` and the label
-/// of its third entry lands on that entry's chapter, and Backspace comes back to the page.
+/// Where the status line says the reader is, since `from` bytes of output: the page, once it is `page`.
+#[cfg(all(feature = "epub", feature = "image"))]
+fn at_page(view: &Session, what: &str, from: usize, page: usize) {
+    view.wait_until(what, |t| t.len() > from && place_now(&t[from..]).is_some_and(|(at, _)| at == page));
+}
+
+/// A book's table of contents is a Contents page at its end, and `T` goes there from any page: `f`
+/// and the label of its third entry lands on that entry's chapter, Backspace comes back to the
+/// page, and again to where `T` was pressed. When the book opens, the status line says the key,
+/// whole and for a moment.
 #[cfg(all(feature = "epub", feature = "image"))]
 #[test]
-fn epub_contents_page_leads_to_its_chapters_and_backspace_comes_back() {
+fn epub_t_goes_to_the_contents_page_at_the_books_end_and_backspace_comes_back() {
     use crate::epub::{Mimetype, NAV_ITEM, THREE_ENTRIES, book_with, coloured_chapters, nav, write, zipped};
     if !pty_works() {
         return;
@@ -4755,17 +4763,101 @@ fn epub_contents_page_leads_to_its_chapters_and_backspace_comes_back() {
     pictures.push(("OEBPS/nav.xhtml", nav(THREE_ENTRIES)));
     let book = book_with(&chapters, &pictures, "", NAV_ITEM);
     let path = write(crate::view::tmp("pager-epub-contents", "book.epub"), &zipped(&book, Mimetype::Stored));
-    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
-    // The Contents page first, then the three chapters.
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 80, 60);
+    // The three chapters, then the Contents page.
+    whole_line_for_a_moment(&view, "Contents: T");
     view.wait_until("the book", |t| drawn(t, "page 1/4"));
     assert!(descendants_running(view.child.id(), "--worker epub").is_empty(), "a worker outlived its answers");
+    let before = view.text().len();
+    view.press("n");
+    at_page(&view, "the second chapter", before, 2);
+    let before = view.text().len();
+    view.press("T");
+    at_page(&view, "the Contents page, the last", before, 4);
     let before = follow(&mut view, 3, "d");
-    view.wait_until("the third chapter", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 4));
+    at_page(&view, "the third chapter", before, 3);
     let before = view.text().len();
     view.press("\x7f");
-    view.wait_until("back on the Contents page", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
-    let before = follow(&mut view, 3, "a");
-    view.wait_until("the second chapter, at its heading", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 3));
-    view.press("q");
+    at_page(&view, "back on the Contents page", before, 4);
+    let before = view.text().len();
+    view.press("\x7f");
+    at_page(&view, "back where T was pressed", before, 2);
+    // Said when the book opens, not each time it is laid out again.
+    let before = view.text().len();
+    view.press("40]");
+    view.wait_until("laid out narrower", |t| t.len() > before && bar(&t[before..]).contains("· width 40 ·"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!view.text()[before..].contains("Contents: T"), "said again for a layout");
+    // `?` lists the key.
+    view.press("?");
+    view.wait_until("listed", |t| bar(t).contains(" T to the contents: Backspace comes back"));
+    view.press("qq");
+    assert!(view.finish().success());
+}
+
+/// `T` goes to the book's own page of contents where it has one: the chapter its package marks
+/// (its nav document, in the reading order), or one of its first chapters that lists the others,
+/// which the package doesn't mark, as Project Gutenberg's EPUB 3 books have it. Never then to the
+/// Contents page made here, the book's last all the same.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_t_goes_to_the_books_own_contents_marked_or_guessed() {
+    use crate::epub::{Mimetype, NAV_ITEM, THREE_ENTRIES, book_with, coloured_chapters, nav, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let to_its_own = |name: &str, book: &[(String, Vec<u8>)], pages: usize| {
+        let path = write(crate::view::tmp("pager-epub-own", name), &zipped(book, Mimetype::Stored));
+        let mut view = Session::start_on(KITTY, &path, &["--pager"], 80, 60);
+        whole_line_for_a_moment(&view, "Contents: T");
+        view.wait_until("the book", |t| drawn(t, &format!("page 1/{pages}")));
+        let before = view.text().len();
+        view.press("3g");
+        at_page(&view, "a chapter in the middle", before, 3);
+        let before = view.text().len();
+        view.press("T");
+        at_page(&view, "the book's own contents", before, 1);
+        let before = view.text().len();
+        view.press("\x7f");
+        at_page(&view, "back", before, 3);
+        view.press("q");
+        assert!(view.finish().success());
+    };
+    // Marked: the nav document first in the reading order, then the three chapters, then clv's page.
+    // It lists two chapters, too few to be guessed: it is the book's own because the book says so.
+    let (chapters, mut pictures) = coloured_chapters();
+    let two = r#"<ol><li><a href="Text/ch1.xhtml">The red one</a></li><li><a href="Text/ch2.xhtml">The blue one</a></li></ol>"#;
+    pictures.push(("OEBPS/nav.xhtml", nav(two)));
+    let mut marked = book_with(&chapters, &pictures, "", NAV_ITEM);
+    let package = marked.iter_mut().find(|(name, _)| name == "OEBPS/content.opf").unwrap();
+    package.1 = String::from_utf8(package.1.clone()).unwrap().replace("<spine>", r#"<spine><itemref idref="nav"/>"#).into_bytes();
+    to_its_own("marked.epub", &marked, 5);
+    // Guessed: a first chapter that lists the three after it, in a book whose nav is no chapter.
+    let listing = r#"<h1>A book</h1><p><a href="ch2.xhtml">The red one</a></p><p><a href="ch3.xhtml#start">The blue one</a></p><p><a href="ch4.xhtml">The green one</a></p>"#;
+    let four = [vec![listing.to_owned()], chapters].concat();
+    let entries = THREE_ENTRIES.replace("ch3", "ch4").replace("ch2", "ch3").replace("ch1", "ch2");
+    pictures.pop();
+    pictures.push(("OEBPS/nav.xhtml", nav(&entries)));
+    to_its_own("guessed.epub", &book_with(&four, &pictures, "", NAV_ITEM), 5);
+}
+
+/// A file that says nothing of where its contents are isn't offered the key: a PDF's status line
+/// never says it, `T` says there is nowhere to go, and `?` doesn't list it.
+#[test]
+fn t_is_offered_only_where_contents_are_declared_never_on_a_pdf() {
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start_on(KITTY, &fixture("no-contents", 3), &["--pager"], 80, 40);
+    view.wait_until("page 1", |t| drawn(t, "page 1/3"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!view.text().contains("Contents"), "said of a PDF");
+    view.press("T");
+    view.wait_until("said", |t| bar(t).contains("no contents to go to here"));
+    assert!(place_now(&view.text()).is_some_and(|(page, _)| page == 1));
+    view.press("?");
+    view.wait_until("the keys", |t| bar(t).contains("these keys"));
+    assert!(!view.text().contains("to the contents"), "listed for a PDF");
+    view.press("qq");
     assert!(view.finish().success());
 }

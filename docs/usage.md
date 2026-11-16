@@ -110,6 +110,7 @@ In a file's pages:
 | `.` | one page fewer to a row, then the page as wide as the window, as `+` zooms in, on any file. On a Markdown or HTML file, one column fewer, down to one |
 | `f` | label the links on screen; type a label to follow its link ([Following links](#following-links)) |
 | `F` | label them, and copy the address of the link whose label you type |
+| `T` | to the contents, in a file that has a place for them: a [book](#books). Backspace comes back |
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
@@ -203,6 +204,9 @@ says so on the whole status line: `this format doesn't reflow (Markdown, HTML an
 naming two of the formats that do, and `these files don't…` in a list none of whose files does.
 It has the line for a second, then the status line comes back; any key brings it back at once,
 and does what it does.
+
+A file that has a place for its contents, a [book](#books), says the key that goes there the same
+way when it opens: `Contents: T`, on the whole status line, for a second.
 
 While you type a number, the status line says only the number and the keys that take it on this
 file: `7: g page · . per row` on a PDF, and `· n p match` after them with a search kept; on a Markdown
@@ -973,8 +977,8 @@ Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on 
 
 ### Books
 
-An ebook (epub) is shown as a book: its cover, a Contents page, then its chapters in its reading
-order, all of them, each starting a new page, as one document. A chapter out of the main flow
+An ebook (epub) is shown as a book: its cover, then its chapters in its reading order, all of them,
+each starting a new page, then a Contents page, as one document. A chapter out of the main flow
 (`linear="no"`: a note, an answer) comes where the book lists it. The book's package, which says
 that order, is read by
 [rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
@@ -989,15 +993,32 @@ with its option; `/` [searches](#searching-a-documents-text) the whole book, acr
 picture already, as most books' cover pages do; then it isn't shown twice. So a book's tile in a
 list is its cover.
 
-**A Contents page** comes after the cover (first, in a book without one), headed `Contents`: the
-book's table of contents, EPUB 3's (its `nav`) or else EPUB 2's (its NCX), as nested lists as deep
-as the book's, each entry a link to the place it names. `f` and an entry's label go to its
-chapter, Backspace comes back, and `/` finds a chapter by its title. An entry that leads to no chapter
-the book shows is its label alone. No page is made for a book one of whose chapters is its table
-of contents already, as the book's package says: its nav document in its reading order, or the
-chapter its landmarks, or its guide, call `toc`. A book that has a contents page of its own and
-doesn't say so has both. A table of contents that can't be read leaves the book without the
-page, and the first page says so: it never costs the book.
+**A Contents page** comes last, after the book's chapters, so that the book's own pages are where
+they would be without it. It is headed `Contents`, and says under that who made it (`Made by clv
+from the book's table of contents.`), since the book didn't: the book's table of contents, EPUB
+3's (its `nav`) or else EPUB 2's (its NCX), as nested lists as deep as the book's, each entry a
+link to the place it names. `f` and an entry's label go to its chapter, Backspace comes back, and
+`/` finds a chapter by its title. An entry that leads to no chapter the book shows is its label
+alone. The page is made for any book that has a table of contents, a book with a page of contents
+among its chapters too. A table of contents that can't be read leaves the book without the page,
+and the first page says so: it never costs the book.
+
+**`T` goes to the contents** from any page, and Backspace comes back to where you were. It goes to
+the book's own page of contents where the book has one among its chapters:
+
+- the chapter the book's package says is one: its nav document in its reading order, or the
+  chapter its landmarks, or EPUB 2's guide, call `toc`;
+- or else a chapter that looks like one, which the package doesn't mark, as in Project
+  Gutenberg's EPUB 3 books: among the book's first eight chapters, the first whose links lead to
+  three other chapters or more, and most of whose links lead to another chapter. `T` lands at the
+  first of those links, since such a chapter may start with the book's title page. A chapter with
+  a few links to others, a preface or a page of notes, isn't taken for one.
+
+Only in a book with neither does `T` go to the Contents page at the book's end. When a book
+opens, the status line says the key (`Contents: T`), for a second
+([The status line](#the-status-line)). A book with no table of contents and no such chapter has
+no contents to go to: nothing is said when it opens, `?` doesn't list `T`, and `T` says so, as it
+does on any file that isn't a book.
 
 Its pictures are read from the book, by their paths from their chapter, `..` included but never
 above the book's top, and drawn by whatever shows them, as a document's are from its directory.

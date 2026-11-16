@@ -269,19 +269,25 @@ CodeQL's default setup scans the Rust and the workflows.
   chapter missing left out and said; a width and dark paper; the cover as the first page and as
   the tile in a list, not twice where a chapter wraps it in a drawing; two chapters of five
   protected left out and said, a book all protected refused, a fixed-layout one said; the
-  Contents page after the cover, none where the spine holds the nav document, an NCX nested
+  Contents page last, where the spine holds the nav document too, an NCX nested
   100,000 deep leaving the book whole and saying so; and that nothing else names rbook.
   In `tests/it/view_pager.rs` (`epub_…`): a word of the third chapter found from the first, the
   worker gone once the book shows and none started by a relayout (`ps`); a link to a file
   said, with files where a path beside the `.epub` would lead never opened; links from a page
-  of contents followed to their chapters, Backspace back, `F` copying a place's name; and the Contents
-  page's entries followed the same. What the worker
+  of contents followed to their chapters, Backspace back, `F` copying a place's name; `T` from a
+  page in the middle to the Contents page at the book's end, its entries followed the same and
+  Backspace back twice, to the book's own page of contents where its package marks one or its
+  links show one, `Contents: T` said when a book opens and not when it is laid out again, and
+  never for a PDF, where `T` says there are none (`t_is_offered_…`). What the worker
   answers of a package (EPUB 2 and 3, hrefs with `..` and `%20`), a worker that dies or answers
   too much, chapters assembled and cut at their bounds, both kinds of cover, a fallback chain and
   its loop, an `<svg>` that wraps a picture, elements written short, what `encryption.xml` says is
   protected, links between chapters as places and an id too long to be one, a table of contents
-  read from a nav and from an NCX, kept within its limits, not made twice, and unread without
-  costing the book (fake workers that die on it), and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
+  read from a nav and from an NCX, kept within its limits, its page last with its room kept, the
+  chapter a book marks as its own page of contents, where `T` leads (marked, guessed by a
+  chapter's links, or the page made here), a chapter of 100,000 links costing the guess no more
+  than a few, and a table of contents unread without costing the book (fake workers that die on
+  it), and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
   lexer's attributes are in `src/source/markup.rs`.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
