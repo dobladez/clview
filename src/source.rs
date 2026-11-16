@@ -130,7 +130,6 @@ pub(crate) trait Backend: Sync {
     /// Whether a document may show what it opens as a picture: its first page, drawn by this backend.
     /// Not what may hold other files or refer to pictures of its own, so that a document can't come to
     /// draw itself.
-    #[cfg_attr(not(feature = "word"), expect(dead_code, reason = "only documents refer to pictures"))]
     fn draws_pictures(&self) -> bool {
         false
     }
@@ -389,6 +388,7 @@ impl Format {
 
     /// This format, its files going by the extensions `names` ([`Format::names`]), not only those
     /// it is told by.
+    #[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and RTF go by a name they aren't told by"))]
     pub(crate) const fn named_by(self, names: &'static [&'static str]) -> Self {
         Self { names, ..self }
     }
@@ -470,10 +470,6 @@ impl Input {
     }
 
     /// [`Input::held`], for a holder that can stop reading the file at a bound ([`Bounded`]).
-    #[cfg_attr(
-        not(any(feature = "zip", feature = "tar", feature = "word", test)),
-        expect(dead_code, reason = "only archives, and a document's fenced blocks, stop early")
-    )]
     fn held_bounded(path: String, head: Vec<u8>, again: Again, bounded: Bounded) -> Self {
         Self { path, head, rest: Rest::Held(again, Some(bounded)) }
     }
@@ -827,6 +823,7 @@ pub(crate) trait Source {
     }
     /// Whether it has a dark form, drawn for a render [`Request::on_dark`] (a diagram's dark theme):
     /// then a document that shows it as a picture asks for that on dark paper. None by default.
+    #[cfg_attr(not(feature = "word"), expect(dead_code, reason = "only documents show pictures"))]
     fn dark_form(&self) -> bool {
         false
     }
@@ -931,7 +928,7 @@ pub(crate) enum Ask {
 }
 
 /// What a source gives of its links ([`Links::try_recv`]), or why not, in words for the reader.
-#[cfg_attr(not(any(feature = "pdf", feature = "word", test)), expect(dead_code, reason = "only PDFs and documents have links"))]
+#[cfg_attr(not(any(feature = "pdf", feature = "word")), expect(dead_code, reason = "only PDFs and documents have links"))]
 pub(crate) enum Told {
     /// A page's links, in any order, at most [`MAX_LINKS`], and how many more it has that were
     /// left out. Why not costs that page's links alone.

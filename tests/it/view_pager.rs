@@ -3743,6 +3743,7 @@ fn open_with_no_desktop_or_no_opener_says_so() {
 
 /// What showing the folder `real` runs on this system, as the fake openers note it: `open -R` on
 /// macOS, revealed in Finder; elsewhere `xdg-open` through `setsid`, as for a file.
+#[cfg(feature = "tar")]
 fn opening_folder(dir: &Path, real: &Path) -> Vec<Vec<String>> {
     match cfg!(target_os = "macos") {
         true => vec![vec!["open".to_owned(), "-R".to_owned(), real.display().to_string()]],
