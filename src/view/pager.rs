@@ -2383,7 +2383,10 @@ impl Pager<'_> {
             return Ok(());
         };
         if self.level.depth >= MAX_DEPTH {
-            self.level.nav.message = Some(format!("{shown}: not followed, {MAX_DEPTH} files deep in links already; u goes back"));
+            // The key that goes back, as the keymap binds it here; nothing said of one, if none is.
+            let back = self.level.nav.keymap().first(Command::Back);
+            let back = if back.is_empty() { String::new() } else { format!("; {back} goes back") };
+            self.level.nav.message = Some(format!("{shown}: not followed, {MAX_DEPTH} files deep in links already{back}"));
             return Ok(());
         }
         let item = match link::local(document, path).and_then(|local| opener.link(&local)) {

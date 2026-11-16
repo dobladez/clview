@@ -80,8 +80,9 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 nothing in a `clv` built without them. Each key does what the command it is bound to does, and
 several keys may be bound to one: the keys of `less` and `vi`, and some of Emacs's, written here
 as `Ctrl-V` and `Alt-V`. For the Alt keys the terminal has to send Alt, or on a Mac Option, as
-`ESC` and the key: in kitty on macOS, `macos_option_as_alt yes`; an Alt key bound to nothing does
-nothing. `+` and `-` are listed once, as what they do where you are:
+`ESC` and the key: in kitty on macOS, `macos_option_as_alt yes`. Alt with a character that is
+bound to nothing does nothing. Alt with `Enter` or with a `Ctrl` key, and `Alt-]` and `Alt-_`, are
+no Alt keys to `clv`: it reads them as `Esc` and then that key, so they leave as `Esc` does. `+` and `-` are listed once, as what they do where you are:
 the font size on a Markdown or HTML file, the zoom elsewhere, and the first status line's reminder
 says which (`+ - font`, `+ - zoom`). `,` and `.` set the pages to a row everywhere, on a Markdown or
 HTML file too, and the reminder says `, . per row` where it has room.

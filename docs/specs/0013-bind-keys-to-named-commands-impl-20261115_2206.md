@@ -167,3 +167,17 @@ As planned, with these readings of what the spec leaves to the code:
   go to the next tile and the one below; Backspace leaves a file and `u` doesn't; `?` lists the keys,
   the new ones among them. Until the owner has seen them, task 3's box and that item stay open and
   the spec stays `Implementing`.
+
+## Codex review, round 1 (2026-11-16)
+
+- **A message still said `u goes back`**: the one a link past sixteen files deep gets
+  (`Pager::follow_file`), written by hand and missed when `u` stopped going back. It reads the key
+  from the keymap's binding for `back` now (`Backspace goes back`), and says nothing of a key if
+  none is bound. `view_pager::links_into_files_go_sixteen_levels_deep_and_no_deeper` holds it:
+  with the literal put back it failed (`Backspace goes back never happened`), the file copied back,
+  `cmp` clean. No other message or doc names `u` or `d` as fixed text: looked for among the string
+  literals of `src/` and in the docs.
+- **The changelog and the manual said too much of Alt**: "an Alt key the pager has no use for does
+  nothing". Only Alt with a printable character is an Alt key: Alt with Enter or a Ctrl key, and
+  `Alt-]` and `Alt-_`, are still Esc and then that key, as ADR-0036 and the task 1 notes record.
+  Both say so now.

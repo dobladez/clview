@@ -4543,7 +4543,7 @@ fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
         view.wait_until("the next file", |t| t.len() > before && settled(t, name) && last_bar(t).contains(" page 1/1 "));
     }
     let before = follow(&mut view, 1, "s");
-    said_since(&view, before, "b.md: not followed, 16 files deep in links already; u goes back");
+    said_since(&view, before, "b.md: not followed, 16 files deep in links already; Backspace goes back");
     assert!(last_bar(&view.text()).contains(" a.md "));
     let before = view.text().len();
     view.press("\x7f");

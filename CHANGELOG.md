@@ -79,8 +79,10 @@ works today. A version's section becomes the notes of its
 - **Keys changed.** `d` and `u` go a screen down and up, as `space` and `b` do. Dark and light
   paper is `D`, where it was `d`. `u` no longer goes back: `Backspace` does, and `Esc`, in a
   file's pages, in a list, through the links followed and while a folder is being opened.
-- `Alt` and a key, from a terminal that sends Alt or Option as `ESC`, is no longer read as `Esc`
-  and then that key, which went back or quit: an Alt key the pager has no use for does nothing.
+- `Alt` and a character, from a terminal that sends Alt or Option as `ESC`, is no longer read as
+  `Esc` and then that character, which went back or quit: one the pager has no use for does
+  nothing. Alt with `Enter` or with a `Ctrl` key, and `Alt-]` and `Alt-_`, are still read as `Esc`
+  and then that key.
 
 ## 0.4.0 (2026-11-10)
 
