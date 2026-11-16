@@ -1,6 +1,6 @@
 # Spec-0012: Show an epub as a book
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-15
 - **Related:** [ADR-0013](../adr/0013-a-documents-pictures-are-drawn-by-the-backends.md) (a document's
   pictures, only from near it, which this lets a held file reach: its follow-up);
@@ -429,3 +429,4 @@ over left out, and said:
 - 2026-11-15 — The book's table of contents as a Contents page (task 5), the overlay left to the
   backlog.
 - 2026-11-15 — Ready: the owner's answers in; fixed-layout books through Blitz in the backlog.
+- 2026-11-15 — Implementing ([notes](0012-show-an-epub-as-a-book-impl-20261115_2208.md)).
