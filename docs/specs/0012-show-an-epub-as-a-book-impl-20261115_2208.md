@@ -631,3 +631,35 @@ The timed test's bounds are 3 s for what takes 40 ms with the fixes, and 20 and 
 
 Gates on 2026-11-16 with round 2's fixes: `cargo fmt --check`, `cargo clippy --all-targets -j 2 --
 -D warnings`, `cargo test -j 2` (615 unit, 13 docs, 300 integration), all passing.
+
+## Codex review, round 3 (of cd19a36)
+
+One finding, relayed by the lead.
+
+**[P1] Every `href="#x"` took the chapter's directory apart and put it together again**
+(`resolved`, through `from_the_top`), for a result `linked` then threw away: under a directory
+4,000 bytes deep, 1,600,000 of them in one `<a>` took Codex 34 s, where the book's top takes 0.41
+s, and no budget stops it, since so little is written. Two changes:
+
+- `Written::linked` answers a link that is empty, a place alone (`#x`) or a query alone before any
+  path is asked about.
+- `from_the_top` no longer takes the directory apart: the directory is kept as it is written, its
+  end cut back for each `..` that leads up it, so a path costs what the reference is long. That
+  is the answer to the lead's second question: `src` and `href` both did work as the directory
+  is deep, for each attribute, where the result is short (a link to a chapter is written `#c2`) or
+  thrown away (a path past `MAX_PATH`, which `from_the_top_within` now finds by its length without
+  putting it together). What is left as the path is long is the look for a chapter by its whole
+  path, a hash of it: 800,000 links to a chapter 2,000 directories deep are read in under 2 s.
+
+**The test, seen failing before the fix**: `epub::tests::a_reference_costs_nothing_for_its_chapters_depth`,
+timed, 3 s for each of `href="#x"`, `href=""` and `href="two.xhtml"`, 800,000 times in one tag
+under a directory 2,000 deep: the first took 22.9 s on the code as it was, and the test failed
+there. It holds what `from_the_top` answers too (up the directory, from the top, above it).
+
+**Left undone, for want of time** (the session's usage limit was reached here): the two reverts
+one at a time (the early answer alone; the directory taken apart again alone), a property test
+holding the new `from_the_top` to the plain one name by name, which was written and not put in,
+and a line in `docs/architecture.md` on `from_the_top_within`.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (616 unit, 13 docs, 300 integration), all passing.

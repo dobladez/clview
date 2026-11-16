@@ -579,24 +579,43 @@ fn unescaped(text: &str) -> String {
 }
 
 /// The path from the book's top of what `reference`, a path as a file in the directory `directory`
-/// (from the top, with no `/` at its end) writes it, names: each `.` and empty name dropped, each
-/// `..` taken with the name before it, and one starting with `/` taken from the top. `None` for one
-/// that leads above the top, or names nothing.
+/// (from the top, as [`from_the_top`] gives one: no `/` at its end, no empty name, no `.` or `..`)
+/// writes it, names: each `.` and empty name dropped, each `..` taken with the name before it, and
+/// one starting with `/` taken from the top. `None` for one that leads above the top, or names
+/// nothing.
 fn from_the_top(directory: &str, reference: &str) -> Option<String> {
-    let mut parts: Vec<&str> = match reference.starts_with('/') {
-        true => Vec::new(),
-        false => directory.split('/').filter(|part| !part.is_empty()).collect(),
-    };
-    for part in reference.split('/') {
-        match part {
+    from_the_top_within(directory, reference, usize::MAX)
+}
+
+/// [`from_the_top`], of at most `most` bytes: `None` for a longer path too, which isn't put
+/// together to be found so. The directory is taken as it is written, its end cut back for each
+/// `..` that leads up it, and never apart: a reference costs what it is long, however deep the
+/// directory, since a chapter may hold a million of them.
+fn from_the_top_within(directory: &str, reference: &str, most: usize) -> Option<String> {
+    let mut kept = if reference.starts_with('/') { "" } else { directory };
+    let mut names: Vec<&str> = Vec::new();
+    for name in reference.split('/') {
+        match name {
             "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            part => parts.push(part),
+            ".." if names.pop().is_some() => {}
+            ".." if kept.is_empty() => return None,
+            ".." => kept = kept.rsplit_once('/').map_or("", |(above, _)| above),
+            name => names.push(name),
         }
     }
-    (!parts.is_empty()).then(|| parts.join("/"))
+    let length = names.iter().fold(kept.len(), |length, name| length.saturating_add(name.len()).saturating_add(1));
+    if (kept.is_empty() && names.is_empty()) || length.saturating_sub(usize::from(kept.is_empty())) > most {
+        return None;
+    }
+    let mut path = String::with_capacity(length);
+    path.push_str(kept);
+    for name in names {
+        if !path.is_empty() {
+            path.push('/');
+        }
+        path.push_str(name);
+    }
+    Some(path)
 }
 
 /// One field more in `out`: its length, four bytes, little-endian, and its bytes. A field too long
@@ -1335,8 +1354,7 @@ impl Written<'_> {
         if scheme || path.starts_with("//") {
             return None;
         }
-        let from_the_top = percent_decoded(path).and_then(|path| from_the_top(self.directory, &path));
-        Some((from_the_top.filter(|path| path.len() <= MAX_PATH), rest))
+        Some((percent_decoded(path).and_then(|path| from_the_top_within(self.directory, &path, MAX_PATH)), rest))
     }
 
     /// A picture's `src` as the book's document writes it: its path from the book's top, written
@@ -1358,13 +1376,18 @@ impl Written<'_> {
     /// chapter it leads to, if it leads to one.
     fn linked(&self, href: &str) -> (String, Option<usize>) {
         let reference = href.trim();
+        let place_in = |chapter: usize, rest: &str| {
+            let fragment = rest.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty());
+            place(chapter, fragment).map_or_else(|| NO_SUCH_PLACE.to_owned(), |name| format!("#{name}"))
+        };
+        // A place alone, or a link to nowhere else, is in this chapter: no path is asked about.
+        if reference.is_empty() || reference.starts_with(['#', '?']) {
+            return (place_in(self.chapter, reference), Some(self.chapter));
+        }
         let Some((path, rest)) = self.resolved(reference) else { return (href.to_owned(), None) };
-        let fragment = rest.split_once('#').map(|(_, fragment)| fragment).filter(|fragment| !fragment.is_empty());
-        // Its chapter: this one, for a place alone or a link to nowhere else.
-        let own = reference.is_empty() || reference.starts_with(['#', '?']);
-        let chapter = if own { Some(self.chapter) } else { path.as_deref().and_then(|path| self.chapters.get(path).copied()) };
+        let chapter = path.as_deref().and_then(|path| self.chapters.get(path).copied());
         let written = match (chapter, path) {
-            (Some(chapter), _) => place(chapter, fragment).map_or_else(|| NO_SUCH_PLACE.to_owned(), |name| format!("#{name}")),
+            (Some(chapter), _) => place_in(chapter, rest),
             (None, Some(path)) if self.zipped.index_of(&path).is_some() => format!("{IN_THE_BOOK}{}", percent_encoded(&path)),
             (None, path) => format!("{NOT_IN_THE_BOOK}{}", percent_encoded(path.as_deref().unwrap_or_default())),
         };
@@ -2971,6 +2994,39 @@ mod tests {
         let (body, ..) = written.body(&drawings, MAX_WRITTEN).unwrap();
         within("drawings that say what they are to the chapter's end", since);
         assert_eq!(body.matches("<svg>").count(), 80_000);
+    }
+
+    /// A reference costs what it is long, not what its chapter's directory is deep: a place in the
+    /// chapter itself (`#x`) asks nothing of any path, and a path is found from the directory as it
+    /// is written, with nothing of it taken apart for each. Under a directory 2,000 deep, 800,000
+    /// of each in one tag are read in the time they take at the book's top; they took 20 s.
+    #[test]
+    fn a_reference_costs_nothing_for_its_chapters_depth() {
+        let deep = "d/".repeat(2_000);
+        let (here, there) = (format!("{deep}one.xhtml"), format!("{deep}two.xhtml"));
+        let numbers: HashMap<&str, usize> = [(here.as_str(), 1), (there.as_str(), 2)].into();
+        let none = book(&[]);
+        let written = Written { chapter: 1, directory: deep.trim_end_matches('/'), zipped: &none, chapters: &numbers };
+        let many = |attribute: &str| chapter(&format!("<a {}>x</a>", attribute.repeat(800_000)));
+        for (attribute, to, most) in
+            [(r##"href="#x" "##, r##" href="#c1-x""##, 3), ("href=\"\" ", r##" href="#c1""##, 3), (r#"href="two.xhtml" "#, r##" href="#c2""##, 6)]
+        {
+            let links = many(attribute);
+            let since = std::time::Instant::now();
+            let (body, ..) = written.body(&links, MAX_WRITTEN).unwrap();
+            let took = since.elapsed();
+            assert_eq!(body.matches(to).count(), 800_000, "{attribute}");
+            assert!(took < Duration::from_secs(most), "{attribute}: {took:?}");
+        }
+        // What a path is found to be is what it was: from the directory, up it, from the top.
+        let from = |directory: &str, reference: &str| from_the_top(directory, reference);
+        assert_eq!(from("a/b", "c/./d//e").as_deref(), Some("a/b/c/d/e"));
+        assert_eq!((from("a/b", "../c").as_deref(), from("a/b", "../../c").as_deref(), from("a/b", "../../../c")), (Some("a/c"), Some("c"), None));
+        assert_eq!(
+            (from("a/b", "c/../../d").as_deref(), from("a/b", "/c").as_deref(), from("a/b", "..").as_deref()),
+            (Some("a/d"), Some("c"), Some("a"))
+        );
+        assert_eq!((from("a/b", "").as_deref(), from("", ""), from("a", ".."), from("", "x/..")), (Some("a/b"), None, None, None));
     }
 
     /// A drawing is looked into only so far for the picture it may wrap, and a chapter's drawings
