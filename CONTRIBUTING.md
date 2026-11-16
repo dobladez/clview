@@ -271,9 +271,9 @@ visible window doesn't do. Measure memory in a visible window.
 ## Releases
 
 Bump `version` in `Cargo.toml`, turn `CHANGELOG.md`'s `## Unreleased` into `## <version> (<date>)`
-under a new empty `## Unreleased`, commit, tag `v<version>` and push the tag:
-`.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the archives
-as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, or a
+under a new empty `## Unreleased`, commit, tag `v<version>` (annotated: `git tag -a`) and push the
+tag: `.github/workflows/release.yml` builds `clv` for macOS and Linux (musl) and publishes the
+archives as a GitHub release, that section its notes. It refuses a tag that disagrees with `Cargo.toml`, or a
 binary whose `--version` names a commit after that version ([`build.rs`](build.rs) says how), and
 `tests/docs.rs` fails on a version the changelog has nothing for. Run by hand, it only builds.
 
@@ -283,3 +283,6 @@ as `Formula/clv.rb` ([ADR-0020](docs/adr/0020-new-versions-through-a-homebrew-ta
 It writes with the `HOMEBREW_TAP_TOKEN` secret: a fine-grained token whose only repository is the
 tap, with Contents read and write. When the token has expired, or is missing, the job fails and the
 release stands: make a new token, `gh secret set HOMEBREW_TAP_TOKEN`, and `gh run rerun <run> --failed`.
+
+The `release` skill (`.agents/skills/release/`, `/release`) walks an agent through it all, from a
+green `main` to the `clv` Homebrew installs, and what to do when a step fails after the tag.
