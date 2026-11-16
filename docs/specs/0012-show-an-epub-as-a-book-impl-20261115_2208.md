@@ -540,3 +540,56 @@ Dismissed by the lead, not this branch's: a piped book read without a bound in
 
 Gates on 2026-11-16 with the review's fixes: `cargo fmt --check`, `cargo clippy --all-targets -j 2
 -- -D warnings`, `cargo test -j 2` (610 unit, 13 docs, 299 integration), all passing.
+
+## Task 8: `?` with two formats at a line's end, and the keys that do nothing here faint
+
+**The owner's decision, 2026-11-16**, through the lead, on the question task 6 left (`?`'s `D`
+line cut in its middle at 80 columns): each line that names formats names a couple, at its end
+(`D  light on dark, or dark on light (Mermaid, Markdown and others)`), the `[ ]` and `{ }` lines
+the same, from what the backends declare, as on the status line; and the keys that do nothing on
+the current document are greyed out, told from what the viewer knows of the source (its settings,
+its contents place), never from a format's name, legible on light and dark and right as text
+cells. Tested at 80 columns: no line cut, a PDF's `D`, `[`, `]` dim, a Markdown file's not.
+
+**Choices made on the way**:
+
+- **Faint is SGR 2**, undone by SGR 22, around each row: the terminal's own dimming of its own
+  foreground. No colour is picked, so none can be wrong for a theme: a fixed grey would vanish on
+  a background near it, and "bright black" is the background's twin in some themes. The keys are
+  text in every output (kitty's protocol, text cells, a pane of tmux), so nothing differs there. A
+  terminal with no faint shows the keys as the rest, which loses the hint and no key.
+- **Which keys**: a setting the source hasn't; a setting a document is laid out again for (the
+  width, the margins) in a list or among `--pages`, where its keys only say to open a document;
+  and `T` where the source declares no contents. The same test `Nav::turn` goes by, now one
+  function (`Nav::idle`). Not `/` on a file with no text, nor `f` on one with no links: the viewer
+  knows neither until it asks the source for them, which starts their work.
+- **`T` is listed where there are no contents, faint**, where task 7 left it out of `?`: the
+  owner's example names it.
+- **No line cut means lines go over rows.** Shortening to two formats wasn't enough at 80
+  columns: the width's line says 68 characters before any format, in 59 of room. What a line says
+  now wraps under its column, where the window has rows for the whole of `?` (34 rows at 80
+  columns on a PDF, which a window of 40 rows holds); where it hasn't (80 × 24, where `?` had a
+  line more than the rows already), each line keeps to one row, cut as before, so that no key
+  falls off the bottom for another's second row. The viewer's own long lines (`/`, `f`, `n N p`)
+  are whole at 80 columns by the same means; they were cut on main too.
+- **`view::together` is gone**: nothing names every format any more.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| the formats first again | `view::pager::tests::the_keys_list_the_settings_after_the_viewers`, `…a_count_sets_a_numbered_setting_and_is_used_up`, `view_pager::the_keys_at_80_columns_are_whole_and_those_that_do_nothing_here_are_faint` |
+| every format named | `view::pager::tests::the_keys_list_the_settings_after_the_viewers` |
+| no setting's keys idle | `view::pager::tests::the_keys_that_do_nothing_on_what_is_shown_are_listed_as_idle`, `view_pager::the_keys_at_80_…` |
+| idle only where the file hasn't the setting | `view::pager::tests::the_keys_that_do_nothing_…` |
+| the contents never idle | that, `view::pager::tests::the_contents_command_is_offered_only_where_a_place_is_declared`, `view_pager::t_is_offered_only_where_contents_are_declared_never_on_a_pdf` |
+| idle keys written as the rest | `view_pager::the_keys_at_80_…`, `view_pager::what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark` |
+| a row a line, always | `view::pager::tests::the_keys_lines_go_over_rows_where_the_window_has_them`, `view_pager::the_keys_at_80_…` |
+| over rows, whatever rows there are | `view::pager::tests::the_keys_lines_go_over_rows_…` |
+
+**In kitty, for the owner**: `?` on a PDF at 80 × 40: `D`, `[ ]`, `{ }`, `s` and `T` faint and
+readable, on a light and on a dark background, their lines ending `(Markdown, HTML and others)`,
+no line cut; on a Markdown file only `T` faint; at 80 × 24 a row a line, cut in the middle.
+
+Gates on 2026-11-16 with this task: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
+warnings`, `cargo test -j 2` (612 unit, 13 docs, 300 integration), all passing.

@@ -280,7 +280,9 @@ CodeQL's default setup scans the Rust and the workflows.
   page in the middle to the Contents page at the book's end, its entries followed the same and
   Backspace back twice, to the book's own page of contents where its package marks one or its
   links show one, `Contents: T` said when a book opens and not when it is laid out again, and
-  never for a PDF, where `T` says there are none (`t_is_offered_…`). What the worker
+  never for a PDF, where `T` says there are none (`t_is_offered_…`); and `?` at 80 columns, no
+  line cut, a setting's line ending with two formats, the keys that do nothing on a PDF faint, in
+  kitty and as text cells, and on a Markdown document `T` alone (`the_keys_at_80_…`). What the worker
   answers of a package (EPUB 2 and 3, hrefs with `..` and `%20`), a worker that dies or answers
   too much, chapters assembled and cut at their bounds, both kinds of cover, a fallback chain and
   its loop, an `<svg>` that wraps a picture, elements written short, what `encryption.xml` says is

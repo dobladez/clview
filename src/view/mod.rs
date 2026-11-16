@@ -394,18 +394,9 @@ pub(super) fn having(backends: &[&dyn Backend]) -> Vec<(&'static str, Vec<&'stat
     having
 }
 
-/// `names` said together: `a`, `a and b`, `a, b and c`; nothing for none.
-pub(super) fn together(names: &[&str]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => (*one).to_owned(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
 /// `names` said shortly: the first two, and that there are others, `a`, `a and b`, `a, b and
 /// others`; nothing for none. The status line has room for no more as formats come to share a
-/// setting.
+/// setting, nor has a line of `?`.
 pub(super) fn shortly(names: &[&str]) -> String {
     match names {
         [] => String::new(),
@@ -1840,8 +1831,7 @@ mod tests {
             names(&[&DIAGRAMS, &PDF, &DOCUMENTS]),
             Some(("Diagram, Marked and others".to_owned(), "Diagram, Marked and others do".to_owned()))
         );
-        assert_eq!((shortly(&[]), some_do(&[]), together(&[])), (String::new(), String::new(), String::new()));
-        assert_eq!((together(&["a"]), together(&["a", "b"]), together(&["a", "b", "c"])), ("a".into(), "a and b".into(), "a, b and c".into()));
+        assert_eq!((shortly(&[]), some_do(&[])), (String::new(), String::new()));
         assert_eq!(settings(&[&DIAGRAMS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper", "tint"], "one setting, shared");
     }
 

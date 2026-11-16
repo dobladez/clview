@@ -244,12 +244,12 @@ pages drawn again with the value, or `Relayout`, the document laid out again at 
 ([Relayout](#relayout)). A format lists the settings its files have, by name (`Format::settings`,
 through `Format::having`, as it lists its fences), and that is all the viewer knows of which files
 have a setting before one is shown: `view::having` gives the names of the formats that list each, in
-the backends' order, and the pager says a setting's phrases with them (`pager::Settings`): its line
-in `?` after all of them (`view::together`: `Mermaid, Markdown, HTML and EPUB light on dark, or dark on
-light`), and what its key says on a file without it with the first two of them (`view::some_do`: `this
-format doesn't go dark (Mermaid, Markdown and others do)`, Mermaid's backend coming before the
-documents', and the epub's after), short enough for a status line of 80 columns however many formats
-come to share the setting.
+the backends' order, and the pager says a setting's phrases with the first two of them
+(`pager::Settings`): its line in `?`, what its keys do and then the formats (`view::shortly`: `light on
+dark, or dark on light (Mermaid, Markdown and others)`), and what its key says on a file without it
+(`view::some_do`: `this format doesn't go dark (Mermaid, Markdown and others do)`, Mermaid's backend
+coming before the documents', and the epub's after), short enough for a status line of 80 columns
+however many formats come to share the setting.
 No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
 checks that a format lists only settings its backend declares, that every setting is listed by
 one, and that a setting two backends declare is declared alike, their option's help apart, since
@@ -907,7 +907,16 @@ number before the first key of one that takes it, `3.`, and the keys bound with 
 Enter`), and leaves out a line whose commands have no key. The keys are a column of their own, as
 wide as the longest of 17 characters or fewer (`KEYS_COLUMN`, `keys_listed`): a command with more
 keys than that, as a screen down has, has what it does further right on its own line, so that one
-long list of keys doesn't take 14 columns from every line's text. What a line says names keys through the
+long list of keys doesn't take 14 columns from every line's text. What a line says goes on over
+as many rows as it takes, under that column (`wrap`), where the window has the rows for all of
+them; where it hasn't, each line is one row, cut in its middle (`cut`), so that every key is still
+listed. Each line comes with whether its keys do nothing on what is shown (`Nav::help_rows`), which
+the viewer tells from what the source says of itself, never from a format: a setting the source
+hasn't, or one a document is laid out again for in a list or among pages picked (`Nav::idle`, which
+`Nav::turn` goes by too), and `contents` where no place is declared. Those rows are written faint
+(`FAINT`, SGR 2 and 22 around the row): the terminal makes faint of its own colours, so nothing
+is chosen for a light background or a dark one, and the keys are text in every output, text cells
+and a pane of tmux too. What a line says names keys through the
 keymap too: `{fewer-per-row}` in its text is the first key bound to the command so named
 (`Keymap::fill`), and so is the `/` in `no search: / starts one`. The status line's first reminder
 is put together from `Hint`s, the first keys of a few commands and a word (`Keymap::reminder`,
@@ -1647,8 +1656,8 @@ gives `Step::Contents` where there is one, and says there are none where there i
 (`NO_CONTENTS`). `Pager::go_to_contents` asks the file's links where the name is, as a link's
 fragment is asked (`Ask::Name`, `Level::seeking`), with where the reader is (`Pager::here`) kept
 meanwhile (`Level::leaving`); `Pager::seek_on` then goes there as a link followed does
-(`Nav::jump`), so `back` comes back. Its line in `?` (`commands::CONTENTS_LINE`) is listed only
-with a place (`Nav::help_lines`), and when a file with one opens the status line says what the
+(`Nav::jump`), so `back` comes back. Its line in `?` (`commands::CONTENTS_LINE`) is faint without
+a place (`Nav::help_rows`), and when a file with one opens the status line says what the
 source calls the place and the key bound to the command (`Nav::offer`: `Contents: T`), as a
 message that has the whole line for a second (`Nav::notice`, [Settings](#settings)), which a
 layout again doesn't say again (`Pager::replace` keeps the notice of the level it replaces).

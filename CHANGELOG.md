@@ -89,6 +89,11 @@ works today. A version's section becomes the notes of its
   `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
   HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
   window of 80 columns.
+- `?` says what a setting's key does and then two of the formats it does it to (`D  light on
+  dark, or dark on light (Mermaid, Markdown and others)`), where it started with every format.
+  The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
+  there are no contents to go to. What a line says goes on over the next row in a narrow window,
+  where it was cut in its middle.
 - An archive's folder in a list has a zipper down its front and a plate at its corner saying which
   kind it is (`ZIP`, `TAR`, or `TGZ`, `TBZ`, `TXZ` for a compressed tar), where it was tied up
   with tape and a bow.

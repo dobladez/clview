@@ -126,6 +126,7 @@ its place on a status line of 80 columns, and was cut in its middle. The owner's
 - **It has the whole status line, for a second**, then the line comes back; a key brings it back
   at once and does what it does (`Nav::notice`, `pager::Moment`).
 
-`?` still lists every format that has a setting, after its keys (`Mermaid, Markdown, HTML and EPUB
-light on dark, or dark on light`): its lines are cut in their middle where a window is too narrow
-for them, as two of them already were at 80 columns.
+`?` names two formats too, the owner's answer of the same day: what a setting's keys do, then the
+formats (`light on dark, or dark on light (Mermaid, Markdown and others)`), so that a line reads
+from what the key does. Its keys are faint where they do nothing on what is shown, which the
+viewer tells from the settings the source says it has, as it tells what a key says there.

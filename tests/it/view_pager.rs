@@ -1437,7 +1437,7 @@ fn s_shows_a_documents_blocks_as_code_and_draws_them_again() {
     assert!(shows_flow(&page));
     view.wait_until("said", |t| last_bar(t).contains(" blocks drawn "));
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" s Markdown, HTML and EPUB fenced blocks drawn, or as code"));
+    view.wait_until("listed", |t| bar(t).contains(" s fenced blocks drawn, or as code (Markdown, HTML and others)"));
     // Any key leaves the keys; the next one quits.
     view.press("qq");
     assert!(view.finish().success());
@@ -2689,8 +2689,11 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     assert!(pressed.elapsed() < Duration::from_millis(700), "{:?}", pressed.elapsed());
     assert!(!view.text().contains("\x1b]11;"), "asked about the background");
     view.press("?");
-    // Every format that has it, in `?`: more than a line of 80 columns holds, so cut in its middle.
-    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown,") && bar(t).contains("EPUB light on dark, or dark on light"));
+    // In `?`, what the key does, then two of the formats it does it to: over two rows at 80
+    // columns, and faint, as a key that does nothing on a PDF.
+    view.wait_until("listed", |t| {
+        bar(t).contains("\x1b[2m D light on dark, or dark on light (Mermaid, Markdown and") && t.contains("others)\x1b[22m")
+    });
     view.press("qq");
     assert!(view.finish().success());
 }
@@ -4791,6 +4794,7 @@ fn epub_t_goes_to_the_contents_page_at_the_books_end_and_backspace_comes_back() 
     // `?` lists the key.
     view.press("?");
     view.wait_until("listed", |t| bar(t).contains(" T to the contents: Backspace comes back"));
+    assert!(!bar(&view.text()).contains("\x1b[2m T "), "faint in a book that has contents");
     view.press("qq");
     assert!(view.finish().success());
 }
@@ -4841,6 +4845,61 @@ fn epub_t_goes_to_the_books_own_contents_marked_or_guessed() {
     to_its_own("guessed.epub", &book_with(&four, &pictures, "", NAV_ITEM), 5);
 }
 
+/// What `?` has written since `from` bytes of output, once it is whole: its rows.
+fn keys_shown(view: &mut Session, from: usize) -> String {
+    view.press("?");
+    view.wait_until("the keys", |t| t.len() > from && bar(&t[from..]).contains("these keys: any key goes back"));
+    view.text()[from..].to_owned()
+}
+
+/// `?` in a window of 80 columns cuts no line: what a line says goes on over the next row. A
+/// setting's line says what its keys do and then two of the formats they do it to. The keys that
+/// do nothing on what is shown are faint, by what the file says of itself: on a PDF `D`, `[ ]`,
+/// `{ }`, `s` and `T`, and on a Markdown document `T` alone. As text cells too.
+#[test]
+fn the_keys_at_80_columns_are_whole_and_those_that_do_nothing_here_are_faint() {
+    if !pty_works() {
+        return;
+    }
+    const SETTINGS: [&str; 4] = ["D", "[ ] 12]", "{ } 12}", "s"];
+    let faint = |keys: &str| format!("\x1b[2m {keys} ");
+    let listed = |shown: &str, keys: &str| bar(shown).contains(&format!(" {keys} "));
+    for terminal in [KITTY, TEXT_ONLY] {
+        let mut view = Session::start_on(terminal, &fixture("keys-faint", 2), &["--pager"], 80, 40);
+        view.wait_until("page 1", |t| drawn(t, "page 1/2"));
+        let from = view.text().len();
+        let shown = keys_shown(&mut view, from);
+        assert!(!shown.contains('…'), "a line cut: {shown:?}");
+        for keys in SETTINGS.iter().chain(&["T"]) {
+            assert!(bar(&shown).contains(&faint(keys)), "{keys} isn't faint on a PDF: {shown:?}");
+        }
+        for keys in ["q", "?", "f", "/", "c", "+ -", "Backspace"] {
+            assert!(listed(&shown, keys) && !bar(&shown).contains(&faint(keys)), "{keys} is faint, or isn't listed: {shown:?}");
+        }
+        assert_eq!(shown.matches("\x1b[2m").count(), shown.matches("\x1b[22m").count(), "a faint row goes back to the rest");
+        // Each of its lines whole, over two rows where it takes them.
+        let said = bar(&shown);
+        assert!(said.contains(" D light on dark, or dark on light (Mermaid, Markdown and") && said.contains("others)"), "{said:?}");
+        assert!(
+            said.contains(" [ ] 12] 4 characters a line narrower, or wider; 72] sets 72, 0] the")
+                && said.contains("window's (Markdown, HTML and others)")
+        );
+        view.press("qq");
+        assert!(view.finish().success());
+    }
+    let mut view = Session::start_on(KITTY, &long_markdown("keys-faint", "long.md"), &["--pager"], 80, 40);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    let from = view.text().len();
+    let shown = keys_shown(&mut view, from);
+    assert!(!shown.contains('…'), "a line cut: {shown:?}");
+    for keys in SETTINGS {
+        assert!(listed(&shown, keys) && !bar(&shown).contains(&faint(keys)), "{keys} is faint on Markdown, or isn't listed: {shown:?}");
+    }
+    assert!(bar(&shown).contains(&faint("T")) && shown.matches("\x1b[2m").count() == 1, "the contents alone are faint: {shown:?}");
+    view.press("qq");
+    assert!(view.finish().success());
+}
+
 /// A file that says nothing of where its contents are isn't offered the key: a PDF's status line
 /// never says it, `T` says there is nowhere to go, and `?` doesn't list it.
 #[test]
@@ -4857,7 +4916,7 @@ fn t_is_offered_only_where_contents_are_declared_never_on_a_pdf() {
     assert!(place_now(&view.text()).is_some_and(|(page, _)| page == 1));
     view.press("?");
     view.wait_until("the keys", |t| bar(t).contains("these keys"));
-    assert!(!view.text().contains("to the contents"), "listed for a PDF");
+    assert!(bar(&view.text()).contains("\x1b[2m T to the contents: Backspace comes back\x1b[22m"), "not listed faint for a PDF");
     view.press("qq");
     assert!(view.finish().success());
 }

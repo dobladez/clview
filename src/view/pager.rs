@@ -606,10 +606,11 @@ impl Settings {
         self.formats(setting).map_or_else(|| NOT_HERE.to_owned(), |formats| format!("{these} {} ({})", setting.does, super::some_do(formats)))
     }
 
-    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), after the formats they do it
-    /// to, all of them ([`super::together`]).
+    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), then the formats they do it
+    /// to, the first two of them ([`super::shortly`]): `light on dark, or dark on light (Markdown,
+    /// HTML and others)`.
     fn help(&self, setting: &Setting) -> String {
-        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{} {}", super::together(formats), setting.help))
+        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{} ({})", setting.help, super::shortly(formats)))
     }
 }
 
@@ -644,11 +645,65 @@ fn bounds_of(bounds: &[(&'static str, Bounds)], name: &str) -> Option<Bounds> {
 /// four) has what it does after them, further right: its own line's, not every line's.
 const KEYS_COLUMN: usize = 17;
 
-/// `?` as it is written, under its title: each of `help`'s lines, its keys and then what they do, in
-/// two columns, the first as wide as the longest keys of [`KEYS_COLUMN`] characters or fewer.
-fn keys_listed(help: &[(String, String)]) -> Vec<String> {
-    let column = help.iter().map(|(keys, _)| chars(keys)).filter(|keys| *keys <= KEYS_COLUMN).max().unwrap_or(0);
-    std::iter::once(String::from("Keys")).chain(help.iter().map(|(keys, what)| format!("  {keys:<column$}   {what}"))).collect()
+/// A line of `?`: its keys, what they do, and whether they do nothing on what is shown.
+type Listed = (String, String, bool);
+
+/// How `?` writes the keys that do nothing on what is shown, and how it goes back to the rest:
+/// faint (SGR 2), which a terminal makes of its own colours, so it reads on a light background
+/// and on a dark one, in a pane of tmux and as text cells too, where the keys are text like any
+/// other; a terminal that has no faint shows them as the rest.
+const FAINT: (&str, &str) = ("\x1b[2m", "\x1b[22m");
+
+/// `?` as it is written, under its title, in a window `width` characters wide with `rows` rows for
+/// it: each of `help`'s lines, its keys and then what they do, in two columns, the first as wide as
+/// the longest keys of [`KEYS_COLUMN`] characters or fewer; each row with whether it is one of keys
+/// that do nothing here. What a line says goes on over as many rows as it takes, under its column,
+/// so that none is cut; unless the keys then take more rows than there are, and then each line is
+/// one row, to be cut where it is too long, so that every key is still listed.
+fn keys_listed(help: &[Listed], width: usize, rows: usize) -> Vec<(String, bool)> {
+    let column = help.iter().map(|(keys, ..)| chars(keys)).filter(|keys| *keys <= KEYS_COLUMN).max().unwrap_or(0);
+    let title = || std::iter::once((String::from("Keys"), false));
+    let indent = column.saturating_add(5);
+    let wrapped: Vec<(String, bool)> = title()
+        .chain(help.iter().flat_map(|(keys, what, idle)| {
+            let start = format!("  {keys:<column$}   ");
+            let over = wrap(what, width.saturating_sub(chars(&start)), width.saturating_sub(indent));
+            let rows = over
+                .into_iter()
+                .enumerate()
+                .map(move |(n, row)| if n == 0 { format!("{start}{row}") } else { format!("{}{row}", " ".repeat(indent)) });
+            rows.map(|row| (row, *idle)).collect::<Vec<_>>()
+        }))
+        .collect();
+    if wrapped.len() <= rows {
+        return wrapped;
+    }
+    title().chain(help.iter().map(|(keys, what, idle)| (format!("  {keys:<column$}   {what}"), *idle))).collect()
+}
+
+/// `text` over as many rows as its words take, the first of `first` characters at most and the
+/// others of `rest`: at least one row, the first empty where its first word doesn't fit it. A word
+/// longer than a row has a row to itself.
+fn wrap(text: &str, first: usize, rest: usize) -> Vec<String> {
+    let mut rows = vec![String::new()];
+    for word in text.split(' ') {
+        let on_first = rows.len() == 1;
+        let room = if on_first { first } else { rest };
+        let Some(row) = rows.last_mut() else { break };
+        let taken = if row.is_empty() { 0 } else { chars(row).saturating_add(1) };
+        // On this row where it fits; and where it fits no row, or only this one is to be had, on a
+        // row to itself. Nothing on the first row yet, and no room there: on from the next.
+        let alone = row.is_empty() && !(on_first && chars(word) <= rest);
+        if taken.saturating_add(chars(word)) <= room || alone {
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        } else {
+            rows.push(word.to_owned());
+        }
+    }
+    rows
 }
 
 /// A setting's line in `?`, its keys as `keymap` binds its commands: the one that cycles it, or the
@@ -832,26 +887,41 @@ impl Nav {
     /// What `?` shows here: the viewer's commands, each with the keys bound to it here, then the
     /// settings' this build declares, whatever is shown, then how to leave. One line for the zoom: its
     /// own, or on a document that has a setting on those keys ([`Keys::Zoom`]), that setting's in its
-    /// place. A command no key is bound to isn't listed.
-    fn help_lines(&self) -> Vec<(String, String)> {
+    /// place. A command no key is bound to isn't listed. With each, whether its keys do nothing on
+    /// what is shown, by what the source says of itself and never by what kind of file it is: a
+    /// setting it hasn't, or that isn't turned here ([`Nav::idle`]), and the contents of a file that
+    /// declares no place for them.
+    fn help_rows(&self) -> Vec<Listed> {
         let keymap = self.keymap();
         let lines = if self.list { commands::LIST_LINES } else { commands::PAGE_LINES };
-        // The contents' line only where there is such a place to go to.
-        let lines = lines.iter().filter(|line| self.contents.is_some() || line.commands != commands::CONTENTS_LINE.commands);
         let leave = if self.nested { commands::BACK_LINES } else { commands::QUIT_LINES };
         let (zoomed, reflows) = (self.zoom_setting(), self.reflows());
-        let said = |line: &Line| (keymap.shown(line), keymap.fill(line.says));
-        let own = lines.map(|line| match zoomed {
+        let said = |line: &Line| (keymap.shown(line), keymap.fill(line.says), false);
+        let own = lines.iter().map(|line| match zoomed {
             Some(setting) if line.commands == commands::ZOOM => {
-                (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting))
+                (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting), false)
             }
             _ if reflows && line.commands == commands::PER_ROW => said(&commands::COLUMNS_LINE),
+            _ if line.commands == commands::CONTENTS_LINE.commands => (keymap.shown(line), keymap.fill(line.says), self.contents.is_none()),
             _ => said(line),
         });
-        let settings =
-            self.settings.declared.iter().copied().filter_map(|setting| Some((setting_keys(keymap, setting)?, self.settings.help(setting))));
+        let settings = self.settings.declared.iter().copied();
+        let settings = settings.filter_map(|setting| Some((setting_keys(keymap, setting)?, self.settings.help(setting), self.idle(setting))));
         let all = own.chain(settings).chain(leave.iter().map(said)).chain([said(&commands::HELP_LINE)]);
-        all.filter(|(keys, _)| !keys.is_empty()).collect()
+        all.filter(|(keys, ..)| !keys.is_empty()).collect()
+    }
+
+    /// [`Nav::help_rows`], each line's keys and what they do.
+    #[cfg(test)]
+    fn help_lines(&self) -> Vec<(String, String)> {
+        self.help_rows().into_iter().map(|(keys, what, _)| (keys, what)).collect()
+    }
+
+    /// Whether `setting`'s commands change nothing here: what is shown hasn't the setting, or it
+    /// is one a document is laid out again for, in a list or among pages picked, where its keys
+    /// only say so ([`Nav::turn`]).
+    fn idle(&self, setting: &Setting) -> bool {
+        !self.has.contains(&setting.name) || (setting.effect == Effect::Relayout && (self.list || self.picked))
     }
 
     /// The setting the zoom keys go to here, if one does ([`Keys::Zoom`]): one this build declares,
@@ -1247,7 +1317,7 @@ impl Nav {
             self.notice = Some(settings.not_here(setting, self.list));
             return Step::Continue;
         }
-        if setting.effect == Effect::Relayout && (self.list || self.picked) {
+        if self.idle(setting) {
             self.message = Some(if self.list { REFLOW_IN_LIST } else { REFLOW_WITH_PAGES }.into());
             return Step::Continue;
         }
@@ -3268,12 +3338,14 @@ impl Pager<'_> {
         self.placed.clear();
         self.on_glass.clear();
         self.spots.clear();
-        let lines = keys_listed(&self.level.nav.help_lines());
         let width = usize::from(size.cols).saturating_sub(2);
         // Above the status line, as many as fit.
-        for (row, line) in (1..size.rows.saturating_sub(1)).zip(lines) {
+        let rows = 1..size.rows.saturating_sub(1);
+        let lines = keys_listed(&self.level.nav.help_rows(), width, rows.len());
+        for (row, (line, idle)) in rows.zip(lines) {
             cursor(out, row, 2);
-            out.extend_from_slice(cut(&line, width).as_bytes());
+            let (on, off) = if idle { FAINT } else { ("", "") };
+            out.extend_from_slice(format!("{on}{}{off}", cut(&line, width)).as_bytes());
         }
     }
 
@@ -4435,14 +4507,14 @@ mod tests {
         assert!(!nav.wants_rerender());
         assert_eq!((width(&nav).0, nav.notice.as_deref(), nav.typed.as_str()), (None, Some("this format doesn't widen (Some does)"), ""));
         // `?` gives a count's form too.
-        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "Some narrower or wider".into())));
+        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "narrower or wider (Some)".into())));
     }
 
     /// `?` lists the keys of the settings this build declares, after the viewer's and before the
-    /// way out, whatever is shown: what each does, after the formats it does it to.
+    /// way out, whatever is shown: what each does, then the formats it does it to, the first two.
     #[test]
     fn the_keys_list_the_settings_after_the_viewers() {
-        const SAID: &str = "Ink, Wash and Dye pale or deep";
+        const SAID: &str = "pale or deep (Ink, Wash and others)";
         for nav in [declaring(reader(0, 3, 40, 40), false), declaring(list(3), true)] {
             let lines = nav.help_lines();
             let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();
@@ -4561,7 +4633,8 @@ mod tests {
     fn a_command_with_many_keys_doesnt_narrow_every_line_of_the_keys() {
         for nav in [reader(0, 3, 40, 40), Nav { nested: true, ..reader(0, 3, 40, 40) }, tiles(10, 3, 2), declaring(tiles(10, 3, 2), true)] {
             let help = nav.help_lines();
-            let lines = keys_listed(&help);
+            // In a window as wide as any line, each line is a row.
+            let lines: Vec<String> = keys_listed(&nav.help_rows(), 500, 500).into_iter().map(|(line, _)| line).collect();
             assert_eq!((lines.len(), lines[0].as_str()), (help.len() + 1, "Keys"));
             let column = help.iter().map(|(keys, _)| chars(keys)).filter(|keys| *keys <= KEYS_COLUMN).max().unwrap();
             // As wide as it was before a screen had four keys: a list's `o` still fits 100 columns.
@@ -5111,10 +5184,73 @@ mod tests {
         assert_eq!(labelled(reader(1, 12, 20, 40), links()).key(Key::Interrupt), Step::Quit);
     }
 
+    /// `?` lists as idle the keys that do nothing on what is shown, by what the source says of
+    /// itself: a setting it hasn't; one a document is laid out again for, in a list or among pages
+    /// picked; and the contents, where it declares no place for them. Every other key is as ever.
+    #[test]
+    fn the_keys_that_do_nothing_on_what_is_shown_are_listed_as_idle() {
+        let idle = |nav: &Nav, keys: &str| nav.help_rows().iter().find(|(listed, ..)| listed == keys).map(|(.., idle)| *idle);
+        let page = || reader(0, 12, 40, 40);
+        assert_eq!((idle(&declaring(page(), false), "D"), idle(&declaring(page(), true), "D")), (Some(true), Some(false)));
+        let both = ["shade", "width"];
+        let document = declaring_both(page(), &both);
+        assert_eq!((idle(&document, "D"), idle(&document, "[ ]  12]")), (Some(false), Some(false)));
+        assert_eq!(
+            (idle(&declaring_both(page(), &["shade"]), "D"), idle(&declaring_both(page(), &["shade"]), "[ ]  12]")),
+            (Some(false), Some(true))
+        );
+        // Laid out again only shown by itself: in a list, and among pages picked, its keys say so.
+        let (tiles, picked) = (declaring_both(list(9), &both), Nav { picked: true, ..declaring_both(page(), &both) });
+        assert_eq!(
+            (idle(&tiles, "D"), idle(&tiles, "[ ]  12]"), idle(&picked, "D"), idle(&picked, "[ ]  12]")),
+            (Some(false), Some(true), Some(false), Some(true))
+        );
+        let contents = Nav { contents: Some(Landmark { called: "Contents", name: "contents".to_owned() }), ..page() };
+        assert_eq!((idle(&page(), "T"), idle(&contents, "T"), idle(&list(9), "T")), (Some(true), Some(false), None));
+        for nav in [document, tiles, contents] {
+            assert!(nav.help_rows().iter().all(|(keys, _, idle)| !idle || ["D", "[ ]  12]", "T"].contains(&keys.as_str())), "{:?}", nav.help_rows());
+        }
+    }
+
+    /// `?` writes what a line says over as many rows as it takes, under its own column, where the
+    /// window has the rows: then no line is cut. Where it hasn't, each line is one row, as it was,
+    /// so that every key is still listed. A row is idle as its line is.
+    #[test]
+    fn the_keys_lines_go_over_rows_where_the_window_has_them() {
+        let line = |keys: &str, what: &str, idle: bool| (keys.to_owned(), what.to_owned(), idle);
+        let help = [line("k", "aaa bbb ccc dd e", true), line("kk", "x", false), line("a long one", "y zz", false)];
+        let listed = |width: usize, rows: usize| keys_listed(&help, width, rows);
+        let rows = |lines: &[(&str, bool)]| lines.iter().map(|(line, idle)| ((*line).to_owned(), *idle)).collect::<Vec<_>>();
+        // The column is the widest keys', here: two, then three spaces, after two.
+        let whole = rows(&[("Keys", false), ("  k            aaa bbb ccc dd e", true), ("  kk           x", false), ("  a long one   y zz", false)]);
+        assert_eq!(listed(40, 4), whole);
+        let over = [
+            ("Keys", false),
+            ("  k            aaa bbb", true),
+            ("               ccc dd e", true),
+            ("  kk           x", false),
+            ("  a long one   y zz", false),
+        ];
+        assert_eq!(listed(23, 5), rows(&over));
+        assert_eq!(listed(23, 4), whole, "more rows than the window has: a row each");
+        assert_eq!(wrap("aaa bbb ccc", 7, 3), ["aaa bbb", "ccc"]);
+        // A word that fits no row has one to itself; one that only the first has no room for starts the next.
+        assert_eq!(
+            (wrap("abcdefgh i", 4, 6), wrap("abcdef g", 4, 6), wrap("", 4, 6)),
+            (vec!["abcdefgh".to_owned(), "i".into()], vec![String::new(), "abcdef".into(), "g".into()], vec![String::new()])
+        );
+        // The keys as they are, at 80 columns: in a window of 60 rows none is past its width.
+        for nav in [declaring_both(reader(0, 12, 40, 40), &["shade", "width"]), declaring(tiles(10, 3, 2), true)] {
+            let (wide, tall) = (keys_listed(&nav.help_rows(), 78, 60), keys_listed(&nav.help_rows(), 78, 15));
+            assert!(wide.len() > nav.help_rows().len() + 1 && wide.iter().all(|(line, _)| chars(line) <= 78), "{wide:?}");
+            assert!(tall.len() == nav.help_rows().len() + 1 && tall.iter().any(|(line, _)| chars(line) > 78));
+        }
+    }
+
     /// `contents` is offered only where what is shown says where its contents are: its key asks
     /// the pager to go there, `?` lists it, and the status line says the key, after what the source
-    /// calls the place, when the file opens. Elsewhere the key says there is none, `?` doesn't
-    /// list it, and nothing is said; nor in a list.
+    /// calls the place, when the file opens. Elsewhere the key says there is none, `?` lists it as
+    /// a key that does nothing here, and nothing is said. A list has no such key.
     #[test]
     fn the_contents_command_is_offered_only_where_a_place_is_declared() {
         let place = || Some(Landmark { called: "Contents", name: "contents".to_owned() });
@@ -5127,7 +5263,9 @@ mod tests {
         assert!(nav.typed.is_empty() && nav.message.is_none());
         let mut without = reader(4, 12, 40, 40);
         assert_eq!((press(&mut without, &[Key::Char('T')]), without.message.as_deref()), (Step::Continue, Some(NO_CONTENTS)));
-        assert!(without.offer().is_none() && !without.help_lines().iter().any(|(keys, _)| keys == "T"), "{:?}", without.help_lines());
+        // Listed all the same, as a key that does nothing here.
+        assert!(without.offer().is_none() && without.help_rows().contains(&("T".into(), "to the contents: Backspace comes back".into(), true)));
+        assert!(nav.help_rows().contains(&("T".into(), "to the contents: Backspace comes back".into(), false)));
         let mut tiles = Nav { contents: place(), ..list(9) };
         assert_eq!((press(&mut tiles, &[Key::Char('T')]), tiles.message.clone(), tiles.offer()), (Step::Continue, None, None));
         assert!(!tiles.help_lines().iter().any(|(keys, _)| keys == "T"));

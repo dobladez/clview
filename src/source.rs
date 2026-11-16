@@ -234,9 +234,9 @@ pub(crate) struct Setting {
     pub(crate) keys: Keys,
     /// The command-line option that sets it, taken whatever the files are.
     pub(crate) option: OptionSpec,
-    /// What its keys do to the files that have it, as `?` lists them after the names of the formats
-    /// that do ([`Format::settings`]): `light on dark, or dark on light`, listed as `Markdown and HTML
-    /// light on dark, or dark on light`.
+    /// What its keys do to the files that have it, as `?` lists them before the names of formats
+    /// that do ([`Format::settings`]): `light on dark, or dark on light`, listed as `light on dark,
+    /// or dark on light (Markdown, HTML and others)`.
     pub(crate) help: &'static str,
     /// What the files that have it do, as said of one that doesn't and of those that do: `go dark`.
     /// Its keys say so on a file that hasn't it, with the names of formats that have

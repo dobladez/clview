@@ -121,8 +121,9 @@ which zips and tars give the documents they hold too: a README in a zip shows it
   spine, or the guide's or landmarks' `toc`), or else one guessed, among the book's first
   chapters, by its links leading mostly to other chapters, within bounds a hostile chapter can't
   make costly. Otherwise to the Contents page. The viewer knows no format: a source declares where
-  its contents are, and the viewer offers the key, lists it in `?` and says it on the status line
-  for a second when the file opens (`Contents: T`) only where one is declared.
+  its contents are, and the viewer goes there, and says the key on the status line for a second
+  when the file opens (`Contents: T`), only where one is declared; elsewhere `?` lists the key
+  faint.
 - **A table of contents rbook can't read** leaves the book without the page, the first page saying
   so; it never refuses the book.
 - Limits: 4,096 entries, 256 bytes a label (cut at a character), 8 levels shown (deeper ones at the
@@ -447,6 +448,17 @@ over left out, and said:
   in kitty, a Project Gutenberg EPUB 3 book: "Contents: T" for a second when it opens, T from a
   chapter lands on the book's own contents, Backspace back; a Standard Ebooks book: T lands on
   the last page`.
+- [x] **`?` with two formats at a line's end, and the keys that do nothing here faint** (the
+  owner's, 2026-11-16) — a setting's line says what its keys do, then the first two formats that
+  have it (`light on dark, or dark on light (Mermaid, Markdown and others)`); the keys that do
+  nothing on what is shown are faint, told from what the source declares (its settings, its
+  contents place); what a line says goes on over rows, so that none is cut at 80 columns; usage,
+  architecture, the changelog, ADR-0033's update. *Files:* `src/view/pager.rs`,
+  `src/view/mod.rs`, `tests/it/view_pager.rs`, `docs/`, `CHANGELOG.md`. *Verify:* `cargo test -j 2
+  --bin clv view::` (`the_keys_that_do_nothing_on_what_is_shown_are_listed_as_idle`,
+  `the_keys_lines_go_over_rows_where_the_window_has_them`) and `cargo test -j 2 --test it
+  view_pager::the_keys_at_80` (at 80 columns no line cut; a PDF's `D`, `[ ]`, `{ }`, `s`, `T`
+  faint, in kitty and as text cells; a Markdown document's `T` alone).
 
 ## Done
 
@@ -481,3 +493,5 @@ over left out, and said:
 - 2026-11-16 — The owner's decisions on the contents: the Contents page at the book's end, for
   every book with a table of contents, saying clv made it (task 5 and its requirement revised);
   a seventh task, a key that goes to the contents, the book's own where marked or guessed.
+- 2026-11-16 — An eighth task, the owner's: `?` names two formats at a line's end, and shows faint
+  the keys that do nothing on what is shown.

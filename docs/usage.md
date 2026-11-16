@@ -77,7 +77,15 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 ## Keys
 
 `?` lists them in the pager too, a backend's after the viewer's: `D` is the documents', and does
-nothing in a `clv` built without them. Each key does what the command it is bound to does, and
+nothing in a `clv` built without them. A line about a key that only some formats have says what
+the key does and then two of those formats (`D  light on dark, or dark on light (Mermaid, Markdown
+and others)`). The keys that do nothing on what you are looking at are faint there: `D`, `[`, `{`
+and `s` on a PDF, the width's and the margins' keys in a list, `T` on a file with no contents to
+go to. Faint is the terminal's own (SGR 2), made of its colours, so it reads on a light background
+and on a dark one, and in [text cells](#text-cells) too; a terminal without it shows those keys
+as the rest. What a line says goes on over the next row where the window is too narrow for it, so
+that none is cut; in a window too short for that (80 × 24), each line keeps to one row, cut in
+its middle where it is too long, so that every key is still listed. Each key does what the command it is bound to does, and
 several keys may be bound to one: the keys of `less` and `vi`, and some of Emacs's, written here
 as `Ctrl-V` and `Alt-V`. For the Alt keys the terminal has to send Alt, or on a Mac Option, as
 `ESC` and the key: in kitty on macOS, `macos_option_as_alt yes`. Alt with a character that is
@@ -1017,7 +1025,7 @@ the book's own page of contents where the book has one among its chapters:
 Only in a book with neither does `T` go to the Contents page at the book's end. When a book
 opens, the status line says the key (`Contents: T`), for a second
 ([The status line](#the-status-line)). A book with no table of contents and no such chapter has
-no contents to go to: nothing is said when it opens, `?` doesn't list `T`, and `T` says so, as it
+no contents to go to: nothing is said when it opens, `?` lists `T` faint, and `T` says so, as it
 does on any file that isn't a book.
 
 Its pictures are read from the book, by their paths from their chapter, `..` included but never
