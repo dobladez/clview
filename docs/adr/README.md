@@ -50,6 +50,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0036 | [Keys are bound to named commands](0036-keys-are-bound-to-named-commands.md) | Accepted |
 | 0037 | [What is beside a held file is read from its holder, a picture measured from its first 64 KiB](0037-what-is-beside-a-held-file-is-read-from-its-holder.md) | Accepted |
 | 0038 | [An epub is one document through the backend that opens HTML, its package read by rbook in a worker process capped at 2 s and 256 MiB](0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md) | Accepted; the Contents page last and a key to the contents, updated 2026-11-16 |
+| 0039 | [A backend sure of a file wins over one that finds a mark in it](0039-a-backend-sure-of-a-file-wins-over-one-that-finds-a-mark-in-it.md) | Accepted |
 
 ## When to write one
 

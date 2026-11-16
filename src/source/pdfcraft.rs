@@ -64,7 +64,14 @@ impl Backend for Pdfcraft {
         OPTIONS
     }
 
+    /// Sure of a file that starts with its header.
     fn opens(&self, _path: &str, head: &[u8]) -> bool {
+        head.starts_with(HEADER)
+    }
+
+    /// Loosely, of one with its header further in: a zip's first file, stored, or a drawing's
+    /// text may hold it there too.
+    fn opens_loosely(&self, _path: &str, head: &[u8]) -> bool {
         is_pdf(head)
     }
 
@@ -87,8 +94,11 @@ impl Backend for Pdfcraft {
 /// first 1024 bytes. ISO 32000-2 §7.5.2 puts the header first; readers have long allowed bytes
 /// before it, up to that bound.
 fn is_pdf(head: &[u8]) -> bool {
-    head.get(..1024).unwrap_or(head).windows(5).any(|w| w == b"%PDF-")
+    head.get(..1024).unwrap_or(head).windows(HEADER.len()).any(|w| w == HEADER)
 }
+
+/// What a PDF's header starts with.
+const HEADER: &[u8] = b"%PDF-";
 
 /// The most pages a PDF may have to be opened. A page tree may name one page over and over, six
 /// bytes a name, so a file of a few megabytes can have millions; real documents stay far below.
@@ -1221,5 +1231,8 @@ mod tests {
         assert!(!is_pdf(b"%PDF"), "a truncated header");
         assert!(!is_pdf(b"\x89PNG\r\n\x1a\n"));
         assert!(!is_pdf(b""));
+        // Sure only of a header at the start; loosely of one further in.
+        assert!(Pdfcraft.opens("a", b"%PDF-1.7\n") && Pdfcraft.opens_loosely("a", b"%PDF-1.7\n"));
+        assert!(!Pdfcraft.opens("a.pdf", &prefixed) && Pdfcraft.opens_loosely("a", &prefixed));
     }
 }

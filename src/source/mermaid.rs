@@ -34,7 +34,7 @@ use super::threads::{RenderFn, Threads};
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
 use super::{
     Again, Anchor, Auto, BACKENDS, Backend, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Named, Opened, Pixels, Pool, Render,
-    Request, Room, Setting, Source, Texts, Value, Values,
+    Request, Room, Setting, Source, Texts, Value, Values, opener,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -139,7 +139,8 @@ fn shown(path: &str, svg: Arc<Vec<u8>>, options: &Parsed<'_>) -> Result<Opened, 
     let again: Again = Arc::new(move || Ok(svg.to_vec()));
     let drawing = Input::held(path.to_owned(), head, again);
     // Not this one: what merman draws is never a diagram.
-    let Some(backend) = BACKENDS.iter().filter(|b| b.name() != Mermaid.name()).find(|b| b.opens(&drawing.path, &drawing.head)) else {
+    let others: Vec<&dyn Backend> = BACKENDS.iter().copied().filter(|b| b.name() != Mermaid.name()).collect();
+    let Some(backend) = opener(&others, &drawing.path, &drawing.head) else {
         return Err(format!("{}: a diagram is shown as the SVG merman draws, and no backend opens that", drawing.path));
     };
     backend.open(drawing, options)

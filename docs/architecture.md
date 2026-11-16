@@ -142,24 +142,30 @@ reader to follow: `Source::links`, `None` by default, otherwise a `Links`, under
 
 ## Backends
 
-A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goes to the first
-that says it opens it, going by the file's first 1024 bytes (`Backend::opens`). Those bytes are
-read once and handed on with the rest of the file (`Input`), so a pipe opens as well as a file. A
-backend opens a file to pages (`Opened::Pages`) or, for an archive, to the files it holds
-(`Opened::Files`, a `Container`).
+A `Backend` opens sources. `source::BACKENDS` lists this build's, and a file goes to the one that
+opens it, going by the file's first 1024 bytes (`source::opener`). A backend is sure of a file
+(`Backend::opens`) by a signature where its format puts it, by what a file of its kind holds, or
+by its name and that it is text; or it opens it only loosely (`Backend::opens_loosely`), by a mark
+that another format's bytes may hold too: a PDF's header past its first byte, which a zip's first
+file, stored, or a drawing's text holds as well. The first backend sure of a file opens it; only
+when none is, the first that opens it loosely, one whose formats go by the file's name before the
+rest ([ADR-0039](adr/0039-a-backend-sure-of-a-file-wins-over-one-that-finds-a-mark-in-it.md)).
+The spreadsheet, epub and Mermaid backends ask the same of the others for the PDF, HTML or SVG
+they make. Those bytes are read once and handed on with the rest of the file (`Input`), so a pipe
+opens as well as a file. A backend opens a file to pages (`Opened::Pages`) or, for an archive, to
+the files it holds (`Opened::Files`, a `Container`).
 
-All are on by default, and asked in this order, the ones that go by how a file starts before the
-PDF one, since a PDF's header may come anywhere in its first 1024 bytes:
+All are on by default, and asked in this order, which settles only claims as sure:
 
 | Asked | File | Feature | How it tells its files | Why asked there |
 |---|---|---|---|---|
-| 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Those bytes may hold a PDF's header, in a drawing's text |
-| 2 | `mermaid.rs` | `mermaid`, which brings `svg` | Its name alone: `.mermaid` and text; `.mmd` and text whose first line past a BOM, blank lines, `%%` comments and front matter, within the first 1024 bytes, starts with a kind of diagram merman draws (the first word of each label in `merman::diagram_header_facts()`, in its case, followed by a space, a `-` or the line's end), or is an `%%{init` directive, since MultiMarkdown is `.mmd` too | As for SVG: a diagram's text may hold a PDF's header |
-| 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
-| 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | As for SVG (an RTF's text), and before zip, since a docx is a zip |
+| 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Before tar, which would take an svgz, gzipped, as the file it unpacks to |
+| 2 | `mermaid.rs` | `mermaid`, which brings `svg` | Its name alone: `.mermaid` and text; `.mmd` and text whose first line past a BOM, blank lines, `%%` comments and front matter, within the first 1024 bytes, starts with a kind of diagram merman draws (the first word of each label in `merman::diagram_header_facts()`, in its case, followed by a space, a `-` or the line's end), or is an `%%{init` directive, since MultiMarkdown is `.mmd` too | |
+| 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | After SVG, for an svgz |
+| 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | Before zip, since a docx and an odt are zips |
 | 5 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
 | 6 | `epub.rs` | `epub`, which brings `word` | A zip whose first file is `mimetype`, stored, saying `application/epub+zip`, whatever its name; a zip named `.epub` whose first file isn't a stored `mimetype` | Before zip, since an epub is a zip; after the Word and spreadsheet backends, which take the zips that say they are theirs |
-| 7 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
+| 7 | `pdfcraft.rs` | `pdf` | `%PDF-` first; loosely, `%PDF-` further in its first 1024 bytes, where ISO 32000-2 lets readers allow bytes before the header | Anywhere: a header further in loses to any backend sure of the file |
 | 8 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
 | 9 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word, spreadsheet and epub backends don't take |
 

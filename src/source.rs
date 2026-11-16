@@ -53,11 +53,11 @@ pub(crate) use joined::{Joined, Part};
 pub(crate) use later::{Handle, Later, Openers};
 pub(crate) use worker::{Worker, serve};
 
-/// The backends this build has, in the order they are asked whether they open a file. SVG
-/// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
-/// 1024 bytes, which a drawing's text may hold. Mermaid diagrams next, for the same reason, and
-/// tar, for the same reason: a tar's first file starts 512 bytes in. Then documents, for the same reason (an RTF's text), spreadsheets
-/// and books, all before zip, since a docx, an xlsx and an epub are zips.
+/// The backends this build has, in the order they are asked whether they open a file. The order
+/// settles only claims as sure ([`opener`]): a mark found anywhere, a PDF's header past its first
+/// byte, loses to any of them wherever it is asked. SVG before tar, which would take an svgz,
+/// gzipped, as the file it unpacks to; documents, spreadsheets and books before zip, since a
+/// docx, an xlsx and an epub are zips.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -118,8 +118,17 @@ pub(crate) trait Backend: Sync {
         &[]
     }
     /// Whether it opens the file at `path`, going by `head`: its first [`HEAD`] bytes, or all of
-    /// a shorter file.
+    /// a shorter file. Sure of it: by a signature where its format puts it, by what a file of its
+    /// kind holds, or by a name and what such a file must be (text). A mark that another format's
+    /// bytes may hold too, anywhere, is [`Backend::opens_loosely`]'s.
     fn opens(&self, path: &str, head: &[u8]) -> bool;
+    /// Whether it opens the file at `path`, which starts with `head`, by a mark that may be found
+    /// in another format's bytes too: a PDF's header past its first byte, where a zip's stored file
+    /// or a drawing's text may hold it. Asked only when no backend [`opens`](Backend::opens) the
+    /// file; none by default.
+    fn opens_loosely(&self, _path: &str, _head: &[u8]) -> bool {
+        false
+    }
     /// `input` opened, with the values `options` gives its own options: its pages, or for a file
     /// that holds files (an archive), a container of them. A backend that lays a file out for the
     /// room it is shown in ([`Backend::open_at`]) takes a room of its own here.
@@ -665,12 +674,18 @@ pub(crate) fn real(path: &str) -> Result<PathBuf, String> {
 /// starts as a PNG does, or a `photo.png` linked to it, would run as a script. Otherwise why not,
 /// in the backend's own words for what it shows.
 pub(crate) fn named_as(backend: &dyn Backend, path: &Path) -> Result<(), String> {
-    let extension = path.extension().and_then(|e| e.to_str());
-    let says = |format: &Format| extension.is_some_and(|e| format.names.iter().any(|name| e.eq_ignore_ascii_case(name)));
-    match backend.formats().iter().any(says) {
+    match goes_by(backend, path) {
         true => Ok(()),
         false => Err(format!("its name doesn't say {}, so it isn't opened", backend.shows())),
     }
+}
+
+/// Whether the file at `path` goes by a name one of `backend`'s formats' files go by
+/// ([`Format::names`]), in any case.
+fn goes_by(backend: &dyn Backend, path: &Path) -> bool {
+    let extension = path.extension().and_then(|e| e.to_str());
+    let says = |format: &Format| extension.is_some_and(|e| format.names.iter().any(|name| e.eq_ignore_ascii_case(name)));
+    backend.formats().iter().any(says)
 }
 
 /// A file as [`Input::reopenable`] gives it.
@@ -687,7 +702,7 @@ pub(crate) enum Reopenable {
     Again(Again),
 }
 
-/// `path` opened, with the first of `backends` that opens it.
+/// `path` opened, with the one of `backends` that opens it ([`opener`]).
 pub(crate) fn choose<'b>(path: &str, backends: &[&'b dyn Backend]) -> Result<(&'b dyn Backend, Input), String> {
     if backends.is_empty() {
         return Err(format!("{path}: this {} was built without backends (cargo features such as `pdf`), so it shows nothing", crate::NAME));
@@ -696,11 +711,22 @@ pub(crate) fn choose<'b>(path: &str, backends: &[&'b dyn Backend]) -> Result<(&'
     Ok((pick(backends, path, &input.head)?, input))
 }
 
-/// `input`, with the first of `backends` that opens it, or `None` when none does: for a
-/// container's files, where what nothing shows is no error.
+/// `input`, with the one of `backends` that opens it ([`opener`]), or `None` when none does: for
+/// a container's files, where what nothing shows is no error.
 pub(crate) fn shown_by<'b>(input: Input, backends: &[&'b dyn Backend]) -> Option<(&'b dyn Backend, Input)> {
-    let backend = backends.iter().find(|backend| backend.opens(&input.path, &input.head)).copied();
-    backend.map(|backend| (backend, input))
+    opener(backends, &input.path, &input.head).map(|backend| (backend, input))
+}
+
+/// The one of `backends` that opens the file at `path`, which starts with `head`: the first sure
+/// of it ([`Backend::opens`]), else, of those that open it [loosely](Backend::opens_loosely), the
+/// first whose formats' files go by its name, else the first. A mark found anywhere never wins
+/// over a signature, whatever the order; the order settles only claims as sure.
+pub(crate) fn opener<'b>(backends: &[&'b dyn Backend], path: &str, head: &[u8]) -> Option<&'b dyn Backend> {
+    if let Some(sure) = backends.iter().find(|backend| backend.opens(path, head)) {
+        return Some(*sure);
+    }
+    let loose: Vec<&'b dyn Backend> = backends.iter().copied().filter(|backend| backend.opens_loosely(path, head)).collect();
+    loose.iter().find(|backend| goes_by(**backend, Path::new(path))).or(loose.first()).copied()
 }
 
 /// The first of `backends` that draws a fenced block written in `language` as a picture, and the
@@ -788,10 +814,10 @@ pub(crate) struct Listed {
     pub(crate) container: Option<Rc<dyn Container>>,
 }
 
-/// The first of `backends` that opens the file at `path`, which starts with `head`.
+/// The one of `backends` that opens the file at `path`, which starts with `head` ([`opener`]).
 fn pick<'b>(backends: &[&'b dyn Backend], path: &str, head: &[u8]) -> Result<&'b dyn Backend, String> {
-    if let Some(backend) = backends.iter().find(|backend| backend.opens(path, head)) {
-        return Ok(*backend);
+    if let Some(backend) = opener(backends, path, head) {
+        return Ok(backend);
     }
     let mut shown: Vec<&str> = Vec::new();
     for backend in backends {
@@ -1232,6 +1258,60 @@ pub(crate) mod tests {
         assert_eq!(pick(&backends, "a.pdf", b"%PDF-1.7\n").map(|b| b.name()), Ok("pdf-one"));
         assert_eq!(pick(&backends, "a.png", b"\x89PNG\r\n").map(|b| b.name()), Ok("png"));
         assert_eq!(pick(&[&PDF_TOO, &PDF], "a.pdf", b"%PDF-2.0").map(|b| b.name()), Ok("pdf-two"));
+    }
+
+    /// A backend that opens loosely the files holding `mark` anywhere, its format's files named
+    /// `extensions`, and is sure of none.
+    struct Loose {
+        name: &'static str,
+        mark: &'static [u8],
+        extensions: &'static [&'static str],
+    }
+
+    impl Backend for Loose {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn shows(&self) -> &'static str {
+            self.name
+        }
+        fn formats(&self) -> Vec<Format> {
+            vec![Format::of(self.name, self.extensions)]
+        }
+        fn credits(&self) -> &[&'static str] {
+            &[]
+        }
+        fn options(&self) -> &'static [OptionSpec] {
+            &[]
+        }
+        fn opens(&self, _path: &str, _head: &[u8]) -> bool {
+            false
+        }
+        fn opens_loosely(&self, _path: &str, head: &[u8]) -> bool {
+            head.windows(self.mark.len()).any(|w| w == self.mark)
+        }
+        fn open(&self, _input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
+            Ok(Opened::Pages(Box::new(Folder(Badge::None))))
+        }
+    }
+
+    /// A backend sure of a file wins over one that opens it loosely, wherever each is in the
+    /// order; among those that open it loosely, the one its name says, else the first.
+    #[test]
+    fn a_backend_sure_of_a_file_wins_over_one_that_finds_a_mark_in_it() {
+        static ANYWHERE: Loose = Loose { name: "anywhere", mark: b"%PDF-", extensions: &["pdf"] };
+        static ALSO: Loose = Loose { name: "also", mark: b"%PDF-", extensions: &["also"] };
+        let marked = b"\x89PNG and then %PDF-1.7";
+        assert_eq!(pick(&[&ANYWHERE, &PNG], "a.png", marked).map(|b| b.name()), Ok("png"));
+        assert_eq!(pick(&[&PNG, &ANYWHERE], "a.pdf", marked).map(|b| b.name()), Ok("png"), "a name never beats a signature");
+        let late = b"junk, then %PDF-1.7";
+        assert_eq!(pick(&[&PNG, &ANYWHERE, &ALSO], "a", late).map(|b| b.name()), Ok("anywhere"));
+        assert_eq!(pick(&[&PNG, &ANYWHERE, &ALSO], "a.ALSO", late).map(|b| b.name()), Ok("also"));
+        assert_eq!(pick(&[&PNG, &ANYWHERE, &ALSO], "a.pdf", late).map(|b| b.name()), Ok("anywhere"));
+        assert!(pick(&[&PNG, &ANYWHERE], "a.pdf", b"nothing").is_err());
+        assert!(
+            shown_by(Input::held("a".into(), late.to_vec(), Arc::new(|| Ok(Vec::new()))), &[&PNG, &ALSO]).is_some_and(|(b, _)| b.name() == "also")
+        );
     }
 
     #[test]

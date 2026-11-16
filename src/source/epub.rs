@@ -30,7 +30,7 @@ use super::worker::{self, Died, FAILED, Link as Worked, Session, WALL, Worker};
 use super::zipped::Zipped;
 use super::{
     Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Landmark, Links, MAX_NAME,
-    Named, Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values,
+    Named, Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values, opener,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -321,7 +321,8 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
     // The book's document is at its top: its pictures' paths are written from there.
     let document = Input::held(path.clone(), head, again).held_near(near(&kept, &plan, &path), String::new());
     // Not this one: what is assembled is never a book.
-    let Some(backend) = BACKENDS.iter().filter(|b| b.name() != Epub.name()).find(|b| b.opens(&document.path, &document.head)) else {
+    let others: Vec<&dyn Backend> = BACKENDS.iter().copied().filter(|b| b.name() != Epub.name()).collect();
+    let Some(backend) = opener(&others, &document.path, &document.head) else {
         return Err(error("a book is shown as the HTML its chapters make, and no backend opens that".into()));
     };
     let shown = match room {

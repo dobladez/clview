@@ -116,6 +116,24 @@ fn an_archive_with_nothing_to_show_says_so() {
     assert!(!out.status.success() && text(&out.stderr).starts_with(&format!("clv: {}: ", path.display())), "{}", text(&out.stderr));
 }
 
+/// A zip whose first file is a PDF, stored, holds the PDF's header in its first 1024 bytes: it is
+/// still a zip, a list of its files, never taken for a PDF that can't be read.
+#[test]
+fn an_archive_starting_with_a_stored_pdf_is_an_archive() {
+    let path = tmp("zip-stored-pdf", "papers.zip");
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for name in ["a.pdf", "b.pdf"] {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(&crate::fixtures::letter(name, 1)).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    assert!(bytes[..1024].windows(5).any(|w| w == b"%PDF-"), "the PDF's header among the first bytes");
+    std::fs::write(&path, bytes).unwrap();
+    let (sizes, labels) = shown(&path, &[]);
+    assert_eq!((sizes.len(), labels), (2, vec![" a.pdf b.pdf".to_string()]), "{sizes:?}");
+}
+
 /// In the pager an archive is a folder to go into, as a directory is: Enter lists it, its files
 /// named from it on the status line, and Backspace goes back.
 #[test]

@@ -39,6 +39,9 @@ works today. A version's section becomes the notes of its
   The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
   there are no contents to go to. What a line says goes on over the next row in a narrow window,
   where it was cut in its middle.
+- A zip whose first file is a PDF stored without compression (as zips often keep PDFs, which
+  compress no further) is shown as a zip, where it was taken for a PDF and refused as one that
+  can't be read.
 
 ## 0.5.0 (2026-11-16)
 

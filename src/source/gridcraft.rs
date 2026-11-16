@@ -20,7 +20,9 @@ use gridcraft_engine::model::Workbook;
 use gridcraft_engine::{DocState, Session, Trust};
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
-use super::{Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Links, Opened, Pool, Render, Reopenable, Request, Source, Texts};
+use super::{
+    Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Links, Opened, Pool, Render, Reopenable, Request, Source, Texts, opener,
+};
 use crate::args::{OptionSpec, Parsed};
 
 /// Spreadsheets, printed by gridcraft.
@@ -79,7 +81,8 @@ impl Backend for Gridcraft {
         let again: Again = Arc::new(move || Ok(pdf.to_vec()));
         let printed = Input::held(path, head, again);
         // Not this one: what it prints is never a spreadsheet.
-        let Some(backend) = BACKENDS.iter().filter(|b| b.name() != self.name()).find(|b| b.opens(&printed.path, &printed.head)) else {
+        let others: Vec<&dyn Backend> = BACKENDS.iter().copied().filter(|b| b.name() != self.name()).collect();
+        let Some(backend) = opener(&others, &printed.path, &printed.head) else {
             return Err(format!("{}: a spreadsheet is shown as the PDF it prints to, and no backend opens that", printed.path));
         };
         match backend.open(printed, options)? {
