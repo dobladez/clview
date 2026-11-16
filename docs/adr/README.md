@@ -24,7 +24,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0010 | [A filtered list keeps the whole list's tile size](0010-a-filtered-list-keeps-the-whole-lists-tile-size.md) | Accepted |
 | 0011 | [Text cells where the terminal has no graphics protocol](0011-text-cells-where-the-terminal-has-no-graphics-protocol.md) | Accepted |
 | 0012 | [Bound what Markdown and HTML cost by their marks and their text](0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md) | Accepted |
-| 0013 | [A document's pictures are drawn by the backends, and only from near it](0013-a-documents-pictures-are-drawn-by-the-backends.md) | Accepted |
+| 0013 | [A document's pictures are drawn by the backends, and only from near it](0013-a-documents-pictures-are-drawn-by-the-backends.md) | Accepted; a document held in an archive having nothing near it superseded by ADR-0037 |
 | 0014 | [Markdown through pulldown-cmark into wordcraft's HTML importer](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) | Accepted |
 | 0015 | [Markdown and HTML on dark paper, the terminal's own colour](0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) | Accepted; `--theme` being the viewer's superseded by ADR-0021; its key `d` moved to `D` by ADR-0036 |
 | 0016 | [How Markdown and HTML look](0016-how-markdown-and-html-look.md) | Accepted |
@@ -48,6 +48,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0034 | [Open a file through the platform's opener, by its real path, only where its name agrees](0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) | Accepted |
 | 0035 | [The links' labels are placements of one image of letters, over the page](0035-link-labels-as-placements-of-one-image-of-letters.md) | Accepted |
 | 0036 | [Keys are bound to named commands](0036-keys-are-bound-to-named-commands.md) | Accepted |
+| 0037 | [What is beside a held file is read from its holder, a picture measured from its first 64 KiB](0037-what-is-beside-a-held-file-is-read-from-its-holder.md) | Accepted |
 
 ## When to write one
 

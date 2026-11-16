@@ -1,6 +1,6 @@
 # ADR-0013: A document's pictures are drawn by the backends, and only from near it
 
-- **Status:** Accepted
+- **Status:** Accepted; a document held in an archive having nothing near it superseded by [ADR-0037](0037-what-is-beside-a-held-file-is-read-from-its-holder.md)
 - **Date:** 2026-11-02
 
 ## Context

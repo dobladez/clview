@@ -11,7 +11,7 @@ use std::sync::Arc;
 use ::zip::ZipArchive;
 
 use super::tree::Tree;
-use super::{Again, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Opened, Reopenable};
+use super::{Again, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Near, Opened, Reopenable, Start};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive is read to: a picture larger than that is more than the
@@ -95,14 +95,35 @@ impl Archive {
         Ok(Self { path, zip, tree, unread, cut })
     }
 
-    /// The first [`HEAD`] bytes of the file at `index`, or all of a shorter one.
-    fn head(&self, index: usize) -> Result<Vec<u8>, String> {
+    /// The first `most` bytes of the file at `index`, or all of a shorter one, unpacking no more.
+    fn first(&self, index: usize, most: u64) -> Result<Vec<u8>, String> {
         caught(|| {
             let mut zip = self.zip.clone();
             let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-            let mut head = Vec::new();
-            entry.take(HEAD).read_to_end(&mut head).map_err(|e| e.to_string())?;
-            Ok(head)
+            let mut first = Vec::new();
+            entry.take(most.min(MAX_BYTES)).read_to_end(&mut first).map_err(|e| e.to_string())?;
+            Ok(first)
+        })
+    }
+
+    /// The file at `index`, called `path` for the reader, as a file held here: its first [`HEAD`]
+    /// bytes read now, and the rest when it is asked for, whole, to a bound or its first bytes alone.
+    fn held(self: &Arc<Self>, index: usize, path: String) -> Result<Input, String> {
+        let head = self.first(index, HEAD).map_err(|e| format!("{path}: {e}"))?;
+        let (whole, bound, first) = (self.clone(), self.clone(), self.clone());
+        let again: Again = Arc::new(move || whole.whole(index, MAX_BYTES));
+        let bounded: Bounded = Arc::new(move |most| bound.within(index, most));
+        let start: Start = Arc::new(move |most| first.first(index, most));
+        Ok(Input::held_bounded(path, head, again, bounded).starting(start))
+    }
+
+    /// What is beside a file held here ([`Near`]): the file at a path from the archive's top, by the
+    /// names its directories list, so never a hidden one, nor anything a `..` would name.
+    fn near(self: &Arc<Self>) -> Near {
+        let archive = self.clone();
+        Arc::new(move |path| {
+            let index = archive.tree.file(&[], path).ok_or_else(|| format!("{}/{path}: not in the archive", archive.path))?;
+            archive.held(index, format!("{}/{path}", archive.path))
         })
     }
 
@@ -179,11 +200,9 @@ impl Container for Directory {
     fn open(&self, name: &str) -> Result<Input, String> {
         let path = format!("{}/{name}", self.path);
         let index = self.archive.tree.file(&self.at, name).ok_or_else(|| format!("{path}: not in the archive"))?;
-        let head = self.archive.head(index).map_err(|e| format!("{path}: {e}"))?;
-        let (archive, bound) = (self.archive.clone(), self.archive.clone());
-        let again: Again = Arc::new(move || archive.whole(index, MAX_BYTES));
-        let bounded: Bounded = Arc::new(move |most| bound.within(index, most));
-        Ok(Input::held_bounded(path, head, again, bounded))
+        // Where it is from the archive's top, for what it refers to beside it.
+        let from_the_top = self.at.iter().map(String::as_str).chain([name]).collect::<Vec<_>>().join("/");
+        Ok(self.archive.held(index, path)?.held_near(self.archive.near(), from_the_top))
     }
 
     /// The archive itself is zipped, its plate saying `ZIP`; a directory in it, a folder as any
@@ -355,6 +374,32 @@ mod tests {
         assert_eq!(d.open("small.txt").unwrap().bytes().unwrap(), b"small");
         for missing in ["nothing", "d", "d/", "big.bin/x", "", "/big.bin"] {
             assert!(top.open(missing).is_err_and(|e| e.ends_with(": not in the archive")), "{missing}");
+        }
+    }
+
+    /// A file in an archive gives its first bytes alone, and what is beside it in the archive, by a
+    /// path from the archive's top: only what its directories list, under that very name.
+    #[test]
+    fn a_file_in_an_archive_gives_its_first_bytes_and_what_is_beside_it() {
+        let big: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+        let bytes = archive(&[("docs/README.md", b"read me"), ("docs/img/a.png", &big), ("top.png", b"top"), (".hidden/b.png", b"hidden")]);
+        let path = on_disk("near", "t.zip", &bytes);
+        let top = opened(&path).unwrap();
+        let docs = inner(&top.list(false).unwrap(), "docs");
+        for input in [top.open("docs/README.md").unwrap(), docs.open("README.md").unwrap()] {
+            let beside = input.near().expect("what is beside it");
+            let (near, at) = &*beside;
+            assert_eq!(at, "docs/README.md");
+            let picture = near("docs/img/a.png").unwrap();
+            assert_eq!((picture.path.as_str(), picture.head.as_slice()), (format!("{path}/docs/img/a.png").as_str(), &big[..1024]));
+            let start = picture.start().expect("its first bytes");
+            assert_eq!(start(2000).unwrap(), &big[..2000]);
+            assert_eq!(start(1 << 20).unwrap(), big, "all of a shorter file");
+            assert_eq!(picture.bytes().unwrap(), big);
+            assert_eq!(near("top.png").unwrap().bytes().unwrap(), b"top");
+            for missing in ["docs/img/../img/a.png", "../t.zip", "docs/../top.png", ".hidden/b.png", "docs", "", "/top.png", "docs/img/a.png/"] {
+                assert!(near(missing).is_err_and(|e| e.ends_with(": not in the archive")), "{missing}");
+            }
         }
     }
 

@@ -123,6 +123,15 @@ images and drawings, gets plain threads from `source/threads.rs`: a render once 
 end, and one no longer wanted is dropped when it is done; a render that panics comes back as a
 failed page.
 
+A file is opened from an `Input`: its first 1,024 bytes, read to choose a backend, and the rest
+still to read. One held in another file (an archive's) is read through what its holder gives: the
+whole file, every time it is asked (`Again`); the whole file within a bound, or nothing past it
+(`Bounded`); its first bytes alone (`Start`); and what is beside it in the holder (`Near`, with the
+file's own path from the holder's top), a path from the top to a held `Input` of its own. The last
+three are the holder's to give or not: a reader without them reads the whole file, and finds
+nothing beside it
+([ADR-0037](adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)).
+
 A source may give its text too, for the reader to search: `Source::texts` is `None` by default,
 and otherwise a `Texts`, which keeps the pool's contract for another kind of work
 ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). And its links, for the
@@ -383,6 +392,14 @@ through its command) and that a key means one setting
   when it first renders, by the first backend that says `draws_pictures` and opens the file, and
   replace their stand-ins in the document's `media`, under a lock that pages rendering share
   ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+  Where they are read from is `picture::Where`: the directory of a document on disk, or, for one
+  held in another file, that file, through what its `Input` carries of it (`Input::near`, a `Near`
+  and the document's own path from the holder's top), which `Stored::Held` keeps, so a relayout
+  (`Document::at`) and a list's file opened late (`later::Reopen::Held`) find them too. A picture's
+  path is brought to one from the holder's top by `picture::from_the_top`, each `..` resolved and
+  one above the top left out, before the holder is asked (`Origin::Near`); the holder gives the
+  picture as a held `Input` of its own, opened by the backends that draw pictures as a file on
+  disk is ([ADR-0037](adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)).
   A fenced block whose language a backend lists (`source::fenced`) is such a picture, promised from
   its text rather than a path (`picture::Origin`): `markdown_as_html` gathers a
   `CodeBlock(Fenced(info))`'s text, asks `Pictures::fenced` to size it, by that backend's `open` of
@@ -471,17 +488,29 @@ through its command) and that a key means one setting
 - **An image** opens by its header alone and decodes on its renderer's or pool's first render (on a
   render thread, so the keys work while a large photo decodes), which keeps the pixels for its
   renders at other sizes and lets them go with it; a picture on disk is read again to decode, one
-  from a pipe kept as it came, one in an archive read from it again.
+  from a pipe kept as it came, one in an archive read from it again. A picture held in another file
+  is measured from its first 64 KiB (`MAX_HEADER`), where the holder gives a file's first bytes alone
+  (`Input::start`, a `Start`): `image::First` reads them as the file would be read up to where they
+  end, and notes a read or a seek past them, or from the file's end, on which the header is read from
+  the whole file instead, so nothing is made of a file as if it ended there
+  ([ADR-0037](adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)).
 - **A zip** has its central directory parsed once, and a file read from it on demand: the first
   bytes, for `Input`, and the whole file through the `Input`'s `Again`, on a render thread, or as much
-  of it as a bound allows through its `Bounded` (`Archive::within`). It holds
-  no open file while idle, so a directory of archives doesn't run out of file descriptors.
+  of it as a bound allows through its `Bounded` (`Archive::within`), or its first bytes alone
+  through its `Start` (`Archive::first`). It holds
+  no open file while idle, so a directory of archives doesn't run out of file descriptors. A file
+  opened from it carries what is beside it (`Input::held_near`): its own path from the archive's
+  top, and a `Near` (`Archive::near`) that finds a path from the top through the archive's `Tree`,
+  so only under a name the archive lists (never a hidden one, nor through a `..`, which is only a
+  name there), as a held file of its own.
 - **A tar** is listed through `Container::ready`: a compressed one is read through once, on a thread
   of its own, into a temporary file removed as soon as it is made
   ([ADR-0004](adr/0004-read-a-compressed-tar-through-once-into-a-file-nothing-names.md)). A file in
-  it read to a bound (`Bounded`) isn't read at all when its header says it is larger. A file
-  compressed alone is opened as what it unpacks to; read to a bound, its decoder stops a byte past
-  it (`unpack_within`).
+  it read to a bound (`Bounded`) isn't read at all when its header says it is larger, and its first
+  bytes alone (`Start`, `Shared::first`) are read as the whole file is, and no further. A file
+  opened from it carries what is beside it, as a zip's does (`tar::near`). A file
+  compressed alone is opened as what it unpacks to, with nothing beside it; read to a bound, its
+  decoder stops a byte past it (`unpack_within`).
 
 ### The room a document is laid out for
 

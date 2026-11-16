@@ -345,7 +345,7 @@ over left out, and said:
 
 ## Tasks
 
-- [ ] **Pictures beside a held file** — `Near` in the contract, `Origin::Near`, a held picture
+- [x] **Pictures beside a held file** — `Near` in the contract, `Origin::Near`, a held picture
   measured within 64 KiB, wordcraft's `Stored::Held` and relayout keeping it, `later.rs` carrying
   it; zip's and tar's containers giving it, `..` resolved, never above the top; ADR (pictures from a
   held file's holder, updating ADR-0013); usage's Documents and Archives, architecture, the

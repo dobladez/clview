@@ -339,6 +339,14 @@ is macOS's `__MACOSX` directory. It reads deflate, deflate64, bzip2, LZMA and XZ
 [limits](#limits), an encrypted one, or one packed in a way this build doesn't read (zstd) is left
 out with a warning, as a broken picture in a directory is.
 
+A Markdown or HTML document in an archive shows the pictures beside it there, as one on disk shows
+those in its directory ([Documents](#documents)): a README in a zip of a repository shows its
+screenshots, by their paths from it, `..` included, but never from above the archive's top. Only
+what the archive lists is found: a picture under a hidden name (`.github/demo.png`) is left out,
+as on disk it wouldn't be. Opening the document unpacks none of its pictures whole: each is
+measured from its first bytes, and unpacked when a page it is on is drawn. A document's links to
+other files in the archive are still not followed ([Following links](#following-links)).
+
 A tar archive, plain or compressed with gzip, bzip2 or xz (`.tar.gz`, `.tgz`, `.tar.bz2`,
 `.tar.xz`, `.cbt`…), is shown the same way, its plate saying `TAR`, or `TGZ`, `TBZ` or `TXZ` as
 it is compressed, whatever its name. A compressed tar has no list of its files and can't be
@@ -792,9 +800,12 @@ reads none.
 
 Only what is near the file is read: a path from its directory, `..` included. **Nothing is fetched**:
 a picture on the web shows as its alt text. So does an absolute path, which on the web means from a
-site's root; one that is missing; and a file that is no picture, such as another document. What comes
-through a pipe or from an archive has no directory, so none of its pictures can be reached, an epub's
-included. A picture in a `data:` URL is drawn, if it is a PNG, JPEG, GIF, WebP or BMP. The first page
+site's root; one that is missing; and a file that is no picture, such as another document. A document
+in a zip or a tar finds its pictures in that [archive](#archives), by the same paths, `..` included but
+never above the archive's top: nothing beside the archive on disk is read for it
+([ADR-0037](adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)). What comes through a
+pipe, or is compressed alone (`README.md.gz`), has nothing beside it, so none of its pictures can be
+reached. A picture in a `data:` URL is drawn, if it is a PNG, JPEG, GIF, WebP or BMP. The first page
 says how many pictures on this machine were left out, and a page says if one of its own can't be drawn,
 a grey box in its place ([ADR-0013](adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
 

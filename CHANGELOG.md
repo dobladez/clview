@@ -10,6 +10,10 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
+  their paths from it, `..` included but never above the archive's top: a README in a zip of a
+  repository shows its screenshots. They were left as their alt text. Opening the document unpacks
+  none of them whole.
 - `f` in a file's pages labels every link on screen with a short code of home-row letters, as the
   Vimium browser extension does; type a code and its link is followed, `Esc` drops the labels. A
   link to a place in the document goes there: a PDF's table of contents or named destination, a

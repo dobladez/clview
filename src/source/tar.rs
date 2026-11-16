@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use super::tree::Tree;
-use super::{Again, BACKENDS, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Opened, Ready, Reopenable};
+use super::{Again, BACKENDS, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Near, Opened, Ready, Reopenable, Start};
 use crate::args::{OptionSpec, Parsed};
 
 /// The most bytes a file in an archive, or a file compressed alone, is read to, as for zip: it
@@ -764,28 +764,36 @@ impl Shared {
         if member.size > MAX_BYTES {
             return Err(format!("it unpacks to more than {} MiB, more than {} reads from an archive", MAX_BYTES >> 20, crate::NAME));
         }
+        self.first(files, index, member.size)
+    }
+
+    /// The first `most` bytes of the file at `index` (by its place in `files`), or all of a shorter
+    /// one, read as [`Shared::read`] reads it whole, and no further.
+    fn first(&self, files: &[Member], index: usize, most: u64) -> Result<Vec<u8>, String> {
+        let member = files.get(index).ok_or("not in the archive")?;
+        let size = member.size.min(most).min(MAX_BYTES);
         let spill = lock(&self.spill).clone();
-        if let Some(read) = spill.as_ref().and_then(|spill| spill.read(member.at, member.size)) {
+        if let Some(read) = spill.as_ref().and_then(|spill| spill.read(member.at, size)) {
             return read;
         }
         let mut cursor = lock(&self.cursor);
         let bytes = caught(|| {
             if self.direct() {
-                return capped(&mut self.raw.open_at(member.at)?, member.size, member.size);
+                return capped(&mut self.raw.open_at(member.at)?, size, size);
             }
             let (mut input, mut at) = match cursor.take() {
                 Some((input, at)) if at <= member.at => (input, at),
                 _ => (stream(&self.raw, self.codec, None)?, 0),
             };
             skip(&mut input, member.at.saturating_sub(at), &AtomicBool::new(false))?;
-            let bytes = capped(&mut input, member.size, member.size)?;
+            let bytes = capped(&mut input, size, size)?;
             at = member.at.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
             if !self.released.load(Ordering::Relaxed) {
                 *cursor = Some((input, at));
             }
             Ok(bytes)
         })?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) < member.size {
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) < size {
             return Err("the archive ends inside it".into());
         }
         Ok(bytes)
@@ -845,6 +853,36 @@ impl Drop for Handle {
     }
 }
 
+/// The file at `file` in `index`, called `path` for the reader, as a file held in the archive: its
+/// first [`HEAD`] bytes now, and the rest when it is asked for, whole, to a bound or its first bytes
+/// alone.
+fn held(shared: &Arc<Shared>, index: &Arc<Index>, file: usize, path: String) -> Result<Input, String> {
+    let head = match index.files.get(file).and_then(|m| m.head.clone()) {
+        Some(head) => head,
+        None => shared.first(&index.files, file, HEAD).map_err(|e| format!("{path}: {e}"))?,
+    };
+    let (whole, bound, first) = (shared.clone(), shared.clone(), shared.clone());
+    let (files, sizes, firsts) = (index.clone(), index.clone(), index.clone());
+    let again: Again = Arc::new(move || whole.read(&files.files, file));
+    // Its size is in its header: one larger than the bound isn't read at all.
+    let bounded: Bounded = Arc::new(move |most| match sizes.files.get(file) {
+        Some(member) if member.size > most => Ok(None),
+        _ => bound.read(&sizes.files, file).map(Some),
+    });
+    let start: Start = Arc::new(move |most| first.first(&firsts.files, file, most));
+    Ok(Input::held_bounded(path, head, again, bounded).starting(start))
+}
+
+/// What is beside a file held in the archive ([`Near`]): the file at a path from its top, by the
+/// names its directories list, so never a hidden one, nor anything a `..` would name.
+fn near(shared: &Arc<Shared>, index: &Arc<Index>) -> Near {
+    let (shared, index) = (shared.clone(), index.clone());
+    Arc::new(move |path| {
+        let file = index.tree.file(&[], path).ok_or_else(|| format!("{}/{path}: not in the archive", shared.path))?;
+        held(&shared, &index, file, format!("{}/{path}", shared.path))
+    })
+}
+
 /// A directory in an archive, its top or one in it, as a container.
 struct Directory {
     handle: Rc<Handle>,
@@ -881,22 +919,9 @@ impl Container for Directory {
         let path = format!("{}/{name}", self.path);
         let index = self.handle.0.index()?;
         let file = index.tree.file(&self.at, name).ok_or_else(|| format!("{path}: not in the archive"))?;
-        let head = match index.files.get(file).and_then(|m| m.head.clone()) {
-            Some(head) => head,
-            None => {
-                let mut head = self.handle.0.read(&index.files, file).map_err(|e| format!("{path}: {e}"))?;
-                head.truncate(usize::try_from(HEAD).unwrap_or(usize::MAX));
-                head
-            }
-        };
-        let (shared, bound, files) = (self.handle.0.clone(), self.handle.0.clone(), index.clone());
-        let again: Again = Arc::new(move || shared.read(&index.files, file));
-        // Its size is in its header: one larger than the bound isn't read at all.
-        let bounded: Bounded = Arc::new(move |most| match files.files.get(file) {
-            Some(member) if member.size > most => Ok(None),
-            _ => bound.read(&files.files, file).map(Some),
-        });
-        Ok(Input::held_bounded(path, head, again, bounded))
+        // Where it is from the archive's top, for what it refers to beside it.
+        let from_the_top = self.at.iter().map(String::as_str).chain([name]).collect::<Vec<_>>().join("/");
+        Ok(held(&self.handle.0, &index, file, path)?.held_near(near(&self.handle.0, &index), from_the_top))
     }
 
     /// The archive itself is zipped, its plate saying how it is packed; a directory in it, a
@@ -1050,10 +1075,38 @@ mod tests {
             let path = on_disk("bounded", &format!("t-{codec:?}.tar"), &compress(&plain, codec));
             let top = opened(&path).unwrap();
             top.list(false).unwrap();
-            let super::super::Rest::Held(_, Some(bounded)) = top.open("a.mmd").unwrap().rest else { panic!("held, and read to a bound") };
+            let super::super::Rest::Held { bounded: Some(bounded), .. } = top.open("a.mmd").unwrap().rest else {
+                panic!("held, and read to a bound")
+            };
             assert_eq!(bounded(2999).unwrap().map(|b| b.len()), None, "{codec:?}");
             assert_eq!(bounded(3000).unwrap().map(|b| b.len()), Some(3000), "{codec:?}");
             assert_eq!(top.open("a.mmd").unwrap().at_most(2999).unwrap().map(|b| b.len()), None, "{codec:?}");
+        }
+    }
+
+    /// A file in an archive gives its first bytes alone, and what is beside it in the archive, by a
+    /// path from the archive's top: only what its directories list, under that very name.
+    #[test]
+    fn a_file_in_an_archive_gives_its_first_bytes_and_what_is_beside_it() {
+        let big: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+        let plain = tar(&[("docs/README.md", b"read me"), ("docs/img/a.png", &big), ("top.png", b"top"), (".hidden/b.png", b"hidden")]);
+        for codec in [Codec::None, Codec::Gzip] {
+            let path = on_disk("near", &format!("t-{codec:?}.tar"), &compress(&plain, codec));
+            let top = opened(&path).unwrap();
+            top.list(false).unwrap();
+            let beside = top.open("docs/README.md").unwrap().near().expect("what is beside it");
+            let (near, at) = &*beside;
+            assert_eq!(at, "docs/README.md", "{codec:?}");
+            let picture = near("docs/img/a.png").unwrap();
+            assert_eq!((picture.path.as_str(), picture.head.as_slice()), (format!("{path}/docs/img/a.png").as_str(), &big[..1024]), "{codec:?}");
+            let start = picture.start().expect("its first bytes");
+            assert_eq!(start(2000).unwrap(), &big[..2000], "{codec:?}");
+            assert_eq!(start(1 << 20).unwrap(), big, "{codec:?}: all of a shorter file");
+            assert_eq!(picture.bytes().unwrap(), big, "{codec:?}");
+            assert_eq!(near("top.png").unwrap().bytes().unwrap(), b"top", "{codec:?}");
+            for missing in ["docs/img/../img/a.png", "../t.tar", "docs/../top.png", ".hidden/b.png", "docs", "", "/top.png"] {
+                assert!(near(missing).is_err_and(|e| e.ends_with(": not in the archive")), "{codec:?}: {missing}");
+            }
         }
     }
 

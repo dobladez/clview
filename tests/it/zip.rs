@@ -10,6 +10,8 @@ use ::zip::write::SimpleFileOptions;
 use ::zip::{CompressionMethod, ZipWriter};
 
 use crate::view::{images, names, png_size, text, tmp, view};
+#[cfg(feature = "word")]
+use crate::view_pager::{PLACED, ids_after, next_image};
 use crate::view_pager::{Session, bar, chosen, pty_works};
 
 /// A `width` × `height` PNG.
@@ -135,4 +137,135 @@ fn an_archive_is_a_folder_to_go_into() {
     view.wait_until("back", |t| bar(t).contains(" trip.zip/ 2/2 ") && chosen(t).as_deref() == Some("trip.zip/"));
     view.press("q");
     assert!(view.finish().success());
+}
+
+/// A `side` × `side` PNG of `colour`.
+#[cfg(feature = "word")]
+fn plain(side: u32, colour: [u8; 3]) -> Vec<u8> {
+    let [r, g, b] = colour;
+    let mut png = Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(side, side, image::Rgba([r, g, b, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    png.into_inner()
+}
+
+#[cfg(feature = "word")]
+const RED: [u8; 3] = [220, 20, 20];
+#[cfg(feature = "word")]
+const BLUE: [u8; 3] = [20, 20, 220];
+#[cfg(feature = "word")]
+const GREEN: [u8; 3] = [20, 180, 20];
+/// The grey of a picture's stand-in: what a document shows of one it measured and couldn't draw.
+#[cfg(feature = "word")]
+const STAND_IN: [u8; 3] = [0xD0, 0xD0, 0xD0];
+
+/// How many of `page`'s pixels are about `colour`.
+#[cfg(feature = "word")]
+fn of(page: &image::RgbImage, colour: [u8; 3]) -> usize {
+    page.pixels().filter(|pixel| pixel.0.iter().zip(colour).all(|(a, b)| a.abs_diff(b) < 12)).count()
+}
+
+/// A Markdown document in an archive (`packed` makes one called `name` of files, by name and
+/// contents) shows the pictures beside it there, by their paths from it as on disk: beside it and,
+/// by `..`, above it, but nothing above the archive's top, even where a picture of that name is on
+/// disk there. Seen as its tile in the list an archive prints as; and in the pager, where the
+/// document is opened only once its tile is wanted, opened by itself, and still after `+` lays it
+/// out again. Shared with the tar backend's test.
+#[cfg(feature = "word")]
+pub(crate) fn a_documents_pictures_are_drawn_from_its_archive(test: &str, name: &str, packed: impl Fn(&[(&str, Vec<u8>)]) -> Vec<u8>) {
+    let dir = tmp(test, "shelf");
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    // Where a path above the archive's top would lead on disk, from the archive and from its files.
+    for outside in ["green.png", "in/green.png"] {
+        std::fs::write(dir.join(outside), plain(120, GREEN)).unwrap();
+    }
+    let readme =
+        "One\n\n![red](red.png)\n\ntwo\n\n![blue](../assets/my%20blue.png)\n\nthree\n\n![green](../../green.png)\n\n![green](../green.png)\n";
+    let files = [("assets/my blue.png", plain(120, BLUE)), ("docs/README.md", readme.as_bytes().to_vec()), ("docs/red.png", plain(120, RED))];
+    let archive = dir.join("in").join(name);
+    std::fs::write(&archive, packed(&files)).unwrap();
+
+    // Printed, the archive is a list: the document's tile is its first page.
+    let out = view(&archive, &["--protocol", "kitty", "-r", "--per-row", "1"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let labels = names(&out.stdout);
+    let at = labels.iter().position(|label| label.contains("README.md")).unwrap_or_else(|| panic!("{labels:?}"));
+    let tile = image::load_from_memory(&images(&out.stdout)[at].png).unwrap().to_rgb8();
+    assert!(of(&tile, RED) > 0 && of(&tile, BLUE) > 0, "beside it and above it: {} red, {} blue", of(&tile, RED), of(&tile, BLUE));
+    assert_eq!(of(&tile, GREEN), 0, "nothing from above the archive's top");
+
+    if !pty_works() {
+        return;
+    }
+    let mut view = Session::start(&archive, &["--protocol", "kitty", "-r"], 100, 50);
+    view.wait_until("the list", |t| bar(t).contains(" 1/3 "));
+    view.press("l");
+    view.wait_until("the document chosen", |t| chosen(t).as_deref() == Some("docs/README.md"));
+    let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();
+    view.press("\r");
+    view.wait_until("the document opened", |t| bar(t).contains(" page 1/1 "));
+    let (opened, page) = next_image(&view, "its page", shown);
+    assert!(of(&page, RED) > 0 && of(&page, BLUE) > 0 && of(&page, GREEN) == 0, "{} red, {} blue", of(&page, RED), of(&page, BLUE));
+    // Laid out again at a larger font, from the archive again: its pictures with it.
+    view.press("+");
+    let (_, larger) = next_image(&view, "laid out again", opened);
+    assert!(of(&larger, RED) > 0 && of(&larger, BLUE) > 0 && of(&larger, GREEN) == 0, "{} red, {} blue", of(&larger, RED), of(&larger, BLUE));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A Markdown README in a zip shows the screenshots beside it.
+#[cfg(feature = "word")]
+#[test]
+fn a_documents_pictures_are_drawn_from_its_zip() {
+    a_documents_pictures_are_drawn_from_its_archive("zip-pictures", "repo.zip", |files| {
+        let path = tmp("zip-pictures", "packed.zip");
+        std::fs::read(archive(&path, files)).unwrap()
+    });
+}
+
+/// A picture is measured, for the document to be laid out around it, from its first bytes: one of
+/// 10 MB whose bytes past them can't be read from the archive (they fail its checksum) is still
+/// given its place on the page, and only then, drawn, found unreadable.
+#[cfg(feature = "word")]
+#[test]
+fn a_documents_pictures_are_measured_without_being_read_whole() {
+    // A PNG's header, saying 800 × 600, and 10 MB that no decoder is ever shown.
+    let mut big = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\x03\x20\0\0\x02\x58\x08\x06\0\0\0".to_vec();
+    big.extend(crc32(&big[12..]).to_be_bytes());
+    big.extend(10u32.pow(7).to_be_bytes());
+    big.extend(b"IDAT");
+    big.extend((0..10u32.pow(7)).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8));
+    let path = tmp("zip-measured", "big.zip");
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (name, contents) in [("README.md", &b"![big](big.png)\n"[..]), ("big.png", &big)] {
+        zip.start_file(name, stored).unwrap();
+        zip.write_all(contents).unwrap();
+    }
+    let mut bytes = zip.finish().unwrap().into_inner();
+    // One byte of the picture, a megabyte in, is no longer what its checksum was taken of.
+    let at = bytes.windows(8).position(|window| window == b"\x89PNG\r\n\x1a\n").unwrap() + (1 << 20);
+    bytes[at] ^= 0xFF;
+    std::fs::write(&path, bytes).unwrap();
+    let out = view(&path, &["--protocol", "kitty", "--per-row", "1"]);
+    // The picture's own tile fails, read whole; the document's is drawn around it, and says that
+    // drawing it then failed.
+    let said = text(&out.stderr);
+    assert!(said.contains("big.png: Invalid checksum") && said.contains("a picture it refers to could not be drawn"), "{said}");
+    let tiles: Vec<image::RgbImage> = images(&out.stdout).iter().map(|tile| image::load_from_memory(&tile.png).unwrap().to_rgb8()).collect();
+    let placed = |tile: &image::RgbImage| of(tile, STAND_IN) > (tile.width() * tile.height()) as usize / 10;
+    assert!(tiles.iter().any(placed), "its place on the page, measured from its first bytes: {} tiles", tiles.len());
+}
+
+/// The CRC-32 of `bytes`, as a PNG's chunk ends with.
+#[cfg(feature = "word")]
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
 }

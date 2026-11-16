@@ -51,7 +51,7 @@ with the keys it suggests in it (`72] sets 72, 0] the window's`), and the manual
 ### More pictures and archives
 
 AVIF, colour profiles, and an animation's frames as its pages. zstd and 7z; a comic book archive
-(cbz) as a book, its pictures its pages; an epub's pictures, and a document's in an archive.
+(cbz) as a book, its pictures its pages; an epub's pictures.
 
 ### Lighter on memory, and steadier
 

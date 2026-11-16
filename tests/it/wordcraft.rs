@@ -539,8 +539,10 @@ fn what_is_not_a_picture_near_the_document_is_not_read() {
     assert_ne!(of("pic.png"), nothing, "and what is one is");
 }
 
-/// What comes through a pipe or from an archive has no directory of its own: the pictures it refers to
-/// can't be reached, even with one of that name beside it, or where `clv` runs.
+/// What comes through a pipe has nothing beside it: the pictures it refers to can't be reached, even
+/// with one of that name where `clv` runs. What is in an archive has what the archive holds beside
+/// it, and nothing else: a picture of that name beside the archive on disk is left out, and said to
+/// be, as one that is missing.
 #[cfg(feature = "image")]
 #[test]
 fn what_has_no_directory_has_no_pictures() {
@@ -568,10 +570,11 @@ fn what_has_no_directory_has_no_pictures() {
     let held = |reference: &str| {
         let archive = write(dir.join("a.zip"), &zip(&[("a.md", &format!("![two]({reference})"))]));
         let out = view(&archive, &["--protocol", "kitty"]);
-        assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert!(text(&out.stderr).contains("page 1: 1 pictures it refers to are left out"), "{}", text(&out.stderr));
         images(&out.stdout).swap_remove(0).png
     };
-    assert_eq!(held("pic.png"), held("missing.png"), "in an archive");
+    assert_eq!(held("pic.png"), held("missing.png"), "in an archive, beside which it is on disk");
 }
 
 /// The colour at a page's corner.

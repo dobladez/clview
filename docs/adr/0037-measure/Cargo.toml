@@ -1,0 +1,17 @@
+[package]
+name = "measure"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone, its own workspace: not part of clv's build. Measures how far into a picture's file
+# the `image` crate reads to tell its size and its orientation, for ADR-0037: `cargo build
+# --release` here, then `target/release/measure <files and directories>`. The `image` crate at the
+# version clv builds, with the formats clv decodes through it.
+[workspace]
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["bmp", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
+
+[profile.release]
+debug = false

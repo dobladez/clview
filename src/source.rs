@@ -440,9 +440,10 @@ pub(crate) struct Input {
 enum Rest {
     /// A file of its own, read on from its head.
     File(File),
-    /// A file held in another (an archive's), read whole, again, from there; and read only so far, if
-    /// the holder can stop early ([`Bounded`]).
-    Held(Again, Option<Bounded>),
+    /// A file held in another (an archive's), read from there: whole, again; only so far, if the
+    /// holder can stop early ([`Bounded`]); its first bytes alone, if the holder can give them
+    /// ([`Start`]); and what is beside it there, if the holder says ([`Beside`]).
+    Held { again: Again, bounded: Option<Bounded>, start: Option<Start>, beside: Option<Arc<Beside>> },
 }
 
 /// A file held in another, read whole from it, every time it is called: within the holder's
@@ -453,6 +454,25 @@ pub(crate) type Again = Arc<dyn Fn() -> Result<Vec<u8>, String> + Send + Sync>;
 /// more than that many bytes, else `None`, having unpacked no more than a byte past them, so a reader
 /// that wants a small file doesn't unpack a large one whole. Within the holder's limits too.
 pub(crate) type Bounded = Arc<dyn Fn(u64) -> Result<Option<Vec<u8>>, String> + Send + Sync>;
+
+/// A file held in another, its first bytes: as many as asked for, or all of a shorter file, having
+/// unpacked no more of it, so a reader that wants a picture's header doesn't unpack the picture.
+/// Every time it is called, on any thread.
+pub(crate) type Start = Arc<dyn Fn(u64) -> Result<Vec<u8>, String> + Send + Sync>;
+
+/// What is beside a file held in another, read from its holder: the file at a path from the
+/// holder's top, its names parted by `/` with no `.`, `..` or empty name among them (`docs/a.png`),
+/// as a held file of its own, with its first bytes and how to read the rest; or why not. It is the
+/// reader's to bring a path to that (a `..` from where it is, resolved, and refused above the top):
+/// a holder finds only what it holds under that very name, so a path can't lead out of it. Every
+/// time it is called, on any thread, and within the holder's limits
+/// ([ADR-0037](../docs/adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)).
+pub(crate) type Near = Arc<dyn Fn(&str) -> Result<Input, String> + Send + Sync>;
+
+/// How what is beside a held file in its holder is read ([`Near`]), and the file's own path from
+/// the holder's top, as [`Near`] takes one (`docs/README.md`): what a document held in an archive
+/// finds its pictures by, as one on disk does by its directory.
+pub(crate) type Beside = (Near, String);
 
 impl Input {
     fn open(path: &str) -> Result<Self, String> {
@@ -465,13 +485,53 @@ impl Input {
 
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
+    #[cfg_attr(not(any(feature = "mermaid", feature = "sheet", test)), expect(dead_code, reason = "only what a backend hands another is held so"))]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
-        Self { path, head, rest: Rest::Held(again, None) }
+        Self { path, head, rest: Rest::Held { again, bounded: None, start: None, beside: None } }
     }
 
     /// [`Input::held`], for a holder that can stop reading the file at a bound ([`Bounded`]).
     fn held_bounded(path: String, head: Vec<u8>, again: Again, bounded: Bounded) -> Self {
-        Self { path, head, rest: Rest::Held(again, Some(bounded)) }
+        Self { path, head, rest: Rest::Held { again, bounded: Some(bounded), start: None, beside: None } }
+    }
+
+    /// This held file, for a holder that can give its first bytes alone ([`Start`]). A file of its
+    /// own is read from its start as it is.
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives give a file's first bytes"))]
+    fn starting(mut self, start: Start) -> Self {
+        if let Rest::Held { start: first, .. } = &mut self.rest {
+            *first = Some(start);
+        }
+        self
+    }
+
+    /// This held file, at `path` from its holder's top, where `near` reads what is beside it
+    /// ([`Beside`]). A file of its own has its directory.
+    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives say what is beside a file"))]
+    fn held_near(mut self, near: Near, path: String) -> Self {
+        if let Rest::Held { beside, .. } = &mut self.rest {
+            *beside = Some(Arc::new((near, path)));
+        }
+        self
+    }
+
+    /// What is beside this file in its holder, if it is held in one that says ([`Input::held_near`]).
+    #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents refer to what is beside them"))]
+    pub(crate) fn near(&self) -> Option<Arc<Beside>> {
+        match &self.rest {
+            Rest::File(_) => None,
+            Rest::Held { beside, .. } => beside.clone(),
+        }
+    }
+
+    /// How to read this file's first bytes alone, if it is held in a file that can give them
+    /// ([`Input::starting`]).
+    #[cfg_attr(not(any(feature = "image", test)), expect(dead_code, reason = "only a picture is measured by its first bytes"))]
+    pub(crate) fn start(&self) -> Option<Start> {
+        match &self.rest {
+            Rest::File(_) => None,
+            Rest::Held { start, .. } => start.clone(),
+        }
     }
 
     /// The whole file.
@@ -482,7 +542,7 @@ impl Input {
                 rest.read_to_end(&mut head).map_err(|e| format!("{}: {e}", self.path))?;
                 Ok(head)
             }
-            Rest::Held(again, _) => again().map_err(|e| format!("{}: {e}", self.path)),
+            Rest::Held { again, .. } => again().map_err(|e| format!("{}: {e}", self.path)),
         }
     }
 
@@ -499,11 +559,11 @@ impl Input {
                 rest.take(left).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", self.path))?;
                 bytes
             }
-            Rest::Held(_, Some(bounded)) => match bounded(most).map_err(|e| format!("{}: {e}", self.path))? {
+            Rest::Held { bounded: Some(bounded), .. } => match bounded(most).map_err(|e| format!("{}: {e}", self.path))? {
                 Some(bytes) => bytes,
                 None => return Ok(None),
             },
-            Rest::Held(again, None) => again().map_err(|e| format!("{}: {e}", self.path))?,
+            Rest::Held { again, .. } => again().map_err(|e| format!("{}: {e}", self.path))?,
         };
         Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
     }
@@ -531,7 +591,7 @@ impl Input {
                 Ok(Reopenable::Disk(file))
             }
             Rest::File(file) => Self { path, head, rest: Rest::File(file) }.bytes().map(Reopenable::Bytes),
-            Rest::Held(again, _) => Ok(Reopenable::Again(again)),
+            Rest::Held { again, .. } => Ok(Reopenable::Again(again)),
         }
     }
 }

@@ -1,7 +1,10 @@
 //! Pictures a document refers to by a path, drawn by whichever backend shows them: what this build
 //! shows as a picture, a drawing or a PDF's page, a document shows too, turned as it would show it.
 //! Only what is on this machine, near the document: nothing is ever fetched
-//! ([ADR-0013](../../docs/adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)).
+//! ([ADR-0013](../../docs/adr/0013-a-documents-pictures-are-drawn-by-the-backends.md)). Near a
+//! document on disk is its directory; near one held in another file (an archive's), what that file
+//! holds, read through it
+//! ([ADR-0037](../../docs/adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)).
 //!
 //! A fenced block of the document is a picture too, when a backend lists the language it is
 //! written in ([`Pictures::fenced`]): drawn from the block's text, by that backend, as a picture by
@@ -18,7 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use super::{Again, BACKENDS, Backend, Bounded, HEAD, Input, Opened, Request, Source, guarded, shown_by};
+use super::{Again, BACKENDS, Backend, Beside, Bounded, HEAD, Input, Near, Opened, Request, Source, guarded, shown_by};
 use crate::args::Parsed;
 use crate::encode::{PngEffort, encode_png};
 
@@ -61,11 +64,59 @@ thread_local! {
     pub(super) static AMONG: Cell<Option<&'static [&'static dyn Backend]>> = const { Cell::new(None) };
 }
 
+/// Where a document's pictures are read from: what their paths start from.
+#[derive(Clone, Copy)]
+pub(super) enum Where<'a> {
+    /// Nowhere: a document come through a pipe, or held in a file that doesn't say what is beside
+    /// it, whose pictures can't be reached.
+    Nowhere,
+    /// The directory a document on disk is in.
+    Directory(&'a Path),
+    /// The file a document is held in (an archive), and the document's own path in it.
+    Holder(&'a Beside),
+}
+
+impl<'a> From<Option<&'a Path>> for Where<'a> {
+    fn from(directory: Option<&'a Path>) -> Self {
+        directory.map_or(Self::Nowhere, Self::Directory)
+    }
+}
+
+impl<'a> Where<'a> {
+    /// What the picture a document names `name` ([`local`]) is drawn from; `None` for a name that
+    /// leads nowhere a picture is read from: above the top of the file holding the document.
+    fn origin(self, name: &str) -> Option<Origin> {
+        match self {
+            Self::Nowhere => None,
+            Self::Directory(directory) => Some(Origin::Path(directory.join(name).to_str()?.to_owned())),
+            Self::Holder((near, document)) => Some(Origin::Near { near: near.clone(), path: from_the_top(document, name)? }),
+        }
+    }
+}
+
+/// The path from a holder's top of what `name` names from the file at `document` there, as a
+/// [`Near`] takes it: from the document's directory, each `.` and empty name dropped and each `..`
+/// taken with the name before it. `None` for one that leads above the top, or names nothing.
+fn from_the_top(document: &str, name: &str) -> Option<String> {
+    let mut parts: Vec<&str> = document.split('/').filter(|part| !part.is_empty()).collect();
+    // The document's own name: its pictures' paths start from the directory it is in.
+    parts.pop();
+    for part in name.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// The pictures of a document being read, each on its way to a [`Promise`].
 pub(super) struct Pictures<'a> {
-    /// The directory the document is in, what its pictures' paths start from; none for one come
-    /// through a pipe or held in an archive, whose pictures can't be reached.
-    beside: Option<&'a Path>,
+    /// Where the document's pictures are read from: what their paths start from.
+    beside: Where<'a>,
     /// The backends asked which draws a fenced block: those built, but in the tests.
     backends: &'a [&'static dyn Backend],
     /// By the name a document refers to it by: its stand-in, or none if it isn't shown.
@@ -90,7 +141,8 @@ pub(super) struct Pictures<'a> {
 }
 
 impl<'a> Pictures<'a> {
-    pub(super) fn beside(beside: Option<&'a Path>) -> Self {
+    pub(super) fn beside(beside: impl Into<Where<'a>>) -> Self {
+        let beside = beside.into();
         #[cfg(test)]
         if let Some(backends) = AMONG.get() {
             return Self::among(beside, backends);
@@ -99,9 +151,9 @@ impl<'a> Pictures<'a> {
     }
 
     /// [`Pictures::beside`], a fenced block drawn by one of `backends`.
-    pub(super) fn among(beside: Option<&'a Path>, backends: &'a [&'static dyn Backend]) -> Self {
+    pub(super) fn among(beside: impl Into<Where<'a>>, backends: &'a [&'static dyn Backend]) -> Self {
         Self {
-            beside,
+            beside: beside.into(),
             backends,
             seen: RefCell::default(),
             blocks: RefCell::default(),
@@ -178,13 +230,14 @@ impl<'a> Pictures<'a> {
         if let Some(block) = self.blocks.borrow().get(reference) {
             return Some(block.clone());
         }
-        let beside = self.beside?;
+        if matches!(self.beside, Where::Nowhere) {
+            return None;
+        }
         let name = local(reference)?;
         if let Some(known) = self.seen.borrow().get(&name) {
             return known.clone();
         }
-        let path = beside.join(&name);
-        let promised = || self.promised(Origin::Path(path.to_str()?.to_owned()), fit);
+        let promised = || self.promised(self.beside.origin(&name)?, fit);
         let stand_in = (self.asked() < MAX_PICTURES).then(promised).flatten();
         if stand_in.is_none() {
             self.left_out.set(self.left_out.get().saturating_add(1));
@@ -242,6 +295,9 @@ fn afresh() -> u64 {
 enum Origin {
     /// A file near the document, by its path.
     Path(String),
+    /// A file beside the document in the file that holds them both: its path from that file's top,
+    /// and how it is read from there.
+    Near { near: Near, path: String },
     /// A fenced block of the document: its text, for the backend that lists its language to open
     /// under `name`.
     Block { backend: &'static dyn Backend, name: String, text: Arc<Vec<u8>> },
@@ -252,6 +308,7 @@ impl Origin {
     fn opened(&self) -> Result<Box<dyn Source>, String> {
         let (backend, name, text) = match self {
             Self::Path(path) => return opened(path),
+            Self::Near { near, path } => return drawn_by(near(path)?),
             Self::Block { backend, name, text } => (backend, name, text),
         };
         let head = text.get(..HEAD as usize).unwrap_or(text.as_slice()).to_vec();
@@ -549,7 +606,11 @@ fn opened(path: &str) -> Result<Box<dyn Source>, String> {
     if !std::fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
         return Err("not a file".into());
     }
-    let input = Input::open(path)?;
+    drawn_by(Input::open(path)?)
+}
+
+/// The picture `input` opened, by the first backend whose files may be pictures.
+fn drawn_by(input: Input) -> Result<Box<dyn Source>, String> {
     let backends: Vec<&dyn Backend> = BACKENDS.iter().copied().filter(|backend| backend.draws_pictures()).collect();
     let (backend, input) = shown_by(input, &backends).ok_or("not a picture this build shows")?;
     match backend.open(input, &Parsed::default())? {
@@ -561,7 +622,8 @@ fn opened(path: &str) -> Result<Box<dyn Source>, String> {
 /// The path `reference` names on this machine, from the document's directory: none for a URL,
 /// whatever its scheme (nothing is fetched), or an absolute path, which on the web a document's
 /// pictures mean from their site, not from the root of this machine. `..` may lead out of the
-/// document's directory, as `docs/usage.md` to `../assets/`.
+/// document's directory, as `docs/usage.md` to `../assets/`; for a document held in another file,
+/// never above that file's top ([`from_the_top`]).
 fn local(reference: &str) -> Option<String> {
     let reference = reference.split(['?', '#']).next()?.trim();
     let scheme = reference.split_once(':').is_some_and(|(before, _)| !before.contains('/'));
@@ -861,7 +923,7 @@ mod tests {
         for n in 0..=MAX_PICTURES {
             std::fs::write(dir.join(format!("{n}.png")), &png).unwrap();
         }
-        let pictures = Pictures::beside(Some(&dir));
+        let pictures = Pictures::beside(Some(dir.as_path()));
         let fit = (468.0, 648.0);
         for n in 0..MAX_PICTURES {
             assert!(pictures.measured(&format!("{n}.png"), fit).is_some(), "{n}");
@@ -879,6 +941,72 @@ mod tests {
         let pictures = Pictures::beside(None);
         assert!(pictures.measured("a.png", (468.0, 648.0)).is_none());
         assert_eq!(pictures.left_out.get(), 0);
+    }
+
+    /// A picture's path from a held document is brought to one from its holder's top, which is all
+    /// a holder is asked for: nothing above the top, nor nothing at all.
+    #[test]
+    fn a_held_documents_picture_is_a_path_from_its_holders_top() {
+        for (document, name, path) in [
+            ("README.md", "a.png", Some("a.png")),
+            ("docs/README.md", "a.png", Some("docs/a.png")),
+            ("docs/README.md", "./img//a.png", Some("docs/img/a.png")),
+            ("docs/README.md", "../a.png", Some("a.png")),
+            ("docs/guide/README.md", "../../assets/a.png", Some("assets/a.png")),
+            ("docs/README.md", "img/../a.png", Some("docs/a.png")),
+            ("/docs//README.md", "a.png", Some("docs/a.png")),
+            ("docs/README.md", "../../a.png", None),
+            ("docs/README.md", "../../docs/a.png", None),
+            ("README.md", "../a.png", None),
+            ("README.md", "x/../../a.png", None),
+            ("README.md", ".", None),
+            ("docs/README.md", "..", None),
+            ("", "a.png", Some("a.png")),
+        ] {
+            assert_eq!(from_the_top(document, name).as_deref(), path, "{document}: {name}");
+        }
+    }
+
+    /// A document held in another file finds its pictures through its holder, by their paths from
+    /// the holder's top; what leads above the top is left out without the holder being asked, and
+    /// an absolute path or a URL is none of it, as on disk.
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_held_documents_pictures_are_read_from_its_holder() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let told = asked.clone();
+        let near: Near = Arc::new(move |path| {
+            told.lock().unwrap().push(path.to_owned());
+            if path != "assets/a.png" && path != "docs/my picture.png" {
+                return Err(format!("{path}: not in the archive"));
+            }
+            let png = picture();
+            let head = png.clone();
+            let again: Again = Arc::new(move || Ok(png.clone()));
+            Ok(Input::held(format!("a.zip/{path}"), head, again))
+        });
+        let beside: Beside = (near, "docs/README.md".to_owned());
+        let pictures = Pictures::beside(Where::Holder(&beside));
+        let stand_in = pictures.measured("../assets/a.png", FIT).expect("above the document, in the archive");
+        assert_eq!(size_of(&stand_in), (2, 2));
+        assert!(pictures.measured("my%20picture.png?raw=true", FIT).is_some(), "beside it, as a URL writes it");
+        assert!(pictures.measured("missing.png", FIT).is_none());
+        assert_eq!((pictures.left_out.get(), asked.lock().unwrap().len()), (1, 3));
+        for outside in ["../../a.png", "../../assets/a.png", "..%2F..%2Fassets%2Fa.png"] {
+            assert!(pictures.measured(outside, FIT).is_none(), "{outside}");
+        }
+        assert_eq!(pictures.left_out.get(), 3, "left out, as one that is missing, each name once");
+        for not_near in ["/assets/a.png", "%2Fassets%2Fa.png", "file:///assets/a.png", "https://example.com/assets/a.png", "~/a.png"] {
+            assert!(pictures.measured(not_near, FIT).is_none(), "{not_near}");
+        }
+        assert_eq!(pictures.left_out.get(), 3, "none of the archive's");
+        assert_eq!(*asked.lock().unwrap(), ["assets/a.png", "docs/my picture.png", "docs/missing.png"], "the holder is asked for nothing else");
+        // Drawn from the holder again, when its page wants it.
+        let promised = pictures.promised_in(&BTreeMap::from([("rId1".to_owned(), stand_in)]));
+        let drawn = promised.draw(&["rId1"], false, None);
+        let [("rId1", Ok(png))] = drawn.as_slice() else { panic!("{} drawn", drawn.len()) };
+        assert_eq!(size_of(png), (2, 2));
+        assert_eq!(asked.lock().unwrap().last().map(String::as_str), Some("assets/a.png"));
     }
 
     use crate::source::tests::Sketches;
@@ -943,7 +1071,7 @@ mod tests {
         assert_eq!(local(&key), None, "never a path");
         // With a directory to look in, a forged key is still no file's name.
         let dir = std::env::temp_dir();
-        let beside = Pictures::among(Some(&dir), &DRAWING);
+        let beside = Pictures::among(Some(dir.as_path()), &DRAWING);
         assert!(beside.measured("fenced:0000000000000000:0", FIT).is_none());
         assert_eq!((beside.left_out.get(), beside.seen.borrow().len()), (0, 0), "not looked for");
     }
@@ -1067,7 +1195,7 @@ mod tests {
     #[test]
     fn fenced_blocks_count_among_the_pictures_a_document_has() {
         let dir = std::env::temp_dir();
-        let pictures = Pictures::among(Some(&dir), &DRAWING);
+        let pictures = Pictures::among(Some(dir.as_path()), &DRAWING);
         for n in 0..MAX_PICTURES - 1 {
             assert!(pictures.fenced("sketch", "40 20", FIT).is_some(), "{n}");
         }

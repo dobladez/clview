@@ -38,13 +38,13 @@ use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, View
 use wordcraft_render::RenderOptions;
 
 use super::head::{COMPOUND, Names, ZIP, mimetype};
-use super::picture::{Pictures, Promised};
+use super::picture::{Pictures, Promised, Where};
 use super::texts::{Answer, Queue};
 use super::threads::Threads;
 use super::{
-    Again, Anchor, Ask, Auto, Backend, Bounds, Deferred, Effect, Format, Frame, Got, Input, Job, Keys, Link, Links, MAX_ADDRESS, MAX_LINK_RECTS,
-    MAX_LINKS, MAX_NAME, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request, Room, Setting, Source, Target, Texts, Told, Value,
-    Values, Want, guarded,
+    Again, Anchor, Ask, Auto, Backend, Beside, Bounds, Deferred, Effect, Format, Frame, Got, Input, Job, Keys, Link, Links, MAX_ADDRESS,
+    MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request, Room, Setting, Source, Target, Texts,
+    Told, Value, Values, Want, guarded,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -471,24 +471,27 @@ fn opened(input: Input, options: &Parsed<'_>, room: Room) -> Result<Paged, Strin
     // The viewer refuses any other value before a file opens: anything but `code` is drawn.
     let fences = options.value(FENCES.option.name) != Some(CODE);
     let at = At { width, font, margin, fences };
-    let read_as = |bytes: &[u8], beside: Option<&Path>| {
+    let read_as = |bytes: &[u8], beside: Where<'_>| {
         let laid = caught(|| laid_out(bytes, kind, password.as_deref(), &path, beside, at, &room))?;
         let fingerprint = fingerprint_of(bytes, &laid);
         Ok((laid, fingerprint))
     };
+    // What is beside it in the file holding it, if it is held in one that says: its pictures.
+    let beside = input.near();
     let (stored, read) = match input.reopenable()? {
         Reopenable::Disk(file) => {
             let bytes = read(file).map_err(error)?;
-            (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent()))
+            (Stored::Disk(PathBuf::from(&path)), read_as(&bytes, Path::new(&path).parent().into()))
         }
         Reopenable::Bytes(bytes) => {
             let bytes = within(bytes).map_err(error)?;
-            let laid = read_as(&bytes, None);
+            let laid = read_as(&bytes, Where::Nowhere);
             (Stored::Memory(bytes), laid)
         }
         Reopenable::Again(again) => {
             let bytes = again().and_then(within).map_err(error)?;
-            (Stored::Held(again), read_as(&bytes, None))
+            let laid = read_as(&bytes, beside.as_deref().map_or(Where::Nowhere, Where::Holder));
+            (Stored::Held(again, beside), laid)
         }
     };
     // Only the pages' sizes are kept, and where their paragraphs are: the document goes, and a render
@@ -837,8 +840,9 @@ enum Stored {
     Disk(PathBuf),
     /// As they came through a pipe, which can't be read again.
     Memory(Vec<u8>),
-    /// In another file (an archive), read from it again to render.
-    Held(Again),
+    /// In another file (an archive), read from it again to render; and what is beside it there, if
+    /// that file says: where its pictures are read from.
+    Held(Again, Option<Arc<Beside>>),
 }
 
 /// A document read and laid out.
@@ -1679,11 +1683,13 @@ impl Document {
         Ok(Paged(Arc::new(document)))
     }
 
-    /// The directory it is in, if it is a file on disk: what the pictures it refers to are near.
-    fn beside(&self) -> Option<&Path> {
+    /// What the pictures it refers to are near: the directory it is in, if it is a file on disk;
+    /// the file it is held in, if that one says what is beside it.
+    fn beside(&self) -> Where<'_> {
         match &self.stored {
-            Stored::Disk(path) => path.parent(),
-            Stored::Memory(_) | Stored::Held(_) => None,
+            Stored::Disk(path) => path.parent().into(),
+            Stored::Held(_, Some(beside)) => Where::Holder(beside),
+            Stored::Memory(_) | Stored::Held(_, None) => Where::Nowhere,
         }
     }
 
@@ -1692,7 +1698,7 @@ impl Document {
         let again = match &self.stored {
             Stored::Memory(bytes) => return Ok(Cow::Borrowed(&bytes[..])),
             Stored::Disk(path) => File::open(path).map_err(|e| e.to_string()).and_then(read),
-            Stored::Held(again) => again().and_then(within),
+            Stored::Held(again, _) => again().and_then(within),
         };
         again.map(Cow::Owned).map_err(|e| format!("reading the file again: {e}"))
     }
@@ -1740,9 +1746,9 @@ fn pixels(size: f32, scale: f32) -> Result<u64, String> {
 
 /// The document in `bytes`, of `kind`, read with `password` if it is protected, and laid out into
 /// pages: Markdown and HTML `at` a width, a font size and margins on the page `room` gives them ([`page_in`]),
-/// the rest on pages of their own. `path` is the file's, for the fields that show it, and `beside` the
-/// directory it is in, for the pictures it refers to.
-fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Option<&Path>, at: At, room: &Room) -> Result<Laid, String> {
+/// the rest on pages of their own. `path` is the file's, for the fields that show it, and `beside`
+/// where the pictures it refers to are read from: the directory it is in, or the file holding it.
+fn laid_out(bytes: &[u8], kind: Kind, password: Option<&str>, path: &str, beside: Where<'_>, at: At, room: &Room) -> Result<Laid, String> {
     let pictures = match at.fences {
         true => Pictures::beside(beside),
         false => Pictures::beside(beside).blocks_as_code(),
@@ -3161,7 +3167,7 @@ mod tests {
             |w: u32, h: u32| crate::encode::encode_png(w, h, &[200, 0, 0, 255].repeat((w * h) as usize), crate::encode::PngEffort::Fast).unwrap();
         std::fs::write(dir.join("wide.png"), png(3000, 300)).unwrap();
         std::fs::write(dir.join("small.png"), png(40, 20)).unwrap();
-        let pictures = Pictures::beside(Some(&dir));
+        let pictures = Pictures::beside(Some(dir.as_path()));
         let sizes = |document: wordcraft_doc::Document| -> Vec<(f32, f32)> {
             let objects = document.body.iter().filter_map(|block| match &**block {
                 Block::Para(para) => Some(para.objects.clone()),
@@ -3368,9 +3374,16 @@ mod tests {
     #[test]
     fn only_markdown_and_html_are_given_this_look() {
         let font = |bytes: &[u8], kind| {
-            let laid =
-                laid_out(bytes, kind, None, "a", None, At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT, fences: true }, &ROOMLESS)
-                    .unwrap();
+            let laid = laid_out(
+                bytes,
+                kind,
+                None,
+                "a",
+                Where::Nowhere,
+                At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT, fences: true },
+                &ROOMLESS,
+            )
+            .unwrap();
             let document = laid.document.read().unwrap();
             document.styles.default_chr.font.clone().unwrap()
         };
@@ -3513,7 +3526,7 @@ mod tests {
             Kind::Markdown,
             None,
             "a",
-            None,
+            Where::Nowhere,
             At { width: Width::Window, font: 100, margin: MARGIN_DEFAULT, fences: true },
             &ROOMLESS,
         )

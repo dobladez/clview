@@ -193,3 +193,11 @@ fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
 fn nothing_but_this_backend_names_its_decompressors() {
     crate::fixtures::named_only_in(&["src/source/tar.rs", "tests/it/tar.rs"], &[], &["bzip2", "lzma"]);
 }
+
+/// A Markdown README in a tar, plain or compressed, shows the screenshots beside it.
+#[cfg(all(feature = "word", feature = "zip"))]
+#[test]
+fn a_documents_pictures_are_drawn_from_its_tar() {
+    crate::zip::a_documents_pictures_are_drawn_from_its_archive("tar-pictures", "repo.tar", tar);
+    crate::zip::a_documents_pictures_are_drawn_from_its_archive("tar-gz-pictures", "repo.tar.gz", |files| gzip(&tar(files)));
+}

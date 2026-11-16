@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-use super::{Again, Backend, Bounded, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Room, Source};
+use super::{Again, Backend, Beside, Bounded, Frame, Input, Job, Opened, Pool, Render, Request, Rest, Room, Source, Start};
 use crate::args::OwnedOptions;
 
 /// The most files opened at once. A document's first layout takes a core, and a large PDF is read
@@ -40,8 +40,9 @@ const UNKNOWN: (f32, f32) = (612.0, 792.0);
 pub(crate) enum Reopen {
     /// On disk, by its path.
     Disk(String),
-    /// Held in another file: its path, first bytes, and how to read it from there, whole or to a bound.
-    Held(String, Vec<u8>, Again, Option<Bounded>),
+    /// Held in another file: its path, first bytes, and how it and what is beside it are read from
+    /// there.
+    Held { path: String, head: Vec<u8>, again: Again, bounded: Option<Bounded>, start: Option<Start>, beside: Option<Arc<Beside>> },
 }
 
 impl Reopen {
@@ -49,8 +50,10 @@ impl Reopen {
     fn input(&self) -> Result<Input, String> {
         match self {
             Self::Disk(path) => Input::open(path),
-            Self::Held(path, head, again, None) => Ok(Input::held(path.clone(), head.clone(), again.clone())),
-            Self::Held(path, head, again, Some(bounded)) => Ok(Input::held_bounded(path.clone(), head.clone(), again.clone(), bounded.clone())),
+            Self::Held { path, head, again, bounded, start, beside } => {
+                let rest = Rest::Held { again: again.clone(), bounded: bounded.clone(), start: start.clone(), beside: beside.clone() };
+                Ok(Input { path: path.clone(), head: head.clone(), rest })
+            }
         }
     }
 }
@@ -69,7 +72,7 @@ impl Input {
         match rest {
             Rest::File(file) if file.metadata().is_ok_and(|m| m.is_file()) && has_a_path_of_its_own(&path) => Ok(Reopen::Disk(path)),
             Rest::File(file) => Err(Self { path, head, rest: Rest::File(file) }),
-            Rest::Held(again, bounded) => Ok(Reopen::Held(path, head, again, bounded)),
+            Rest::Held { again, bounded, start, beside } => Ok(Reopen::Held { path, head, again, bounded, start, beside }),
         }
     }
 }
@@ -737,8 +740,22 @@ mod tests {
         // A device, as a pipe is: read now or never.
         assert!(Input::open("/dev/null").unwrap().later().is_err());
         let again: Again = Arc::new(|| Ok(b"whole".to_vec()));
-        let Ok(held) = Input::held("a.zip/b".into(), b"wh".to_vec(), again).later() else { panic!("held") };
+        let Ok(held) = Input::held("a.zip/b".into(), b"wh".to_vec(), again.clone()).later() else { panic!("held") };
         assert_eq!(held.input().unwrap().bytes().unwrap(), b"whole");
+        assert!(held.input().unwrap().start().is_none() && held.input().unwrap().near().is_none());
+        // What its holder says of it comes back with it: its first bytes alone, and what is beside it.
+        let start: super::super::Start = Arc::new(|most| Ok(b"whole"[..5.min(most as usize)].to_vec()));
+        let near: super::super::Near = Arc::new(|path| Err(format!("{path}: asked")));
+        let held = Input::held("a.zip/d/b".into(), b"wh".to_vec(), again).starting(start).held_near(near, "d/b".into());
+        let Ok(held) = held.later() else { panic!("held") };
+        let input = held.input().unwrap();
+        assert_eq!(input.start().map(|start| start(2).unwrap()), Some(b"wh".to_vec()));
+        let beside = input.near().expect("what is beside it");
+        let (near, at) = &*beside;
+        assert_eq!((at.as_str(), near("d/c.png").err().as_deref()), ("d/b", Some("d/c.png: asked")));
+        // A file of its own has its directory, and is read from its start as it is.
+        let own = Input::open(path).unwrap();
+        assert!(own.start().is_none() && own.near().is_none());
     }
 
     /// A job runs on the threads before the files waiting, its result taken once through its handle;

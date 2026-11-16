@@ -6,8 +6,9 @@
 //! read again when it decodes; one from a pipe is kept as it came.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Seek};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -16,7 +17,7 @@ use ::image::metadata::Orientation;
 use ::image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbaImage};
 
 use super::threads::Threads;
-use super::{Again, Backend, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, guarded};
+use super::{Again, Backend, Frame, Input, Opened, Pixels, Pool, Render, Reopenable, Request, Source, Start, guarded};
 use crate::args::{OptionSpec, Parsed};
 
 /// Images, decoded by the `image` crate.
@@ -59,10 +60,11 @@ impl Backend for Images {
     fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
         let format = format(&path, &input.head).ok_or_else(|| format!("{path}: not an image"))?;
+        let start = input.start();
         let image = match input.reopenable()? {
             Reopenable::Disk(file) => Image::on_disk(Path::new(&path), file, format),
             Reopenable::Bytes(bytes) => Image::in_memory(bytes, format),
-            Reopenable::Again(again) => Image::held(again, format),
+            Reopenable::Again(again) => Image::held(again, start, format),
         };
         Ok(Opened::Pages(Box::new(image.map_err(|e| format!("{path}: {e}"))?)))
     }
@@ -71,6 +73,13 @@ impl Backend for Images {
 /// The most bytes a decoded picture may take, and so the largest it opens: 512 MiB, about 134
 /// megapixels in RGBA.
 const MAX_BYTES: u64 = 512 << 20;
+
+/// The most of a picture held in another file read to find its size, where its holder gives a
+/// file's first bytes alone: a header is in a file's first kilobyte or so (in every one of 1,999
+/// pictures of real books and repositories, ADR-0037), but a photograph's comes after its EXIF,
+/// thumbnail and colour profile, some tens of kilobytes. A picture whose header takes more is read
+/// whole.
+const MAX_HEADER: u64 = 64 << 10;
 
 /// How a picture is decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,9 +163,30 @@ impl Image {
         Ok(Self(Arc::new(Picture { encoded: Encoded::Disk(path.into()), format, size })))
     }
 
-    /// The picture that `again` reads from the file holding it: read once now for its header.
-    fn held(again: Again, format: Format) -> Result<Self, String> {
-        let size = header(Cursor::new(&within(again()?)?), format)?;
+    /// The picture that `again` reads from the file holding it: its header read now, from its first
+    /// [`MAX_HEADER`] bytes alone where `start` gives them and they hold it, so that a document
+    /// measuring its pictures unpacks none whole; else from the whole of it, read once.
+    fn held(again: Again, start: Option<Start>, format: Format) -> Result<Self, String> {
+        let whole = || header(Cursor::new(&within(again()?)?), format);
+        let size = match start.map(|start| start(MAX_HEADER.saturating_add(1))).transpose()? {
+            None => whole()?,
+            // All of a file no longer than that.
+            Some(first) if u64::try_from(first.len()).unwrap_or(u64::MAX) <= MAX_HEADER => header(Cursor::new(&first), format)?,
+            // The `image` crate reads a JPEG whole before it looks at it, then goes through its
+            // segments in order as far as its first scan, for its size and for its EXIF alike: what
+            // it makes of the first bytes, when it makes anything, is what it makes of the file.
+            Some(first) if format == Format::Image(ImageFormat::Jpeg) => match header(Cursor::new(&first), format) {
+                Ok(size) => size,
+                Err(_) => whole()?,
+            },
+            Some(first) => {
+                let past = Cell::new(false);
+                let measured = header(First { bytes: &first, at: 0, past: &past }, format);
+                // What a decoder made of a file cut short is no answer: it may have taken the cut
+                // for the file's end.
+                if past.get() { whole()? } else { measured? }
+            }
+        };
         Ok(Self(Arc::new(Picture { encoded: Encoded::Held(again), format, size })))
     }
 
@@ -164,6 +194,74 @@ impl Image {
     fn in_memory(bytes: Vec<u8>, format: Format) -> Result<Self, String> {
         let size = header(Cursor::new(&bytes), format)?;
         Ok(Self(Arc::new(Picture { encoded: Encoded::Memory(bytes), format, size })))
+    }
+}
+
+/// The first bytes of a file longer than them, read as the file would be up to where they end:
+/// reading or seeking to there or past it, or from the file's end, fails and is noted in `past`,
+/// so that nothing is made of the file as if it ended there.
+struct First<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    past: &'a Cell<bool>,
+}
+
+impl First<'_> {
+    /// What is left of the bytes; none is left to read once they are passed.
+    fn left(&self) -> std::io::Result<&[u8]> {
+        match self.bytes.get(self.at..).filter(|left| !left.is_empty()) {
+            Some(left) => Ok(left),
+            None => Err(self.passed()),
+        }
+    }
+
+    fn passed(&self) -> std::io::Error {
+        self.past.set(true);
+        std::io::Error::other("past the first bytes read of the picture")
+    }
+}
+
+impl Read for First<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let left = self.left()?;
+        let read = left.len().min(buf.len());
+        // Both as long as `read`, which is no more than either.
+        if let (Some(to), Some(from)) = (buf.get_mut(..read), left.get(..read)) {
+            to.copy_from_slice(from);
+        }
+        self.at = self.at.saturating_add(read);
+        Ok(read)
+    }
+}
+
+impl BufRead for First<'_> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.left()
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.at = self.at.saturating_add(amount).min(self.bytes.len());
+    }
+}
+
+impl Seek for First<'_> {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let at = match to {
+            SeekFrom::Start(at) => usize::try_from(at).ok(),
+            SeekFrom::Current(by) => i64::try_from(self.at).ok().and_then(|at| at.checked_add(by)).and_then(|at| usize::try_from(at).ok()),
+            // Where the file ends isn't known.
+            SeekFrom::End(_) => None,
+        };
+        match at.filter(|at| *at < self.bytes.len()) {
+            Some(at) => {
+                self.at = at;
+                Ok(u64::try_from(at).unwrap_or(u64::MAX))
+            }
+            None => Err(self.passed()),
+        }
     }
 }
 
@@ -589,6 +687,95 @@ mod tests {
         assert_eq!(pixel(render(&image, 1.0)), Some(200));
         std::fs::remove_file(&path).unwrap();
         assert!(render(&image, 1.0).error.is_some_and(|e| e.starts_with("reading the file again: ")));
+    }
+
+    /// `bytes` as a picture held in another file, which gives a file's first bytes alone: the
+    /// picture, how many times it was read whole, and the most of it asked for at once.
+    fn held(name: &str, bytes: &[u8]) -> (Result<Image, String>, usize, u64) {
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        let (whole, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicU64::new(0)));
+        let (read, asked) = (whole.clone(), most.clone());
+        let (all, first) = (bytes.to_vec(), bytes.to_vec());
+        let again: Again = Arc::new(move || {
+            read.fetch_add(1, Ordering::Relaxed);
+            Ok(all.clone())
+        });
+        let start: Start = Arc::new(move |most| {
+            asked.fetch_max(most, Ordering::Relaxed);
+            Ok(first[..first.len().min(most as usize)].to_vec())
+        });
+        let image = format(name, bytes).ok_or_else(|| "not an image".to_owned()).and_then(|format| Image::held(again, Some(start), format));
+        (image, whole.load(Ordering::Relaxed), most.load(Ordering::Relaxed))
+    }
+
+    /// A 256 × 256 picture of noise, opaque, as RGBA: what no format packs (xorshift's bytes).
+    fn noise() -> Vec<u8> {
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        };
+        (0..256 * 256).flat_map(|_| [next(), next(), next(), 255]).collect()
+    }
+
+    /// A picture held in another file is measured from its first 64 KiB, never unpacked whole for
+    /// its size, in every format whose header is there; and its size is the one the whole file gives.
+    #[test]
+    fn a_held_picture_is_measured_from_its_first_bytes() {
+        // Noise, which no format packs: each file is some hundreds of kilobytes.
+        let noise = noise();
+        let rgb: Vec<u8> = noise.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let rgba8 = ExtendedColorType::Rgba8;
+        let cases = [
+            ("a.png", png(&noise, 256, 256)),
+            ("a.bmp", written(|out| BmpEncoder::new(out).write_image(&noise, 256, 256, rgba8))),
+            // Four frames: a GIF's 256 colours pack one of them into less than the first bytes.
+            ("a.gif", written(|out| (0..4).try_for_each(|_| GifEncoder::new(&mut *out).encode(&noise, 256, 256, rgba8)))),
+            ("a.webp", written(|out| WebPEncoder::new_lossless(out).write_image(&noise, 256, 256, rgba8))),
+            ("a.qoi", written(|out| QoiEncoder::new(out).write_image(&noise, 256, 256, rgba8))),
+            ("a.ppm", written(|out| PnmEncoder::new(out).write_image(&rgb, 256, 256, ExtendedColorType::Rgb8))),
+            ("a.tga", written(|out| TgaEncoder::new(out).write_image(&noise, 256, 256, rgba8))),
+            ("a.jpg", written(|out| JpegEncoder::new_with_quality(out, 100).write_image(&rgb, 256, 256, ExtendedColorType::Rgb8))),
+            ("a.ico", written(|out| IcoEncoder::new(out).write_image(&noise, 256, 256, rgba8))),
+        ];
+        for (name, bytes) in cases {
+            assert!(bytes.len() as u64 > MAX_HEADER, "{name}: {} bytes", bytes.len());
+            let (image, whole, most) = held(name, &bytes);
+            let image = image.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!((image.size(0), whole, most), (Some((256.0, 256.0)), 0, MAX_HEADER + 1), "{name}");
+            // Read whole only to be drawn.
+            let frame = render(&image, 1.0);
+            assert_eq!((frame.error.as_deref(), frame.width, frame.height), (None, 256, 256), "{name}");
+        }
+        // A file no longer than that is all there is to read.
+        let small = png(&opaque(), 3, 2);
+        let (image, whole, _) = held("a.png", &small);
+        assert_eq!((image.unwrap().size(0), whole), (Some((3.0, 2.0)), 0));
+    }
+
+    /// A header that isn't within the first 64 KiB is read from the whole file: a photograph whose
+    /// size and orientation come after more than that, and a TIFF that keeps its directory at its
+    /// end. Nothing is made of the file as if it ended where its first bytes do.
+    #[test]
+    fn a_held_picture_whose_header_comes_later_is_read_whole() {
+        // An application segment of 65,533 bytes before the EXIF, as a colour profile is.
+        let photo = photo(6);
+        let padding = [&b"\xff\xe2\xff\xff"[..], &[0u8; 65_533]].concat();
+        let late = [&photo[..2], &padding, &photo[2..]].concat();
+        assert_eq!(open("a.jpg", late.clone()).unwrap().size(0), Some((8.0, 16.0)));
+        let (image, whole, _) = held("a.jpg", &late);
+        assert_eq!((image.unwrap().size(0), whole), (Some((8.0, 16.0)), 1), "turned as its EXIF says, past the first bytes");
+        let noise = noise();
+        let tiff = written(|out| TiffEncoder::new(out).write_image(&noise, 256, 256, ExtendedColorType::Rgba8));
+        let (image, whole, _) = held("a.tiff", &tiff);
+        assert_eq!((image.unwrap().size(0), whole), (Some((256.0, 256.0)), 1));
+        // Cut short where its first bytes end, a picture is no picture, and says so from the whole.
+        let mut cut = late;
+        cut.truncate(MAX_HEADER as usize + 100);
+        let (image, whole, _) = held("a.jpg", &cut);
+        assert!(image.is_err() && whole == 1);
     }
 
     #[test]
