@@ -27,7 +27,11 @@ gh run list --workflow CI --event schedule --limit 2
   again on it, the nightly's sets too (`gh workflow run CI`). A timing test that times out on a
   slow runner, a different one each run, is flaky: rerun it (`gh run rerun <id> --failed`), and
   if the user agrees to release past it, say so in the report.
-- `cargo deny check advisories`, if it is installed (CI runs it on every push anyway).
+- `cargo deny check advisories`, if it is installed (CI runs it on every push anyway), and
+  GitHub's open alerts, which can come before RustSec has them:
+  `gh api 'repos/dobladez/clview/dependabot/alerts?state=open' --jq '.[] | [.security_advisory.severity, .dependency.package.name, .security_advisory.ghsa_id, .security_advisory.summary] | @tsv'`.
+  For each, which crate brings it (`cargo tree -i <crate>@<version>`) and whether clv can reach
+  what it is about, as `deny.toml`'s `ignore` reasons; tell the user, who decides.
 - `## Unreleased` in `CHANGELOG.md` has entries. If it is empty, there is nothing to release.
 
 ## 2. Pick the version
