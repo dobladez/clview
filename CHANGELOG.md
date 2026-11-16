@@ -12,15 +12,15 @@ works today. A version's section becomes the notes of its
 
 - An ebook (epub) is shown as a book: its chapters in its reading order, each starting a new page,
   with its pictures, as one document laid out for the window. It has what Markdown and HTML have:
-  `[` and `]` for its width, `+` and `-` for its font size, `{` and `}` for its margins, `d` for
+  `[` and `]` for its width, `+` and `-` for its font size, `{` and `}` for its margins, `D` for
   dark paper, `/` to search the whole book. It was a list of its files, each chapter opened alone
   and without its pictures. Its cover comes first, a page of its own, and is its tile in a list;
   then a Contents page, made from its table of contents, each entry a link to its chapter, unless
   one of its chapters is that page already. Chapters it protects (DRM) are left out, and the first
   page says how many. Its own stylesheets aren't read, and a fixed-layout book is laid out
-  flowing. Its links between chapters are places in the book, which `f` goes to and `u` comes back
-  from; a link from it is never followed to a file. A zip that says it is an epub is one whatever
-  its name.
+  flowing. Its links between chapters are places in the book, which `f` goes to and Backspace comes
+  back from; a link from it is never followed to a file. A zip that says it is an epub is one
+  whatever its name.
 - A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
   their paths from it, `..` included but never above the archive's top: a README in a zip of a
   repository shows its screenshots. They were left as their alt text. Opening the document unpacks
@@ -81,7 +81,7 @@ works today. A version's section becomes the notes of its
 
 ### Changed
 
-- A key that changes how a file looks (`d`, `[`, `{`, `s`), on a file that has no such thing, says
+- A key that changes how a file looks (`D`, `[`, `{`, `s`), on a file that has no such thing, says
   so shorter, and on the whole status line, which comes back after a second or with the next key:
   `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
   HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a

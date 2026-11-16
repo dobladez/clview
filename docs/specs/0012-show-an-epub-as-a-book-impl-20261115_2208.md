@@ -229,7 +229,7 @@ builds nothing, so the next run tests the reverted code. Copy it back with a new
 
 | Reverted | Failed |
 |---|---|
-| a link to a chapter left a link to a file | `epub::tests::links_between_chapters_are_places_in_the_book`, `…links_lead_to_ids_made_the_books_own`, `view_pager::epub_links_between_chapters_are_followed_and_u_comes_back` |
+| a link to a chapter left a link to a file | `epub::tests::links_between_chapters_are_places_in_the_book`, `…links_lead_to_ids_made_the_books_own`, `view_pager::epub_links_between_chapters_are_followed_and_backspace_comes_back` |
 | a `#name` alone not its own chapter's | all three of `epub::tests::links_…` |
 | a name of any length a place | `epub::tests::links_to_an_id_too_long_once_made_the_books_own_say_so` |
 | a place too long answered as a missing file | the same |
@@ -277,7 +277,7 @@ is the owner's, and its box stays open until it is confirmed.
 
 | Reverted | Failed |
 |---|---|
-| no table of contents asked for | `epub::tests::contents_are_read_from_a_nav_and_from_an_ncx`, `…contents_are_kept_within_their_limits`, `…contents_are_not_made_twice`, `…contents_that_cant_be_read_leave_the_book_whole`, `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice`, `view_pager::epub_contents_page_leads_to_its_chapters_and_u_comes_back` |
+| no table of contents asked for | `epub::tests::contents_are_read_from_a_nav_and_from_an_ncx`, `…contents_are_kept_within_their_limits`, `…contents_are_not_made_twice`, `…contents_that_cant_be_read_leave_the_book_whole`, `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice`, `view_pager::epub_contents_page_leads_to_its_chapters_and_backspace_comes_back` |
 | a page though the nav document is a chapter | `epub::tests::contents_are_not_made_twice`, `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice` |
 | a page though the landmarks, or the guide, name a chapter | `epub::tests::contents_are_not_made_twice` |
 | the worker keeping every entry | `epub::tests::contents_are_kept_within_their_limits` |
@@ -383,3 +383,21 @@ Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
 PDF in a window of 80 columns, `]`: `this format doesn't reflow (Markdown, HTML and others do)`
 alone on the status line, the line back after a second; `d` then at once `j`: the line back with
 the key.
+
+## Rebased onto main, 2026-11-16
+
+The lead's word: once the status-line change was committed, rebase onto main, where Spec-0013 (keys
+bound to named commands) had landed. The branch had never been pushed; its commits before the
+rebase are kept on `backup-spec-0012-before-rebase`.
+
+- **Conflicts**: the ADR index (0036 is main's, 0037 and 0038 this branch's, both kept), the
+  backlog's line on a table of contents, and the pager and its tests where both had changed the
+  sentence a key says (`Settings::of`, which main brought, now takes each setting's formats as a
+  list, as `view::having` gives them).
+- **Main's keys, where this branch named the old ones**: the paper's key is `D`, in the book's
+  `paper` setting too, which must be declared as the documents' is; and what comes back from a
+  link is Backspace, `u` being a screen up. The two epub tests in the pager press Backspace and
+  are named for it (`…_and_backspace_comes_back`); usage, the changelog, ADR-0038 and
+  CONTRIBUTING say `D` and Backspace. The spec's own text still says `d` and `u`, as it was
+  written before Spec-0013: its Changelog says so.
+- Three tests failed after the rebase, all for those keys, and pass with them.

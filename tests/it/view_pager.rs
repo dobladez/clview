@@ -2681,7 +2681,7 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     whole_line_for_a_moment(&view, SAID);
     assert_eq!(transmitted(&view.text()), 1, "sent again");
     // A key takes the line back at once, and does what it does: here, nothing to move to.
-    view.press("d");
+    view.press("D");
     view.wait_until("said again", |t| last_bar(t).trim() == SAID);
     let pressed = Instant::now();
     view.press("k");
@@ -4710,7 +4710,7 @@ fn epub_a_link_to_a_file_is_said_and_no_file_beside_the_book_is_opened() {
 /// as the book's document has it.
 #[cfg(all(feature = "epub", feature = "image"))]
 #[test]
-fn epub_links_between_chapters_are_followed_and_u_comes_back() {
+fn epub_links_between_chapters_are_followed_and_backspace_comes_back() {
     use crate::epub::{Mimetype, book_of, coloured_chapters, write, zipped};
     if !pty_works() {
         return;
@@ -4726,12 +4726,12 @@ fn epub_links_between_chapters_are_followed_and_u_comes_back() {
     let before = follow(&mut view, 3, "a");
     view.wait_until("the third chapter", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 3));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
     let before = follow(&mut view, 3, "d");
     view.wait_until("the fourth chapter, by a path with ..", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 4));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back again", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
     let before = copy_link(&mut view, 3, "a");
     said_since(&view, before, "copied #c3-start");
@@ -4743,10 +4743,10 @@ fn epub_links_between_chapters_are_followed_and_u_comes_back() {
 }
 
 /// A book's Contents page, made from its table of contents, is a page of links: `f` and the label
-/// of its third entry lands on that entry's chapter, and `u` comes back to the page.
+/// of its third entry lands on that entry's chapter, and Backspace comes back to the page.
 #[cfg(all(feature = "epub", feature = "image"))]
 #[test]
-fn epub_contents_page_leads_to_its_chapters_and_u_comes_back() {
+fn epub_contents_page_leads_to_its_chapters_and_backspace_comes_back() {
     use crate::epub::{Mimetype, NAV_ITEM, THREE_ENTRIES, book_with, coloured_chapters, nav, write, zipped};
     if !pty_works() {
         return;
@@ -4762,7 +4762,7 @@ fn epub_contents_page_leads_to_its_chapters_and_u_comes_back() {
     let before = follow(&mut view, 3, "d");
     view.wait_until("the third chapter", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 4));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back on the Contents page", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
     let before = follow(&mut view, 3, "a");
     view.wait_until("the second chapter, at its heading", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 3));

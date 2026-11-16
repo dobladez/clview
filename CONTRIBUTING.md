@@ -274,7 +274,7 @@ CodeQL's default setup scans the Rust and the workflows.
   In `tests/it/view_pager.rs` (`epub_…`): a word of the third chapter found from the first, the
   worker gone once the book shows and none started by a relayout (`ps`); a link to a file
   said, with files where a path beside the `.epub` would lead never opened; links from a page
-  of contents followed to their chapters, `u` back, `F` copying a place's name; and the Contents
+  of contents followed to their chapters, Backspace back, `F` copying a place's name; and the Contents
   page's entries followed the same. What the worker
   answers of a package (EPUB 2 and 3, hrefs with `..` and `%20`), a worker that dies or answers
   too much, chapters assembled and cut at their bounds, both kinds of cover, a fallback chain and

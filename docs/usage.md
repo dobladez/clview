@@ -198,7 +198,7 @@ right side, cutting the name shorter while it is there. Until the first key, the
 reminder of the main keys. A [search](#searching-a-documents-text) is said there too, before any
 message: what is typed and its count, then the match you are on.
 
-A key that changes how a file looks (`d`, `[`, `{`, `s`), pressed on a file that has no such thing,
+A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
 says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,
 naming two of the formats that do, and `these files don't…` in a list none of whose files does.
 It has the line for a second, then the status line comes back; any key brings it back at once,
@@ -980,7 +980,7 @@ that order, is read by
 [rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
 XHTML, are joined and laid out as [HTML is](#documents), on pages the window's size or to a width
 of your own. So a book has what a document has: `[` and `]` for the width of its line, `+` and `-`
-for its font size, `{` and `}` for its margins, `d` for dark paper, `s` for its fenced blocks, each
+for its font size, `{` and `}` for its margins, `D` for dark paper, `s` for its fenced blocks, each
 with its option; `/` [searches](#searching-a-documents-text) the whole book, across its chapters;
 `--pages` picks pages; and `o` opens the `.epub` itself.
 
@@ -992,7 +992,7 @@ list is its cover.
 **A Contents page** comes after the cover (first, in a book without one), headed `Contents`: the
 book's table of contents, EPUB 3's (its `nav`) or else EPUB 2's (its NCX), as nested lists as deep
 as the book's, each entry a link to the place it names. `f` and an entry's label go to its
-chapter, `u` comes back, and `/` finds a chapter by its title. An entry that leads to no chapter
+chapter, Backspace comes back, and `/` finds a chapter by its title. An entry that leads to no chapter
 the book shows is its label alone. No page is made for a book one of whose chapters is its table
 of contents already, as the book's package says: its nav document in its reading order, or the
 chapter its landmarks, or its guide, call `toc`. A book that has a contents page of its own and
@@ -1015,7 +1015,7 @@ chapter's `<style>`: a book made to look a certain way comes out plainer, as its
 
 Its links are [followed](#following-links) as any document's. A link from one chapter to another
 (`ch2.xhtml`, `ch2.xhtml#s3`, `../Text/ch2.xhtml#s3`), or to a place in its own (`#s3`), is a place
-in the book: `f` and its label go there, `u` comes back, and `F` copies it as the book's document
+in the book: `f` and its label go there, Backspace comes back, and `F` copies it as the book's document
 names it, `#c2` for the second chapter's start and `#c2-s3` for its `id="s3"`, since two chapters
 may each have an `s3`. A web address is followed as in any document.
 

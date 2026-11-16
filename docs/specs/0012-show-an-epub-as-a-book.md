@@ -417,7 +417,7 @@ over left out, and said:
   `src/source/wordcraft.rs`, `src/source/epub.rs`, `tests/it/view_pager.rs`, `docs/`,
   `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv view::` (the sentence's shapes; the
   message alone on the line at any width; a moment of a second, started over by a key) and `cargo
-  test -j 2 --test it view_pager` (at 80 columns, `d`, `]` and `s` on a PDF: the sentence on the
+  test -j 2 --test it view_pager` (at 80 columns, `D`, `]` and `s` on a PDF: the sentence on the
   whole line, the status line back after a second, and at once with a key).
 
 ## Done
@@ -447,3 +447,5 @@ over left out, and said:
   or a chain of `refines`, at rbook 0.7.13 (the notes say what each test does instead).
 - 2026-11-16 — A sixth task, the owner's: what a key says where its setting isn't, shorter and on
   the whole status line for a second.
+- 2026-11-16 — Rebased onto main after Spec-0013: where this spec says `d` for the paper and `u`
+  to come back from a link, the keys are now `D` and Backspace.

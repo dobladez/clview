@@ -73,7 +73,7 @@ The viewer has two shapes for many things shown together: a list of files, each 
    pass one is left out with those after it, and said, where the documents' backend would refuse
    the whole file.
 9. **The table of contents is a page of the book**, a Contents page after the cover, not an
-   overlay of the viewer's: a list of links, which `f` follows and `u` comes back from as any
+   overlay of the viewer's: a list of links, which `f` follows and Backspace comes back from as any
    link's ([Spec-0011](../specs/0011-follow-a-documents-links.md)), `/` searches, and text cells
    and tmux show, with nothing new in the viewer. A second request to a second worker reads it,
    given the package again and the nav document or the NCX (1 MiB at most): its entries, walked
