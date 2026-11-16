@@ -62,8 +62,9 @@ By default:
 | `screen-up` | `b`, PgUp, `u`, `M-v` |
 | `scroll-down` | `j`, ↓, Enter, `C-n` |
 | `scroll-up` | `k`, ↑, `C-p` |
-| `next`: the next page, or with a search kept the next match | `n`, → |
-| `previous`: the page before, or with a search kept the match before | `p`, ← |
+| `next`: the next page, or with a search kept the next match | `n` |
+| `previous`: the page before, or with a search kept the match before | `p` |
+| `next-page`, `previous-page`: the next page and the one before, with a search kept too | →, ← |
 | `previous-match` | `N` |
 | `go-to`: the first page, or the page counted | `g`, Home; Enter with a count (`12⏎`) |
 | `last` | `G`, End |
@@ -182,7 +183,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `r`'s binding following it, nothing else bound yet. *Files:* `src/view/keys.rs`,
   `src/view/pager.rs`. *Verify:* `cargo test -j 2 --bin clv keys::`, the property tests covering
   Ctrl and Alt cut anywhere.
-- [ ] **The catalog and the keymaps, keys as today** — `src/view/commands.rs`, the pager dispatching
+- [x] **The catalog and the keymaps, keys as today** — `src/view/commands.rs`, the pager dispatching
   through it, `?` and the reminders read from it, `VIEWER_KEYS` gone. A refactor: every key does what
   it did. *Files:* `src/view/commands.rs`, `src/view/pager.rs`, `src/view/mod.rs`, `src/source.rs`,
   `docs/architecture.md`. *Verify:* `cargo test -j 2`, the existing tests unchanged.
@@ -207,3 +208,6 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 - 2026-11-15 — Ready (spec-new).
 - 2026-11-15 — Implementing ([notes](0013-bind-keys-to-named-commands-impl-20261115_2206.md)).
+- 2026-11-15 — Revised while implementing, by the owner's word: → and ← keep turning pages with a search
+  kept, as they do today, through two more commands, `next-page` and `previous-page`; `next` and
+  `previous` are on `n` and `p` alone. The pages table said one command for both.

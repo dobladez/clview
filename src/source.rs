@@ -221,7 +221,7 @@ pub(crate) struct Setting {
     pub(crate) zero: Value,
     /// Where it starts by the terminal's background, if it does: then its option takes `auto` too.
     pub(crate) auto: Option<Auto>,
-    /// Its keys in the pager.
+    /// The keys it suggests for its commands in the pager, which the keymaps take.
     pub(crate) keys: Keys,
     /// The command-line option that sets it, taken whatever the files are.
     pub(crate) option: OptionSpec,
@@ -278,43 +278,25 @@ pub(crate) struct Auto {
     pub(crate) dark: &'static str,
 }
 
-/// A [`Setting`]'s keys in the pager.
+/// The keys a [`Setting`] suggests for its commands in the pager. The viewer names the commands from
+/// the setting (`paper`; `width-down` and `width-up`) and binds these keys to them in its keymaps,
+/// after its own: a suggestion never takes a key the viewer binds, nor another setting's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Keys {
-    /// One, going to the next named value, after the last the first.
+    /// One, for the command that goes to the next named value, after the last the first.
     #[cfg_attr(not(any(feature = "word", feature = "mermaid", test)), expect(dead_code, reason = "only documents and diagrams have a setting"))]
     Cycle(char),
-    /// Two, going a step down and a step up among the numbers, and the named value set among them
-    /// ([`Bounds::named_at`]).
+    /// Two, for the commands that go a step down and a step up among the numbers, and the named value
+    /// set among them ([`Bounds::named_at`]).
     #[cfg_attr(not(any(feature = "word", test)), expect(dead_code, reason = "only documents have a setting with numbers"))]
     Step(char, char),
-    /// The viewer's zoom keys, `+` and `=` up, `-` and `_` down, stepping among the numbers as
-    /// [`Keys::Step`] does, with a count setting the number: a font size. They go to the setting only
+    /// None of its own: the viewer's zoom commands step it among the numbers as [`Keys::Step`]'s do,
+    /// with a count setting the number: a font size. They go to the setting only
     /// on a document that has it, shown by itself without `--pages`; everywhere else they zoom, as
     /// they always did. The one place a setting takes the viewer's keys
     /// ([ADR-0023](../docs/adr/0023-the-window-is-the-page-of-markdown-and-html.md)). Named by the
     /// viewer, which asks a setting whether it is on these keys, so live in every build.
     Zoom,
-}
-
-impl Keys {
-    /// The keys, in the order they are pressed down and up.
-    pub(crate) fn chars(self) -> Vec<char> {
-        match self {
-            Self::Cycle(key) => vec![key],
-            Self::Step(down, up) => vec![down, up],
-            Self::Zoom => vec!['-', '_', '+', '='],
-        }
-    }
-
-    /// Whether `key` steps up (`true`), down (`false`), or isn't one of these keys.
-    pub(crate) fn up(self, key: char) -> Option<bool> {
-        match self {
-            Self::Cycle(_) => None,
-            Self::Step(down, up) => (key == up).then_some(true).or((key == down).then_some(false)),
-            Self::Zoom => matches!(key, '+' | '=').then_some(true).or(matches!(key, '-' | '_').then_some(false)),
-        }
-    }
 }
 
 /// A [`Setting`]'s value.
@@ -1624,37 +1606,28 @@ pub(crate) mod tests {
         assert_eq!(wrong_settings(&[&INKS, &SAYS]).len(), 1, "its line in `?`, said otherwise");
     }
 
-    /// What is wrong with the keys `backends` give their settings: one that is the viewer's, one that
-    /// means two settings, or a setting given two sets of keys.
+    /// What is wrong with the keys `backends` suggest for their settings: a setting given two sets of
+    /// keys, and what the viewer's keymaps refuse of them (`view::wrong_keys`), a key that is the
+    /// viewer's by default or that means two settings.
     fn wrong_keys(backends: &[&dyn Backend]) -> Vec<String> {
-        let mut seen: Vec<(char, &str)> = Vec::new();
-        let mut keys: Vec<(&str, Keys)> = Vec::new();
+        let mut settings: Vec<&'static Setting> = Vec::new();
         let mut wrong = Vec::new();
         for backend in backends {
             for setting in backend.settings() {
-                match keys.iter().find(|(name, _)| *name == setting.name) {
-                    Some((_, known)) if *known != setting.keys => wrong.push(format!("{}: {} has other keys", backend.name(), setting.name)),
+                match settings.iter().find(|known| known.name == setting.name) {
+                    Some(known) if known.keys != setting.keys => wrong.push(format!("{}: {} has other keys", backend.name(), setting.name)),
                     Some(_) => {}
-                    None => keys.push((setting.name, setting.keys)),
-                }
-                for key in setting.keys.chars() {
-                    // The zoom keys alone may be a setting's: they are the viewer's where the setting isn't.
-                    if crate::view::VIEWER_KEYS.contains(key) && setting.keys != Keys::Zoom {
-                        wrong.push(format!("{}: {key:?}, {}'s key, is the viewer's", backend.name(), setting.name));
-                    }
-                    match seen.iter().find(|(seen, _)| *seen == key) {
-                        Some((_, other)) if *other != setting.name => wrong.push(format!("{key:?} is {other}'s and {}'s", setting.name)),
-                        Some(_) => {}
-                        None => seen.push((key, setting.name)),
-                    }
+                    None => settings.push(setting),
                 }
             }
         }
+        wrong.extend(crate::view::wrong_keys(&settings));
         wrong
     }
 
-    /// No backend's setting has one of the viewer's keys, a key means the same setting in every
-    /// backend that declares it, and the build declares no more settings than a request carries.
+    /// No backend's setting suggests a key the viewer's keymaps bind by default, a key means the same
+    /// setting in every backend that declares it, and the build declares no more settings than a
+    /// request carries.
     #[test]
     fn a_settings_keys_are_its_own_in_every_backend() {
         assert_eq!(wrong_keys(BACKENDS), Vec::<String>::new());
@@ -1673,8 +1646,6 @@ pub(crate) mod tests {
         assert_eq!(wrong_keys(&[&QUITS]).len(), 1, "the viewer's");
         assert!(wrong_keys(&[&PAPER, &ZOOMS]).is_empty(), "the zoom keys, as Keys::Zoom alone");
         assert_eq!(wrong_keys(&[&PLUS]).len(), 2, "the zoom keys as a Step are the viewer's");
-        assert_eq!((Keys::Zoom.up('+'), Keys::Zoom.up('='), Keys::Zoom.up('_'), Keys::Zoom.up('x')), (Some(true), Some(true), Some(false), None));
-        assert_eq!((Keys::Step('[', ']').up(']'), Keys::Step('[', ']').up('['), Keys::Cycle('d').up('d')), (Some(true), Some(false), None));
         assert_eq!(wrong_keys(&[&PAPER, &OTHER]).len(), 1, "two settings");
         assert_eq!(wrong_keys(&[&PAPER, &STEPS]).len(), 1, "two sets of keys");
     }

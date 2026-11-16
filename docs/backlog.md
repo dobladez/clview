@@ -44,7 +44,9 @@ and the positions of files opened before. The command `o` opens a file with, in 
 desktop's default app (`zathura`, say), would be one of them
 ([Spec-0010](specs/0010-open-file-in-default-app.md)). So would the keys: each bound to a command by
 its name, in the pager's keymaps or the list's
-([Spec-0013](specs/0013-bind-keys-to-named-commands.md)).
+([Spec-0013](specs/0013-bind-keys-to-named-commands.md)). Two things a key bound anew would leave
+wrong, since they still write a key by hand: a setting's phrase in `?`, which its backend declares
+with the keys it suggests in it (`72] sets 72, 0] the window's`), and the manual's tables.
 
 ### More pictures and archives
 

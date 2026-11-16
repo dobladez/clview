@@ -172,7 +172,8 @@ CodeQL's default setup scans the Rust and the workflows.
 ## Tests
 
 - **Unit tests** in each module, among them property tests for the key decoder (answers cut
-  anywhere among keys are never keys), the fit and the grid, that the reader's page stays on
+  anywhere among keys are never keys), the catalog of commands and the keymaps (each key bound once,
+  every command where it applies, `?` and the reminders read from them), the fit and the grid, that the reader's page stays on
   screen, and a search's matches and rectangles (within their text, within their page). The
   pager's search is tested on a fake text (`search::tests::Fake`), which gives what it is asked
   when the test lets it.

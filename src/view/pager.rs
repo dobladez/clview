@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::cells::{self, Colours};
 use super::clip;
+use super::commands::{self, Command, Count, Keymap, Keymaps, Line, Mode, Turn};
 use super::hints::{self, Aim, Hints, Typed};
 use super::launch;
 use super::link;
@@ -69,9 +70,10 @@ const MAX_FILTER: usize = 256;
 const FILTER_KEYS: &str = "⏎ keep · esc cancel";
 /// What the status line says after a search being typed, when there is room.
 const SEARCH_KEYS: &str = "⏎ search · esc cancel";
-/// What `/` says in the pages of a file with no text to search, and `N` without a search.
+/// What `/` says in the pages of a file with no text to search, and `N` without a search, the key
+/// that starts one named from the keymap ([`Keymap::fill`]).
 const NO_TEXT: &str = "no text to search";
-const NO_SEARCH: &str = "no search: / starts one";
+const NO_SEARCH: &str = "no search: {search} starts one";
 /// The most places the reader comes back to with `u`, the links followed last: an older one is
 /// forgotten.
 const MAX_JUMPS: usize = 100;
@@ -118,75 +120,10 @@ const MAX_RESENDS: u32 = 8;
 /// How long the pager waits at the end for the terminal's answers to its last placements, so
 /// none of them lands on the command line.
 const ANSWER_WAIT: Duration = Duration::from_millis(100);
-/// The reminder of the keys the status line starts with, until the first key: shorter and
-/// shorter for a narrow window. In a list; in a file's pages, from a list or not.
-const LIST_KEYS: [&str; 4] = [
-    "arrows move · ⏎ open · + - zoom · , . per row · q quit",
-    "arrows move · ⏎ open · + - zoom · q quit",
-    "arrows · ⏎ open · q quit",
-    "⏎ open · q quit",
-];
-const OPENED_KEYS: [&str; 4] = [
-    "esc back · space b · n p · + - zoom · , . per row · q quit",
-    "esc back · space b · n p · + - zoom · q quit",
-    "esc back · n p · q quit",
-    "esc back · q quit",
-];
-const KEYS: [&str; 4] = [
-    "space b j k · n p · g G · 12⏎ · + - zoom · , . per row · q quit",
-    "space b j k · n p · g G · 12⏎ · + - zoom · q quit",
-    "n p · + - zoom · q quit",
-    "n p · q quit",
-];
-/// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
-/// them (`source.rs` checks the build's).
-#[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofFgGbjknNphl +=-_,.r/";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
 const ZOOM_WIDTH: usize = 9;
-/// What `?` shows: each key, and what it does. In a file's pages:
-const PAGE_HELP: &[(&str, &str)] = &[
-    ("space  PageDown", "the next screen, or the rest of a page taller than the window"),
-    ("b  PageUp", "back a screen"),
-    ("j k  ↓ ↑  Enter", "a few rows down or up, or a row of pages"),
-    ("n p  → ←", "the next or the previous screen of pages"),
-    ("g G  Home End", "the first or the last page"),
-    ("12 Enter  12g", "page 12"),
-    ("+ -", "zoom in, as far as the window's width; out, to rows of pages"),
-    (", .  3.", "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto"),
-    ("/", "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
-    ("n  N p  3n", "with a search: the next match, or with N or p the one before; 3n the third on"),
-    ("f", "label the links on screen: type a label to follow its link, Esc drops the labels"),
-    ("F", "label them, and copy the address of the one whose label is typed"),
-    ("u  Backspace", "back to where the last link followed was"),
-    ("r  Ctrl-L", "render the pages again"),
-    ("c", "copy the page to the clipboard"),
-    ("o", "open the file in the app the desktop opens it with"),
-];
-/// In a list:
-const LIST_HELP: &[(&str, &str)] = &[
-    ("← →  h l", "the one before or after"),
-    ("↑ ↓  k j", "the one above or below"),
-    ("space b  n p", "a screen on or back"),
-    ("g G  Home End", "the first or the last"),
-    ("12 Enter", "the 12th"),
-    ("Enter", "open it: a file's pages, or a directory's files"),
-    ("/", "filter by name as you type: ⏎ keeps it, Esc clears it"),
-    ("+ -", "bigger, fewer to a row; smaller, more to a row"),
-    (", .  3.", "one more tile to a row, or one fewer; 3. sets 3, 0. auto"),
-    ("r  Ctrl-L", "render again"),
-    ("c", "copy its picture to the clipboard"),
-    ("o", "open it in the desktop's app: a file in its app, a folder in the file manager"),
-];
-/// The `, .` line on a document laid out for its room, where they are columns.
-const COLUMNS_HELP: (&str, &str) = (", .  3.", "one more column, or one fewer, down to one; 3. sets 3, 0. auto");
-/// Leaving, gone into from a list or not, and these keys themselves.
-const BACK_HELP: &[(&str, &str)] = &[("Esc  Backspace  u", "back to the list, or to the file a link led from"), ("q  Ctrl-C", "quit")];
-const QUIT_HELP: &[(&str, &str)] = &[("q  Esc  Ctrl-C", "quit")];
-const HELP_HELP: (&str, &str) = ("?", "these keys: any key goes back");
-
 /// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
 /// are taken in turn from `first_id` on ([`super::kitty::IdColor::id`]). A container gone into
 /// from a list is listed by `opener`, a few files at a time, saying how far it has got. `room` is
@@ -215,12 +152,7 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let settings = Rc::new(Settings {
-        declared: super::settings(opener.backends),
-        having: super::having(opener.backends),
-        values: std::cell::Cell::new(terminal.values),
-        changed: Default::default(),
-    });
+    let settings = Rc::new(Settings::of(super::settings(opener.backends), super::having(opener.backends), terminal.values));
     // The window's room; the count to a row a document is laid out in is the reader's ([`Nav::columns`]).
     let room = Room { per_row: None, ..room };
     let mut level = Level::new(0, shown, zoom, false, settings.clone(), room);
@@ -347,12 +279,12 @@ pub(super) fn run(
                 redraw = true;
                 // A key says where the reader wants to be: the place a link named is no longer waited for.
                 pager.stop_seeking();
-                // Reading a container gone into: Esc (or the others that go back) stops it, and
+                // Reading a container gone into: the keys that leave or go back stop it, and
                 // the keys that quit, quit. Nothing else moves meanwhile.
                 if pager.reading.is_some() || pager.going_into.is_some() {
-                    match key {
-                        Key::Char('q') | Key::Interrupt => quit = true,
-                        Key::Escape | Key::Backspace | Key::Char('u') => pager.stop_reading(),
+                    match pager.level.nav.command(key) {
+                        Some(Command::Quit) => quit = true,
+                        Some(Command::Back | Command::Leave) => pager.stop_reading(),
                         _ => {}
                     }
                     if quit {
@@ -364,8 +296,8 @@ pub(super) fn run(
                 // A setting's bounds may depend on another's value (the width's on the font size) and on
                 // the pages to a row: asked again before the next key.
                 pager.refresh_bounds();
-                if let Step::Again(key) = step {
-                    step = pager.level.nav.key(key);
+                if let Step::Again(command) = step {
+                    step = pager.level.nav.run(command);
                     pager.refresh_bounds();
                 }
                 match step {
@@ -445,9 +377,9 @@ enum Step {
     ToClipboard(usize),
     /// Open the file in another app, the one the desktop opens it with, the reader on this page.
     Launch(usize),
-    /// This key again, once the bounds are asked again: it set the pages to a row back to `auto`
-    /// first, and steps from the bounds of the room at `auto` ([`Nav::setting_key`]).
-    Again(Key),
+    /// This command again, once the bounds are asked again: it set the pages to a row back to `auto`
+    /// first, and steps from the bounds of the room at `auto` ([`Nav::turn`]).
+    Again(Command),
     /// `/` in a file's pages: a search of the source's text, if it has any ([`Nav::start_search`]).
     Search,
     /// `f` in a file's pages: labels for the links on screen, if the source has links
@@ -583,6 +515,9 @@ struct Settings {
     /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`d`
     /// then `u`, read together) doesn't lose it.
     changed: std::cell::Cell<bool>,
+    /// The keys, in a file's pages and in a list: the viewer's defaults, and those the settings
+    /// declared suggest for their commands ([`Keymaps`]). Built once, with the settings.
+    keymaps: Keymaps,
 }
 
 /// What a setting's keys say on a file that hasn't it, where no format is said to have it: the
@@ -590,6 +525,12 @@ struct Settings {
 const NOT_HERE: &str = "not for this file";
 
 impl Settings {
+    /// The settings `declared`, the formats `having` each, at `values`, and the keymaps their keys
+    /// make with the viewer's.
+    fn of(declared: Vec<&'static Setting>, having: Vec<(&'static str, String)>, values: Values) -> Self {
+        Self { keymaps: Keymaps::new(&declared), declared, having, values: std::cell::Cell::new(values), changed: Default::default() }
+    }
+
     /// The formats whose files have `setting`, said together, if any lists it.
     fn formats(&self, setting: &Setting) -> Option<&str> {
         self.having.iter().find(|(name, _)| *name == setting.name).map(|(_, formats)| formats.as_str())
@@ -634,13 +575,18 @@ fn bounds_of(bounds: &[(&'static str, Bounds)], name: &str) -> Option<Bounds> {
     bounds.iter().find(|(setting, _)| *setting == name).map(|(_, bounds)| *bounds)
 }
 
-/// A setting's keys, as `?` lists them.
-fn setting_keys(setting: &Setting) -> String {
+/// A setting's line in `?`, its keys as `keymap` binds its commands: the one that cycles it, or the
+/// two that step it, and with numbers, one typed before the one that steps up (`[ ]  12]`). None for a
+/// setting with no command of its own, which the zoom's reach ([`Keys::Zoom`]).
+fn setting_keys(keymap: &Keymap, setting: &'static Setting) -> Option<String> {
     match setting.keys {
-        Keys::Cycle(key) => key.to_string(),
-        Keys::Step(down, up) if setting.numbers.is_some() => format!("{down} {up}  12{up}"),
-        Keys::Step(down, up) => format!("{down} {up}"),
-        Keys::Zoom => "+ -  150+".to_owned(),
+        Keys::Cycle(_) => Some(keymap.each(&[Command::Setting(setting, Turn::Next)])),
+        Keys::Step(..) => {
+            let (down, up) = (Command::Setting(setting, Turn::Down), Command::Setting(setting, Turn::Up));
+            let keys = keymap.beside(&[down, up]);
+            Some(if setting.numbers.is_some() { format!("{keys}  {}", keymap.numbered(12, up)) } else { keys })
+        }
+        Keys::Zoom => None,
     }
 }
 
@@ -666,14 +612,14 @@ fn said_in(setting: &Setting, value: Value, bounds: Option<Bounds>) -> String {
     }
 }
 
-/// What `key`, one of `setting`'s, does to its value `now`, with `count` typed before it, on a document
-/// whose values sit as `bounds` say in its room: the value it goes to, and what the reader is told of
-/// it. A number typed sets a setting with numbers to it, within their range, and 0 to where the setting
-/// says ([`Setting::zero`]). Otherwise a cycling key goes to the next named value, after the last the
-/// first; a stepping key to the next among the steps down or up ([`stepped`]), up to the most the room
-/// holds. At an end the value stays, and the line says so; a number past the most here is kept, and
-/// says so.
-fn turned(setting: &Setting, bounds: Option<Bounds>, now: Value, key: char, count: Option<&str>) -> (Value, String) {
+/// What turning `setting` one way (`turn`) does to its value `now`, with `count` typed before, on a
+/// document whose values sit as `bounds` say in its room: the value it goes to, and what the reader is
+/// told of it. A number typed sets a setting with numbers to it, within their range, and 0 to where the
+/// setting says ([`Setting::zero`]). Otherwise a setting that cycles goes to the next named value, after
+/// the last the first; one that steps to the next among the steps down or up ([`stepped`]), up to the
+/// most the room holds. At an end the value stays, and the line says so; a number past the most here is
+/// kept, and says so.
+fn turned(setting: &Setting, bounds: Option<Bounds>, now: Value, turn: Turn, count: Option<&str>) -> (Value, String) {
     let says = |value: Value| said_in(setting, value, bounds);
     let at_end = |number: u32, end: &str| (Value::Number(number), format!("{}, the {end}", says(Value::Number(number))));
     if let (Some(numbers), Some(count)) = (setting.numbers, count) {
@@ -698,8 +644,8 @@ fn turned(setting: &Setting, bounds: Option<Bounds>, now: Value, key: char, coun
             next.map_or(now, |named| Value::Named(named.name))
         }
         (Keys::Step(..) | Keys::Zoom, None, _) => now,
-        (keys @ (Keys::Step(..) | Keys::Zoom), Some(numbers), _) => {
-            let up = keys.up(key).unwrap_or(true);
+        (Keys::Step(..) | Keys::Zoom, Some(numbers), _) => {
+            let up = turn != Turn::Down;
             // The most here: the room's, where it is under the setting's own.
             let (most, here) = match bounds.and_then(|bounds| bounds.most).filter(|most| *most < numbers.most) {
                 Some(most) => (most.max(numbers.least), " here"),
@@ -805,23 +751,27 @@ impl Nav {
         if self.list { "tile" } else { "page" }
     }
 
-    /// What `?` shows here: the viewer's keys, then the settings' this build declares, whatever is
-    /// shown, then how to leave. One `+ -` line: the zoom's, or on a document that has a setting on
-    /// those keys ([`Keys::Zoom`]), that setting's in its place.
+    /// What `?` shows here: the viewer's commands, each with the keys bound to it here, then the
+    /// settings' this build declares, whatever is shown, then how to leave. One line for the zoom: its
+    /// own, or on a document that has a setting on those keys ([`Keys::Zoom`]), that setting's in its
+    /// place. A command no key is bound to isn't listed.
     fn help_lines(&self) -> Vec<(String, String)> {
-        let keys = if self.list { LIST_HELP } else { PAGE_HELP };
-        let leave = if self.nested { BACK_HELP } else { QUIT_HELP };
-        let zoomed = self.zoom_setting();
-        let line = |setting: &Setting| (setting_keys(setting), self.settings.help(setting));
-        let settings = self.settings.declared.iter().filter(|setting| setting.keys != Keys::Zoom).map(|setting| line(setting));
-        let fixed = |lines: &[(&str, &str)]| lines.iter().map(|(keys, what)| ((*keys).to_owned(), (*what).to_owned())).collect::<Vec<_>>();
-        let reflows = self.reflows();
-        let keys = fixed(keys).into_iter().map(|(chars, what)| match zoomed {
-            Some(setting) if chars == "+ -" => line(setting),
-            _ if reflows && chars == COLUMNS_HELP.0 => (chars, COLUMNS_HELP.1.to_owned()),
-            _ => (chars, what),
+        let keymap = self.keymap();
+        let lines = if self.list { commands::LIST_LINES } else { commands::PAGE_LINES };
+        let leave = if self.nested { commands::BACK_LINES } else { commands::QUIT_LINES };
+        let (zoomed, reflows) = (self.zoom_setting(), self.reflows());
+        let said = |line: &Line| (keymap.shown(line), keymap.fill(line.says));
+        let own = lines.iter().map(|line| match zoomed {
+            Some(setting) if line.commands == commands::ZOOM => {
+                (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting))
+            }
+            _ if reflows && line.commands == commands::PER_ROW => said(&commands::COLUMNS_LINE),
+            _ => said(line),
         });
-        keys.chain(settings).chain(fixed(leave)).chain(fixed(&[HELP_HELP])).collect()
+        let settings =
+            self.settings.declared.iter().copied().filter_map(|setting| Some((setting_keys(keymap, setting)?, self.settings.help(setting))));
+        let all = own.chain(settings).chain(leave.iter().map(said)).chain([said(&commands::HELP_LINE)]);
+        all.filter(|(keys, _)| !keys.is_empty()).collect()
     }
 
     /// The setting the zoom keys go to here, if one does ([`Keys::Zoom`]): one this build declares,
@@ -916,71 +866,128 @@ impl Nav {
         if self.search.as_ref().is_some_and(Search::typing) {
             return self.search_key(key);
         }
+        // The number typed before a key is no keymap's: its digits, and while there is one, Esc,
+        // which drops it, and Backspace, which takes its last digit back.
         let typing = !self.typed.is_empty();
         match key {
-            Key::Char('?') => self.help = true,
-            Key::Char('q') | Key::Interrupt => return Step::Quit,
-            // A filter kept goes before the list does.
-            Key::Escape | Key::Backspace if self.filter.is_some() && !typing => self.unfilter(self.chosen()),
-            Key::Char('u') if self.filter.is_some() => self.unfilter(self.chosen()),
-            // And a search kept before the file does.
-            Key::Escape | Key::Backspace if self.search.is_some() && !typing => self.search = None,
-            Key::Char('u') if self.search.is_some() => self.search = None,
-            Key::Escape if !typing => return Step::Leave,
-            Key::Escape => self.typed.clear(),
-            // Past MAX_TYPED digits, more are ignored (no other arm takes a digit).
-            Key::Char(c @ '0'..='9') if self.typed.len() < MAX_TYPED => self.typed.push(c),
-            // The links followed are gone back through before the file is left.
-            Key::Backspace if !typing => return self.back_step(),
-            Key::Backspace => {
-                self.typed.pop();
-            }
-            Key::Char('u') => return self.back_step(),
-            Key::Enter | Key::Char('g') if typing => self.go_typed(),
-            Key::Char('c') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
-            Key::Char('o') => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
-            _ if self.list => return self.list_key(key),
-            // A number typed before it is dropped.
-            Key::Char(key @ ('f' | 'F')) => {
-                self.typed.clear();
-                return Step::Hints(if key == 'f' { Aim::Follow } else { Aim::Copy });
-            }
-            Key::Char(' ') | Key::PageDown => self.forward(self.visible.max(1), self.per_screen()),
-            Key::Char('b') | Key::PageUp => self.back(self.visible.max(1), self.per_screen()),
-            Key::Char('j') | Key::Down | Key::Enter => self.forward(STEP, self.row()),
-            Key::Char('k') | Key::Up => self.back(STEP, self.row()),
-            // With a search kept, from match to match, `p` back as `N` is; the arrows still turn pages.
-            Key::Char('n') if self.search.is_some() => self.step_match(true),
-            Key::Char('N' | 'p') if self.search.is_some() => self.step_match(false),
-            Key::Char('N') => self.message = Some(NO_SEARCH.into()),
-            Key::Char('n') | Key::Right => self.go(self.first().saturating_add(self.per_screen())),
-            Key::Char('p') | Key::Left => self.go(self.first().saturating_sub(self.per_screen())),
-            Key::Char('g') | Key::Home => self.go(0),
-            Key::Char('G') | Key::End => self.go(usize::MAX),
-            // `=` and `_` are the same keys as `+` and `-`, with Shift or without.
-            // A document's font size, where it has one; the zoom everywhere else.
-            Key::Char('+' | '=' | '-' | '_') if self.zoom_setting().is_some() => return self.setting_key(key),
-            Key::Char('+' | '=') => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
-            Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
-            Key::Char(',') => self.per_row_key(true),
-            Key::Char('.') => self.per_row_key(false),
-            Key::Char('r') | Key::Ctrl('l') => self.rerender = true,
-            // A number typed before it is dropped. The search kept is typed on; with none, the pager
-            // asks the source for its text.
-            Key::Char('/') => {
-                self.typed.clear();
-                match self.search.as_mut() {
-                    Some(search) => search.edit(),
-                    None => return Step::Search,
+            // Past MAX_TYPED digits, more are ignored.
+            Key::Char(digit @ '0'..='9') => {
+                if self.typed.len() < MAX_TYPED {
+                    self.typed.push(digit);
                 }
+                Step::Continue
             }
-            _ => return self.setting_key(key),
+            Key::Escape if typing => {
+                self.typed.clear();
+                Step::Continue
+            }
+            Key::Backspace if typing => {
+                self.typed.pop();
+                Step::Continue
+            }
+            // A key bound to nothing does nothing.
+            key => self.command(key).map_or(Step::Continue, |command| self.run(command)),
+        }
+    }
+
+    /// Whether the reader is among a list's tiles or a file's pages: whose keymap the keys are looked
+    /// up in.
+    fn mode(&self) -> Mode {
+        if self.list { Mode::List } else { Mode::Pages }
+    }
+
+    /// The keys here.
+    fn keymap(&self) -> &Keymap {
+        self.settings.keymaps.of(self.mode())
+    }
+
+    /// The command `key` asks for here, with the number typed before it if there is one: none for a
+    /// key bound to nothing.
+    fn command(&self, key: Key) -> Option<Command> {
+        self.keymap().command(key, !self.typed.is_empty())
+    }
+
+    /// Do `command`, whichever key asked: what it does with the number typed before it and without
+    /// is the command's ([`Command::count`]). One that means nothing here does nothing.
+    fn run(&mut self, command: Command) -> Step {
+        if !command.applies(self.mode()) {
+            return Step::Continue;
+        }
+        if command.count() == Count::Dropped {
+            self.typed.clear();
+        }
+        // A document's font size, where it has one; the zoom everywhere else.
+        if let (Command::ZoomIn | Command::ZoomOut, Some(setting)) = (command, self.zoom_setting()) {
+            return self.turn(setting, if command == Command::ZoomIn { Turn::Up } else { Turn::Down }, command);
+        }
+        let typing = !self.typed.is_empty();
+        let (row, per) = (self.row(), self.per_screen());
+        let last = self.pages.len().saturating_sub(1);
+        match command {
+            Command::Help => self.help = true,
+            Command::Quit => return Step::Quit,
+            // A filter kept goes before the list does, and a search kept before the file does.
+            Command::Back | Command::Leave if self.filter.is_some() => self.unfilter(self.chosen()),
+            Command::Back | Command::Leave if self.search.is_some() => self.search = None,
+            Command::Leave => return Step::Leave,
+            // The links followed are gone back through before the file is left.
+            Command::Back => return self.back_step(),
+            Command::GoTo if typing => self.go_typed(),
+            Command::Copy => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::ToClipboard(*page)),
+            Command::OpenInApp => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
+            Command::MorePerRow => self.per_row_key(true),
+            Command::FewerPerRow => self.per_row_key(false),
+            Command::Rerender => self.rerender = true,
+            Command::Setting(setting, turn) => return self.turn(setting, turn, command),
+            // In a list: from tile to tile, the screen following.
+            Command::Open => return self.pages.get(self.at).map_or(Step::Continue, |tile| Step::Open(*tile)),
+            Command::TileLeft => self.select(self.at.saturating_sub(1)),
+            Command::TileRight => self.select(self.at.saturating_add(1)),
+            Command::TileUp if self.at >= row => self.select(self.at.saturating_sub(row)),
+            // Below, or on the last row, the last tile.
+            Command::TileDown if self.at.saturating_add(row) <= last => self.select(self.at.saturating_add(row)),
+            Command::TileDown if last / row > self.at / row => self.select(last),
+            Command::TileUp | Command::TileDown => {}
+            Command::ScreenDown if self.list => {
+                self.top = self.first().saturating_add(per);
+                self.select(self.at.saturating_add(per));
+            }
+            Command::ScreenUp if self.list => {
+                self.top = self.first().saturating_sub(per);
+                self.select(self.at.saturating_sub(per));
+            }
+            Command::GoTo if self.list => self.select(0),
+            Command::Last if self.list => self.select(last),
+            Command::ZoomIn if self.list => self.step_per_row(false),
+            Command::ZoomOut if self.list => self.step_per_row(true),
+            Command::Filter => self.start_filter(),
+            // In a file's pages.
+            Command::Follow => return Step::Hints(Aim::Follow),
+            Command::CopyLink => return Step::Hints(Aim::Copy),
+            Command::ScreenDown => self.forward(self.visible.max(1), per),
+            Command::ScreenUp => self.back(self.visible.max(1), per),
+            Command::ScrollDown => self.forward(STEP, row),
+            Command::ScrollUp => self.back(STEP, row),
+            // With a search kept, from match to match; the commands that turn pages still do.
+            Command::Next if self.search.is_some() => self.step_match(true),
+            Command::Previous | Command::PreviousMatch if self.search.is_some() => self.step_match(false),
+            Command::PreviousMatch => self.message = Some(self.keymap().fill(NO_SEARCH)),
+            Command::Next | Command::NextPage => self.go(self.first().saturating_add(per)),
+            Command::Previous | Command::PreviousPage => self.go(self.first().saturating_sub(per)),
+            Command::GoTo => self.go(0),
+            Command::Last => self.go(usize::MAX),
+            Command::ZoomIn => self.zoom_to(self.zoom.zoomed_in(self.per_row), "fully zoomed in"),
+            Command::ZoomOut => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
+            // The search kept is typed on; with none, the pager asks the source for its text.
+            Command::Search => match self.search.as_mut() {
+                Some(search) => search.edit(),
+                None => return Step::Search,
+            },
         }
         Step::Continue
     }
 
-    /// Backspace or `u` with nothing typed and no search kept: back through the links followed,
-    /// then out of the file.
+    /// `back` with no search kept: back through the links followed, then out of the file.
     fn back_step(&self) -> Step {
         if self.jumps.is_empty() { Step::Back } else { Step::Return }
     }
@@ -1126,62 +1133,24 @@ impl Nav {
         self.search.as_ref().map_or((None, true), |search| search.tint(page))
     }
 
-    /// What `key` does in a list: the arrows move from tile to tile, the screen following, and
-    /// Enter opens the tile chosen.
-    fn list_key(&mut self, key: Key) -> Step {
-        let (row, per) = (self.row(), self.per_screen());
-        let last = self.pages.len().saturating_sub(1);
-        match key {
-            Key::Enter => return self.pages.get(self.at).map_or(Step::Continue, |tile| Step::Open(*tile)),
-            Key::Left | Key::Char('h') => self.select(self.at.saturating_sub(1)),
-            Key::Right | Key::Char('l') => self.select(self.at.saturating_add(1)),
-            Key::Up | Key::Char('k') if self.at >= row => self.select(self.at.saturating_sub(row)),
-            // Below, or on the last row, the last tile.
-            Key::Down | Key::Char('j') if self.at.saturating_add(row) <= last => self.select(self.at.saturating_add(row)),
-            Key::Down | Key::Char('j') if last / row > self.at / row => self.select(last),
-            Key::Char(' ' | 'n') | Key::PageDown => {
-                self.top = self.first().saturating_add(per);
-                self.select(self.at.saturating_add(per));
-            }
-            Key::Char('b' | 'p') | Key::PageUp => {
-                self.top = self.first().saturating_sub(per);
-                self.select(self.at.saturating_sub(per));
-            }
-            Key::Char('g') | Key::Home => self.select(0),
-            Key::Char('G') | Key::End => self.select(last),
-            Key::Char('+' | '=') => self.step_per_row(false),
-            Key::Char('-' | '_') => self.step_per_row(true),
-            Key::Char(',') => self.per_row_key(true),
-            Key::Char('.') => self.per_row_key(false),
-            Key::Char('r') | Key::Ctrl('l') => self.rerender = true,
-            Key::Char('/') => self.start_filter(),
-            _ => return self.setting_key(key),
-        }
-        Step::Continue
-    }
-
-    /// A key none of the viewer's took: a setting's, if this build declares one with it. A number
-    /// typed before it is used up by a setting with numbers, whatever happens, and left as it is by
-    /// one without. On what hasn't the setting, which formats have it is said ([`Settings::only`]) and
-    /// nothing changes; a relayout
-    /// setting's in a list, or with `--pages`, says why nothing changes either. Otherwise its value
-    /// changes and the reader is told what it is now: a redraw setting's pages are made again, and a
-    /// document whose layout isn't at a relayout setting's value is laid out again when it is on screen
-    /// ([`Pager::relayout`]).
+    /// A setting's command: turn it one way. A number typed before it is used up by a setting with
+    /// numbers, whatever happens, and left as it is by one without. On what hasn't the setting, which
+    /// formats have it is said ([`Settings::only`]) and nothing changes; a relayout setting's in a list,
+    /// or with `--pages`, says why nothing changes either. Otherwise its value changes and the reader is
+    /// told what it is now: a redraw setting's pages are made again, and a document whose layout isn't
+    /// at a relayout setting's value is laid out again when it is on screen ([`Pager::relayout`]).
     ///
-    /// On a document laid out in columns, a key of a setting that says how wide a page is
-    /// ([`Setting::sets_width`]) sets the pages to a row back to `auto` first, and is pressed again once
-    /// the bounds are those of the room at `auto` ([`Step::Again`]); `0` before it changes only its own.
-    fn setting_key(&mut self, key: Key) -> Step {
-        let Key::Char(char) = key else { return Step::Continue };
+    /// On a document laid out in columns, turning a setting that says how wide a page is
+    /// ([`Setting::sets_width`]) sets the pages to a row back to `auto` first, and `command`, which
+    /// asked, is run again once the bounds are those of the room at `auto` ([`Step::Again`]); `0`
+    /// before it changes only its own.
+    fn turn(&mut self, setting: &'static Setting, turn: Turn, command: Command) -> Step {
         let settings = self.settings.clone();
-        let Some(setting) = settings.declared.iter().find(|setting| setting.keys.chars().contains(&char)) else { return Step::Continue };
         let zero = self.typed.parse::<u32>().ok() == Some(0);
         if setting.sets_width && self.has.contains(&setting.name) && self.columns().is_some() && !zero {
             self.zoom_to(Some(Zoom::Auto), "");
-            return Step::Again(key);
+            return Step::Again(command);
         }
-        let key = char;
         let count = setting.numbers.and_then(|_| (!self.typed.is_empty()).then(|| std::mem::take(&mut self.typed)));
         if !self.has.contains(&setting.name) {
             self.message = Some(settings.only(setting));
@@ -1193,7 +1162,7 @@ impl Nav {
         }
         let mut values = settings.values.get();
         let now = values.get(setting.name).unwrap_or(setting.default);
-        let (value, said) = turned(setting, bounds_of(&self.bounds, setting.name), now, key, count.as_deref());
+        let (value, said) = turned(setting, bounds_of(&self.bounds, setting.name), now, turn, count.as_deref());
         if value != now && values.set(setting.name, value) {
             settings.values.set(values);
             if setting.effect == Effect::Redraw {
@@ -1423,7 +1392,15 @@ impl Nav {
             Key::Enter if !empty => filter.typing = false,
             Key::Backspace | Key::Enter => self.unfilter(self.chosen()),
             Key::Escape => self.cancel_filter(),
-            _ => return self.list_key(key),
+            // A key that types nothing: what it is bound to, if that moves among the tiles or
+            // renders them again.
+            _ => {
+                let moves = |command: &Command| {
+                    let tile = matches!(command, Command::TileLeft | Command::TileRight | Command::TileUp | Command::TileDown);
+                    tile || matches!(command, Command::ScreenDown | Command::ScreenUp | Command::GoTo | Command::Last | Command::Rerender)
+                };
+                return self.command(key).filter(moves).map_or(Step::Continue, |command| self.run(command));
+            }
         }
         self.refilter(self.chosen());
         Step::Continue
@@ -1552,18 +1529,15 @@ impl Nav {
             Some(message) => message.clone(),
             // The keys leave the name room for its first characters at least.
             None if self.hint => {
-                let fits = |keys: &&&str| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
-                let keys = match (self.list, self.nested) {
-                    (true, _) => &LIST_KEYS,
-                    (false, true) => &OPENED_KEYS,
-                    (false, false) => &KEYS,
+                let fits = |keys: &String| chars(keys).saturating_add(chars(name).min(16)).saturating_add(5) <= room;
+                let hints = match (self.list, self.nested) {
+                    (true, _) => commands::LIST_HINTS,
+                    (false, true) => commands::OPENED_HINTS,
+                    (false, false) => commands::PAGE_HINTS,
                 };
-                let hint = keys.iter().find(fits).map_or_else(String::new, |keys| (*keys).to_owned());
                 // The zoom keys are a setting's here: the hint says which.
-                match self.zoom_setting() {
-                    Some(setting) => hint.replace("+ - zoom", &format!("+ - {}", setting.name)),
-                    None => hint,
-                }
+                let zoom = self.zoom_setting().map_or("zoom", |setting| setting.name);
+                hints.iter().map(|hints| self.keymap().reminder(hints, zoom)).find(fits).unwrap_or_default()
             }
             None => String::new(),
         };
@@ -1622,16 +1596,18 @@ impl Nav {
         printable(&format!(" {line}").chars().chain(std::iter::repeat(' ')).take(width).collect::<String>())
     }
 
-    /// The keys a number typed here goes to, as the status line names them: to a page (`g`), or in a
-    /// list a tile (`Enter`); to the pages to a row (`.`); with a search kept, that many matches on
-    /// or back (`n`, `p`); and to each setting with numbers what is
+    /// The keys a number typed here goes to, as the status line names them, each the first bound to its
+    /// command: to a page (`g`), or in a list a tile, by the key that goes to one only with a number
+    /// (`Enter`); to the pages to a row (`.`); with a search kept, that many matches on or back (`n`,
+    /// `p`); and to each setting with numbers what is
     /// shown has and lets change here (not one that lays out again, in a list or with `--pages`), by its
     /// up key and its name, the one on the zoom keys first.
     fn takes_a_number(&self) -> Vec<String> {
-        let first = if self.list { "Enter tile" } else { "g page" };
-        let mut keys = vec![first.to_owned(), ". per row".to_owned()];
+        let keymap = self.keymap();
+        let first = if self.list { format!("{} tile", keymap.first_counted(Command::GoTo)) } else { format!("{} page", keymap.first(Command::GoTo)) };
+        let mut keys = vec![first, format!("{} per row", keymap.first(Command::FewerPerRow))];
         if self.search.is_some() {
-            keys.push("n p match".to_owned());
+            keys.push(format!("{} {} match", keymap.first(Command::Next), keymap.first(Command::Previous)));
         }
         let here = |setting: &&&Setting| {
             setting.numbers.is_some() && self.has.contains(&setting.name) && !(setting.effect == Effect::Relayout && (self.list || self.picked))
@@ -1640,12 +1616,12 @@ impl Nav {
         let rest = self.settings.declared.iter().filter(here).filter(|setting| setting.keys != Keys::Zoom);
         for setting in zoomed.chain(rest) {
             let up = match setting.keys {
-                Keys::Zoom => Some('+'),
-                Keys::Step(_, up) => Some(up),
+                Keys::Zoom => Some(Command::ZoomIn),
+                Keys::Step(..) => Some(Command::Setting(setting, Turn::Up)),
                 Keys::Cycle(_) => None,
             };
             if let Some(up) = up {
-                keys.push(format!("{up} {}", setting.name));
+                keys.push(format!("{} {}", keymap.first(up), setting.name));
             }
         }
         keys
@@ -3672,6 +3648,21 @@ mod tests {
         nav.on_screen()[0].unwrap()
     }
 
+    /// What the status line's first reminders say, as they were when they were written by hand: in a
+    /// list, in a file's pages gone into from one, and in a file's pages.
+    const LIST_KEYS: [&str; 2] = ["arrows move · ⏎ open · + - zoom · , . per row · q quit", "arrows move · ⏎ open · + - zoom · q quit"];
+    const OPENED_KEYS: [&str; 2] = ["esc back · space b · n p · + - zoom · , . per row · q quit", "esc back · space b · n p · + - zoom · q quit"];
+    const KEYS: [&str; 4] = [
+        "space b j k · n p · g G · 12⏎ · + - zoom · , . per row · q quit",
+        "space b j k · n p · g G · 12⏎ · + - zoom · q quit",
+        "n p · + - zoom · q quit",
+        "n p · q quit",
+    ];
+    /// And what `?` says of the zoom, in a file's pages and in a list, and of the columns.
+    const ZOOM_SAID: &str = "zoom in, as far as the window's width; out, to rows of pages";
+    const TILES_ZOOM_SAID: &str = "bigger, fewer to a row; smaller, more to a row";
+    const COLUMNS_SAID: &str = "one more column, or one fewer, down to one; 3. sets 3, 0. auto";
+
     /// A setting the tests declare, as a backend would: two named values, cycled by `d`.
     const SHADE: Setting = Setting {
         name: "shade",
@@ -3690,7 +3681,7 @@ mod tests {
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
     fn declaring(nav: Nav, has: bool) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE], having: vec![(SHADE.name, "Ink and Wash".into())], ..Default::default() });
+        let settings = Rc::new(Settings::of(vec![&SHADE], vec![(SHADE.name, "Ink and Wash".into())], Values::default()));
         Nav { settings, has: if has { vec![SHADE.name] } else { Vec::new() }, ..nav }
     }
 
@@ -3715,7 +3706,7 @@ mod tests {
         press(&mut nav, &[Key::Char('d')]);
         assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only Ink and Wash go deep".to_owned()), false));
         // A setting no format is said to have: said without one.
-        let mut nav = Nav { settings: Rc::new(Settings { declared: vec![&SHADE], ..Default::default() }), ..reader(0, 12, 40, 40) };
+        let mut nav = Nav { settings: Rc::new(Settings::of(vec![&SHADE], Vec::new(), Values::default())), ..reader(0, 12, 40, 40) };
         press(&mut nav, &[Key::Char('d')]);
         assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some(NOT_HERE.to_owned()), false));
         assert!(nav.help_lines().contains(&("d".into(), "pale or deep".into())), "its line in `?` as it is: {:?}", nav.help_lines());
@@ -3769,7 +3760,7 @@ mod tests {
 
     /// [`declaring_both`], the width's values sitting as `bounds` say.
     fn declaring_in(nav: Nav, has: &[&'static str], bounds: Bounds) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH], having: vec![(WIDTH.name, "some".into())], ..Default::default() });
+        let settings = Rc::new(Settings::of(vec![&SHADE, &WIDTH], vec![(WIDTH.name, "some".into())], Values::default()));
         let bounds = if has.contains(&WIDTH.name) { vec![(WIDTH.name, bounds)] } else { Vec::new() };
         Nav { settings, has: has.to_vec(), bounds, ..nav }
     }
@@ -3787,11 +3778,11 @@ mod tests {
     #[test]
     fn on_a_reflowed_document_a_count_is_columns_and_the_last_key_wins() {
         let chars = |text: &str| text.chars().map(Key::Char).collect::<Vec<_>>();
-        // As the pager does: a key that asks to be pressed again is, the bounds asked again between.
+        // As the pager does: a command that asks to be run again is, the bounds asked again between.
         let press = |nav: &mut Nav, keys: &[Key]| {
             for key in keys {
-                if let Step::Again(key) = nav.key(*key) {
-                    nav.key(key);
+                if let Step::Again(command) = nav.key(*key) {
+                    nav.run(command);
                 }
             }
         };
@@ -3814,7 +3805,7 @@ mod tests {
         assert_eq!((one.zoom, one.message.as_deref()), (Zoom::Auto, Some("1 per row, the least")));
         // A count sets the width back to `window`; `0.` leaves it.
         press(&mut nav, &chars("72"));
-        assert_eq!(nav.key(Key::Char(']')), Step::Again(Key::Char(']')), "the count goes to auto first");
+        assert_eq!(nav.key(Key::Char(']')), Step::Again(Command::Setting(&WIDTH, Turn::Up)), "the count goes to auto first");
         assert_eq!((nav.zoom, nav.typed.as_str()), (Zoom::Auto, "72"), "the number waits for the key again");
         assert_eq!(nav.key(Key::Char(']')), Step::Continue);
         assert_eq!((width(&nav), nav.columns()), ((Some(Value::Number(72)), Some("width 72")), None));
@@ -3826,7 +3817,7 @@ mod tests {
         press(&mut nav, &chars(","));
         assert_eq!((width(&nav).0, nav.zoom), (Some(Value::Named("window")), Zoom::PerRow(2)), "`,` from auto showing one");
         // `[` steps from `window` as it sits at auto, once the count is back there.
-        assert_eq!(nav.key(Key::Char('[')), Step::Again(Key::Char('[')));
+        assert_eq!(nav.key(Key::Char('[')), Step::Again(Command::Setting(&WIDTH, Turn::Down)));
         assert_eq!(nav.zoom, Zoom::Auto);
         nav.key(Key::Char('['));
         // `0]` changes only the width.
@@ -3856,9 +3847,9 @@ mod tests {
             press(&mut other, &chars("72]"));
             assert_eq!(other.zoom, Zoom::PerRow(3), "a width key leaves the zoom");
         }
-        assert!(nav.help_lines().contains(&(COLUMNS_HELP.0.to_owned(), COLUMNS_HELP.1.to_owned())), "`?` says columns");
+        assert!(nav.help_lines().contains(&(", .  3.".to_owned(), COLUMNS_SAID.to_owned())), "`?` says columns");
         let mut picked = Nav { picked: true, ..declaring_both(reader(0, 20, 40, 40), &["width"]) };
-        assert!(!picked.help_lines().iter().any(|(_, what)| *what == COLUMNS_HELP.1), "with --pages, the zoom's");
+        assert!(!picked.help_lines().iter().any(|(_, what)| *what == COLUMNS_SAID), "with --pages, the zoom's");
         picked.grid(1, 1, 8);
         press(&mut picked, &chars("."));
         assert_eq!(picked.zoom, Zoom::Width, "with --pages, the width");
@@ -3948,9 +3939,9 @@ mod tests {
         );
         let setting = Setting { named: &[Named { name: "top", says: "at the top" }], ..WIDTH };
         let at = |at| Some(Bounds { named_at: Some(at), most: None });
-        assert_eq!(turned(&setting, at(200), Value::Named("top"), ']', None), (Value::Named("top"), "at the top, the most".into()));
-        assert_eq!(turned(&setting, at(200), Value::Number(200), ']', None), (Value::Named("top"), "at the top".into()));
-        assert_eq!(turned(&setting, None, Value::Named("top"), ']', None), (Value::Number(20), "width 20".into()), "set nowhere");
+        assert_eq!(turned(&setting, at(200), Value::Named("top"), Turn::Up, None), (Value::Named("top"), "at the top, the most".into()));
+        assert_eq!(turned(&setting, at(200), Value::Number(200), Turn::Up, None), (Value::Named("top"), "at the top".into()));
+        assert_eq!(turned(&setting, None, Value::Named("top"), Turn::Up, None), (Value::Number(20), "width 20".into()), "set nowhere");
     }
 
     /// The room bounds the steps: the most a width is laid out at there is the last step (`window`
@@ -4064,7 +4055,7 @@ mod tests {
     /// `nav` in a build that declares [`SHADE`], [`WIDTH`] and [`FONT`], showing what has `has` of them,
     /// the font's most in the room `most`.
     fn declaring_font(nav: Nav, has: &[&'static str], most: Option<u32>) -> Nav {
-        let settings = Rc::new(Settings { declared: vec![&SHADE, &WIDTH, &FONT], ..Default::default() });
+        let settings = Rc::new(Settings::of(vec![&SHADE, &WIDTH, &FONT], Vec::new(), Values::default()));
         let bounds = if has.contains(&FONT.name) { vec![(FONT.name, Bounds { named_at: None, most })] } else { Vec::new() };
         Nav { settings, has: has.to_vec(), bounds, ..nav }
     }
@@ -4108,13 +4099,13 @@ mod tests {
         let plus: Vec<&(String, String)> = lines.iter().filter(|(keys, _)| keys.starts_with("+ -")).collect();
         assert_eq!(plus.len(), 1, "{lines:?}");
         assert_eq!((plus[0].0.as_str(), plus[0].1.as_str()), ("+ -  150+", "larger or smaller text"));
-        assert!(!lines.iter().any(|(_, what)| *what == PAGE_HELP[6].1), "the zoom's line is gone");
+        assert!(!lines.iter().any(|(_, what)| *what == ZOOM_SAID), "the zoom's line is gone");
         // Elsewhere, the zoom: a list, a document without the setting, pages picked by `--pages`.
         for mut nav in [declaring_font(list(9), &["font"], Some(170)), declaring_font(reader(4, 20, 40, 40), &["shade"], None)] {
             nav.grid(2, 1, 8);
             press(&mut nav, &[Key::Char('-')]);
             assert_eq!((font(&nav).0, nav.zoom), (None, Zoom::PerRow(3)));
-            assert!(nav.help_lines().iter().any(|(_, what)| *what == PAGE_HELP[6].1 || *what == LIST_HELP[7].1));
+            assert!(nav.help_lines().iter().any(|(keys, what)| keys == "+ -" && (*what == ZOOM_SAID || *what == TILES_ZOOM_SAID)));
             assert!(!nav.help_lines().iter().any(|(_, what)| *what == FONT.help), "no line for the font elsewhere: {:?}", nav.help_lines());
             nav.hint = true;
             nav.message = None;
@@ -4252,44 +4243,51 @@ mod tests {
         assert!(!reader(0, 3, 40, 40).help_lines().iter().any(|(_, said)| said.contains("pale or deep")));
     }
 
-    /// The viewer's keys are those [`VIEWER_KEYS`] lists: any other character does nothing to where
-    /// the reader is, in a file's pages or in a list, so a setting may have it.
+    /// A key does something only through the command it is bound to: a character, or Ctrl or Alt with
+    /// one, that is bound to nothing where the reader is does nothing there, in a file's pages or in
+    /// a list (in particular, neither Ctrl nor Alt is Esc); and every key bound does something.
     #[test]
-    fn the_viewers_keys_are_those_listed() {
+    fn a_key_does_what_it_is_bound_to_and_nothing_otherwise() {
         // Each somewhere it can move: a page and a tile in the middle.
         let tiles = |count, per_row, rows| {
             let mut nav = tiles(count, per_row, rows);
             nav.select(4);
             nav
         };
-        // Nor does Ctrl or Alt with a character, but for Ctrl-L: in particular, neither is Esc.
-        let others = (' '..='~').filter(|c| !VIEWER_KEYS.contains(*c)).map(Key::Char);
-        let chords = ('a'..='z').filter(|c| *c != 'l').map(Key::Ctrl).chain((' '..='~').map(Key::Alt));
-        for key in others.chain(chords) {
+        let chords = ('a'..='z').map(Key::Ctrl).chain((' '..='~').map(Key::Alt));
+        let named = [Key::Enter, Key::Escape, Key::Backspace, Key::Interrupt, Key::Up, Key::Down, Key::Left, Key::Right];
+        let keys = (' '..='~').map(Key::Char).chain(chords).chain(named).chain([Key::PageUp, Key::PageDown, Key::Home, Key::End]);
+        let (mut bound, mut unbound) = (0, 0);
+        for key in keys {
             for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
+                let command = nav.command(key);
                 let before = format!("{nav:?}");
                 let mut nav = nav;
-                assert_eq!(nav.key(key), Step::Continue, "{key:?}");
+                let step = nav.key(key);
                 nav.hint = true;
-                assert_eq!(format!("{nav:?}"), before, "{key:?}");
+                let did = step != Step::Continue || format!("{nav:?}") != before;
+                // A digit is the number typed, no keymap's.
+                assert_eq!(did, command.is_some() || matches!(key, Key::Char('0'..='9')), "{key:?}, bound to {command:?}");
+                bound += usize::from(command.is_some());
+                unbound += usize::from(command.is_none());
             }
         }
+        assert!(bound > 60 && unbound > 150, "{bound} bound, {unbound} not");
         for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
-            let mut nav = nav;
-            nav.key(Key::Ctrl('l'));
-            assert!(nav.rerender, "Ctrl-L renders again");
+            assert_eq!((nav.command(Key::Ctrl('l')), nav.command(Key::Alt('q')), nav.command(Key::Ctrl('n'))), (Some(Command::Rerender), None, None));
         }
-        // And each listed is taken by one or the other.
-        for c in VIEWER_KEYS.chars() {
-            let moved = [reader(1, 12, 20, 40), tiles(10, 3, 2)].into_iter().any(|nav| {
-                let before = format!("{nav:?}");
-                let mut nav = nav;
-                let step = nav.key(Key::Char(c));
-                nav.hint = true;
-                step != Step::Continue || format!("{nav:?}") != before
-            });
-            assert!(moved, "{c:?}");
-        }
+        // A command that means nothing where the reader is does nothing, were it run there.
+        let mut nav = reader(1, 12, 20, 40);
+        let before = format!("{nav:?}");
+        assert_eq!((nav.run(Command::TileRight), nav.run(Command::Open), nav.run(Command::Filter)), (Step::Continue, Step::Continue, Step::Continue));
+        assert_eq!(format!("{nav:?}"), before);
+        let mut nav = tiles(10, 3, 2);
+        let before = format!("{nav:?}");
+        assert_eq!(
+            (nav.run(Command::Follow), nav.run(Command::Search), nav.run(Command::NextPage)),
+            (Step::Continue, Step::Continue, Step::Continue)
+        );
+        assert_eq!(format!("{nav:?}"), before);
     }
 
     /// `keys` pressed: what the first that asks more of the pager than a move asks.
@@ -5712,7 +5710,7 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('n'), Key::Char('q')]), Step::Quit);
         assert_eq!(page(&nav), 3);
         press(&mut nav, &[Key::Char('N')]);
-        assert_eq!((nav.message.as_deref(), page(&nav)), (Some(NO_SEARCH), 3));
+        assert_eq!((nav.message.as_deref(), page(&nav)), (Some("no search: / starts one"), 3));
     }
 
     /// The status line with a search: typed, what is typed and its count, the keys when there is

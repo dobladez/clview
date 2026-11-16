@@ -4,6 +4,7 @@
 
 mod cells;
 mod clip;
+mod commands;
 mod detect;
 mod files;
 mod fit;
@@ -29,7 +30,7 @@ use std::time::{Duration, Instant};
 use crate::encode::{self, PngEffort};
 use cells::{Colours, Glyphs, Ground, Style};
 #[cfg(test)]
-pub(crate) use pager::VIEWER_KEYS;
+pub(crate) use commands::wrong_keys;
 
 use crate::CliError;
 use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};

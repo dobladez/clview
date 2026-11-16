@@ -94,7 +94,8 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `cells.rs` | Rendered pixels into lines of text cells, for a terminal without the protocol ([Text cells](#text-cells-cellsrs)). Pure |
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
-| `pager.rs` | The pager: navigation (`Nav`, no IO), rendering and sending ahead, what is kept in the terminal, redraws |
+| `commands.rs` | What the pager can do, by name (the catalog), and the keymaps that bind keys to it, for a file's pages and for a list; `?`'s lines and the status line's reminders, read from them ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)). Pure |
+| `pager.rs` | The pager: navigation (`Nav`, no IO), which looks each key up and runs its command, rendering and sending ahead, what is kept in the terminal, redraws |
 | `search.rs` | A file's search (`/`): what is typed, the text read so far, folded, the matches in it and the one the reader is on ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). No IO of its own |
 | `hints.rs` | The labels over a page's links (`f`): their codes, what is typed of one, the wait for the pages' links, where each label goes on screen, and the image of their letters ([Following a file's links](#following-a-files-links-hintsrs-linkrs-pagerrs)). No IO of its own |
 | `link.rs` | A link checked before anything is done with it: what a source gives as a page's links, a web address, a path. It opens and launches nothing |
@@ -199,8 +200,10 @@ What the reader may change while a file is shown (the paper, a document's width)
 declare, never the viewer's to know:
 
 - **A backend declares, format by format, the keys and options it supports.** Each setting is a
-  `Setting` (`Backend::settings`) with its values, its keys, its option and two phrases, and each
-  `Format` lists the settings its files have (`Format::settings`).
+  `Setting` (`Backend::settings`) with its values, the keys it suggests, its option and two phrases,
+  and each `Format` lists the settings its files have (`Format::settings`). The viewer makes each
+  setting's commands from its name and binds the keys suggested to them in its keymaps
+  ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)).
 - **The viewer merges settings by name** (`view::settings`): one value of each for the whole run,
   whichever backend's file is shown, sent with every render (`Request::values`, and dark paper's
   colour in `Request::dark`). A source says which it has (`Source::settings`) and draws by a value
@@ -251,9 +254,9 @@ starts each at what its option says or its default, resolving `auto` by the back
 and asks the terminal for its background only when what is shown has a setting with `auto`, or is a
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
 request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
-pager's `Nav` takes a key the viewer's keys don't take to the build's settings (`setting_key`), then
-says which formats have the setting if what is shown hasn't it (`Settings::only`); a redraw value changed goes the way `r` goes. A `Cycle` key goes to the next named
-value; `Step` keys to the next among the steps down or up (`stepped`): the multiples of the step from
+pager's `Nav` runs a setting's command, which a key the setting suggested is bound to (`Nav::turn`), then
+says which formats have the setting if what is shown hasn't it (`Settings::only`); a redraw value changed goes the way `r` goes. A `Cycle` setting's command goes to the next named
+value; a `Step` setting's two to the next among the steps down or up (`stepped`): the multiples of the step from
 the least up to the most here (the setting's, or the room's where that is under it), and the named
 value set among them (`Bounds::named_at`), after the number equal to it (`window` at 94 in a window
 of 100 columns: from 92 `]` goes to 94, then to `window`, which says `the most here`; in a window
@@ -262,18 +265,20 @@ width), staying at the least or the most and saying so; a number typed before a 
 key sets it, clamped to its range, used up whatever happens, and 0 to the setting's `zero`
 (`turned`). A number past the most here is kept, laid out at the most, and said with what it is laid
 out at, `width 120 (window)`, `font 300% (170%)` (`said_in`): `]` from it says so, `[` goes to the last
-step under it. `Keys::Zoom` steps the same way on `+`/`=` and `-`/`_` (`Keys::up`), but those are the
-viewer's keys: `Nav::key` asks first (`zoom_setting`) whether this build declares a setting on them
+step under it. A `Keys::Zoom` setting steps the same way, but has no command or key of its own: it is
+reached through the viewer's `zoom-in` and `zoom-out`, on `+`/`=` and `-`/`_`. `Nav::run` asks first
+(`zoom_setting`) whether this build declares a setting on them
 that the document shown has, shown by itself (not a list, not pages picked by `--pages`), and only then
 hands them to it; everywhere else they zoom as before, so the viewer's keys still come first but for
 these, on such a document. The one setting `?` doesn't list after the viewer's keys: `help_lines` shows
 one `+ -` line, the setting's in place of the zoom's where the keys go to it, and the status line's
-first reminder says `+ - font` there (`KEYS`, `OPENED_KEYS`). `a_settings_keys_are_its_own_in_every_backend`
-lets `Keys::Zoom` through, alone among the viewer's keys ([ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
+first reminder says `+ - font` there (`Keymap::reminder`). `a_settings_keys_are_its_own_in_every_backend`
+lets `Keys::Zoom` through, which suggests no key ([ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 The values are shared by every level (`pager::Settings`), and so is the change, so a level left before
 the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
-checks that no setting has one of the viewer's keys (`VIEWER_KEYS`, which the pager's
-`the_viewers_keys_are_those_listed` checks) and that a key means one setting
+checks that no setting suggests a key the viewer's keymaps bind by default (`view::wrong_keys`; the
+pager's `a_key_does_what_it_is_bound_to_and_nothing_otherwise` checks that a key does nothing but
+through its command) and that a key means one setting
 ([ADR-0021](adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)).
 
 ### How each opens, and what it keeps
@@ -715,6 +720,56 @@ the spot, and a `Later`'s renderer is the opened source's. The pager never calls
 the front of the queue. Going in, that is asked again each `POLL`, keys meaning what they do while a
 container is read; copying says it is still opening, and copies once it is, after a `draw`, so that what
 is listed is from the true size.
+
+## Commands and keymaps (`commands.rs`, `pager.rs`)
+
+What the pager can do is apart from the keys that do it. `commands.rs` holds both halves:
+
+- **The catalog.** A `Command` is one thing the reader can ask for, known by its name
+  (`Command::name`, kebab-case): the viewer's own (`VIEWER`: `screen-down`, `tile-left`, `go-to`,
+  `back`, `quit`…) and, for each setting a build declares, one or two built from the setting's name,
+  `Command::Setting(&Setting, Turn)`: `paper` for a `Keys::Cycle`, `width-down` and `width-up` for a
+  `Keys::Step`. The viewer names none of a backend's commands. A setting on the zoom keys
+  (`Keys::Zoom`) has none of its own: `zoom-in` and `zoom-out` hand over to it where it applies
+  (`Nav::zoom_setting`, [Settings](#settings)). Each command says what it makes of the number typed
+  before it (`Command::count`: `Taken`, `Dropped`, or `Left` typed for the key that takes it), where
+  it means something (`Command::applies`: a file's pages, a list, or both, a `Mode`), and has its line
+  in `?` (`Line`, in `PAGE_LINES`, `LIST_LINES`, `BACK_LINES`, `QUIT_LINES`), which two commands that
+  go together share, as down and up do.
+- **The keymaps.** A `Keymap` binds keys to commands, one for a file's pages and one for a list
+  (`Keymaps`), built once a run with the pager's settings (`pager::Settings::of`): the viewer's
+  defaults first (`PAGES`, `LIST`), then the keys each setting suggests (`Setting::keys`), in both
+  keymaps, since a setting holds for a list's tiles as for a file's pages. A key goes to one command:
+  a suggestion that is already bound in either keymap, a digit among them, is left out, and so is a
+  second setting's on the same key. `Keymaps::build` says what it left out, and
+  `source::tests::a_settings_keys_are_its_own_in_every_backend` holds the build's settings to none
+  (through `view::wrong_keys`), as `the_default_keymaps_bind_each_key_once_and_every_command_where_it_applies`
+  holds the defaults. A key may be bound only with a number typed before it (`counted`): Enter is
+  `scroll-down` in a file's pages and `open` in a list, and `go-to` in both after a number (`12⏎`).
+  A key may also be bound and not listed (`also`): `=` and `_`, which are `+` and `-` with Shift or
+  without, and in a list PageDown and PageUp, for which `?`'s column of keys has no room.
+
+`Nav::key` takes what is typed outside the keymaps first: any key while `?` shows, the links' labels,
+the text of a filter or a search being typed, and the number typed before a key, which is its digits
+and, while there is one, Esc (which drops it) and Backspace (its last digit). Any other key is looked
+up in the keymap of where the reader is (`Nav::command`, with whether a number is typed) and its
+command run (`Nav::run`, one exhaustive `match` on `Command`); a key bound to nothing does nothing,
+an unbound Ctrl or Alt key among them. While a filter is typed, a key that types nothing still runs
+what it is bound to if that moves among the tiles or renders them again. While a container gone into
+is still being read, the run loop looks the key up the same way and takes only `quit`, and `back` and
+`leave`, which stop the reading. A command that asks to be run again once the bounds are asked again
+(`Step::Again`, a width set on a document in columns) is run by itself, no key pressed twice.
+
+Nothing else writes a key. `?` lists each `Line`'s commands with the keys bound to them here
+(`Keymap::shown`: `each` key, or two commands' keys `beside` each other, `j k  ↓ ↑  Enter`, a
+number before the first key of one that takes it, `3.`, and the keys bound with a number, `12
+Enter`), and leaves out a line whose commands have no key. What a line says names keys through the
+keymap too: `{fewer-per-row}` in its text is the first key bound to the command so named
+(`Keymap::fill`), and so is the `/` in `no search: / starts one`. The status line's first reminder
+is put together from `Hint`s, the first keys of a few commands and a word (`Keymap::reminder`,
+`PAGE_HINTS`, `OPENED_HINTS`, `LIST_HINTS`, shorter and shorter for a narrow window), and the keys a
+number typed goes to (`Nav::takes_a_number`) are read the same way. Only a setting's own phrase
+still writes its keys (`72] sets 72`), as its backend declared them.
 
 ## Getting pages to the terminal
 
