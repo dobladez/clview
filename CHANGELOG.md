@@ -71,6 +71,8 @@ works today. A version's section becomes the notes of its
   fixes since. A PDF's page warns of an image whose colour table is malformed, and of a Type 3
   font without its widths. A spreadsheet's Arabic is drawn where Noto Sans Arabic is installed,
   where it was blank.
+- `Alt` and a key, from a terminal that sends Alt or Option as `ESC`, is no longer read as `Esc`
+  and then that key, which went back or quit: an Alt key the pager has no use for does nothing.
 
 ## 0.4.0 (2026-11-10)
 

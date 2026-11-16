@@ -984,7 +984,12 @@ key, which quits, and its letters keys. One cut off between reads waits for the 
 bytes and 1 s, and is dropped whole if the rest doesn't come. So does any escape sequence cut off
 past its `ESC`, a late cell size or a key over SSH alike. A rest that comes later than that is
 read as keys: no wait could tell it from typing, and terminals send each reply in one write. Only
-an `ESC` alone, with nothing after it for 50 ms, is the Esc key. At the end, the pager waits up to 100 ms after its last placements,
+an `ESC` alone, with nothing after it for 50 ms, is the Esc key. An `ESC` and a printable character
+read together, or within those 50 ms, are `Key::Alt` and that character, as a terminal that sends
+Alt or Option as `ESC` writes them: never Esc and then the key. But for `[` and `O`, which start a
+sequence, and `_` and `]`, which start an answer and are Esc and that key where none follows. A byte
+from 1 to 26 is `Key::Ctrl` and its letter, apart from the ones that are Enter, Backspace, Tab and
+Ctrl-C. At the end, the pager waits up to 100 ms after its last placements,
 so no late answer lands on the shell's command line.
 
 ## What tmux loses, and how the pager notices

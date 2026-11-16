@@ -11,6 +11,14 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
     Char(char),
+    /// Ctrl and a letter, the letter in lower case (`Ctrl('v')`, Emacs's `C-v`): but for the ones
+    /// that are keys of their own, Enter (`C-m`, `C-j`), Backspace (`C-h`), Tab (`C-i`, no key
+    /// here) and [`Key::Interrupt`] (`C-c`).
+    Ctrl(char),
+    /// Alt and a character (`Alt('v')`, Emacs's `M-v`), as a terminal that sends Alt or Option as
+    /// ESC does: an ESC and a printable character arriving together. An Esc, then a key typed
+    /// later, are those two keys.
+    Alt(char),
     Enter,
     Escape,
     Backspace,
@@ -91,7 +99,9 @@ pub(crate) fn decode(bytes: &[u8], flush: bool) -> (Vec<Key>, usize) {
             0x03 => (Some(Key::Interrupt), 1),
             // Printable ASCII.
             0x20..=0x7e => (Some(Key::Char(char::from(b))), 1),
-            0x0c => (Some(Key::Char('\u{c}')), 1),
+            // Ctrl and a letter: `C-a` is 1, `C-z` 26. But for Ctrl-C, Backspace (`C-h`) and Enter
+            // (`C-j`, `C-m`), taken above, and Tab (`C-i`), which is no key.
+            0x01 | 0x02 | 0x04..=0x07 | 0x0b | 0x0c | 0x0e..=0x1a => (Some(Key::Ctrl(char::from(b.saturating_add(0x60)))), 1),
             // A character past ASCII, typed into a list's filter (`é`); one cut off waits for the
             // rest, as an escape sequence does.
             0x80..=0xff => match utf8(rest) {
@@ -167,7 +177,20 @@ fn escape(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
         }
         // A string terminator on its own: the end of something cut off, never a key.
         Some(b'\\') => Some((None, 2)),
-        // Esc, then another key typed quickly enough to arrive in the same read.
+        // What starts an answer or an OSC sequence, and wasn't one (the caller takes those): Esc,
+        // then that key, as before there were Alt keys. `M-_` and `M-]` can't be told from them.
+        Some(b'_' | b']') => Some((Some(Key::Escape), 1)),
+        // Alt and a printable character, as a terminal that sends Alt as ESC does: the two arrive
+        // together. (Esc, then a key typed later, is read alone first: the caller waits a while
+        // for what follows an ESC.)
+        Some(b @ 0x20..=0x7e) => Some((Some(Key::Alt(char::from(*b))), 2)),
+        // And a character past ASCII: one cut off waits for the rest, and bytes that are none
+        // leave the Esc, and are dropped after it.
+        Some(0x80..=0xff) => match utf8(bytes.get(1..).unwrap_or_default())? {
+            (Some(Key::Char(c)), used) => Some((Some(Key::Alt(c)), used.saturating_add(1))),
+            _ => Some((Some(Key::Escape), 1)),
+        },
+        // Esc, then a key that is no character (Enter, another Esc), read together.
         Some(_) => Some((Some(Key::Escape), 1)),
     }
 }
@@ -332,8 +355,54 @@ mod tests {
         assert_eq!(decode(b"j\x1b[", true), (vec![Key::Char('j')], 1));
         assert_eq!(decode(b"\x1b[6;", true), (vec![], 0));
         assert_eq!(decode(b"\x1bO", true), (vec![], 0));
-        // Esc typed before another key.
-        assert_eq!(keys(b"\x1bq"), [Key::Escape, Key::Char('q')]);
+        // Esc, then a key that is no character, read together.
+        assert_eq!(keys(b"\x1b\r"), [Key::Escape, Key::Enter]);
+        assert_eq!(keys(b"\x1b\x1b"), [Key::Escape, Key::Escape]);
+    }
+
+    #[test]
+    fn ctrl_and_a_letter_is_a_key() {
+        assert_eq!(keys(b"\x0e\x10\x06\x02\x16\x0c"), ['n', 'p', 'f', 'b', 'v', 'l'].map(Key::Ctrl));
+        // Every letter, but for the ones that are keys of their own: Ctrl-C, Backspace (C-h), Tab
+        // (C-i, no key), Enter (C-j, C-m).
+        for (byte, letter) in (1u8..=26).zip('a'..='z') {
+            let expected = match letter {
+                'c' => vec![Key::Interrupt],
+                'h' => vec![Key::Backspace],
+                'i' => vec![],
+                'j' | 'm' => vec![Key::Enter],
+                letter => vec![Key::Ctrl(letter)],
+            };
+            assert_eq!(keys(&[byte]), expected, "C-{letter}");
+        }
+        // The other control bytes are still no keys: NUL (C-@, C-Space), and those past C-z.
+        assert_eq!(keys(b"\0\x1c\x1d\x1e\x1fj"), [Key::Char('j')]);
+    }
+
+    #[test]
+    fn esc_and_a_printable_character_in_one_read_is_alt() {
+        assert_eq!(keys(b"\x1bv\x1bV\x1b \x1b<"), ['v', 'V', ' ', '<'].map(Key::Alt));
+        assert_eq!(keys(b"j\x1bqk"), [Key::Char('j'), Key::Alt('q'), Key::Char('k')]);
+        assert_eq!(keys("\x1bé\x1b€".as_bytes()), [Key::Alt('é'), Key::Alt('€')]);
+        // Esc, and a key typed after it: the Esc is read alone, and is the Esc key once nothing
+        // followed it.
+        assert_eq!(decode(b"\x1b", true), (vec![Key::Escape], 1));
+        assert_eq!(keys(b"v"), [Key::Char('v')]);
+        // Cut between the two, the ESC waits for what follows it, and is Alt with it.
+        assert_eq!(decode(b"\x1b", false), (vec![], 0));
+        assert_eq!(keys(b"\x1bv"), [Key::Alt('v')]);
+        // What starts a sequence still does: an arrow as CSI and as SS3 sends it, a string's end.
+        assert_eq!(keys(b"\x1b[A\x1bOB\x1b\\"), [Key::Up, Key::Down]);
+        assert_eq!(decode(b"\x1b[", true), (vec![], 0));
+        assert_eq!(decode(b"\x1bO", true), (vec![], 0));
+        // A character past ASCII cut off waits for the rest; bytes that are no character leave the
+        // Esc, and are dropped, as is a control character.
+        assert_eq!(decode(b"\x1b\xe2\x82", true), (vec![], 0));
+        assert_eq!(keys(b"\x1b\xe2\x82\xac"), [Key::Alt('\u{20ac}')]);
+        assert_eq!(keys(b"\x1b\xffj"), [Key::Escape, Key::Char('j')]);
+        assert_eq!(keys(b"\x1b\xc2\x9bj"), [Key::Escape, Key::Char('j')]);
+        // Alt and a Ctrl key is Esc and that key: no Alt key.
+        assert_eq!(keys(b"\x1b\x16"), [Key::Escape, Key::Ctrl('v')]);
     }
 
     #[test]
@@ -495,7 +564,7 @@ mod tests {
         /// come out, and the answers as answers, never as keys.
         #[test]
         fn answers_among_keys_cut_anywhere_are_never_keys(
-            parts in proptest::collection::vec(0usize..4, 0..12),
+            parts in proptest::collection::vec(0usize..8, 0..12),
             cuts in proptest::collection::vec(1usize..40, 0..12),
         ) {
             let mut bytes = Vec::new();
@@ -505,6 +574,12 @@ mod tests {
                     0 => (b"j", Some(Key::Char('j'))),
                     1 => (b"\x1b]5522;type=write:status=DONE:id=clv-7\x1b\\", Some(Key::Copied(7, Ok(())))),
                     2 => (b"\x1b[?5522;2$y", Some(Key::Clipboard(true))),
+                    // Ctrl and Alt keys among them: an Alt key's ESC is no answer's start or end,
+                    // nor an answer's ESC an Alt key's.
+                    4 => (b"\x16", Some(Key::Ctrl('v'))),
+                    5 => (b"\x1bv", Some(Key::Alt('v'))),
+                    6 => (b"\x1b[6;25;14t", None),
+                    7 => ("\x1b\u{e9}".as_bytes(), Some(Key::Alt('\u{e9}'))),
                     _ => (b"\x1b]5522;type=write:status=EPERM:id=clv-8\x07", Some(Key::Copied(8, Err(ClipError::Denied)))),
                 };
                 bytes.extend_from_slice(code);

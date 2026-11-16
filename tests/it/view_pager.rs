@@ -1660,7 +1660,7 @@ fn a_page_past_the_workers_heap_costs_the_search_that_page_and_four_of_them_the_
     // The page is still shown, and turned to; only its text is unread.
     view.press("n");
     view.wait_until("the match after the page unread", |t| last_bar(t).contains(" /page 2/2 · page 2 unread ") && last_bar(t).contains(" page 3/3 "));
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 
@@ -1676,7 +1676,7 @@ fn a_page_past_the_workers_heap_costs_the_search_that_page_and_four_of_them_the_
     view.wait_until("the rest left unread", |t| last_bar(t).contains(" /page 1/2 · read 2 of 8 pages "));
     assert!(view.text().contains("reading its text failed too often: the rest is left unread"));
     no_text_worker(&view, "the reading was given up");
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 
@@ -1829,10 +1829,10 @@ fn a_searchs_matches_are_tinted_into_the_page_and_esc_takes_the_tint_off() {
     }
     view.wait_until("round the file", |t| last_bar(t).contains(" /e 14/15 "));
     let placed_before = ids_after(&view.text(), PLACED).len();
-    view.press("\x1bg");
+    view.press("\x7fg");
     view.wait_until("cleared, on page 1", |t| !last_bar(t).contains("/e") && last_bar(t).contains(" page 1/5 "));
     // The bar says page 1 before page 1, rendered again, is placed: until then the image placed last
-    // is page 5's, tinted. Wait for the image placed last since the `Esc` to be page 1 as first sent.
+    // is page 5's, tinted. Wait for the image placed last since the Backspace to be page 1 as first sent.
     let deadline = Instant::now() + PATIENCE;
     let last_id = loop {
         let text = view.text();
@@ -1904,7 +1904,7 @@ fn the_page_shows_the_match_the_status_line_says_whenever_its_render_arrives() {
         let page = pngs(&text).into_iter().rfind(|(id, _)| *id == placed).unwrap().1;
         assert_eq!(own_at(&page), Some(home), "{apart} ms apart: the status line says the first match, the page another");
     }
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
@@ -1985,7 +1985,7 @@ fn pages_sent_again_for_their_tints_stay_within_what_the_terminal_keeps() {
     // And both ended tinted as the status line says: the second page's match the reader's.
     let last: Vec<bool> = pngs(&text).iter().rev().take(2).map(|(_, page)| page.pixels().any(|pixel| pixel.0 == OWN_TINT)).collect();
     assert_eq!(last.iter().filter(|own| **own).count(), 1, "one of the two pages last sent has the reader's match");
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
@@ -2050,7 +2050,7 @@ fn where_the_screen_leaves_no_room_a_page_goes_before_its_tinted_copy_comes() {
     view.wait_until("tinted", |t| pngs(t).iter().skip(before + 6).any(|(_, page)| has(page, OWN_TINT)));
     quiet(&view);
     assert!(most_held(&view.text()) <= BUDGET, "{} MiB held", most_held(&view.text()) >> 20);
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
@@ -2076,7 +2076,7 @@ fn c_copies_a_page_untinted_while_its_matches_are_tinted() {
     assert_eq!(copy.dimensions(), (1224, 1584));
     let coloured = copy.pixels().filter(|pixel| pixel.0[0] != pixel.0[1] || pixel.0[1] != pixel.0[2]).count();
     assert_eq!(coloured, 0, "the copy carries the tint");
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
@@ -3499,7 +3499,7 @@ fn a_search_outlives_a_relayout_and_starts_over_on_another_text() {
     view.press("n");
     view.wait_until("on from it", |t| last_bar(t).contains(" /with 5/60 "));
     // Being typed: laid out again meanwhile, it is typed on, and counts the whole text's.
-    view.press("\x1b0]/wit");
+    view.press("\x7f0]/wit");
     view.wait_until("laid out again while typed", |t| last_bar(t).contains(" /wit 60 ") && last_bar(t).contains(" 1 per row "));
     view.press("h\r");
     view.wait_until("kept", |t| last_bar(t).contains(" /with ") && last_bar(t).contains("/60 "));
@@ -3746,7 +3746,7 @@ fn open_in_a_list_opens_the_tile_chosen_and_refuses_an_archives() {
         said_since(&view, from, said);
     }
     // Back, then into a.pdf, opened when its tile was wanted, and c.pdf.gz, opened at once.
-    for (keys, name, real) in [("\x1bg\r", "a.pdf", real("a.pdf")), ("\x1bll\r", "c.pdf.gz", real("c.pdf.gz"))] {
+    for (keys, name, real) in [("\x7fg\r", "a.pdf", real("a.pdf")), ("\x7fll\r", "c.pdf.gz", real("c.pdf.gz"))] {
         let from = view.text().len();
         view.press(keys);
         view.wait_until(name, |t| t.get(from..).is_some_and(|t| t.contains("  page 1/")));

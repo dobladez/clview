@@ -178,7 +178,7 @@ None.
 
 One checkbox each: a session's work, and a commit that builds and passes on its own.
 
-- [ ] **Ctrl and Alt keys decoded** — `Key::Ctrl` and `Key::Alt`, `C-l` moved to `Ctrl('l')` with
+- [x] **Ctrl and Alt keys decoded** — `Key::Ctrl` and `Key::Alt`, `C-l` moved to `Ctrl('l')` with
   `r`'s binding following it, nothing else bound yet. *Files:* `src/view/keys.rs`,
   `src/view/pager.rs`. *Verify:* `cargo test -j 2 --bin clv keys::`, the property tests covering
   Ctrl and Alt cut anywhere.

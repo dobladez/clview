@@ -156,9 +156,9 @@ fn a_workbook_that_opened_with_warnings_is_searched_through_its_pdf() {
     view.press("n");
     view.wait_until("the second sheet's", |t| last(t).contains(" plain.xlsx /42 2/2 ") && last(t).contains(" page 2/2 "));
     // A formula isn't text on the page: its value is.
-    view.press("\x1b/A1*2\r");
+    view.press("\x7f/A1*2\r");
     view.wait_until("no match", |t| last(t).contains(" plain.xlsx /A1*2 no match "));
-    view.press("\x1bq");
+    view.press("\x7fq");
     assert!(view.finish().success());
 }
 

@@ -141,7 +141,7 @@ const KEYS: [&str; 4] = [
 /// The characters of the viewer's keys, in a file's pages or in a list: a setting may have none of
 /// them (`source.rs` checks the build's).
 #[cfg(test)]
-pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofFgGbjknNphl +=-_,.r/\u{c}";
+pub(crate) const VIEWER_KEYS: &str = "0123456789?qucofFgGbjknNphl +=-_,.r/";
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
 /// The widest the zoom is said: `8 per row`.
@@ -964,7 +964,7 @@ impl Nav {
             Key::Char('-' | '_') => self.zoom_to(self.zoom.zoomed_out(self.per_row, self.most_per_row), "fully zoomed out"),
             Key::Char(',') => self.per_row_key(true),
             Key::Char('.') => self.per_row_key(false),
-            Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('r') | Key::Ctrl('l') => self.rerender = true,
             // A number typed before it is dropped. The search kept is typed on; with none, the pager
             // asks the source for its text.
             Key::Char('/') => {
@@ -1153,7 +1153,7 @@ impl Nav {
             Key::Char('-' | '_') => self.step_per_row(true),
             Key::Char(',') => self.per_row_key(true),
             Key::Char('.') => self.per_row_key(false),
-            Key::Char('r' | '\u{c}') => self.rerender = true,
+            Key::Char('r') | Key::Ctrl('l') => self.rerender = true,
             Key::Char('/') => self.start_filter(),
             _ => return self.setting_key(key),
         }
@@ -4262,14 +4262,22 @@ mod tests {
             nav.select(4);
             nav
         };
-        for c in (' '..='~').chain(['\u{c}']).filter(|c| !VIEWER_KEYS.contains(*c)) {
+        // Nor does Ctrl or Alt with a character, but for Ctrl-L: in particular, neither is Esc.
+        let others = (' '..='~').filter(|c| !VIEWER_KEYS.contains(*c)).map(Key::Char);
+        let chords = ('a'..='z').filter(|c| *c != 'l').map(Key::Ctrl).chain((' '..='~').map(Key::Alt));
+        for key in others.chain(chords) {
             for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
                 let before = format!("{nav:?}");
                 let mut nav = nav;
-                assert_eq!(nav.key(Key::Char(c)), Step::Continue, "{c:?}");
+                assert_eq!(nav.key(key), Step::Continue, "{key:?}");
                 nav.hint = true;
-                assert_eq!(format!("{nav:?}"), before, "{c:?}");
+                assert_eq!(format!("{nav:?}"), before, "{key:?}");
             }
+        }
+        for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
+            let mut nav = nav;
+            nav.key(Key::Ctrl('l'));
+            assert!(nav.rerender, "Ctrl-L renders again");
         }
         // And each listed is taken by one or the other.
         for c in VIEWER_KEYS.chars() {
@@ -5271,8 +5279,11 @@ mod tests {
         assert_eq!(filter_text(&nav), Some("q j1?u gG+-/rcd"));
         assert_eq!(nav.settings.values.get(), Values::default(), "typed, a setting's key is a letter of the filter");
         assert_eq!((nav.help, nav.zoom, nav.typed.as_str(), nav.rerender, typing(&nav)), (false, zoom, "", false, true));
-        // A control character isn't: Ctrl-L renders again, and Ctrl-C still quits.
-        press(&mut nav, &[Key::Char('\u{c}'), Key::Char('\u{1b}')]);
+        // A control character isn't, nor Ctrl or Alt with a character: Ctrl-L renders again, and
+        // Ctrl-C still quits.
+        press(&mut nav, &[Key::Char('\u{1b}'), Key::Ctrl('n'), Key::Alt('v'), Key::Alt('q')]);
+        assert_eq!((nav.rerender, filter_text(&nav), typing(&nav)), (false, Some("q j1?u gG+-/rcd"), true));
+        press(&mut nav, &[Key::Ctrl('l')]);
         assert_eq!((nav.rerender, filter_text(&nav)), (true, Some("q j1?u gG+-/rcd")));
         assert_eq!(press(&mut nav, &[Key::Interrupt]), Step::Quit);
     }
@@ -5658,7 +5669,7 @@ mod tests {
         assert_eq!(nav.search.as_ref().map(Search::query), Some("q nN1?u gG+-/rcd"));
         assert_eq!((nav.help, nav.typed.as_str(), nav.rerender, page(&nav)), (false, "", false, 0));
         assert_eq!(nav.settings.values.get(), Values::default(), "typed, a setting's key is a letter of the search");
-        for key in [Key::Right, Key::Left, Key::Down, Key::PageDown, Key::End, Key::Char('\u{c}')] {
+        for key in [Key::Right, Key::Left, Key::Down, Key::PageDown, Key::End, Key::Ctrl('l'), Key::Ctrl('n'), Key::Alt('v'), Key::Alt('q')] {
             assert_eq!(search_keys(&mut nav, &texts, &[key]), Step::Continue, "{key:?}");
             assert_eq!((page(&nav), nav.rerender, nav.search.as_ref().map(Search::query)), (0, false, Some("q nN1?u gG+-/rcd")), "{key:?}");
         }

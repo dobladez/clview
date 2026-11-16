@@ -110,8 +110,9 @@ fn files_opened_on_demand_are_read_from_the_archive_again_after_leaving_it() {
         let before = view.text().len();
         view.press("\r");
         view.wait_until("in the archive", |t| t.get(before..).is_some_and(|t| t.contains(" c.pdf")));
-        // Straight back out, with a tile maybe still being opened, then in again.
-        view.press("\x1b");
+        // Straight back out, with a tile maybe still being opened, then in again. Backspace, not
+        // Esc: the next key may be read with it, and an ESC and `q` together are Alt and `q`.
+        view.press("\x7f");
         view.wait_until("back", |t| t.get(before..).is_some_and(|t| t.rfind("t.tar.gz").is_some()));
     }
     view.press("q");

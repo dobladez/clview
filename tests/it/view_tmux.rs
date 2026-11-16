@@ -430,7 +430,7 @@ fn inside_tmux_a_tinted_page_reaches_a_terminal_that_attaches_later() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
-    server.tmux(&["send-keys", "-t", "view:0", "Escape", "q"]);
+    server.tmux(&["send-keys", "-t", "view:0", "BSpace", "q"]);
 }
 
 #[test]
