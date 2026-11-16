@@ -42,7 +42,9 @@ by name on a key of its own, so `/` means one thing everywhere.
 For customization and remembering settings, a Mermaid theme of the reader's choosing among them;
 and the positions of files opened before. The command `o` opens a file with, in place of the
 desktop's default app (`zathura`, say), would be one of them
-([Spec-0010](specs/0010-open-file-in-default-app.md)).
+([Spec-0010](specs/0010-open-file-in-default-app.md)). So would the keys: each bound to a command by
+its name, in the pager's keymaps or the list's
+([Spec-0013](specs/0013-bind-keys-to-named-commands.md)).
 
 ### More pictures and archives
 
@@ -190,3 +192,10 @@ document's headings (paragraphs with an outline level, which wordcraft's PDF exp
 with their pages) could be shown over the pages as `?`'s keys are, and one chosen gone to, as
 following a link to a place in the document goes there
 ([Spec-0011](specs/0011-follow-a-documents-links.md)), `u` coming back.
+
+### Running a command by name (`M-x`)
+
+Every key the pager takes goes to a command with a name, its help and whether it takes a count
+([Spec-0013](specs/0013-bind-keys-to-named-commands.md)). A key could ask for one by name, as Emacs's
+`M-x` does: its name typed on the status line, completed among the commands where the reader is, a
+number before it taken as its count. A command no key is bound to would be reached that way.
