@@ -541,7 +541,10 @@ fn unescaped(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(rest.get(..at).unwrap_or_default());
         rest = rest.get(at..).unwrap_or_default();
-        let entity = rest.find(';').filter(|end| *end <= 10).and_then(|end| Some((rest.get(1..end)?, end)));
+        // Its end, among its first bytes alone: looked for in all the rest, a run of `&` with no
+        // `;` after it took the square of its length to read.
+        let end = rest.as_bytes().iter().take(11).position(|byte| *byte == b';');
+        let entity = end.and_then(|end| Some((rest.get(1..end)?, end)));
         let decoded = entity.and_then(|(name, end)| {
             let character = match name {
                 "amp" => '&',
@@ -1110,29 +1113,51 @@ const SHOWN: [&str; 5] = ["img", "hr", "svg", "table", "br"];
 /// HTML's void elements, which have no end tag: written short (`<br/>`), one is all there.
 const VOID: [&str; 14] = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 
+/// How far a drawing's `<title>` or `<desc>` is passed over, to see whether the drawing only wraps
+/// a picture: what a cover says of itself is a line.
+const MAX_LOOK: usize = 4 << 10;
+/// How many bytes of a chapter's drawings are looked into for nothing, together: past them, no
+/// drawing of the chapter is looked into. A drawing of anything else costs its first tag, so
+/// this is thousands of them; only drawings made to be looked into at length spend it.
+const MAX_LOOKED: usize = 1 << 20;
+
 /// The picture an `<svg>` wraps, when that is all it holds, as a cover's page writes it
 /// (`<svg><image xlink:href="cover.jpg"/></svg>`): its reference as written, and where the
-/// `<svg>`, whose content starts at `at` in `xhtml`, ends. `None` for a drawing of anything else,
-/// or of two pictures, which is left to be read as it is.
-fn wrapped_picture(xhtml: &str, mut at: usize) -> Option<(&str, usize)> {
-    let mut picture = None;
+/// `<svg>`, whose content starts at `at` in `xhtml`, ends. Or, for a drawing of anything else, or
+/// of two pictures, which is left to be read as it is, how many bytes were looked at to find that
+/// out: a `<title>` or a `<desc>` that doesn't end within [`MAX_LOOK`] is no cover's.
+fn wrapped_picture(xhtml: &str, start: usize) -> Result<(&str, usize), usize> {
+    let (mut picture, mut at) = (None, start);
+    let looked = |at: usize| at.saturating_sub(start);
     while let Some((piece, next)) = Piece::at(xhtml, at) {
         at = next;
         match piece {
             Piece::Text(run) if run.trim().is_empty() => {}
             Piece::Other => {}
-            Piece::End(name) if name.eq_ignore_ascii_case("svg") => return picture.map(|picture| (picture, at)),
+            Piece::End(name) if name.eq_ignore_ascii_case("svg") => return picture.map(|picture| (picture, at)).ok_or(looked(at)),
             Piece::End(name) if name.eq_ignore_ascii_case("image") => {}
-            // What says what the drawing is, to a reader that can't see it.
-            Piece::Start(tag) if (tag.is("title") || tag.is("desc")) && !tag.self_closed => at = past_end_tag(xhtml, at, tag.name),
+            // What says what the drawing is, to a reader that can't see it: passed over, as far as
+            // is looked. In all the rest of the chapter, a thousand drawings whose `<desc>` ends
+            // nowhere would each be read to the chapter's end.
+            Piece::Start(tag) if (tag.is("title") || tag.is("desc")) && !tag.self_closed => {
+                let far = at.saturating_add(MAX_LOOK).min(xhtml.len());
+                let Some(near) = (0..=far).rev().find(|end| xhtml.is_char_boundary(*end)).and_then(|end| xhtml.get(..end)) else {
+                    return Err(looked(at));
+                };
+                let past = past_end_tag(near, at, tag.name);
+                if past >= near.len() && near.len() < xhtml.len() {
+                    return Err(looked(past));
+                }
+                at = past;
+            }
             Piece::Start(tag) if tag.is("image") && picture.is_none() => {
                 let href = |name: &str| tag.attributes().find(|attribute| attribute.name.eq_ignore_ascii_case(name)).map(|attribute| attribute.value);
-                picture = Some(href("xlink:href").or_else(|| href("href")).filter(|href| !href.trim().is_empty())?);
+                picture = Some(href("xlink:href").or_else(|| href("href")).filter(|href| !href.trim().is_empty()).ok_or(looked(at))?);
             }
-            _ => return None,
+            _ => return Err(looked(at)),
         }
     }
-    None
+    Err(looked(at))
 }
 
 /// A chapter being written into the book.
@@ -1157,6 +1182,8 @@ impl Written<'_> {
         let mut out = format!("<div id=\"c{}\" style=\"page-break-before: always\">", self.chapter);
         let (mut text, mut at) = (0usize, 0usize);
         let mut tally = Tally::default();
+        // How far its drawings have been looked into for a picture they didn't wrap.
+        let mut looked = 0usize;
         // Whether anything of the chapter shows yet: text, or an element that shows without any.
         let mut shown = false;
         // From its `<body>`, where it has one.
@@ -1205,13 +1232,20 @@ impl Written<'_> {
                     }
                     shown |= SHOWN.iter().any(|name| tag.is(name));
                     // A drawing that only wraps a picture, as a cover's page does, is that picture.
-                    match Some(&tag).filter(|tag| tag.is("svg") && !tag.self_closed).and_then(|_| wrapped_picture(xhtml, at)) {
+                    let wrapped = match tag.is("svg") && !tag.self_closed && looked < MAX_LOOKED {
+                        true => wrapped_picture(xhtml, at).map_err(|more| looked = looked.saturating_add(more)).ok(),
+                        false => None,
+                    };
+                    match wrapped {
                         Some((picture, past)) => {
                             let _ = write!(out, "<img src=\"{}\" alt=\"\"/>", escaped(&self.pictured(&unescaped(picture))));
                             at = past;
                         }
                         // What it shows as text is text of the chapter's.
-                        None => text = text.saturating_add(self.start_tag(&tag, &mut out, &mut tally)),
+                        None => match self.start_tag(&tag, &mut out, &mut tally, room) {
+                            Some(shown) => text = text.saturating_add(shown),
+                            None => return Err(out.len()),
+                        },
                     }
                 }
             }
@@ -1230,12 +1264,17 @@ impl Written<'_> {
     /// read as the text they are, their entities undone (`a&amp;b.png` is the file `a&b.png`), and
     /// written as text again ([`escaped`]). Gives how many bytes of text the tag shows: a
     /// picture's `alt`, which the importer writes where it has no picture, and no other attribute.
-    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String, tally: &mut Tally) -> usize {
+    /// Or nothing, for a tag that takes what is written past `room` bytes, where it stops: one
+    /// tag may say an attribute any number of times, each written from the book's top.
+    fn start_tag(&self, tag: &StartTag<'_>, out: &mut String, tally: &mut Tally, room: usize) -> Option<usize> {
         let from = out.len();
         let mut text = 0usize;
         out.push('<');
         out.push_str(tag.name);
         for attribute in tag.attributes() {
+            if out.len() > room {
+                return None;
+            }
             let name = attribute.name;
             let is = |attribute: &str| name.eq_ignore_ascii_case(attribute);
             if is("alt") && tag.is("img") {
@@ -1281,7 +1320,7 @@ impl Written<'_> {
             (true, true) => out.push_str("/>"),
             (false, _) => out.push('>'),
         }
-        text
+        Some(text)
     }
 
     /// The path `reference` names, from this chapter, as a path from the book's top, and what
@@ -2889,6 +2928,70 @@ mod tests {
         assert!(cover.contains(r#"<img src="./text/a%26b.png" alt=""/>"#), "{cover}");
         let page = contents_page(&[entry(1, "One", Some("text/one.xhtml"), Some("x\"y<z&"))], |entry| place(1, entry.fragment.as_deref()));
         assert!(page.contains(r##"<a href="#c1-x&quot;y&lt;z&amp;">One</a>"##), "{page}");
+    }
+
+    /// One tag stops being written where it passes the book's room, as a chapter does: an
+    /// attribute said 20,000 times in one tag, each written from the book's top, is no more whole
+    /// than 20,000 tags are.
+    #[test]
+    fn a_tag_stops_being_written_where_it_passes_the_books_room() {
+        let (numbers, none) = (HashMap::new(), book(&[]));
+        let deep = "d/".repeat(2_000);
+        let written = Written { chapter: 1, directory: deep.trim_end_matches('/'), zipped: &none, chapters: &numbers };
+        let tag = chapter(&format!("<img {}/>", r#"src="x" "#.repeat(20_000)));
+        assert!(tag.len() < 200 << 10);
+        let room = 1 << 20;
+        let stopped = written.body(&tag, room).unwrap_err();
+        assert!(stopped > room && stopped <= room + 2 * MAX_PATH, "stopped at {stopped}, an attribute past {room}");
+        let links = chapter(&format!("<a {}>x</a>", r#"href="y.xhtml" "#.repeat(20_000)));
+        let stopped = written.body(&links, room).unwrap_err();
+        assert!(stopped > room && stopped <= room + 4 * MAX_PATH, "stopped at {stopped}");
+    }
+
+    /// What is read of a chapter takes time as its length, however it is made: entities that end
+    /// nowhere, and drawings that each say what they are at a length that ends nowhere near.
+    #[test]
+    fn a_chapter_made_to_be_read_slowly_isnt() {
+        // Read as the square of their length, each of these took tens of seconds.
+        let within = |what: &str, since: std::time::Instant| assert!(since.elapsed() < Duration::from_secs(3), "{what}: {:?}", since.elapsed());
+        let since = std::time::Instant::now();
+        let ampersands = "&".repeat(1 << 20);
+        assert_eq!(unescaped(&ampersands), ampersands);
+        within("entities that end nowhere", since);
+        let far = format!("{}&amp;{}&#x41;&é;&ééééé;", "&".repeat(1 << 16), "&#".repeat(1 << 16));
+        assert_eq!(unescaped(&far).len(), (3 << 16) + 2 + 4 + 12);
+        // An entity's end is looked for in bytes, which may stop in the middle of a character.
+        assert_eq!(unescaped("&aéééééé;&lt;"), "&aéééééé;<");
+        let (numbers, none) = (HashMap::new(), book(&[]));
+        let written = Written { chapter: 1, directory: "", zipped: &none, chapters: &numbers };
+        // A drawing's `<desc>` is passed over to see whether the drawing only wraps a picture: each
+        // of these ends at the chapter's end, 80,000 times over.
+        let drawings = chapter(&format!("{}</desc>", "<svg><desc>".repeat(80_000)));
+        let since = std::time::Instant::now();
+        let (body, ..) = written.body(&drawings, MAX_WRITTEN).unwrap();
+        within("drawings that say what they are to the chapter's end", since);
+        assert_eq!(body.matches("<svg>").count(), 80_000);
+    }
+
+    /// A drawing is looked into only so far for the picture it may wrap, and a chapter's drawings
+    /// only so far together: past that, a drawing that wraps a picture stays a drawing. Drawings
+    /// of anything else cost a glance each, and any number of them leave the next one its look.
+    #[test]
+    fn a_drawing_is_looked_into_only_so_far_for_its_picture() {
+        let (numbers, none) = (HashMap::new(), book(&[]));
+        let written = Written { chapter: 1, directory: "", zipped: &none, chapters: &numbers };
+        let wrapped = r#"<svg><title>A cover</title><image xlink:href="cover.jpg"/></svg>"#;
+        let picture = r#"<img src="./cover.jpg" alt=""/>"#;
+        let body = |xhtml: &str| written.body(&chapter(xhtml), MAX_WRITTEN).unwrap().0;
+        assert_eq!(body(&wrapped.repeat(300)).matches(picture).count(), 300, "each of a chapter's wrapped pictures");
+        let drawn = r#"<svg><path d="M0 0"/></svg>"#.repeat(50_000);
+        assert_eq!(body(&format!("{drawn}{wrapped}")).matches(picture).count(), 1, "after any number of drawings");
+        // One that says what it is at more length than is looked into stays a drawing.
+        let long = format!(r#"<svg><desc>{}</desc><image xlink:href="cover.jpg"/></svg>"#, "a".repeat(MAX_LOOK));
+        assert_eq!(body(&long).matches(picture).count(), 0);
+        // And once a chapter's drawings have been looked into that far together, none is.
+        let spent = format!("{}{}</desc>{wrapped}", "<svg><desc>".repeat(MAX_LOOKED / MAX_LOOK + 1), "a".repeat(MAX_LOOK));
+        assert_eq!(body(&spent).matches(picture).count(), 0);
     }
 
     /// The guess costs a chapter nothing that grows with it: its links are counted as they are

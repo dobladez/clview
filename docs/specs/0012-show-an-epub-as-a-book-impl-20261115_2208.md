@@ -593,3 +593,41 @@ no line cut; on a Markdown file only `T` faint; at 80 × 24 a row a line, cut in
 
 Gates on 2026-11-16 with this task: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
 warnings`, `cargo test -j 2` (612 unit, 13 docs, 300 integration), all passing.
+
+## Codex review, round 2 (of 08a3b16)
+
+Two findings, relayed by the lead, and a third found while looking for the second's pattern, as
+the lead asked.
+
+1. **[P1] The book's room was checked between pieces, so one tag could pass it**: 20,000 `src="x"`
+   in one `<img>`, 160 KiB, in a directory 4,000 bytes deep, wrote 80 MB before it was refused.
+   `Written::start_tag` is given the room and stops at the attribute that passes it.
+2. **[P1] `unescaped` looked for an entity's `;` in all the rest**, for each `&`, and only then
+   asked whether it was near: a run of `&` took the square of its length, 20 s for 1 MiB here, in
+   the viewer's process. It looks in the next 11 bytes, as bytes, since a slice of 11 may end
+   within a character; what is sliced is up to a `;` found, which is a character's start.
+3. **Found on the way, the same shape in `wrapped_picture`**: to see whether an `<svg>` only wraps
+   a picture, its `<title>` or `<desc>` was passed over with `past_end_tag`, to the chapter's end
+   where it has no end tag; `<svg><desc>` 80,000 times, 880 KiB, took 30 s. It is passed over
+   within 4 KiB (`MAX_LOOK`: a cover says what it is in a line), and a chapter's drawings are
+   looked into for nothing 1 MiB at most together (`MAX_LOOKED`), after which the chapter's
+   drawings stay drawings. A drawing of anything else costs its first tag, so 50,000 of them leave
+   a wrapped picture after them its look (tested). The limit is on the look, not on the picture: an
+   `<image>` whose reference is megabytes of `data:` is read as before.
+
+Looked at for the same and found linear: the lexer (`Piece::at`, `Attributes`, `past_end_tag`
+called from `Written::body`, each of which uses up what it reads), `resolved`, `from_the_top`,
+the percent coders, `escaped`. `picture.rs`'s `unescaped` is the percent decoder, one pass.
+
+| Reverted | Failed |
+|---|---|
+| a tag's room checked between tags alone | `epub::tests::a_tag_stops_being_written_where_it_passes_the_books_room` |
+| an entity's end looked for in all the rest | `epub::tests::a_chapter_made_to_be_read_slowly_isnt` (20 s where it has 3) |
+| a drawing's `<desc>` passed over to the chapter's end | `epub::tests::a_drawing_is_looked_into_only_so_far_for_its_picture` |
+| a chapter's drawings looked into without end | the same |
+| both of those | `epub::tests::a_chapter_made_to_be_read_slowly_isnt` (30 s where it has 3); with either alone it passes, the other bounding the time |
+
+The timed test's bounds are 3 s for what takes 40 ms with the fixes, and 20 and 30 s without.
+
+Gates on 2026-11-16 with round 2's fixes: `cargo fmt --check`, `cargo clippy --all-targets -j 2 --
+-D warnings`, `cargo test -j 2` (615 unit, 13 docs, 300 integration), all passing.

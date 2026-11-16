@@ -290,7 +290,9 @@ CodeQL's default setup scans the Rust and the workflows.
   read from a nav and from an NCX, kept within its limits, its page last with its room kept, the
   chapter a book marks as its own page of contents, where `T` leads (marked, guessed by a
   chapter's links, or the page made here), a chapter of 100,000 links costing the guess no more
-  than a few, a chapter that stops being written where it passes the book's room, a picture's
+  than a few, a chapter that stops being written where it passes the book's room, and a tag within it,
+  entities and drawings made to be read as the square of their length read in time (timed, 3 s
+  for what took 20 and 30), a drawing looked into only so far for the picture it wraps, a picture's
   `alt` counted as text, paths and ids read with their entities undone and written with them
   again, and a table of contents unread without costing the book (fake workers that die on
   it), and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The

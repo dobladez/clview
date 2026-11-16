@@ -577,7 +577,13 @@ through its command) and that a key means one setting
   `<img>` alone was text of the document). A chapter written again may come to many times
   its size, each short path written from the book's top (20,000 pictures in a directory 4,000
   bytes deep are 280 KiB that come to 80 MB), so `Written::body` is given the bytes the book has
-  left and stops at the piece that passes them, never holding more than that and a piece. The
+  left and stops at the piece that passes them, and within a tag at the attribute that does
+  (`Written::start_tag`), never holding more than that and one path. Reading a chapter takes time
+  as its length: an entity's end is looked for in its first 11 bytes (`unescaped`), and a
+  drawing's `<title>` or `<desc>` is passed over within 4 KiB (`MAX_LOOK`) when it is looked into
+  for the picture it may wrap, a chapter's drawings being looked into for nothing 1 MiB at most
+  together (`MAX_LOOKED`), after which the chapter's drawings stay drawings; without those, 1 MiB
+  of `&` took 20 s to read, and 80,000 drawings whose `<desc>` ends at the chapter's end 30 s. The
   document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,
   for the first render and each relayout, asking the worker nothing; its `Near` (`epub::near`)
   reads a picture from the book by its very name in the zip, with its first bytes alone for its
