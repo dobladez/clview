@@ -3,7 +3,7 @@
 I hate leaving the terminal, so `clv` was born: it shows images, Markdown, PDFs, Word documents,
 spreadsheets, SVGs, and HTML right in your kitty-compatible terminal.
 
-[demo](https://github.com/user-attachments/assets/4f8b4590-9c21-498c-b72c-ad7c5dcf1371)
+[demo](https://github.com/user-attachments/assets/1d94ccc3-3a8e-441b-8f64-8813622a1909)
 
 🤖 Disclaimer: clview is almost entirely coded with AI tools: mostly Claude Code, some Codex, OpenCode,
 Pi and others, always from my kitty terminal, of course.
@@ -80,15 +80,14 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 ## Plans
 
-High level, roughly in order; the details of each, and ideas not yet planned, are in the
-[backlog](docs/backlog.md).
+High level, not in order, no promises; more details and other idesa in the [backlog](docs/backlog.md).
 
+- A config file: customization, settings and positions remembered.
 - Plain text files (yes, not yet: ironic).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
 - `D` for SVG drawings too, as for Markdown, HTML and Mermaid diagrams.
 - More documents: Org-mode, AsciiDoc and reStructuredText; ebooks (epub) as books.
-- A config file: customization, settings and positions remembered.
 - `/` as a search in lists too.
 - More pictures: AVIF, colour profiles, animations.
 - More archives: zstd, 7z; comic book archives as books.
