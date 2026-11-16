@@ -6,6 +6,8 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+## 0.5.0 (2026-11-16)
+
 ### Added
 
 - `f` in a file's pages labels every link on screen with a short code of home-row letters, as the
