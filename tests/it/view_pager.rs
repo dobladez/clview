@@ -2863,16 +2863,19 @@ fn keys_work_while_the_document_is_laid_out_again_and_the_new_pages_show_with_no
     if !pty_works() {
         return;
     }
-    // Enough text to take a while to lay out: about a second and a half here.
+    // Enough text to take a while to lay out: under a second here.
     let path = crate::view::tmp("reflow-threads", "big.md");
     let paragraph = "Words enough in a paragraph to fill a few lines of a page, over and over again. ".repeat(12);
     let big: String = (1..=2800).map(|n| format!("Paragraph {n}. {paragraph}\n\n")).collect();
     std::fs::write(&path, big).unwrap();
     let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
     view.wait_until("page 1", |t| t.contains("  page 1/") || t.contains("  pages 1"));
-    view.press("40]");
+    // `?` comes with the width, read with it. Pressed only once `width 40…` was seen, it raced the
+    // layout through script(1) and the test's own polling, and on a loaded runner the layout ended
+    // before `?` was read. Read together, `?` is taken right after the layout starts, and only the
+    // viewer can keep it waiting.
+    view.press("40]?");
     view.wait_until("under way", |t| t.contains("width 40…"));
-    view.press("?");
     const KEYS: &str = "these keys: any key goes back";
     view.wait_until("the keys", |t| t.contains(KEYS));
     view.wait_until("laid out", |t| bar(t).contains("· width 40 ·"));
