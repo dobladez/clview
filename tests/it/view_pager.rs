@@ -4720,3 +4720,31 @@ fn epub_links_between_chapters_are_followed_and_u_comes_back() {
     view.press("q");
     assert!(view.finish().success());
 }
+
+/// A book's Contents page, made from its table of contents, is a page of links: `f` and the label
+/// of its third entry lands on that entry's chapter, and `u` comes back to the page.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_contents_page_leads_to_its_chapters_and_u_comes_back() {
+    use crate::epub::{Mimetype, NAV_ITEM, THREE_ENTRIES, book_with, coloured_chapters, nav, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let (chapters, mut pictures) = coloured_chapters();
+    pictures.push(("OEBPS/nav.xhtml", nav(THREE_ENTRIES)));
+    let book = book_with(&chapters, &pictures, "", NAV_ITEM);
+    let path = write(crate::view::tmp("pager-epub-contents", "book.epub"), &zipped(&book, Mimetype::Stored));
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    // The Contents page first, then the three chapters.
+    view.wait_until("the book", |t| drawn(t, "page 1/4"));
+    assert!(descendants_running(view.child.id(), "--worker epub").is_empty(), "a worker outlived its answers");
+    let before = follow(&mut view, 3, "d");
+    view.wait_until("the third chapter", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 4));
+    let before = view.text().len();
+    view.press("u");
+    view.wait_until("back on the Contents page", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+    let before = follow(&mut view, 3, "a");
+    view.wait_until("the second chapter, at its heading", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 3));
+    view.press("q");
+    assert!(view.finish().success());
+}

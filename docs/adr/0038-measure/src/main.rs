@@ -11,7 +11,9 @@
 //! (a manifest of `n` items, and a spine of as many, up to 4,096), `refines` (a chain of `n`
 //! metadata entries, each refining the one before), `refined` (`n` entries refining one), `metas`
 //! (`n` empty `<meta/>` elements, the costliest a byte) and `font` (a manifest item whose media
-//! type has a character past ASCII, `n` ignored).
+//! type has a character past ASCII, `n` ignored); and, for the table of contents, `ncx` (an EPUB 2
+//! NCX nested `n` deep), `nav` (an EPUB 3 nav nested `n` deep) and `entries` (a nav of `n` entries
+//! side by side).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::{Cursor, Read, Write};
@@ -145,6 +147,7 @@ fn generated(kind: &str, n: usize, out: &str) {
     let mut metadata = String::from(r#"<dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language>"#);
     let mut items = String::from(r#"<item id="one" href="one.xhtml" media-type="application/xhtml+xml"/>"#);
     let mut spine = String::from(r#"<itemref idref="one"/>"#);
+    let mut toc: Option<(&str, String)> = None;
     match kind {
         "items" => {
             items = (0..n).map(|i| format!(r#"<item id="i{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#)).collect();
@@ -160,18 +163,52 @@ fn generated(kind: &str, n: usize, out: &str) {
         }
         "metas" => metadata.push_str(&"<meta/>".repeat(n)),
         "font" => items.push_str("<item id=\"f\" href=\"f.otf\" media-type=\"application/font\u{e8}\"/>"),
+        "ncx" => {
+            items.push_str(r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#);
+            spine = r#"<itemref idref="one"/>"#.to_owned();
+            let points = format!(
+                "{}{}",
+                r#"<navPoint><navLabel><text>x</text></navLabel><content src="one.xhtml"/>"#.repeat(n),
+                "</navPoint>".repeat(n)
+            );
+            toc = Some(("toc.ncx", format!(r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>{points}</navMap></ncx>"#)));
+        }
+        "nav" | "entries" => {
+            items.push_str(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
+            let list = match kind {
+                "nav" => format!("{}{}", r#"<ol><li><a href="one.xhtml">x</a>"#.repeat(n), "</li></ol>".repeat(n)),
+                _ => format!("<ol>{}</ol>", r#"<li><a href="one.xhtml">x</a></li>"#.repeat(n)),
+            };
+            toc = Some((
+                "nav.xhtml",
+                format!(r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc">{list}</nav></body></html>"#),
+            ));
+        }
         _ => return eprintln!("no such kind: {kind}"),
     }
+    if kind == "ncx" {
+        spine = String::new();
+    }
+    // An NCX is the spine's to name.
+    let (version, spine) = match kind {
+        "ncx" => ("2.0", r#"<spine toc="ncx"><itemref idref="one"/></spine>"#.to_owned()),
+        _ => ("3.0", format!("<spine>{spine}</spine>")),
+    };
     let opf = format!(
-        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">{metadata}</metadata><manifest>{items}</manifest><spine>{spine}</spine></package>"#
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">{metadata}</metadata><manifest>{items}</manifest>{spine}</package>"#
     );
     let container = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
-    let book = zipped(&[
+    let mut files: Vec<(&str, &[u8])> = vec![
         ("mimetype", b"application/epub+zip"),
         ("META-INF/container.xml", container.as_bytes()),
         ("content.opf", opf.as_bytes()),
         ("one.xhtml", b"<html><body><p>one</p></body></html>"),
-    ]);
+    ];
+    if let Some((name, contents)) = &toc {
+        files.push((name, contents.as_bytes()));
+        println!("{out}: a table of contents of {} bytes", contents.len());
+    }
+    let book = zipped(&files);
     std::fs::write(out, book).unwrap();
     println!("{out}: an OPF of {} bytes", opf.len());
 }
@@ -187,7 +224,7 @@ fn main() {
         }
         Some("gen") => match (args.get(1), args.get(2).and_then(|n| n.parse().ok()), args.get(3)) {
             (Some(kind), Some(n), Some(out)) => generated(kind, n, out),
-            _ => eprintln!("measure gen <items|refines|refined|metas|font> <n> <out.epub>"),
+            _ => eprintln!("measure gen <items|refines|refined|metas|font|ncx|nav|entries> <n> <out.epub>"),
         },
         _ => eprintln!("measure read [--toc] <x.epub>… | measure gen <kind> <n> <out.epub>"),
     }

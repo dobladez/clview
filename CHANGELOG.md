@@ -14,7 +14,9 @@ works today. A version's section becomes the notes of its
   with its pictures, as one document laid out for the window. It has what Markdown and HTML have:
   `[` and `]` for its width, `+` and `-` for its font size, `{` and `}` for its margins, `d` for
   dark paper, `/` to search the whole book. It was a list of its files, each chapter opened alone
-  and without its pictures. Its cover comes first, a page of its own, and is its tile in a list.
+  and without its pictures. Its cover comes first, a page of its own, and is its tile in a list;
+  then a Contents page, made from its table of contents, each entry a link to its chapter, unless
+  one of its chapters is that page already.
   Chapters it protects (DRM) are left out, and the first page says how many. Its own stylesheets
   aren't read, and a fixed-layout book is laid out flowing. Its links between chapters are places
   in the book, which `f` goes to and `u` comes back from; a link from it is never followed to a

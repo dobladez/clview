@@ -231,6 +231,14 @@ const MAX_PROTECTED: usize = 16_384;
 /// that is: a chain that comes back on itself stops there.
 const MAX_FALLBACKS: usize = 8;
 
+/// The largest table of contents read (the nav document, or the NCX), and given to rbook; the most
+/// entries kept of it, the longest label of one, in bytes, cut at a character, and how many levels
+/// of them are shown, deeper ones at the last.
+const MAX_TOC: u64 = 1 << 20;
+const MAX_ENTRIES: usize = 4096;
+const MAX_LABEL: usize = 256;
+const MAX_LEVELS: u8 = 8;
+
 /// The most chapters a book's reading order has, and the longest path of a file in it, in bytes:
 /// past either, the book is refused.
 const MAX_CHAPTERS: usize = 4096;
@@ -321,7 +329,7 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
         None => backend.open(document, options)?,
     };
     match shown {
-        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes(plan.fixed).into() }))),
+        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes(plan.fixed, &plan.contents).into() }))),
         Opened::Files(_) => Err(error("its chapters' HTML holds files".into())),
     }
 }
@@ -363,6 +371,35 @@ struct Plan {
     /// The files the book protects, by their paths from its top, sorted: encrypted by anything but
     /// a font's obfuscation.
     protected: Vec<String>,
+    /// The file that holds the book's table of contents, by its path from the book's top: EPUB 3's
+    /// nav document, else EPUB 2's NCX.
+    toc: Option<String>,
+    /// The table of contents read from it, for the book's Contents page.
+    contents: Contents,
+}
+
+/// A book's table of contents, as its Contents page is made from it.
+#[derive(Debug, Default, PartialEq, Eq)]
+enum Contents {
+    /// None to show: the book has none, or one of its chapters is its table of contents already.
+    #[default]
+    None,
+    /// Its entries, in order, and whether there were more than are kept.
+    Listed { entries: Vec<Entry>, more: bool },
+    /// It couldn't be read: the book has no Contents page, and its first page says so.
+    Unread,
+}
+
+/// An entry of a book's table of contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Entry {
+    /// How deep it is nested, from 1.
+    depth: u8,
+    label: String,
+    /// The file it leads to, by its path from the book's top, if it leads anywhere in the book.
+    path: Option<String>,
+    /// The place it names in that file, as the file calls it.
+    fragment: Option<String>,
 }
 
 /// An item of a book's spine.
@@ -430,13 +467,41 @@ fn planned(zipped: &Zipped, read: Read) -> Result<Plan, String> {
     put(&mut request, opf_path.as_bytes());
     put(&mut request, &opf);
     put(&mut request, &encryption);
-    match read(READ, request) {
+    let mut plan = match read(READ, request) {
         Ok((PLAN, answer)) => Plan::read(&answer).ok_or_else(|| UNREAD.to_owned()),
         Ok((REFUSED, why)) => Err(cut(&String::from_utf8_lossy(&why), MAX_WHY).to_owned()),
         Ok(_) => Err(UNREAD.into()),
         Err(Died::TooMany) => Err("too many files are being read at once to read its package".into()),
         Err(Died::Unstarted(why)) => Err(format!("the process that reads its package couldn't be started ({})", cut(&why, MAX_WHY))),
         Err(_) => Err(UNREAD.into()),
+    }?;
+    plan.contents = contents(&plan, zipped, &opf_path, &opf, read);
+    Ok(plan)
+}
+
+/// The table of contents of the book `plan` orders, for its Contents page: read by a second worker,
+/// through `read`, which is given the package again (`path`, `opf`) with the file that holds it. None
+/// where the book has none, or has a chapter that is it already: the nav document itself in the
+/// reading order, or the chapter the package's landmarks, or its guide, call its `toc`. Whatever
+/// goes wrong costs the Contents page, never the book.
+fn contents(plan: &Plan, zipped: &Zipped, path: &str, opf: &[u8], read: Read) -> Contents {
+    let Some(toc) = plan.toc.as_deref() else { return Contents::None };
+    let chapter = |file: &str| plan.chapters.iter().any(|chapter| chapter.path.as_deref() == Some(file));
+    if chapter(toc) {
+        return Contents::None;
+    }
+    let held = zipped.index_of(toc).filter(|_| !plan.protects(toc)).and_then(|index| zipped.within(index, MAX_TOC).ok().flatten());
+    let Some(held) = held else { return Contents::Unread };
+    let mut request = Vec::new();
+    for field in [path.as_bytes(), opf, toc.as_bytes(), &held] {
+        put(&mut request, field);
+    }
+    let Ok((ENTRIES, answer)) = read(CONTENTS, request) else { return Contents::Unread };
+    match Listed::read(&answer) {
+        Some(listed) if listed.own.as_deref().is_some_and(chapter) => Contents::None,
+        Some(listed) if listed.entries.is_empty() => Contents::None,
+        Some(listed) => Contents::Listed { entries: listed.entries, more: listed.more },
+        None => Contents::Unread,
     }
 }
 
@@ -560,12 +625,69 @@ struct Answer {
     fixed: bool,
     /// The files encrypted by anything but a font's obfuscation.
     protected: Vec<String>,
+    /// The file that holds the table of contents: the nav document's path, else the NCX's.
+    toc: Option<String>,
+}
+
+/// `field` as text, if it is text of at most `most` bytes.
+fn text_within(field: &[u8], most: usize) -> Option<&str> {
+    std::str::from_utf8(field).ok().filter(|text| text.len() <= most)
+}
+
+/// What the worker reads of a table of contents ([`CONTENTS`]'s answer): its entries, whether
+/// there were more than it kept, and the file the package's landmarks, or its guide, call the
+/// book's own table of contents.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Listed {
+    entries: Vec<Entry>,
+    more: bool,
+    own: Option<String>,
+}
+
+impl Listed {
+    /// As the worker writes it: whether there were more entries, the book's own table of contents'
+    /// path, how many entries, and each one's depth, label, path and place.
+    fn written(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        put(&mut out, &[u8::from(self.more)]);
+        put(&mut out, self.own.as_deref().unwrap_or_default().as_bytes());
+        put(&mut out, &u32::try_from(self.entries.len()).unwrap_or(u32::MAX).to_le_bytes());
+        for entry in &self.entries {
+            put(&mut out, &[entry.depth]);
+            put(&mut out, cut(&entry.label, MAX_LABEL).as_bytes());
+            put(&mut out, entry.path.as_deref().unwrap_or_default().as_bytes());
+            put(&mut out, entry.fragment.as_deref().unwrap_or_default().as_bytes());
+        }
+        out
+    }
+
+    /// What the worker answered a [`CONTENTS`] with, checked as any input is: its entries within
+    /// their count, their labels and places within their lengths, their depths from 1 to
+    /// [`MAX_LEVELS`], their paths brought to paths from the book's top. `None` for an answer that
+    /// isn't one.
+    fn read(answer: &[u8]) -> Option<Self> {
+        let mut fields = Fields(answer);
+        let text = text_within;
+        let path = |field: &[u8]| Some(text(field, MAX_PATH)?).map(|path| from_the_top("", path));
+        let more = matches!(fields.next()?, [1]);
+        let own = path(fields.next()?)?;
+        let count = usize::try_from(u32::from_le_bytes(*fields.next()?.first_chunk::<4>()?)).ok().filter(|count| *count <= MAX_ENTRIES)?;
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let [depth] = *fields.next()? else { return None };
+            let label = text(fields.next()?, MAX_LABEL)?.to_owned();
+            let file = path(fields.next()?)?;
+            let fragment = Some(text(fields.next()?, MAX_NAME)?).filter(|fragment| !fragment.is_empty()).map(str::to_owned);
+            entries.push(Entry { depth: depth.clamp(1, MAX_LEVELS), label, path: file, fragment });
+        }
+        fields.next().is_none().then_some(Self { entries, more, own })
+    }
 }
 
 impl Answer {
     /// As the worker writes it: whether the book is laid out page by page, its cover's path, how
-    /// many chapters and each chapter's path and media type, then how many protected files and
-    /// each one's path.
+    /// many chapters and each chapter's path and media type, how many protected files and each
+    /// one's path, then the path of the file that holds its table of contents.
     fn written(&self) -> Vec<u8> {
         let count = |count: usize| u32::try_from(count).unwrap_or(u32::MAX).to_le_bytes();
         let mut out = Vec::new();
@@ -580,6 +702,7 @@ impl Answer {
         for path in &self.protected {
             put(&mut out, path.as_bytes());
         }
+        put(&mut out, self.toc.as_deref().unwrap_or_default().as_bytes());
         out
     }
 }
@@ -607,7 +730,8 @@ impl Plan {
             files.extend(path(fields.next()?)?);
         }
         files.sort_unstable();
-        fields.next().is_none().then_some(Self { chapters: read, cover, fixed, protected: files })
+        let toc = path(fields.next()?)?;
+        fields.next().is_none().then_some(Self { chapters: read, cover, fixed, protected: files, toc, contents: Contents::None })
     }
 }
 
@@ -634,7 +758,7 @@ struct Left {
 impl Left {
     /// What the first page says of the chapters left out, a line for each reason; and of a book
     /// made to be laid out page by page (`fixed`), which this isn't.
-    fn notes(&self, fixed: bool) -> Vec<String> {
+    fn notes(&self, fixed: bool, contents: &Contents) -> Vec<String> {
         let said = |count: usize, why: &str| match count {
             0 => None,
             1 => Some(format!("1 chapter is left out: {why}")),
@@ -652,6 +776,13 @@ impl Left {
             said(self.too_large, &format!("more than {} MiB", MAX_CHAPTER >> 20)),
             said(self.other, &format!("not a kind of chapter {} shows", crate::NAME)),
             said(self.past, &format!("the book is longer than {} lays out", crate::NAME)),
+            match contents {
+                Contents::Unread => Some("its table of contents couldn't be read: it has no Contents page".to_owned()),
+                Contents::Listed { more: true, .. } => {
+                    Some(format!("its Contents page has the first {MAX_ENTRIES} entries of its table of contents"))
+                }
+                _ => None,
+            },
             fixed.then(|| "a fixed-layout book: its pages are laid out as its text flows, not as they were made".to_owned()),
         ]
         .into_iter()
@@ -676,7 +807,7 @@ fn start() -> String {
 /// shown doesn't show already. And how many chapters were left out, and why.
 fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     let mut out = start();
-    let (mut left, mut marks, mut text) = (Left::default(), 0usize, 0usize);
+    let mut left = Left::default();
     // Each chapter's number in the reading order, from 1, by its file: where a link to it leads.
     let mut numbers: HashMap<&str, usize> = HashMap::new();
     for (number, chapter) in plan.chapters.iter().enumerate() {
@@ -686,6 +817,24 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     }
     // The cover, as a picture the book holds and may show.
     let cover = plan.cover.as_deref().filter(|cover| zipped.index_of(cover).is_some() && !plan.protects(cover));
+    // The Contents page, after the cover: an entry leads to its chapter where the book has that
+    // chapter to show.
+    let contents = match &plan.contents {
+        Contents::Listed { entries, .. } => {
+            let shows = |path: &str| {
+                let chapter = plan.chapters.iter().find(|chapter| chapter.path.as_deref() == Some(path));
+                chapter.is_some_and(|chapter| chapter.kind != Kind::Other) && zipped.index_of(path).is_some() && !plan.protects(path)
+            };
+            let leads = |entry: &Entry| {
+                let path = entry.path.as_deref().filter(|path| shows(path))?;
+                place(numbers.get(path).copied()?, entry.fragment.as_deref())
+            };
+            contents_page(entries, leads)
+        }
+        Contents::None | Contents::Unread => String::new(),
+    };
+    // What the book comes to as it is written.
+    let (mut marks, mut text) = (0usize, 0usize);
     for (number, chapter) in plan.chapters.iter().enumerate() {
         let Some(path) = chapter.path.as_deref() else {
             left.missing = left.missing.saturating_add(1);
@@ -727,13 +876,17 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
                 written.body(&xhtml)
             }
         };
-        // Before the first chapter shown, unless that one shows it.
-        let first = match cover.filter(|cover| left.shown == 0 && !body.contains(&pictured_from_the_top(cover))) {
-            Some(cover) => page_of("cover", cover),
-            None => String::new(),
+        // Before the first chapter shown: the cover, unless that chapter shows it, then the
+        // Contents page.
+        let first = match (left.shown, cover.filter(|cover| !body.contains(&pictured_from_the_top(cover)))) {
+            (0, Some(cover)) => format!("{}{contents}", page_of("cover", cover)),
+            (0, None) => contents.clone(),
+            _ => String::new(),
         };
         let body_marks = first.bytes().chain(body.bytes()).filter(|b| matches!(b, b'<' | b'\r' | b'\n')).count();
-        let (marks_now, text_now) = (marks.saturating_add(body_marks), text.saturating_add(body_text));
+        // The Contents page, written with the first chapter shown, counted whole as text.
+        let first_text = if left.shown == 0 { contents.len() } else { 0 };
+        let (marks_now, text_now) = (marks.saturating_add(body_marks), text.saturating_add(body_text).saturating_add(first_text));
         if out.len().saturating_add(first.len()).saturating_add(body.len()) > MAX_WRITTEN || marks_now > MAX_MARKS || text_now > MAX_TEXT {
             // With those after it: a book cut short reads to where it is cut.
             left.past = plan.chapters.len().saturating_add(1).saturating_sub(number);
@@ -745,6 +898,45 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
         left.shown = left.shown.saturating_add(1);
     }
     (out, left)
+}
+
+/// The book's Contents page, of `entries`: a heading, and nested lists as deep as the entries are,
+/// each entry its label, as a link to the place `leads` says it leads to in the book's document, or
+/// alone where it leads to none.
+fn contents_page(entries: &[Entry], leads: impl Fn(&Entry) -> Option<String>) -> String {
+    let mut out = String::from("<div id=\"contents\" style=\"page-break-before: always\"><h1>Contents</h1>");
+    // How many lists are open, each with an item open in it.
+    let mut open = 0u8;
+    for entry in entries {
+        // One level deeper than the entry before at most, so that every list is in an item.
+        let depth = entry.depth.clamp(1, MAX_LEVELS).min(open.saturating_add(1));
+        while open > depth {
+            out.push_str("</li></ul>");
+            open = open.saturating_sub(1);
+        }
+        if open == depth {
+            out.push_str("</li>");
+        }
+        while open < depth {
+            out.push_str("<ul>");
+            open = open.saturating_add(1);
+        }
+        out.push_str("<li>");
+        // A label is text: what would be markup in it is written so that it is none.
+        let label = entry.label.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        let label = if label.trim().is_empty() { "\u{2026}".to_owned() } else { label };
+        match leads(entry) {
+            Some(place) => {
+                let _ = write!(out, "<a href=\"#{place}\">{label}</a>");
+            }
+            None => out.push_str(&label),
+        }
+    }
+    for _ in 0..open {
+        out.push_str("</li></ul>");
+    }
+    out.push_str("</div>\n");
+    out
 }
 
 /// A page of the picture at `path`, from the book's top, with the id `id`: a chapter that is a
@@ -1194,6 +1386,13 @@ const READ: u8 = 1;
 /// Its reading order, its cover and its protected files ([`Answer::written`]): an answer.
 const PLAN: u8 = 2;
 
+/// A book's table of contents, to read: a request too. The package's path and its bytes, then the
+/// path and the bytes of the file that holds the table of contents.
+const CONTENTS: u8 = 4;
+
+/// Its entries ([`Listed::written`]): an answer.
+const ENTRIES: u8 = 5;
+
 /// Why rbook refused it, in its words: an answer.
 const REFUSED: u8 = 3;
 
@@ -1206,9 +1405,10 @@ const MALFORMED: u8 = 1;
 const READ_CPU: u64 = 2;
 const MAX_HEAP: usize = 256 << 20;
 
-/// The longest request: a package's path, the package and the book's list of protected files
-/// ([`MAX_PATH`], [`MAX_OPF`], [`MAX_ENCRYPTION`]), each with its length.
-const MAX_REQUEST: usize = MAX_PATH + (MAX_OPF as usize) + (MAX_ENCRYPTION as usize) + 12;
+/// The longest request: a package's path and the package, with the book's list of protected files
+/// or with a table of contents and its path ([`MAX_PATH`], [`MAX_OPF`], [`MAX_ENCRYPTION`],
+/// [`MAX_TOC`], which is as much), each with its length.
+const MAX_REQUEST: usize = 2 * MAX_PATH + (MAX_OPF as usize) + (MAX_ENCRYPTION as usize) + 16;
 
 /// The longest media type kept of a manifest's item, in bytes.
 const MAX_MEDIA_TYPE: usize = 255;
@@ -1216,7 +1416,7 @@ const MAX_MEDIA_TYPE: usize = 255;
 /// The longest answer: the cover's path, every chapter's path and media type, and the protected
 /// files' paths, which together are no longer than the list they are read from; each with its
 /// length, and their counts.
-const MAX_ANSWER: usize = 32 + MAX_PATH + MAX_CHAPTERS * (MAX_PATH + MAX_MEDIA_TYPE + 8) + (MAX_ENCRYPTION as usize) + MAX_PROTECTED * 4;
+const MAX_ANSWER: usize = 40 + 2 * MAX_PATH + MAX_CHAPTERS * (MAX_PATH + MAX_MEDIA_TYPE + 8) + (MAX_ENCRYPTION as usize) + MAX_PROTECTED * 4;
 
 /// The worker that reads a book's package: `clv --worker epub`.
 pub(crate) struct Package;
@@ -1229,7 +1429,7 @@ impl Worker for Package {
     }
 
     fn takes(&self, kind: u8) -> Option<(u64, usize)> {
-        (kind == READ).then_some((READ_CPU, MAX_REQUEST))
+        matches!(kind, READ | CONTENTS).then_some((READ_CPU, MAX_REQUEST))
     }
 
     fn heap(&self) -> usize {
@@ -1246,21 +1446,89 @@ struct Reading;
 
 impl Session for Reading {
     fn answer(&mut self, kind: u8, payload: Vec<u8>) -> (u8, Vec<u8>) {
-        if kind != READ {
-            return (FAILED, vec![MALFORMED]);
-        }
         let mut fields = Fields(&payload);
-        let (Some(path), Some(opf), Some(encryption), None) =
-            (fields.next().and_then(|path| std::str::from_utf8(path).ok()), fields.next(), fields.next(), fields.next())
-        else {
-            return (FAILED, vec![MALFORMED]);
+        let text = |field| Option::and_then(field, |field: &[u8]| std::str::from_utf8(field).ok());
+        let answered = match kind {
+            READ => {
+                let (Some(path), Some(opf), Some(encryption), None) = (text(fields.next()), fields.next(), fields.next(), fields.next()) else {
+                    return (FAILED, vec![MALFORMED]);
+                };
+                std::panic::catch_unwind(|| read(path, opf, encryption).map(|answer| (PLAN, answer.written())))
+            }
+            CONTENTS => {
+                let (Some(path), Some(opf), Some(toc), Some(held), None) =
+                    (text(fields.next()), fields.next(), text(fields.next()), fields.next(), fields.next())
+                else {
+                    return (FAILED, vec![MALFORMED]);
+                };
+                std::panic::catch_unwind(|| listed(path, opf, toc, held).map(|listed| (ENTRIES, listed.written())))
+            }
+            _ => return (FAILED, vec![MALFORMED]),
         };
-        let read = std::panic::catch_unwind(|| read(path, opf, encryption));
-        match read.unwrap_or_else(|_| Err(UNREAD.into())) {
-            Ok(answer) => (PLAN, answer.written()),
+        match answered.unwrap_or_else(|_| Err(UNREAD.into())) {
+            Ok(answer) => answer,
             Err(why) => (REFUSED, cut(&why, MAX_WHY).as_bytes().to_vec()),
         }
     }
+}
+
+/// A zip of `files`, by name and contents, stored as they are, under a container that names the
+/// package at `path`: what rbook is given to read, in memory.
+fn package_of(path: &str, files: &[(&str, &[u8])]) -> Result<Cursor<Vec<u8>>, String> {
+    let escaped = path.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+    let container = format!(
+        "<?xml version=\"1.0\"?><container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile \
+         full-path=\"{escaped}\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>"
+    );
+    let mut zip = ::zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = ::zip::write::SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored);
+    for (name, bytes) in [("mimetype", MIMETYPE), ("META-INF/container.xml", container.as_bytes())].iter().chain(files) {
+        zip.start_file(*name, stored).map_err(|e| e.to_string())?;
+        zip.write_all(bytes).map_err(|e| e.to_string())?;
+    }
+    zip.finish().map_err(|e| e.to_string())
+}
+
+/// The path from the book's top that `href` leads to, within its limit.
+fn located(href: rbook::ebook::element::Href<'_>) -> Result<String, String> {
+    let path = href.path().decode().into_owned();
+    match path.len() > MAX_PATH {
+        true => Err("a file's path is too long".into()),
+        false => Ok(path),
+    }
+}
+
+/// What rbook reads of the table of contents `held`, the file at `toc` in the book whose package
+/// is `opf`, at `path`: its entries, in order, each its depth, its label and where it leads, walked
+/// with a stack of the worker's own (rbook's own counts of them recurse), as many as are kept; and
+/// the file the package's landmarks, or its guide, call the book's table of contents. EPUB 3's nav
+/// where the book has one, else EPUB 2's NCX. Or why not.
+fn listed(path: &str, opf: &[u8], toc: &str, held: &[u8]) -> Result<Listed, String> {
+    let epub = rbook::Epub::options().strict(false).read(package_of(path, &[(path, opf), (toc, held)])?).map_err(|e| e.to_string())?;
+    let read = epub.toc();
+    let is_toc = |kind: Option<&str>| kind.is_some_and(|kind| kind.split_ascii_whitespace().any(|kind| kind.eq_ignore_ascii_case("toc")));
+    let own = read.landmarks().and_then(|landmarks| landmarks.iter().find(|landmark| is_toc(landmark.kind_raw())));
+    let own = own.and_then(|landmark| landmark.href()).map(located).transpose()?;
+    let Some(contents) = read.contents() else { return Err("it has no table of contents".into()) };
+    let mut listed = Listed { own, ..Listed::default() };
+    let mut levels = vec![contents.iter()];
+    while let Some(level) = levels.last_mut() {
+        let Some(entry) = level.next() else {
+            levels.pop();
+            continue;
+        };
+        if listed.entries.len() >= MAX_ENTRIES {
+            listed.more = true;
+            break;
+        }
+        let depth = u8::try_from(levels.len()).unwrap_or(u8::MAX).clamp(1, MAX_LEVELS);
+        let href = entry.href();
+        let fragment = href.and_then(|href| href.fragment()).filter(|fragment| !fragment.is_empty() && fragment.len() <= MAX_NAME);
+        let path = href.map(located).transpose()?;
+        listed.entries.push(Entry { depth, label: cut(entry.label().trim(), MAX_LABEL).to_owned(), path, fragment: fragment.map(str::to_owned) });
+        levels.push(entry.iter());
+    }
+    Ok(listed)
 }
 
 /// What rbook reads of the package `opf`, the file at `path` in its book: each item of the spine,
@@ -1270,30 +1538,11 @@ impl Session for Reading {
 /// zip holding the package alone, under a container that names it, and reads neither the table of
 /// contents (`skip_toc`: one it can't read fails the whole package) nor any other file.
 fn read(path: &str, opf: &[u8], encryption: &[u8]) -> Result<Answer, String> {
-    let escaped = path.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
-    let container = format!(
-        "<?xml version=\"1.0\"?><container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile \
-         full-path=\"{escaped}\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>"
-    );
-    let mut zip = ::zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = ::zip::write::SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored);
-    for (name, bytes) in [("mimetype", MIMETYPE), ("META-INF/container.xml", container.as_bytes()), (path, opf)] {
-        zip.start_file(name, stored).map_err(|e| e.to_string())?;
-        zip.write_all(bytes).map_err(|e| e.to_string())?;
-    }
-    let package = zip.finish().map_err(|e| e.to_string())?;
-    let epub = rbook::Epub::options().strict(false).skip_toc(true).read(package).map_err(|e| e.to_string())?;
+    let epub = rbook::Epub::options().strict(false).skip_toc(true).read(package_of(path, &[(path, opf)])?).map_err(|e| e.to_string())?;
     let spine = epub.spine();
     if spine.len() > MAX_CHAPTERS {
         return Err(format!("its reading order has more than {MAX_CHAPTERS} chapters"));
     }
-    let located = |item: &rbook::epub::manifest::EpubManifestEntry<'_>| -> Result<String, String> {
-        let path = item.href().path().decode().into_owned();
-        match path.len() > MAX_PATH {
-            true => Err("a file's path is too long".into()),
-            false => Ok(path),
-        }
-    };
     let mut chapters = Vec::new();
     for entry in spine.iter() {
         let Some(item) = entry.manifest_entry() else {
@@ -1310,14 +1559,19 @@ fn read(path: &str, opf: &[u8], encryption: &[u8]) -> Result<Answer, String> {
             shown = fallback;
         }
         let shown = if Kind::of(shown.media_type().as_bytes()) == Kind::Other { item } else { shown };
-        chapters.push((Some(located(&shown)?), shown.media_type().to_owned()));
+        chapters.push((Some(located(shown.href())?), shown.media_type().to_owned()));
     }
     if chapters.is_empty() {
         return Err("its package lists no chapters to read".into());
     }
-    let cover = epub.manifest().cover_image().map(|cover| located(&cover)).transpose()?;
+    let manifest = epub.manifest();
+    let cover = manifest.cover_image().map(|cover| located(cover.href())).transpose()?;
     let fixed = epub.metadata().by_property("rendition:layout").any(|layout| layout.value().trim() == "pre-paginated");
-    Ok(Answer { chapters, cover, fixed, protected: protected(&String::from_utf8_lossy(encryption))? })
+    // Where its table of contents is: the nav document, which EPUB 3 marks; else the NCX, by its kind.
+    let nav = manifest.by_property("nav").next();
+    let toc = nav.or_else(|| manifest.iter().find(|item| item.media_type().trim().eq_ignore_ascii_case("application/x-dtbncx+xml")));
+    let toc = toc.map(|toc| located(toc.href())).transpose()?;
+    Ok(Answer { chapters, cover, fixed, protected: protected(&String::from_utf8_lossy(encryption))?, toc })
 }
 
 /// The algorithms that only obfuscate a font, IDPF's and Adobe's: a file encrypted by one of them
@@ -1448,6 +1702,9 @@ mod tests {
 
     /// The worker's code, on a thread of the tests, as [`package`] asks a worker process.
     fn in_a_thread(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
+        // In its turn, as a worker process is asked: the tests run side by side, and only so many
+        // workers are alive at once.
+        let _turn = TURN.lock().unwrap_or_else(PoisonError::into_inner);
         asked(|| worker::spawn(&PACKAGE), kind, payload)
     }
 
@@ -1654,7 +1911,7 @@ mod tests {
         assert_eq!(shown, ["fine", "sixteen", "big", "marked"]);
         assert!(html.contains(r#"<div id="c8""#) && !html.contains(r#"<div id="c9""#), "numbered by their place in the reading order");
         assert_eq!(
-            left.notes(false),
+            left.notes(false, &Contents::None),
             [
                 "2 chapters are left out: not in the book",
                 "2 chapters are left out: unreadable, or not text",
@@ -1692,7 +1949,10 @@ mod tests {
             2,
             "by its bytes"
         );
-        assert_eq!(Left { past: 2, ..Left::default() }.notes(false), ["2 chapters are left out: the book is longer than clv lays out"]);
+        assert_eq!(
+            Left { past: 2, ..Left::default() }.notes(false, &Contents::None),
+            ["2 chapters are left out: the book is longer than clv lays out"]
+        );
     }
 
     /// A reference in a chapter is a path from the book's top, or none: resolved from the chapter's
@@ -2034,9 +2294,9 @@ mod tests {
         let (html, left) = assembled(&protecting(&["two.xhtml", "plate.jpg", "cover.jpg"]), &book(&files));
         assert_eq!((left.protected, left.shown, left.unreadable), (2, 1, 0));
         assert!(html[HEAD as usize..].starts_with(r#"<div id="c1""#) && !html.contains(r#"id="cover""#), "a protected cover is no page: {html}");
-        assert_eq!(left.notes(false), ["2 chapters are protected (DRM)"]);
+        assert_eq!(left.notes(false, &Contents::None), ["2 chapters are protected (DRM)"]);
         assert_eq!(
-            Left { protected: 1, ..Left::default() }.notes(true),
+            Left { protected: 1, ..Left::default() }.notes(true, &Contents::None),
             ["1 chapter is protected (DRM)", "a fixed-layout book: its pages are laid out as its text flows, not as they were made"]
         );
         // Nothing of the book shown, and something protected: what `opened` refuses the book by.
@@ -2053,6 +2313,231 @@ mod tests {
         let fixed = package("3.0", r#"<meta property="rendition:layout">pre-paginated</meta>"#, CHAPTER_ITEM, r#"<itemref idref="one"/>"#);
         let flowing = package("3.0", r#"<meta property="rendition:layout">reflowable</meta>"#, CHAPTER_ITEM, r#"<itemref idref="one"/>"#);
         assert!(planned_of(&fixed, &[]).unwrap().fixed && !planned_of(&flowing, &[]).unwrap().fixed);
+    }
+
+    /// A nav document whose table of contents is `list`, with `more` beside it.
+    fn nav(list: &str, more: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h1>Contents</h1>{list}</nav>{more}</body></html>"#
+        )
+    }
+
+    const NAV_ITEM: &str = r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#;
+    const TWO_ITEM: &str = r#"<item id="two" href="text/two.xhtml" media-type="application/xhtml+xml"/>"#;
+    const BOTH: &str = r#"<itemref idref="one"/><itemref idref="two"/>"#;
+
+    fn entry(depth: u8, label: &str, path: Option<&str>, fragment: Option<&str>) -> Entry {
+        Entry { depth, label: label.to_owned(), path: path.map(str::to_owned), fragment: fragment.map(str::to_owned) }
+    }
+
+    /// A book's table of contents is read by a second worker, which is given the file that holds
+    /// it: EPUB 3's nav document where the book has one, else EPUB 2's NCX. Its entries come in
+    /// order, each its depth, its label as text and where it leads, by a path from the book's top.
+    #[test]
+    fn contents_are_read_from_a_nav_and_from_an_ncx() {
+        let list = r##"<ol><li><a href="text/one.xhtml">One &amp; <em>only</em></a><ol><li><a href="text/one.xhtml#s2">One, two</a><ol><li><a href="text/two.xhtml#s3">Deep</a></li></ol></li></ol></li><li><a href="text/gone.xhtml">Gone</a></li><li><span>No link</span></li></ol>"##;
+        let epub3 = package("3.0", "", &format!("{CHAPTER_ITEM}{TWO_ITEM}{NAV_ITEM}"), BOTH);
+        let plan = planned_of(&epub3, &[("OEBPS/nav.xhtml", nav(list, "").as_bytes())]).unwrap();
+        assert_eq!(plan.toc.as_deref(), Some("OEBPS/nav.xhtml"));
+        let read = [
+            entry(1, "One & only", Some("OEBPS/text/one.xhtml"), None),
+            entry(2, "One, two", Some("OEBPS/text/one.xhtml"), Some("s2")),
+            entry(3, "Deep", Some("OEBPS/text/two.xhtml"), Some("s3")),
+            entry(1, "Gone", Some("OEBPS/text/gone.xhtml"), None),
+            entry(1, "No link", None, None),
+        ];
+        assert_eq!(plan.contents, Contents::Listed { entries: read.to_vec(), more: false });
+        // EPUB 2: the NCX the spine names.
+        let point = |label: &str, src: &str, inner: &str| {
+            format!(r#"<navPoint><navLabel><text>{label}</text></navLabel><content src="{src}"/>{inner}</navPoint>"#)
+        };
+        let points = format!(
+            "{}{}",
+            point("One &amp; only", "text/one.xhtml", &point("One, two", "text/one.xhtml#s2", &point("Deep", "text/two.xhtml#s3", ""))),
+            point("Gone", "text/gone.xhtml", "")
+        );
+        let ncx =
+            format!(r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>{points}</navMap></ncx>"#);
+        let ncx_item = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+        let epub2 = package("2.0", "", &format!("{CHAPTER_ITEM}{TWO_ITEM}{ncx_item}"), BOTH).replace("<spine>", r#"<spine toc="ncx">"#);
+        let plan = planned_of(&epub2, &[("OEBPS/toc.ncx", ncx.as_bytes())]).unwrap();
+        assert_eq!(plan.toc.as_deref(), Some("OEBPS/toc.ncx"));
+        assert_eq!(plan.contents, Contents::Listed { entries: read[..4].to_vec(), more: false });
+        // A book with both is read by its nav; one with neither has no table of contents.
+        let both = package("3.0", "", &format!("{CHAPTER_ITEM}{TWO_ITEM}{ncx_item}{NAV_ITEM}"), BOTH);
+        assert_eq!(planned_of(&both, &[("OEBPS/nav.xhtml", nav(list, "").as_bytes())]).unwrap().toc.as_deref(), Some("OEBPS/nav.xhtml"));
+        let neither = planned_of(&package("3.0", "", &format!("{CHAPTER_ITEM}{TWO_ITEM}"), BOTH), &[]).unwrap();
+        assert_eq!((neither.toc, neither.contents), (None, Contents::None));
+    }
+
+    /// Entries past the 4,096 kept are left out, and said; a level past the eighth is shown at the
+    /// eighth; a label past 256 bytes is cut at a character.
+    #[test]
+    fn contents_are_kept_within_their_limits() {
+        let long = "é".repeat(200);
+        let many: String =
+            (0..=MAX_ENTRIES).map(|n| format!(r#"<li><a href="text/one.xhtml#s{n}">{}</a></li>"#, if n == 0 { &long } else { "x" })).collect();
+        let package = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="one"/>"#);
+        let plan = planned_of(&package, &[("OEBPS/nav.xhtml", nav(&format!("<ol>{many}</ol>"), "").as_bytes())]).unwrap();
+        let Contents::Listed { entries, more } = &plan.contents else { panic!("{:?}", plan.contents) };
+        assert_eq!((entries.len(), *more), (MAX_ENTRIES, true));
+        assert_eq!((entries[0].label.len(), entries[0].label.chars().count()), (MAX_LABEL, MAX_LABEL / 2), "cut at a character");
+        assert_eq!(Left::default().notes(false, &plan.contents), ["its Contents page has the first 4096 entries of its table of contents"]);
+        let deep = format!("{}{}", r#"<ol><li><a href="text/one.xhtml">x</a>"#.repeat(12), "</li></ol>".repeat(12));
+        let plan = planned_of(&package, &[("OEBPS/nav.xhtml", nav(&deep, "").as_bytes())]).unwrap();
+        let Contents::Listed { entries, .. } = &plan.contents else { panic!("{:?}", plan.contents) };
+        assert_eq!(entries.iter().map(|entry| entry.depth).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 8]);
+        // What a worker answers is checked: a depth, a count, a label or a place past its limit.
+        let listed = |entries: Vec<Entry>| Listed { entries, more: false, own: None }.written();
+        assert_eq!(
+            Listed::read(&listed(vec![entry(200, "x", None, None), entry(0, "y", None, None)]))
+                .unwrap()
+                .entries
+                .iter()
+                .map(|e| e.depth)
+                .collect::<Vec<_>>(),
+            [8, 1]
+        );
+        assert!(Listed::read(&listed(vec![entry(1, "x", None, None); MAX_ENTRIES + 1])).is_none());
+        assert!(Listed::read(&listed(vec![entry(1, "x", None, Some(&"a".repeat(MAX_NAME + 1)))])).is_none());
+        assert!(Listed::read(&listed(vec![entry(1, "x", Some("../../etc/passwd"), None)])).is_some_and(|read| read.entries[0].path.is_none()));
+        assert!(Listed::read(&[]).is_none() && Listed::read(&[0xFF; 40]).is_none());
+    }
+
+    /// No Contents page is made for a book one of whose chapters is its table of contents already,
+    /// as its package says: the nav document in the reading order, for which no worker is asked;
+    /// or the chapter its landmarks, or its guide, call `toc`.
+    #[test]
+    fn contents_are_not_made_twice() {
+        fn never_contents(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
+            assert_ne!(kind, CONTENTS, "asked for a table of contents the book shows itself");
+            in_a_thread(kind, payload)
+        }
+        let list = r#"<ol><li><a href="text/one.xhtml">One</a></li></ol>"#;
+        let container = container("OEBPS/content.opf");
+        let planned_with = |package: &str, nav: &str, read: Read| {
+            let files =
+                [("META-INF/container.xml", container.as_bytes()), ("OEBPS/content.opf", package.as_bytes()), ("OEBPS/nav.xhtml", nav.as_bytes())];
+            planned(&book(&files), read).unwrap()
+        };
+        let in_spine = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="nav"/><itemref idref="one"/>"#);
+        assert_eq!(planned_with(&in_spine, &nav(list, ""), never_contents).contents, Contents::None);
+        let apart = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="one"/>"#);
+        assert!(matches!(planned_with(&apart, &nav(list, ""), in_a_thread).contents, Contents::Listed { .. }));
+        let landmarks = |kind: &str, href: &str| {
+            format!(r#"<nav epub:type="landmarks"><ol><li><a epub:type="{kind}" href="{href}">Table of contents</a></li></ol></nav>"#)
+        };
+        assert_eq!(planned_with(&apart, &nav(list, &landmarks("toc", "text/one.xhtml#contents")), in_a_thread).contents, Contents::None);
+        assert!(matches!(
+            planned_with(&apart, &nav(list, &landmarks("bodymatter", "text/one.xhtml")), in_a_thread).contents,
+            Contents::Listed { .. }
+        ));
+        assert!(matches!(
+            planned_with(&apart, &nav(list, &landmarks("toc", "text/not-a-chapter.xhtml")), in_a_thread).contents,
+            Contents::Listed { .. }
+        ));
+        // EPUB 2's guide says the same.
+        let ncx = r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap><navPoint><navLabel><text>One</text></navLabel><content src="text/one.xhtml"/></navPoint></navMap></ncx>"#;
+        let ncx_item = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+        let guided = |guide: &str| {
+            let package = package("2.0", "", &format!("{CHAPTER_ITEM}{ncx_item}"), r#"<itemref idref="one"/>"#)
+                .replace("<spine>", r#"<spine toc="ncx">"#)
+                .replace("</package>", &format!("{guide}</package>"));
+            planned_of(&package, &[("OEBPS/toc.ncx", ncx.as_bytes())]).unwrap().contents
+        };
+        assert_eq!(guided(r#"<guide><reference type="toc" title="Contents" href="text/one.xhtml#contents"/></guide>"#), Contents::None);
+        assert!(matches!(guided(r#"<guide><reference type="cover" title="Cover" href="text/one.xhtml"/></guide>"#), Contents::Listed { .. }));
+        assert!(matches!(guided(""), Contents::Listed { .. }));
+    }
+
+    /// A table of contents that can't be read costs the book its Contents page, never the book:
+    /// the file missing, protected, or past what is read of one; one rbook refuses; a worker that
+    /// dies on it, or answers what is no answer. The first page says so.
+    #[test]
+    fn contents_that_cant_be_read_leave_the_book_whole() {
+        fn dies(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
+            if kind == CONTENTS { Err(Died::Memory) } else { in_a_thread(kind, payload) }
+        }
+        fn answers_otherwise(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
+            if kind == CONTENTS { Ok((ENTRIES, vec![0xFF; 64])) } else { in_a_thread(kind, payload) }
+        }
+        fn refuses(kind: u8, payload: Vec<u8>) -> Result<(u8, Vec<u8>), Died> {
+            if kind == CONTENTS { Ok((REFUSED, b"rbook's reason".to_vec())) } else { in_a_thread(kind, payload) }
+        }
+        let package = package("3.0", "", &format!("{CHAPTER_ITEM}{NAV_ITEM}"), r#"<itemref idref="one"/>"#);
+        let container = container("OEBPS/content.opf");
+        let unread = |more: &[(&str, &[u8])], read: Read| {
+            let mut files = vec![("META-INF/container.xml", container.as_bytes()), ("OEBPS/content.opf", package.as_bytes())];
+            files.extend_from_slice(more);
+            let plan = planned(&book(&files), read).expect("the book is read");
+            assert_eq!(paths(&plan), [Some("OEBPS/text/one.xhtml")]);
+            plan.contents
+        };
+        let good = nav(r#"<ol><li><a href="text/one.xhtml">One</a></li></ol>"#, "");
+        let held: [(&str, &[u8]); 1] = [("OEBPS/nav.xhtml", good.as_bytes())];
+        assert!(matches!(unread(&held, in_a_thread), Contents::Listed { .. }));
+        for read in [dies as Read, answers_otherwise, refuses] {
+            assert_eq!(unread(&held, read), Contents::Unread);
+        }
+        assert_eq!(unread(&[], in_a_thread), Contents::Unread, "the file it names isn't in the book");
+        // One that could be read, but for its size: past what is read of one, by a byte.
+        let large = format!("{good}{}", " ".repeat(MAX_TOC as usize + 1 - good.len()));
+        assert_eq!(unread(&[("OEBPS/nav.xhtml", large.as_bytes())], in_a_thread), Contents::Unread);
+        let within = format!("{good}{}", " ".repeat(MAX_TOC as usize - good.len()));
+        assert!(matches!(unread(&[("OEBPS/nav.xhtml", within.as_bytes())], in_a_thread), Contents::Listed { .. }));
+        assert_eq!(
+            unread(&[("OEBPS/nav.xhtml", b"<html><body><nav epub:type=\"toc\"><ol><li>")], in_a_thread),
+            Contents::Unread,
+            "not a table of contents"
+        );
+        assert_eq!(unread(&[("OEBPS/nav.xhtml", b"<html><body><p>no nav here</p></body></html>")], in_a_thread), Contents::Unread);
+        let protecting = br#"<encryption><EncryptedData><EncryptionMethod Algorithm="aes"/><CipherData><CipherReference URI="OEBPS/nav.xhtml"/></CipherData></EncryptedData></encryption>"#;
+        assert_eq!(unread(&[held[0], ("META-INF/encryption.xml", protecting)], in_a_thread), Contents::Unread);
+        assert_eq!(Left::default().notes(false, &Contents::Unread), ["its table of contents couldn't be read: it has no Contents page"]);
+    }
+
+    /// The Contents page comes after the cover, before the first chapter: a heading, and lists
+    /// nested as the entries are, each its label, markup in it no markup, as a link to its place
+    /// in the book; an entry that leads to no chapter the book shows is its label alone.
+    #[test]
+    fn contents_are_a_page_of_links_after_the_cover() {
+        let (one, two) = (chapter(r#"<h1 id="s1">One</h1>"#), chapter("<h1>Two</h1>"));
+        let files: [(&str, &[u8]); 4] =
+            [("text/one.xhtml", one.as_bytes()), ("text/two.xhtml", two.as_bytes()), ("cover.jpg", b"jpeg"), ("notes.txt", b"x")];
+        let mut plan = plan(&[("text/one.xhtml", Kind::Xhtml), ("text/two.xhtml", Kind::Xhtml), ("text/gone.xhtml", Kind::Xhtml)]);
+        plan.cover = Some("cover.jpg".to_owned());
+        plan.contents = Contents::Listed {
+            entries: vec![
+                entry(1, "One <b>&</b> only", Some("text/one.xhtml"), None),
+                entry(2, "Its start", Some("text/one.xhtml"), Some("s1")),
+                entry(3, "Deeper", Some("text/two.xhtml"), Some("x")),
+                entry(2, "Missing", Some("text/gone.xhtml"), None),
+                entry(1, "Not a chapter", Some("notes.txt"), None),
+                entry(1, "Nowhere", None, None),
+                entry(1, " ", Some("text/two.xhtml"), None),
+            ],
+            more: false,
+        };
+        let (html, left) = assembled(&plan, &book(&files));
+        let page = concat!(
+            r##"<div id="contents" style="page-break-before: always"><h1>Contents</h1><ul>"##,
+            r##"<li><a href="#c1">One &lt;b&gt;&amp;&lt;/b&gt; only</a><ul><li><a href="#c1-s1">Its start</a><ul><li><a href="#c2-x">Deeper</a></li></ul></li><li>Missing</li></ul></li>"##,
+            r##"<li>Not a chapter</li><li>Nowhere</li><li><a href="#c2">…</a></li></ul></div>"##,
+            "\n",
+        );
+        let text = &html[HEAD as usize..];
+        let cover = text.find(r#"<div id="cover""#).unwrap();
+        let (contents, first) = (text.find(page).expect(text), text.find(r#"<div id="c1""#).unwrap());
+        assert!(cover == 0 && cover < contents && contents + page.len() == first, "{text}");
+        assert_eq!((left.shown, left.missing), (2, 1));
+        // Without a cover it is the first page; and a book with no chapter shown has none.
+        plan.cover = None;
+        assert!(assembled(&plan, &book(&files)).0[HEAD as usize..].starts_with(page));
+        assert_eq!(assembled(&plan, &book(&[])).0.len(), HEAD as usize);
+        // Any depths, in any order, make lists that close.
+        let odd = [entry(3, "a", None, None), entry(1, "b", None, None), entry(8, "c", None, None), entry(2, "d", None, None)];
+        let page = contents_page(&odd, |_| None);
+        assert!(page.ends_with("<h1>Contents</h1><ul><li>a</li><li>b<ul><li>c</li><li>d</li></ul></li></ul></div>\n"), "{page}");
     }
 
     /// Which zips are books: one that says so in its first file, stored, whatever its name; one
@@ -2140,11 +2625,12 @@ mod tests {
             for path in &paths {
                 put(&mut framed, path.as_bytes());
             }
+            put(&mut framed, paths.last().map_or(&b""[..], |path| path.as_bytes()));
             let within = |path: &str| !path.split('/').any(|part| part == ".." || part.is_empty());
             match Plan::read(&framed) {
                 Some(plan) => {
                     prop_assert_eq!(plan.chapters.len(), count as usize);
-                    prop_assert!(plan.chapters.iter().filter_map(|chapter| chapter.path.as_deref()).chain(plan.cover.as_deref()).all(within));
+                    prop_assert!(plan.chapters.iter().filter_map(|chapter| chapter.path.as_deref()).chain(plan.cover.as_deref()).chain(plan.toc.as_deref()).all(within));
                     prop_assert!(plan.protected.iter().all(|path| within(path)) && plan.protected.is_sorted());
                 }
                 None => prop_assert!(paths.len() < count as usize, "an answer as the worker writes one is read"),

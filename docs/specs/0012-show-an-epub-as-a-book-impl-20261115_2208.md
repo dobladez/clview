@@ -239,3 +239,65 @@ Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D
 
 The task's manual check (in kitty, a Gutenberg epub's contents page, `f`, a label: its chapter)
 is the owner's, and its box stays open until it is confirmed.
+
+## Task 5: a book's Contents page
+
+**The spec's open question, looked at on real books**
+
+- **A book's own contents page, told**: of the 22 books, none has its nav document in its spine.
+  7 of the 10 Gutenberg EPUB 2 editions name a contents chapter in their guide, and get no
+  Contents page. The 10 Gutenberg EPUB 3 editions have no landmarks at all, so those of them
+  whose text has its own contents get clv's page besides it: two. Standard Ebooks' two have none
+  of their own, and get the page, nested as their books are. The rule is the spec's, kept as
+  written; whether two contents in Gutenberg's EPUB 3 books is worth a guess at a chapter headed
+  `Contents` is the owner's: told to the lead.
+
+**Changed from the plan**
+
+- **An NCX nested 100,000 deep doesn't kill the worker: it is never given to it**, being past the
+  1 MiB read of a table of contents (8 MiB of it). And nothing within 1 MiB does either, at rbook
+  0.7.13: a nav nested 20,000 deep is read in 10 ms and 20 MiB, on a stack of 8 MiB (ADR-0038).
+  So the integration test has the book whole and saying so for the first, and a Contents page
+  for a nav 20,000 deep; a worker that dies on a table of contents is a fake one, in the unit
+  tests.
+- **The NCX is found by its media type**, not by the spine's `toc` attribute, which rbook doesn't
+  give once the table of contents is skipped. A book whose spine doesn't name its NCX is then
+  asked for it, and rbook, which goes by the spine, says it has none: no Contents page, and the
+  first page says its table of contents couldn't be read.
+- **An entry is a link where its chapter can be shown** (in the book, not protected, XHTML or a
+  picture), decided before the chapters are written: one whose chapter is then left out for
+  another reason (unreadable, past the bounds) is still a link, to a place the document then says
+  it hasn't.
+- **A list never opens more than a level deeper than the entry before it**, whatever depths a
+  worker answers: `<ul>` in `<ul>` is no list.
+- **An entry without a label** shows as `…`.
+- **Two workers a book** that has a table of contents to read, one after the other.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| no table of contents asked for | `epub::tests::contents_are_read_from_a_nav_and_from_an_ncx`, `…contents_are_kept_within_their_limits`, `…contents_are_not_made_twice`, `…contents_that_cant_be_read_leave_the_book_whole`, `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice`, `view_pager::epub_contents_page_leads_to_its_chapters_and_u_comes_back` |
+| a page though the nav document is a chapter | `epub::tests::contents_are_not_made_twice`, `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice` |
+| a page though the landmarks, or the guide, name a chapter | `epub::tests::contents_are_not_made_twice` |
+| the worker keeping every entry | `epub::tests::contents_are_kept_within_their_limits` |
+| a depth kept as the worker answers it | the same |
+| a label written as markup | `epub::tests::contents_are_a_page_of_links_after_the_cover` |
+| an entry linked whatever it leads to | the same |
+| a table of contents read whatever its size; a protected one read | `epub::tests::contents_that_cant_be_read_leave_the_book_whole` |
+| a table of contents unread not said | the same, and `epub::a_books_contents_page_comes_after_its_cover_and_isnt_made_twice` |
+| the Contents page before the cover | `epub::tests::contents_are_a_page_of_links_after_the_cover` |
+| lists as deep as the entries say | the same |
+
+The size test first held a file of blank space past 1 MiB, which no worker could read either: with
+the limit taken away it still passed. It now holds a table of contents that reads, a byte past the
+limit, and one exactly at it, which is listed.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (594 unit, 13 docs, 294 integration), all passing; `cargo deny check
+advisories` too.
+
+**Looked at, not in kitty**: Standard Ebooks' *Alice* and *Frankenstein* printed with `--protocol
+kitty`, their pages read back as pictures: the cover, then `Contents`, a list nested two deep, its
+entries in the links' blue. The task's manual check, in kitty, is the owner's, and its box stays
+open until it is confirmed.

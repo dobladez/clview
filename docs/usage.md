@@ -967,8 +967,8 @@ Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on 
 
 ### Books
 
-An ebook (epub) is shown as a book: its cover, then its chapters in its reading order, all of them,
-each starting a new page, as one document. A chapter out of the main flow (`linear="no"`: a note,
+An ebook (epub) is shown as a book: its cover, a Contents page, then its chapters in its reading
+order, all of them, each starting a new page, as one document. A chapter out of the main flow (`linear="no"`: a note,
 an answer) comes where the book lists it. The book's package, which says that order, is read by
 [rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
 XHTML, are joined and laid out as [HTML is](#documents), on pages the window's size or to a width
@@ -981,6 +981,16 @@ with its option; `/` [searches](#searching-a-documents-text) the whole book, acr
 (EPUB 3's `cover-image`, or EPUB 2's `<meta name="cover">`), unless the first chapter shows that
 picture already, as most books' cover pages do; then it isn't shown twice. So a book's tile in a
 list is its cover.
+
+**A Contents page** comes after the cover (first, in a book without one), headed `Contents`: the
+book's table of contents, EPUB 3's (its `nav`) or else EPUB 2's (its NCX), as nested lists as deep
+as the book's, each entry a link to the place it names. `f` and an entry's label go to its
+chapter, `u` comes back, and `/` finds a chapter by its title. An entry that leads to no chapter
+the book shows is its label alone. No page is made for a book one of whose chapters is its table
+of contents already, as the book's package says: its nav document in its reading order, or the
+chapter its landmarks, or its guide, call `toc`. A book that has a contents page of its own and
+doesn't say so has both. A table of contents that can't be read leaves the book without the
+page, and the first page says so: it never costs the book.
 
 Its pictures are read from the book, by their paths from their chapter, `..` included but never
 above the book's top, and drawn by whatever shows them, as a document's are from its directory.
@@ -1232,9 +1242,10 @@ limit, it does as the last column says. How large a page is drawn is under
 | A book's reading order | 4,096 chapters; a file's path of 4 KiB | refused |
 | A book's chapter | 16 MiB | that chapter is left out, and the first page says so |
 | A book, its chapters joined | 48 MiB; 400,000 lines and tags; 6 MiB of text between its tags, some 3,700 pages: below what any HTML file may be, above | the chapter that would pass one is left out, with those after it, and the first page says how many |
+| A book's table of contents (its nav document, or its NCX) | 1 MiB; 4,096 entries; a label of 256 bytes; 8 levels | past 1 MiB, the book has no Contents page, and its first page says so; past 4,096, the rest are left out, and the first page says so; a longer label is cut; a deeper entry is shown at the eighth level |
 | A book through a pipe, or in an archive | 256 MiB | refused |
 | A place in a book: a chapter's `id`, with its chapter's number before it | 256 bytes | that `id` is no place, and a link to it says `no such place in this book` |
-| The process that reads a book's package: its CPU time, and its memory | 2 s, or three times that on the clock; 256 MiB | the process is killed and the book refused: `its package couldn't be read` |
+| The process that reads a book's package, and another its table of contents: its CPU time, and its memory | 2 s, or three times that on the clock; 256 MiB | the process is killed; on the package, the book is refused: `its package couldn't be read`; on the table of contents, the book has no Contents page |
 | A fenced block drawn as a picture | what a file of its kind may be: a Mermaid diagram's 1 MiB, and merman's limits | it stays code, and the first page says how many did |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |

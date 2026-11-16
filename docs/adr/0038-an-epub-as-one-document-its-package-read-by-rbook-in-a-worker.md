@@ -72,7 +72,17 @@ The viewer has two shapes for many things shown together: a list of files, each 
    400,000 marks, 6 MiB of text between its tags, counted as it writes. The chapter that would
    pass one is left out with those after it, and said, where the documents' backend would refuse
    the whole file.
-9. **The book is assembled again each time it is read**, from the reading order kept: to open, on
+9. **The table of contents is a page of the book**, a Contents page after the cover, not an
+   overlay of the viewer's: a list of links, which `f` follows and `u` comes back from as any
+   link's ([Spec-0011](../specs/0011-follow-a-documents-links.md)), `/` searches, and text cells
+   and tmux show, with nothing new in the viewer. A second request to a second worker reads it,
+   given the package again and the nav document or the NCX (1 MiB at most): its entries, walked
+   with a stack of the worker's own, 4,096 at most, shown 8 levels deep. Apart from the reading
+   order, so that a table of contents rbook can't read, or that kills the worker, costs that page
+   and never the book.
+10. **No Contents page where the package says a chapter is one**: the nav document in the spine,
+    or the chapter the landmarks, or EPUB 2's guide, call `toc`.
+11. **The book is assembled again each time it is read**, from the reading order kept: to open, on
    its first render, on each relayout. An open book holds that order and where its file is, not
    its text, since a list may hold many
    ([ADR-0019](0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
@@ -125,6 +135,18 @@ chapter joined and the whole book laid out, for its first page.
 
 All 22 one after another take 11 s; a list opens four at a time.
 
+**A table of contents**, `measure gen <nav|ncx|entries> <n>` then `measure read --toc`: rbook reads
+one nested 20,000 deep in 10 ms and 20 MiB, on a main thread's stack of 8 MiB, and drops it; an
+NCX nested 14,000 deep, more than 1 MiB of it, in 7 ms and 14 MiB; a nav of 30,000 entries side
+by side in 12 ms and 9 MiB. So nothing within the 1 MiB that is read of one takes the worker past
+its caps at this version: the caps are there for the next.
+
+**A book's own contents page, told**: of the 22 books, none has its nav document in its spine; 7
+of the 10 EPUB 2 editions name a contents chapter in their guide (`type="toc"`), and get no
+Contents page; the EPUB 3 editions of the same books say nothing of it (they have no landmarks),
+and get the page besides the contents their text has; Standard Ebooks' two have no contents page
+of their own, and get the page.
+
 **A page break on a `<div>`** reaches its first paragraph in the documents' backend, at the Word
 backend's pin: `<div style="page-break-before: always">` starts a page before a heading, a
 paragraph, bare text, a list, a block quote, a `<pre>`, a rule or a picture, nested or not, and
@@ -148,6 +170,13 @@ that is the first thing a chapter shows.
   cross its pipe, to save the backend two small reads it has to bound anyway.
 - **The book's own container given to rbook**: one more hostile file for it to parse, and the
   backend's look and rbook's could then disagree on which package it names.
+- **The table of contents as an overlay of the viewer's**, opened with a key over any page: a new
+  kind of thing in the viewer, with keys, drawing and a contract for a source's outline, for PDFs
+  and documents too. It is in the backlog
+  ([a table of contents to browse](../backlog.md#a-table-of-contents-to-browse)); the page needs
+  none of it, and is what a printed book has.
+- **The table of contents read with the reading order, in one request**: one it can't read fails
+  the whole package in rbook, and the book with it.
 - **A source a chapter, joined as a list's tiles are**: each chapter laid out alone, cheaply, and
   only when reached. But a search would stop at a chapter's end, a link to another chapter would
   be a link to another file, and `]` would lay one chapter out again, not the book.
@@ -170,6 +199,8 @@ that is the first thing a chapter shows.
     books that for each tile wanted.
   - A chapter whose first content is a table starts a point lower than any other.
   - A book past the bounds shows its first chapters only: 6 MiB of text is some 3,700 pages.
+  - A book that has a contents page among its chapters and doesn't say so has two: Project
+    Gutenberg's EPUB 3 editions, of the books looked at.
   - A fixed-layout book is laid out flowing, and says so
     ([backlog](../backlog.md#fixed-layout-epubs-through-blitz)).
   - A book's tile in a list costs the whole book's layout: 22 real books printed as a list take

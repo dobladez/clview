@@ -361,6 +361,64 @@ fn a_protected_chapter_is_left_out_and_a_book_all_protected_refused() {
     assert_eq!(said, "warning: page 1: a fixed-layout book: its pages are laid out as its text flows, not as they were made\n");
 }
 
+/// A nav document whose table of contents is `list`.
+pub(crate) fn nav(list: &str) -> Vec<u8> {
+    format!(
+        r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><h1>Contents</h1>{list}</nav></body></html>"#
+    )
+    .into_bytes()
+}
+
+/// The manifest's item for a nav document at `OEBPS/nav.xhtml`.
+pub(crate) const NAV_ITEM: &str = r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#;
+
+/// A nav's list of [`three_chapters`]'s chapters, as a nav at `OEBPS/nav.xhtml` writes them.
+pub(crate) const THREE_ENTRIES: &str = r##"<ol><li><a href="Text/ch1.xhtml">The red one</a></li><li><a href="Text/ch2.xhtml#start">The blue one</a></li><li><a href="Text/ch3.xhtml">The green one</a></li></ol>"##;
+
+/// A book's table of contents is a Contents page after its cover, before its first chapter; none
+/// is made for a book whose own page of contents is in its reading order. A table of contents
+/// that can't be read (an NCX nested 100,000 deep, more than is read of one) leaves the book
+/// without the page, its first page saying so; one nested as deep as fits is read.
+#[test]
+fn a_books_contents_page_comes_after_its_cover_and_isnt_made_twice() {
+    let yellow = |page: &image::RgbImage| of(page, YELLOW) > 0;
+    let cover = r#"<item id="cover" href="Images/cover.png" media-type="image/png" properties="cover-image"/>"#;
+    let (chapters, mut pictures) = coloured_chapters();
+    pictures.push(("OEBPS/Images/cover.png", plain(200, YELLOW)));
+    let shown = |name: &str, files: &[(String, Vec<u8>)]| pages(&write(tmp("epub-contents", name), &zipped(files, Mimetype::Stored)), &[]);
+    let with = |more: &[(&'static str, Vec<u8>)]| [pictures.clone(), more.to_vec()].concat();
+    // The cover, the Contents page, then the three chapters.
+    let book = book_with(&chapters, &with(&[("OEBPS/nav.xhtml", nav(THREE_ENTRIES))]), "", &format!("{cover}{NAV_ITEM}"));
+    let (pages, said) = shown("book.epub", &book);
+    assert_eq!((pages.len(), said.as_str()), (5, ""));
+    assert!(yellow(&pages[0]) && !yellow(&pages[1]) && colours(&pages[1..2]) == [[false; 3]], "the Contents page, of text alone");
+    assert_eq!(colours(&pages[2..]), IN_ORDER);
+    // The nav document in the reading order is the book's own: a chapter, and no page of clv's.
+    let mut own = book.clone();
+    let package = own.iter_mut().find(|(name, _)| name == "OEBPS/content.opf").unwrap();
+    package.1 = String::from_utf8(package.1.clone()).unwrap().replace("<spine>", r#"<spine><itemref idref="nav"/>"#).into_bytes();
+    let (pages, said) = shown("own.epub", &own);
+    assert_eq!((pages.len(), said.as_str()), (5, ""), "the cover, the book's own contents, its chapters");
+    // An NCX nested 100,000 deep: past what is read of one, so never given to the worker.
+    let point = r#"<navPoint><navLabel><text>x</text></navLabel><content src="Text/ch1.xhtml"/>"#;
+    let deep = format!(
+        r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>{}{}</navMap></ncx>"#,
+        point.repeat(100_000),
+        "</navPoint>".repeat(100_000)
+    );
+    let ncx = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+    let nested = book_with(&chapters, &with(&[("OEBPS/toc.ncx", deep.into_bytes())]), "", &format!("{cover}{ncx}"));
+    let (pages, said) = shown("nested.epub", &nested);
+    assert_eq!((pages.len(), said.as_str()), (4, "warning: page 1: its table of contents couldn't be read: it has no Contents page\n"));
+    assert_eq!(colours(&pages[1..]), IN_ORDER, "the book is whole");
+    // A nav nested 20,000 deep, within what is read: rbook reads it, and the page is made.
+    let list = format!("{}{}", r#"<ol><li><a href="Text/ch1.xhtml">x</a>"#.repeat(20_000), "</li></ol>".repeat(20_000));
+    let within = book_with(&chapters, &with(&[("OEBPS/nav.xhtml", nav(&list))]), "", &format!("{cover}{NAV_ITEM}"));
+    assert!(within.iter().any(|(name, bytes)| name == "OEBPS/nav.xhtml" && bytes.len() < 1 << 20));
+    let (pages, said) = shown("within.epub", &within);
+    assert!(said.contains("its Contents page has the first 4096 entries") && pages.len() > 5 && yellow(&pages[0]), "{said}: {} pages", pages.len());
+}
+
 /// `--help` lists the format, by its extension, and credits what reads it.
 #[test]
 fn help_lists_books_and_credits_rbook() {

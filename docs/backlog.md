@@ -197,7 +197,10 @@ A PDF's outline (pdfcraft's `DocInfo.outline`: titles, levels, each a page and a
 document's headings (paragraphs with an outline level, which wordcraft's PDF exporter already lists
 with their pages) could be shown over the pages as `?`'s keys are, and one chosen gone to, as
 following a link to a place in the document goes there
-([Spec-0011](specs/0011-follow-a-documents-links.md)), Backspace coming back.
+([Spec-0011](specs/0011-follow-a-documents-links.md)), Backspace coming back. A book (epub) has its
+table of contents as a page of its own meanwhile, a Contents page of links
+([Spec-0012](specs/0012-show-an-epub-as-a-book.md)): its entries, which the epub's worker reads,
+would serve the overlay too.
 
 ### Fixed-layout epubs through Blitz
 

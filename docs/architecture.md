@@ -504,8 +504,17 @@ through its command) and that a key means one setting
   with `skip_toc`, so rbook reads no other file, and a table of contents it can't read doesn't
   cost the package. Its caps are 2 s of CPU and 256 MiB of heap (`READ_CPU`, `MAX_HEAP`): a
   package of 599,000 empty elements in 4 MiB takes rbook 566 MiB, and is refused by the cap. One
-  worker a book, gone once it has answered, one at a time (`TURN`), so a list of books takes one
-  of the six workers' places. The answer is checked as any input is (`Plan::read`: 4,096 chapters,
+  worker a request, gone once it has answered, one at a time (`TURN`), so a list of books takes
+  one of the six workers' places. A second request, `CONTENTS`, reads the table of contents, for a
+  book whose answer names the file that holds one (`Answer::toc`: the manifest's `nav` item, else
+  its NCX) and doesn't have that file in its spine: the package again, and that file (1 MiB at
+  most, `MAX_TOC`), which rbook now reads with it. It is answered `ENTRIES` (`Listed::written`):
+  the entries of `toc().contents()`, walked with a stack of the worker's own, since rbook's own
+  counts of them recurse, each its depth, its label and where it leads, 4,096 at most; and the
+  file the landmarks, or EPUB 2's guide, call `toc`. `epub::contents` checks it (`Listed::read`)
+  and keeps the entries in the `Plan`, or nothing where that file is a chapter (`Contents::None`),
+  or that it couldn't be read (`Contents::Unread`): a worker that refuses, dies or answers
+  otherwise costs the Contents page, never the book. The answer is checked as any input is (`Plan::read`: 4,096 chapters,
   4 KiB a path, each path brought to one from the book's top or dropped) and kept with the book
   (`Plan`), with where the book's bytes are (`Kept`: the zip's directory, for a file on disk or
   one come through a pipe; how to read it again, for one held in another file). `assembled` writes
@@ -516,7 +525,10 @@ through its command) and that a key means one setting
   a table is none, so one that is the first thing a chapter shows gets a paragraph of a zero-width
   space before it, `BEFORE_A_TABLE`). A chapter that is a picture is a `<div>` of an `<img>` of it
   (`page_of`), and so is the cover, before the first chapter shown, unless that chapter's body
-  refers to the cover's path as written from the book's top. A chapter the book protects
+  refers to the cover's path as written from the book's top. After the cover comes the Contents
+  page (`contents_page`): a `<div id="contents">` of a heading and nested lists, each entry its
+  label, escaped, as a link to its place (`place`, as a chapter's own links are written) where it
+  leads to a chapter the book shows, no deeper than the entry before it by more than a level. A chapter the book protects
   (`Plan::protects`) is left out and counted, and a book with none shown and some protected is
   refused.
   `Written::body` goes through the chapter with `markup.rs`'s lexer, tag by tag: `<head>`,
@@ -539,7 +551,8 @@ through its command) and that a key means one setting
   reads a picture from the book by its very name in the zip, with its first bytes alone for its
   size, and refuses one the book protects. What the backend gives is wrapped in a `Book`, which hands every `Source` method on, the
   source a relayout's job makes too; puts the chapters left out or protected among the first page's
-  warnings, and that a fixed-layout book is laid out flowing (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
+  warnings, with a table of contents unread or cut, and that a fixed-layout book is laid out
+  flowing (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
   `Target::Other` saying which it is), so the viewer never looks for a file beside the `.epub`.
   The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
   `margin`, `fences`), so that a list knows a book has them before it is opened
