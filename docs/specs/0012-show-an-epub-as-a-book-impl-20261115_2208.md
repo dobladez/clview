@@ -689,3 +689,16 @@ with `//`.
 
 Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
 `cargo test -j 2` (617 unit, 13 docs, 300 integration), all passing.
+
+## Done (2026-11-16)
+
+- **The manual checks.** The owner did them in kitty and they pass, as the team lead relayed, with
+  the word to tick tasks 3, 4, 5 and 7 and the Done list's manual item: a Gutenberg book with its
+  pictures, `/` across chapters, `D`, `+` and `-`; a directory of books; `T`, Backspace and `f`
+  on a contents page; clv's own Contents page last; a README's pictures in a zip; and the status
+  line and `?` at 80 columns.
+- **Merged after release 0.5.0.** Rebased onto it; its changelog lines moved under `Unreleased`,
+  where the rebase had left them under 0.5.0. The gates pass there.
+- **Left for later.** A piped file read whole before its limit, in `Input::reopenable` and shared
+  by every backend, came up in the Codex review and is not this spec's. The builds without every
+  backend (none, and `pdf,svg`) are CI's nightly, after the push.

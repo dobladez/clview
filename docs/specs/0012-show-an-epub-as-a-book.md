@@ -1,6 +1,6 @@
 # Spec-0012: Show an epub as a book
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-15
 - **Related:** [ADR-0013](../adr/0013-a-documents-pictures-are-drawn-by-the-backends.md) (a document's
   pictures, only from near it, which this lets a held file reach: its follow-up);
@@ -389,7 +389,7 @@ over left out, and said:
   and a file of that name beside the `.epub` not opened; `--width 60`, dark paper; nothing else
   names rbook; the Mermaid epub as a book); `cargo test -j 2 --test it view_pager::epub` (`/`
   finds a word in the third chapter; the worker gone once it has answered).
-- [ ] **Covers, fallbacks and DRM** — the cover first (both kinds, not twice), an `<svg>` cover as
+- [x] **Covers, fallbacks and DRM** — the cover first (both kinds, not twice), an `<svg>` cover as
   its picture, empty elements written short, a picture or SVG as a chapter, the `fallback` chain,
   protected chapters left out and said (the book refused when none is left), fixed layout said; a list of books timed. *Files:* `src/source/epub.rs`,
   `tests/it/epub.rs`, `docs/usage.md`. *Verify:* `cargo test -j 2 --bin clv epub::tests` (both
@@ -399,14 +399,14 @@ over left out, and said:
   says two; all protected: refused); `Manual: in kitty, clv a Project Gutenberg epub
   with pictures (Alice's Adventures in Wonderland): the cover, then each chapter on its own page with
   its pictures; / a word from the last chapter; d; + then -; and a directory of 20 epubs, timed`.
-- [ ] **A book's links** — chapter-to-chapter and in-chapter links rewritten to places, a chapter's
+- [x] **A book's links** — chapter-to-chapter and in-chapter links rewritten to places, a chapter's
   start a place, an id too long once prefixed; usage. *Files:* `src/source/epub.rs`,
   `tests/it/view_pager.rs`, `docs/usage.md`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv
   epub::tests::links` (relative, `..`, a fragment, none, a missing chapter, an id past 256 bytes) and
   `cargo test -j 2 --test it view_pager::epub_links` (`f` on a contents page's label lands on chapter
   3's heading, `u` back, `F` copies its `#name`); `Manual: in kitty, a Gutenberg epub's contents page,
   f, a label: its chapter`.
-- [ ] **A book's Contents page** — the worker's `CONTENTS` (nav, else NCX; walked with its own
+- [x] **A book's Contents page** — the worker's `CONTENTS` (nav, else NCX; walked with its own
   stack; its limits), the page written at the book's end with links to places and a line saying
   clv made it (revised 2026-11-16: it was after the cover, and not made when a chapter is the
   book's own), a table of contents unread or killing the worker leaving the book whole; usage,
@@ -430,7 +430,7 @@ over left out, and said:
   message alone on the line at any width; a moment of a second, started over by a key) and `cargo
   test -j 2 --test it view_pager` (at 80 columns, `D`, `]` and `s` on a PDF: the sentence on the
   whole line, the status line back after a second, and at once with a key).
-- [ ] **A key that goes to the contents** (the owner's, 2026-11-16) — the contract's
+- [x] **A key that goes to the contents** (the owner's, 2026-11-16) — the contract's
   `Source::contents` (a `Landmark`: what the place is called and its name among the source's
   links); the viewer's `contents` command, `T`, through Spec-0013's catalog and keymaps, offered
   only where a place is declared (`?`, and `Contents: T` on the status line for a second when the
@@ -466,7 +466,7 @@ over left out, and said:
 - [x] Tests added, each seen failing without the change: `a_documents_pictures` (zip and tar),
   `epub::tests`, `tests/it/epub.rs`, `view_pager::epub`, `view_pager::epub_links`,
   `view_pager::epub_t_goes`, `view_pager::t_is_offered`.
-- [ ] Manual: in kitty, a Gutenberg epub with pictures and a contents page: the cover first, chapters
+- [x] Manual: in kitty, a Gutenberg epub with pictures and a contents page: the cover first, chapters
   a page each, its pictures, `/` across chapters, `D`, `+`, and `f` to a chapter, `T` to its own
   contents and Backspace back; a book without a contents page of its own: `T` to the Contents page
   at its end, `f` to a chapter; a directory of 20
@@ -495,3 +495,4 @@ over left out, and said:
   a seventh task, a key that goes to the contents, the book's own where marked or guessed.
 - 2026-11-16 — An eighth task, the owner's: `?` names two formats at a line's end, and shows faint
   the keys that do nothing on what is shown.
+- 2026-11-16 — Done.
