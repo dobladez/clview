@@ -656,10 +656,36 @@ timed, 3 s for each of `href="#x"`, `href=""` and `href="two.xhtml"`, 800,000 ti
 under a directory 2,000 deep: the first took 22.9 s on the code as it was, and the test failed
 there. It holds what `from_the_top` answers too (up the directory, from the top, above it).
 
-**Left undone, for want of time** (the session's usage limit was reached here): the two reverts
-one at a time (the early answer alone; the directory taken apart again alone), a property test
-holding the new `from_the_top` to the plain one name by name, which was written and not put in,
-and a line in `docs/architecture.md` on `from_the_top_within`.
+**Left undone then, for want of time** (the session's usage limit was reached there), and done in
+the commit after, below: the two reverts one at a time, a property test holding the new
+`from_the_top` to the plain one name by name, and a line in `docs/architecture.md`.
 
 Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
 `cargo test -j 2` (616 unit, 13 docs, 300 integration), all passing.
+
+### Round 3, finished
+
+**Each part of the fix reverted alone**, and the resolver changed where it could be wrong:
+
+| Reverted | Failed |
+|---|---|
+| a place alone asked about as a path (no early answer in `Written::linked`) | `epub::tests::links_between_chapters_are_places_in_the_book`, `…links_lead_to_ids_made_the_books_own`, `…links_to_an_id_too_long_once_made_the_books_own_say_so`, `…a_reference_costs_nothing_for_its_chapters_depth` (by what is written: `#x` is then no place in its chapter) |
+| the directory taken apart for each reference (the resolver as it was) | `epub::tests::a_reference_costs_nothing_for_its_chapters_depth` (17 s where it has 3, on the links to a chapter; the places alone pass, answered early) |
+| above the top is the top (`..` with nothing left to go up) | `epub::tests::a_path_from_the_top_is_the_one_found_name_by_name`, `…a_reference_costs_nothing_for_its_chapters_depth` |
+| a path as long as may be is too long; a path's length counted with a name too many | `epub::tests::a_path_from_the_top_is_the_one_found_name_by_name` |
+
+So each part is held alone: the early answer by what links are written as, which three tests that
+were there before say; the resolver's time by the timed test; and what the resolver answers by the
+property test.
+
+**The property test**, `a_path_from_the_top_is_the_one_found_name_by_name`, 512 cases: a directory
+of up to five names, some past ASCII, and a reference made of `/`, `//`, `../`, `./`, `..`, `.`,
+names, `%2F`, `%2f`, `%2E`, `%C3%A9` and a `%` alone, both as written and as read (its `%XX`
+undone, where `%2F` is a `/` and `%2E%2E` a `..`). `from_the_top` gives what the plain way gives,
+name by name (kept in the tests as `plainly_from_the_top`: the function as it was);
+`from_the_top_within` gives that where it is no longer than a length drawn too; and
+`Written::resolved` gives it for a chapter in that directory, none for a reference that starts
+with `//`.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (617 unit, 13 docs, 300 integration), all passing.

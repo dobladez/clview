@@ -3009,7 +3009,7 @@ mod tests {
         let written = Written { chapter: 1, directory: deep.trim_end_matches('/'), zipped: &none, chapters: &numbers };
         let many = |attribute: &str| chapter(&format!("<a {}>x</a>", attribute.repeat(800_000)));
         for (attribute, to, most) in
-            [(r##"href="#x" "##, r##" href="#c1-x""##, 3), ("href=\"\" ", r##" href="#c1""##, 3), (r#"href="two.xhtml" "#, r##" href="#c2""##, 6)]
+            [(r##"href="#x" "##, r##" href="#c1-x""##, 3), ("href=\"\" ", r##" href="#c1""##, 3), (r#"href="two.xhtml" "#, r##" href="#c2""##, 3)]
         {
             let links = many(attribute);
             let since = std::time::Instant::now();
@@ -3110,6 +3110,53 @@ mod tests {
         assert_eq!(Fields(&written).collect::<Vec<_>>(), [&b"one"[..], b"", b"three"]);
         assert_eq!(Fields(&written[..written.len() - 1]).collect::<Vec<_>>(), [&b"one"[..], b""], "one cut short is none");
         assert_eq!(Fields(&[0xFF, 0xFF, 0xFF, 0xFF, 1]).count(), 0);
+    }
+
+    /// A path from the top as it is plainly found: the directory's names and the reference's, one
+    /// by one, as [`from_the_top`] found it before it stopped taking the directory apart.
+    fn plainly_from_the_top(directory: &str, reference: &str) -> Option<String> {
+        let mut parts: Vec<&str> = match reference.starts_with('/') {
+            true => Vec::new(),
+            false => directory.split('/').filter(|part| !part.is_empty()).collect(),
+        };
+        for part in reference.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop()?;
+                }
+                part => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join("/"))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Whatever the directory and the reference, the path found is the one found plainly, name
+        /// by name: `..` up the directory and above the top, `.` and empty names, a path from the
+        /// top, names past ASCII, and a `/` or a `.` written `%2F` or `%2E`, which is one once the
+        /// reference is read. Within a length, it is that path where it is no longer; and a
+        /// chapter's reference is found the same.
+        #[test]
+        fn a_path_from_the_top_is_the_one_found_name_by_name(
+            directory in prop::collection::vec("[a-cé]{1,3}", 0..6),
+            reference in r"(/|//|\.\./|\./|\.\.|\.|[a-cé]{1,2}|%2F|%2f|%2E|%C3%A9|%){0,12}",
+            most in 0usize..24,
+        ) {
+            let directory = directory.join("/");
+            for reference in [reference.clone(), percent_decoded(&reference).unwrap_or_default()] {
+                let plainly = plainly_from_the_top(&directory, &reference);
+                prop_assert_eq!(from_the_top(&directory, &reference), plainly.clone(), "{} {}", directory, reference);
+                prop_assert_eq!(from_the_top_within(&directory, &reference, most), plainly.filter(|path| path.len() <= most), "{} {}", directory, reference);
+            }
+            let (numbers, none) = (HashMap::new(), book(&[]));
+            let written = Written { chapter: 1, directory: &directory, zipped: &none, chapters: &numbers };
+            let read = percent_decoded(&reference).and_then(|read| plainly_from_the_top(&directory, &read));
+            let found = if reference.starts_with("//") { None } else { Some((read, "")) };
+            prop_assert_eq!(written.resolved(&reference), found, "{} {}", directory, reference);
+        }
     }
 
     proptest! {

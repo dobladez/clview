@@ -583,7 +583,14 @@ through its command) and that a key means one setting
   drawing's `<title>` or `<desc>` is passed over within 4 KiB (`MAX_LOOK`) when it is looked into
   for the picture it may wrap, a chapter's drawings being looked into for nothing 1 MiB at most
   together (`MAX_LOOKED`), after which the chapter's drawings stay drawings; without those, 1 MiB
-  of `&` took 20 s to read, and 80,000 drawings whose `<desc>` ends at the chapter's end 30 s. The
+  of `&` took 20 s to read, and 80,000 drawings whose `<desc>` ends at the chapter's end 30 s.
+  Nor does a reference cost what its chapter's directory is deep: a link that is empty, a place
+  alone (`#x`) or a query alone is this chapter's, answered before any path is asked about
+  (`Written::linked`), and a path is found from the directory as it is written
+  (`from_the_top_within`: the directory's end cut back for each `..` that leads up it, never taken
+  apart into its names, and a path past `MAX_PATH` found so by its length, not put together). Taken
+  apart for each, 800,000 `href="#x"` in a chapter 2,000 directories deep took 23 s.
+  `a_path_from_the_top_is_the_one_found_name_by_name` holds it to the plain way, name by name. The
   document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,
   for the first render and each relayout, asking the worker nothing; its `Near` (`epub::near`)
   reads a picture from the book by its very name in the zip, with its first bytes alone for its
