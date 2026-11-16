@@ -196,3 +196,14 @@ As planned, with these readings of what the spec leaves to the code:
   `clipboard_answers_are_never_keys` have the same bytes after a `j`), so nothing was fixed in the
   code; with `decode`'s two arms that hold them back taken out, all three tests failed, and
   `answers_among_keys_cut_anywhere_are_never_keys` with them. File copied back, `cmp` clean.
+
+## Done (2026-11-16)
+
+- **The manual checks.** The owner did them in kitty and they pass, as the team lead relayed, with
+  the word to tick task 3's box and the Done list's manual item. The confirmation names kitty; it
+  doesn't say tmux apart, where what stands for it is `tests/it/view_tmux.rs`, `D` in a pane among
+  it.
+- **Discoveries, the last time.** The owner's earlier answers are the final word: the arrows keep
+  turning pages (`next-page`, `previous-page`), `12 Home` goes to page 12, a setting's phrase that
+  names its keys is in the backlog under A config file, and Alt with Enter or a Ctrl key still
+  beginning with an Esc is in ADR-0036. Nothing else came up.

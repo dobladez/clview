@@ -1,6 +1,6 @@
 # Spec-0013: Bind keys to named commands, and rebind them
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-15
 - **Related:** [ADR-0021](../adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)
   (a backend declares its settings and their keys; "the viewer's keys come first", which this
@@ -187,7 +187,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   through it, `?` and the reminders read from it, `VIEWER_KEYS` gone. A refactor: every key does what
   it did. *Files:* `src/view/commands.rs`, `src/view/pager.rs`, `src/view/mod.rs`, `src/source.rs`,
   `docs/architecture.md`. *Verify:* `cargo test -j 2`, the existing tests unchanged.
-- [ ] **The new keys** — `d` and `u` a screen, `D` the paper, `u` no longer back, `C-n` `C-p` `C-f`
+- [x] **The new keys** — `d` and `u` a screen, `D` the paper, `u` no longer back, `C-n` `C-p` `C-f`
   `C-b`, `C-v` and `M-v`; the tests that pressed `d` or `u`; the docs, the changelog and the ADR.
   *Files:* `src/view/commands.rs`, `src/view/pager.rs`, `src/source/wordcraft.rs`,
   `src/source/mermaid.rs`, `tests/it/*.rs`, `docs/usage.md`, `docs/architecture.md`, `docs/adr/`,
@@ -200,7 +200,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: name them.
-- [ ] Manual: in kitty and inside tmux, `d`, `u`, `C-v`, `M-v` and `D` on a PDF, a Markdown file and
+- [x] Manual: in kitty and inside tmux, `d`, `u`, `C-v`, `M-v` and `D` on a PDF, a Markdown file and
   a list, and `?` listing the keys from the keymap.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
@@ -211,3 +211,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-15 — Revised while implementing, by the owner's word: → and ← keep turning pages with a search
   kept, as they do today, through two more commands, `next-page` and `previous-page`; `next` and
   `previous` are on `n` and `p` alone. The pages table said one command for both.
+- 2026-11-16 — Done.
