@@ -411,15 +411,15 @@ over left out, and said:
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: `a_documents_pictures` (zip and tar),
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: `a_documents_pictures` (zip and tar),
   `epub::tests`, `tests/it/epub.rs`, `view_pager::epub`, `view_pager::epub_links`,
   `view_pager::epub_contents`.
 - [ ] Manual: in kitty, a Gutenberg epub with pictures and a contents page: the cover first, chapters
   a page each, its pictures, `/` across chapters, `d`, `+`, and `f` to a chapter; a book without a
   contents page of its own: the Contents page after the cover, `f` to a chapter; a directory of 20
   epubs as a list, timed, its tiles their covers; a Markdown README in a zip with its screenshots.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
@@ -430,3 +430,7 @@ over left out, and said:
   backlog.
 - 2026-11-15 — Ready: the owner's answers in; fixed-layout books through Blitz in the backlog.
 - 2026-11-15 — Implementing ([notes](0012-show-an-epub-as-a-book-impl-20261115_2208.md)).
+- 2026-11-16 — The five tasks' code, tests and docs in, with ADR-0037 and ADR-0038. Tasks 3 to 5
+  and Done's manual item stay open for their checks in kitty, which are the owner's; the worker
+  was found never to be killed by a table of contents within its 1 MiB, nor by `application/fontè`
+  or a chain of `refines`, at rbook 0.7.13 (the notes say what each test does instead).

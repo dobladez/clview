@@ -301,3 +301,29 @@ advisories` too.
 kitty`, their pages read back as pictures: the cover, then `Contents`, a list nested two deep, its
 entries in the links' blue. The task's manual check, in kitty, is the owner's, and its box stays
 open until it is confirmed.
+
+## The Done checklist
+
+- **The gates** pass at the last commit: `cargo fmt --check`, `cargo clippy --all-targets -j 2 --
+  -D warnings`, `cargo test -j 2` (594 unit, 13 docs, 294 integration). The two other feature sets
+  (no backends; `pdf,svg`) are CI's, never built here: `src/source.rs` got dead-code expectations
+  for them (`Input::held`, `starting`, `held_near`, `near`, `start`), `src/source/zipped.rs` one
+  (`index_of`) and `src/source/markup.rs` one (`attributes`), each reasoned out, none compiled.
+  Run `gh workflow run CI` once this is pushed.
+- **Each test was seen failing**, in the tables above; the lexer's two in `markup.rs` too
+  (`a_start_tags_attributes_come_as_written_with_their_places`,
+  `any_text_is_cut_into_pieces_and_attributes_within_it`), with an attribute's place cut to its
+  name, its value a byte short, and its place past its tag.
+- **The docs** were read against what shipped: `CHANGELOG.md` (two lines under Unreleased),
+  usage (Books, Archives, Documents, Which files it shows, Limits, Known issues, the options' and
+  keys' tables), architecture (Sources, Backends' table, Files, How each opens), ADR-0037 and
+  ADR-0038 with their measures and the ADR index, ADR-0013's status, `CONTRIBUTING.md` (features,
+  pins, the rule on rbook, Tests), `CLAUDE.md`'s Layout, README (what it shows; Plans without its
+  epub half), the backlog.
+- **The manual item** is open, with tasks 3 to 5's: in kitty, a Gutenberg epub with pictures and
+  a contents page (the cover first, chapters a page each, its pictures, `/` across chapters, `d`,
+  `+`, `f` to a chapter); a book without a contents page of its own (the Contents page after the
+  cover, `f` to a chapter); a directory of 20 epubs as a list, timed, its tiles their covers; a
+  Markdown README in a zip with its screenshots.
+
+The spec stays `Implementing` until those are confirmed.

@@ -16,11 +16,11 @@ works today. A version's section becomes the notes of its
   dark paper, `/` to search the whole book. It was a list of its files, each chapter opened alone
   and without its pictures. Its cover comes first, a page of its own, and is its tile in a list;
   then a Contents page, made from its table of contents, each entry a link to its chapter, unless
-  one of its chapters is that page already.
-  Chapters it protects (DRM) are left out, and the first page says how many. Its own stylesheets
-  aren't read, and a fixed-layout book is laid out flowing. Its links between chapters are places
-  in the book, which `f` goes to and `u` comes back from; a link from it is never followed to a
-  file. A zip that says it is an epub is one whatever its name.
+  one of its chapters is that page already. Chapters it protects (DRM) are left out, and the first
+  page says how many. Its own stylesheets aren't read, and a fixed-layout book is laid out
+  flowing. Its links between chapters are places in the book, which `f` goes to and `u` comes back
+  from; a link from it is never followed to a file. A zip that says it is an epub is one whatever
+  its name.
 - A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
   their paths from it, `..` included but never above the archive's top: a README in a zip of a
   repository shows its screenshots. They were left as their alt text. Opening the document unpacks

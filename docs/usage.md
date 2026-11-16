@@ -968,8 +968,9 @@ Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on 
 ### Books
 
 An ebook (epub) is shown as a book: its cover, a Contents page, then its chapters in its reading
-order, all of them, each starting a new page, as one document. A chapter out of the main flow (`linear="no"`: a note,
-an answer) comes where the book lists it. The book's package, which says that order, is read by
+order, all of them, each starting a new page, as one document. A chapter out of the main flow
+(`linear="no"`: a note, an answer) comes where the book lists it. The book's package, which says
+that order, is read by
 [rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
 XHTML, are joined and laid out as [HTML is](#documents), on pages the window's size or to a width
 of your own. So a book has what a document has: `[` and `]` for the width of its line, `+` and `-`
@@ -1026,8 +1027,8 @@ read is refused: `it is protected (DRM)`. A protected picture is left out, as on
 
 A chapter that is missing, that can't be read (neither UTF-8, nor UTF-16 with its byte-order mark),
 that is larger than 16 MiB or that is neither XHTML nor a picture is left out, and the first page
-says how many were, and why. A book longer than `clv` lays out ([limits](#limits)) is cut at the chapter that would
-pass them, and the first page says how many chapters that left out.
+says how many were, and why. A book longer than `clv` lays out ([limits](#limits)) is cut at the
+chapter that would pass them, and the first page says how many chapters that left out.
 
 A file that is a book but can't be read as one is refused, with why, and isn't shown as a zip
 instead: one without its `META-INF/container.xml` or the package that names, with a package that
