@@ -266,13 +266,17 @@ CodeQL's default setup scans the Rust and the workflows.
   whose `mimetype` is compressed or missing); through a pipe and in an archive; a book that can't
   be read refused and not shown as a zip; hostile packages (a chain of `refines` 4 MiB long, 599,000
   empty elements that take the worker past its heap) costing the book and never the viewer; a
-  chapter missing left out and said; a width and dark paper; and that nothing else names rbook.
+  chapter missing left out and said; a width and dark paper; the cover as the first page and as
+  the tile in a list, not twice where a chapter wraps it in a drawing; two chapters of five
+  protected left out and said, a book all protected refused, a fixed-layout one said; and that
+  nothing else names rbook.
   In `tests/it/view_pager.rs` (`epub_…`): a word of the third chapter found from the first, the
   worker gone once the book shows and none started by a relayout (`ps`); and a link to a file
   said, with files where a path beside the `.epub` would lead never opened. What the worker
   answers of a package (EPUB 2 and 3, hrefs with `..` and `%20`), a worker that dies or answers
-  too much, chapters assembled and cut at their bounds, and property tests that no chapter and no
-  answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
+  too much, chapters assembled and cut at their bounds, both kinds of cover, a fallback chain and
+  its loop, an `<svg>` that wraps a picture, elements written short, what `encryption.xml` says is
+  protected, and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
   lexer's attributes are in `src/source/markup.rs`.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a

@@ -80,12 +80,17 @@ pub(crate) fn chapter(body: &str) -> String {
 /// The files of a book of `chapters`, each a body, in `OEBPS/Text/`, named `ch1.xhtml` and on, in
 /// that reading order, with `more` files, by their names from the book's top.
 pub(crate) fn book_of(chapters: &[String], more: &[(&str, Vec<u8>)]) -> Vec<(String, Vec<u8>)> {
-    let items: String =
+    book_with(chapters, more, "", "")
+}
+
+/// [`book_of`], its package with `metadata` and manifest `items` of its own besides.
+pub(crate) fn book_with(chapters: &[String], more: &[(&str, Vec<u8>)], metadata: &str, items: &str) -> Vec<(String, Vec<u8>)> {
+    let chapter_items: String =
         (1..=chapters.len()).map(|n| format!(r#"<item id="ch{n}" href="Text/ch{n}.xhtml" media-type="application/xhtml+xml"/>"#)).collect();
     let itemrefs: String = (1..=chapters.len()).map(|n| format!(r#"<itemref idref="ch{n}"/>"#)).collect();
     let mut files = vec![
         ("META-INF/container.xml".to_owned(), CONTAINER.as_bytes().to_vec()),
-        ("OEBPS/content.opf".to_owned(), package("", &items, &itemrefs).into_bytes()),
+        ("OEBPS/content.opf".to_owned(), package(metadata, &format!("{chapter_items}{items}"), &itemrefs).into_bytes()),
     ];
     files.extend(chapters.iter().enumerate().map(|(n, body)| (format!("OEBPS/Text/ch{}.xhtml", n + 1), chapter(body).into_bytes())));
     files.extend(more.iter().map(|(name, bytes)| ((*name).to_owned(), bytes.clone())));
@@ -95,6 +100,12 @@ pub(crate) fn book_of(chapters: &[String], more: &[(&str, Vec<u8>)]) -> Vec<(Str
 /// A book of three chapters, each a heading, a line and a picture of its own colour, red, blue
 /// and green, in `OEBPS/Images/`, reached from the chapter by `../Images/`.
 pub(crate) fn three_chapters() -> Vec<(String, Vec<u8>)> {
+    let (chapters, pictures) = coloured_chapters();
+    book_of(&chapters, &pictures)
+}
+
+/// The bodies and the pictures of [`three_chapters`]'s book.
+fn coloured_chapters() -> (Vec<String>, Vec<(&'static str, Vec<u8>)>) {
     let chapters: Vec<String> = ["red", "blue", "green"]
         .iter()
         .enumerate()
@@ -106,8 +117,21 @@ pub(crate) fn three_chapters() -> Vec<(String, Vec<u8>)> {
         })
         .collect();
     let pictures =
-        [("OEBPS/Images/red.png", plain(120, RED)), ("OEBPS/Images/blue.png", plain(120, BLUE)), ("OEBPS/Images/green.png", plain(120, GREEN))];
-    book_of(&chapters, &pictures)
+        vec![("OEBPS/Images/red.png", plain(120, RED)), ("OEBPS/Images/blue.png", plain(120, BLUE)), ("OEBPS/Images/green.png", plain(120, GREEN))];
+    (chapters, pictures)
+}
+
+const YELLOW: [u8; 3] = [230, 200, 20];
+
+/// [`three_chapters`]'s book with a yellow cover its package names, as EPUB 3 does; and with
+/// `first` as a chapter before the others, if given.
+fn with_a_cover(first: Option<&str>) -> Vec<(String, Vec<u8>)> {
+    let (mut chapters, mut pictures) = coloured_chapters();
+    if let Some(first) = first {
+        chapters.insert(0, first.to_owned());
+    }
+    pictures.push(("OEBPS/Images/cover.png", plain(200, YELLOW)));
+    book_with(&chapters, &pictures, "", r#"<item id="cover" href="Images/cover.png" media-type="image/png" properties="cover-image"/>"#)
 }
 
 pub(crate) fn write(path: PathBuf, bytes: &[u8]) -> PathBuf {
@@ -273,6 +297,68 @@ fn a_book_is_laid_out_to_a_width_and_drawn_on_dark_paper() {
     // What only another kind of file takes is refused, as for any file.
     let out = view(&path, &["--protocol", "kitty", "--password", "x"]);
     assert!(!out.status.success() && out.stdout.is_empty(), "{}", text(&out.stderr));
+}
+
+/// The cover the package names is the book's first page, before its first chapter, and so its tile
+/// in a list; a book whose first chapter is its cover's page, a drawing that wraps the picture,
+/// shows it once.
+#[test]
+fn a_books_cover_is_its_first_page_and_its_tile_in_a_list() {
+    let yellow = |page: &image::RgbImage| of(page, YELLOW) > 0;
+    let dir = tmp("epub-cover", "shelf");
+    std::fs::create_dir_all(&dir).unwrap();
+    let book = write(dir.join("a.epub"), &zipped(&with_a_cover(None), Mimetype::Stored));
+    let (shown, said) = pages(&book, &[]);
+    assert!(said.is_empty() && shown.len() == 4 && yellow(&shown[0]), "{said}: {} pages", shown.len());
+    assert_eq!((colours(&shown[..1]), colours(&shown[1..])), (vec![[false; 3]], IN_ORDER.to_vec()), "the cover alone, then the chapters");
+    let wrapper = r#"<div><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 200 200"><image width="200" height="200" xlink:href="../Images/cover.png"/></svg></div>"#;
+    let wrapped = write(dir.join("b.epub"), &zipped(&with_a_cover(Some(wrapper)), Mimetype::Stored));
+    let (shown, said) = pages(&wrapped, &[]);
+    assert!(said.is_empty() && shown.len() == 4 && yellow(&shown[0]) && !shown[1..].iter().any(yellow), "{said}: {} pages", shown.len());
+    // In a list, each book's tile is its first page: its cover.
+    let (tiles, said) = pages(&dir, &[]);
+    assert!(said.is_empty() && tiles.len() == 2 && tiles.iter().all(yellow), "{said}: {} tiles", tiles.len());
+}
+
+/// A chapter the book protects (DRM) is left out, the first page saying how many are, and the
+/// rest shown; a font only obfuscated is no matter; a book none of whose chapters can be read is
+/// refused. A book made to be laid out page by page says it is laid out flowing.
+#[test]
+fn a_protected_chapter_is_left_out_and_a_book_all_protected_refused() {
+    let data = |algorithm: &str, uri: &str| {
+        format!(
+            r#"<EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#"><EncryptionMethod Algorithm="{algorithm}"/><CipherData><CipherReference URI="{uri}"/></CipherData></EncryptedData>"#
+        )
+    };
+    let encryption = |chapters: &[usize]| {
+        let chapters: String =
+            chapters.iter().map(|n| data("http://www.w3.org/2001/04/xmlenc#aes256-cbc", &format!("OEBPS/Text/ch{n}.xhtml"))).collect();
+        let font = data("http://www.idpf.org/2008/embedding", "OEBPS/Fonts/a.otf");
+        format!(r#"<?xml version="1.0"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">{font}{chapters}</encryption>"#)
+            .into_bytes()
+    };
+    let chapters: Vec<String> = (1..=5).map(|n| format!("<p>Chapter {n}</p>")).collect();
+    let book = |name: &str, protected: &[usize]| {
+        let mut files = book_of(&chapters, &[("META-INF/encryption.xml", encryption(protected))]);
+        // What is protected is no text: its bytes are whatever its cipher made of them.
+        for n in protected {
+            files.iter_mut().find(|(name, _)| *name == format!("OEBPS/Text/ch{n}.xhtml")).unwrap().1 = vec![0x9F, 0x00, 0xFF, 0x80];
+        }
+        write(tmp("epub-protected", name), &zipped(&files, Mimetype::Stored))
+    };
+    let (shown, said) = pages(&book("two.epub", &[2, 4]), &[]);
+    assert_eq!((shown.len(), said.as_str()), (3, "warning: page 1: 2 chapters are protected (DRM)\n"));
+    let (shown, said) = pages(&book("fonts.epub", &[]), &[]);
+    assert_eq!((shown.len(), said.as_str()), (5, ""), "a font obfuscated is no protected file");
+    let all = book("all.epub", &[1, 2, 3, 4, 5]);
+    let out = view(&all, &["--protocol", "kitty"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert_eq!(text(&out.stderr), format!("clv: {}: it is protected (DRM)\n", all.display()));
+    // Fixed layout, said with the first page, and laid out as any other book.
+    let fixed = book_with(&chapters, &[], r#"<meta property="rendition:layout">pre-paginated</meta>"#, "");
+    let (shown, said) = pages(&write(tmp("epub-protected", "fixed.epub"), &zipped(&fixed, Mimetype::Stored)), &[]);
+    assert_eq!(shown.len(), 5);
+    assert_eq!(said, "warning: page 1: a fixed-layout book: its pages are laid out as its text flows, not as they were made\n");
 }
 
 /// `--help` lists the format, by its extension, and credits what reads it.

@@ -32,7 +32,9 @@ Org-mode, AsciiDoc and reStructuredText, their source blocks (`#+begin_src`, `[s
 `.. code::`) drawn as Markdown's fenced blocks are. An ebook's own stylesheets, applied a chapter
 at a time: an epub is a book now ([Spec-0012](specs/0012-show-an-epub-as-a-book.md)), in clv's
 own look, since the stylesheets of its chapters would meet in the one document they are joined
-into. Other ebook formats: MOBI, AZW, FB2.
+into. A book's tile from its cover alone: a list lays each book out whole for its tile, as it does
+any document (22 real books printed as a list take 10 s, half a second a book). Other ebook
+formats: MOBI, AZW, FB2.
 
 ### `/` as a search in lists too
 

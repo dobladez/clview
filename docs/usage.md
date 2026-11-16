@@ -967,9 +967,9 @@ Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on 
 
 ### Books
 
-An ebook (epub) is shown as a book: its chapters in its reading order, all of them, each starting a
-new page, as one document. A chapter out of the main flow (`linear="no"`: a note, an answer) comes
-where the book lists it. The book's package, which says that order, is read by
+An ebook (epub) is shown as a book: its cover, then its chapters in its reading order, all of them,
+each starting a new page, as one document. A chapter out of the main flow (`linear="no"`: a note,
+an answer) comes where the book lists it. The book's package, which says that order, is read by
 [rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
 XHTML, are joined and laid out as [HTML is](#documents), on pages the window's size or to a width
 of your own. So a book has what a document has: `[` and `]` for the width of its line, `+` and `-`
@@ -977,10 +977,20 @@ for its font size, `{` and `}` for its margins, `d` for dark paper, `s` for its 
 with its option; `/` [searches](#searching-a-documents-text) the whole book, across its chapters;
 `--pages` picks pages; and `o` opens the `.epub` itself.
 
+**The cover comes first**, a page of its own: the picture the book's package names as its cover
+(EPUB 3's `cover-image`, or EPUB 2's `<meta name="cover">`), unless the first chapter shows that
+picture already, as most books' cover pages do; then it isn't shown twice. So a book's tile in a
+list is its cover.
+
 Its pictures are read from the book, by their paths from their chapter, `..` included but never
 above the book's top, and drawn by whatever shows them, as a document's are from its directory.
 Each is measured from its first bytes, so opening a book, or a list of them, unpacks none whole. A
-picture on the web is its alt text.
+picture on the web is its alt text. A drawing that only wraps a picture (`<svg><image/></svg>`, as
+a cover's page is written) shows as that picture.
+
+A chapter that is a picture or an SVG drawing, not XHTML, is a page of that picture. One of any
+other kind is shown as the first of its fallbacks, as the package lists them, that is XHTML or a
+picture, at most eight along; with none, it is left out.
 
 The book's look is `clv`'s own ([ADR-0016](adr/0016-how-markdown-and-html-look.md)), with what its
 markup says on top through `style` attributes. **Its stylesheets are not read**, linked or in a
@@ -991,9 +1001,15 @@ disk. A link to a file in the book that is no chapter (a picture, a stylesheet) 
 book, which clv doesn't open alone`, one to a file the book doesn't hold says `not in this book`. A
 web address is [followed](#following-links) as in any document.
 
+**Protected chapters** (DRM) are left out, and the first page says how many are (`3 chapters are
+protected (DRM)`): a chapter the book's `META-INF/encryption.xml` says is encrypted, by anything
+but the two ways fonts are obfuscated (IDPF's and Adobe's), which are no matter, since a
+document's fonts aren't used. What can be read is shown. A book none of whose chapters can be
+read is refused: `it is protected (DRM)`. A protected picture is left out, as one that is missing.
+
 A chapter that is missing, that can't be read (neither UTF-8, nor UTF-16 with its byte-order mark),
-that is larger than 16 MiB or that isn't XHTML is left out, and the first page says how many were,
-and why. A book longer than `clv` lays out ([limits](#limits)) is cut at the chapter that would
+that is larger than 16 MiB or that is neither XHTML nor a picture is left out, and the first page
+says how many were, and why. A book longer than `clv` lays out ([limits](#limits)) is cut at the chapter that would
 pass them, and the first page says how many chapters that left out.
 
 A file that is a book but can't be read as one is refused, with why, and isn't shown as a zip
@@ -1205,7 +1221,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to, the fenced blocks it draws among them; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning, a block as its code; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
-| A book (epub): its `container.xml`; its package (OPF) | 64 KiB; 4 MiB | refused |
+| A book (epub): its `container.xml`; its package (OPF); its list of protected files (`encryption.xml`) | 64 KiB; 4 MiB; 1 MiB, and 16,384 files | refused |
 | A book's reading order | 4,096 chapters; a file's path of 4 KiB | refused |
 | A book's chapter | 16 MiB | that chapter is left out, and the first page says so |
 | A book, its chapters joined | 48 MiB; 400,000 lines and tags; 6 MiB of text between its tags, some 3,700 pages: below what any HTML file may be, above | the chapter that would pass one is left out, with those after it, and the first page says how many |
@@ -1239,6 +1255,11 @@ limit, it does as the last column says. How large a page is drawn is under
   or not, and a stylesheet of 3 MiB some 8; the [limits](#limits) above count rules times elements,
   not that. The parse runs in `clv`'s own process, so it can't be stopped; `q` still quits.
 
+- **A fixed-layout book is laid out as any other.** A book whose package says its pages are made
+  one by one (`rendition:layout` `pre-paginated`: a comic, a picture book, a magazine) has its
+  chapters' text and pictures flow down pages the window's size, not placed as its maker placed
+  them, and its first page says so
+  ([backlog](backlog.md#fixed-layout-epubs-through-blitz)).
 - **A book's own stylesheets are not read.** An epub is laid out in `clv`'s own look, with only
   what its markup's `style` attributes say on top: a book that counts on its CSS for its headings,
   its indents, its drop caps or its centred lines comes out plainer than a reader app shows it

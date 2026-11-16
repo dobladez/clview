@@ -221,6 +221,15 @@ const MAX_CONTAINER: u64 = 64 << 10;
 /// The largest package (OPF) read, and given to rbook.
 const MAX_OPF: u64 = 4 << 20;
 
+/// The largest `META-INF/encryption.xml` read, which says which of the book's files are protected,
+/// and the most files it may say are.
+const MAX_ENCRYPTION: u64 = 1 << 20;
+const MAX_PROTECTED: usize = 16_384;
+
+/// The most fallbacks followed from a spine's item that is neither XHTML nor a picture, to one
+/// that is: a chain that comes back on itself stops there.
+const MAX_FALLBACKS: usize = 8;
+
 /// The most chapters a book's reading order has, and the longest path of a file in it, in bytes:
 /// past either, the book is refused.
 const MAX_CHAPTERS: usize = 4096;
@@ -291,6 +300,9 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
     let plan = Arc::new(planned(&zipped, read).map_err(error)?);
     let (html, left) = assembled(&plan, &zipped);
     drop(zipped);
+    if left.shown == 0 && left.protected > 0 {
+        return Err(error("it is protected (DRM)".into()));
+    }
     let html = html.into_bytes();
     let head = html.get(..HEAD as usize).unwrap_or(&html).to_vec();
     let again: Again = {
@@ -298,7 +310,7 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
         Arc::new(move || Ok(assembled(&plan, &*kept.zipped()?).0.into_bytes()))
     };
     // The book's document is at its top: its pictures' paths are written from there.
-    let document = Input::held(path.clone(), head, again).held_near(near(&kept, &path), String::new());
+    let document = Input::held(path.clone(), head, again).held_near(near(&kept, &plan, &path), String::new());
     // Not this one: what is assembled is never a book.
     let Some(backend) = BACKENDS.iter().filter(|b| b.name() != Epub.name()).find(|b| b.opens(&document.path, &document.head)) else {
         return Err(error("a book is shown as the HTML its chapters make, and no backend opens that".into()));
@@ -308,18 +320,22 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, read: Read) ->
         None => backend.open(document, options)?,
     };
     match shown {
-        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes().into() }))),
+        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Book { pages, notes: left.notes(plan.fixed).into() }))),
         Opened::Files(_) => Err(error("its chapters' HTML holds files".into())),
     }
 }
 
 /// What is beside the book's document ([`Near`]): the file at a path from the book's top, by its
-/// very name in the zip, read from the book each time, as a held file of its own.
-fn near(kept: &Kept, book: &str) -> Near {
-    let (kept, book) = (kept.clone(), book.to_owned());
+/// very name in the zip, read from the book each time, as a held file of its own. Not a file the
+/// book protects, whose bytes are no picture.
+fn near(kept: &Kept, plan: &Arc<Plan>, book: &str) -> Near {
+    let (kept, plan, book) = (kept.clone(), plan.clone(), book.to_owned());
     Arc::new(move |path| {
         let named = format!("{book}/{path}");
         let error = |e: String| format!("{named}: {e}");
+        if plan.protects(path) {
+            return Err(error("protected (DRM)".into()));
+        }
         let zipped = kept.zipped().map_err(error)?;
         let index = zipped.index_of(path).ok_or_else(|| error("not in the book".into()))?;
         let head = zipped.first(index, HEAD).map_err(error)?;
@@ -334,10 +350,18 @@ fn near(kept: &Kept, book: &str) -> Near {
 }
 
 /// A book's reading order, as its package gives it: what the worker answered, checked.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Plan {
-    /// The spine's items, in its order.
+    /// The spine's items, in its order, each as the file that is shown for it.
     chapters: Vec<Chapter>,
+    /// The cover picture the package names, by its path from the book's top.
+    cover: Option<String>,
+    /// Whether the package says the book is laid out page by page (`rendition:layout`
+    /// `pre-paginated`), which it isn't here.
+    fixed: bool,
+    /// The files the book protects, by their paths from its top, sorted: encrypted by anything but
+    /// a font's obfuscation.
+    protected: Vec<String>,
 }
 
 /// An item of a book's spine.
@@ -355,20 +379,31 @@ struct Chapter {
 enum Kind {
     /// XHTML, a chapter to read.
     Xhtml,
+    /// A picture or a drawing, shown as a page of it.
+    Picture,
     /// Anything else.
     Other,
 }
 
 impl Kind {
-    /// By a manifest item's media type: XHTML, as EPUB 3 names it, and as EPUB 2's OEBPS could.
+    /// By a manifest item's media type: XHTML, as EPUB 3 names it, and as EPUB 2's OEBPS could; a
+    /// picture, of any kind (`image/…`, SVG among them).
     fn of(media_type: &[u8]) -> Self {
-        match [&b"application/xhtml+xml"[..], b"text/html", b"text/x-oeb1-document"]
-            .iter()
-            .any(|xhtml| media_type.trim_ascii().eq_ignore_ascii_case(xhtml))
-        {
+        let media_type = media_type.trim_ascii();
+        let starts = |start: &[u8]| media_type.get(..start.len()).is_some_and(|head| head.eq_ignore_ascii_case(start));
+        let xhtml = [&b"application/xhtml+xml"[..], b"text/html", b"text/x-oeb1-document"];
+        match xhtml.iter().any(|xhtml| media_type.eq_ignore_ascii_case(xhtml)) {
             true => Self::Xhtml,
+            false if starts(b"image/") => Self::Picture,
             false => Self::Other,
         }
+    }
+}
+
+impl Plan {
+    /// Whether the book protects the file at `path`, from its top.
+    fn protects(&self, path: &str) -> bool {
+        self.protected.binary_search_by(|protected| protected.as_str().cmp(path)).is_ok()
     }
 }
 
@@ -385,9 +420,15 @@ fn planned(zipped: &Zipped, read: Read) -> Result<Plan, String> {
         return Err("its package's path is too long".into());
     }
     let opf = file(&opf_path, MAX_OPF, "package")?;
+    // Which of its files are protected, if it says: the worker's to read too.
+    let encryption = match zipped.index_of(ENCRYPTION) {
+        Some(_) => file(ENCRYPTION, MAX_ENCRYPTION, "list of protected files")?,
+        None => Vec::new(),
+    };
     let mut request = Vec::new();
     put(&mut request, opf_path.as_bytes());
     put(&mut request, &opf);
+    put(&mut request, &encryption);
     match read(READ, request) {
         Ok((PLAN, answer)) => Plan::read(&answer).ok_or_else(|| UNREAD.to_owned()),
         Ok((REFUSED, why)) => Err(cut(&String::from_utf8_lossy(&why), MAX_WHY).to_owned()),
@@ -397,6 +438,9 @@ fn planned(zipped: &Zipped, read: Read) -> Result<Plan, String> {
         Err(_) => Err(UNREAD.into()),
     }
 }
+
+/// Where a book says which of its files are encrypted, and how (EPUB 3.3's OCF, §4.2.6.3.5).
+const ENCRYPTION: &str = "META-INF/encryption.xml";
 
 /// The path of the package (OPF) the container `xml` names first: the `full-path` of its first
 /// `rootfile` that says it is a package, or says nothing of what it is. A look of clv's own, for one
@@ -504,40 +548,69 @@ impl<'a> Iterator for Fields<'a> {
     }
 }
 
-impl Plan {
-    /// The answer to a [`READ`]: how many chapters, then each chapter's path and its media type.
-    fn written(chapters: &[(Option<String>, String)]) -> Vec<u8> {
+/// What the worker reads of a package ([`READ`]'s answer), before the viewer checks it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Answer {
+    /// Each item of the spine, in order: the path and the media type of the file shown for it; no
+    /// path for an item the manifest doesn't have.
+    chapters: Vec<(Option<String>, String)>,
+    /// The cover picture's path.
+    cover: Option<String>,
+    fixed: bool,
+    /// The files encrypted by anything but a font's obfuscation.
+    protected: Vec<String>,
+}
+
+impl Answer {
+    /// As the worker writes it: whether the book is laid out page by page, its cover's path, how
+    /// many chapters and each chapter's path and media type, then how many protected files and
+    /// each one's path.
+    fn written(&self) -> Vec<u8> {
+        let count = |count: usize| u32::try_from(count).unwrap_or(u32::MAX).to_le_bytes();
         let mut out = Vec::new();
-        put(&mut out, &u32::try_from(chapters.len()).unwrap_or(u32::MAX).to_le_bytes());
-        for (path, media_type) in chapters {
+        put(&mut out, &[u8::from(self.fixed)]);
+        put(&mut out, self.cover.as_deref().unwrap_or_default().as_bytes());
+        put(&mut out, &count(self.chapters.len()));
+        for (path, media_type) in &self.chapters {
             put(&mut out, path.as_deref().unwrap_or_default().as_bytes());
             put(&mut out, cut(media_type, MAX_MEDIA_TYPE).as_bytes());
         }
+        put(&mut out, &count(self.protected.len()));
+        for path in &self.protected {
+            put(&mut out, path.as_bytes());
+        }
         out
-    }
-
-    /// What the worker answered a [`READ`] with, checked as any input is: within the limits, its
-    /// paths text, brought to paths from the book's top. `None` for an answer that isn't one.
-    fn read(answer: &[u8]) -> Option<Self> {
-        let mut fields = Fields(answer);
-        let count = usize::try_from(u32::from_le_bytes(*fields.next()?.first_chunk::<4>()?)).ok()?;
-        if count > MAX_CHAPTERS {
-            return None;
-        }
-        let mut chapters = Vec::new();
-        for _ in 0..count {
-            let (path, media_type) = (fields.next()?, fields.next()?);
-            if path.len() > MAX_PATH {
-                return None;
-            }
-            let path = std::str::from_utf8(path).ok().and_then(|path| from_the_top("", path));
-            chapters.push(Chapter { path, kind: Kind::of(media_type) });
-        }
-        fields.next().is_none().then_some(Self { chapters })
     }
 }
 
-/// Why chapters were left out of a book assembled, and how many for each.
+impl Plan {
+    /// What the worker answered a [`READ`] with ([`Answer::written`]), checked as any input is:
+    /// within the limits, its paths text, brought to paths from the book's top. `None` for an answer
+    /// that isn't one.
+    fn read(answer: &[u8]) -> Option<Self> {
+        let mut fields = Fields(answer);
+        let count = |field: &[u8]| usize::try_from(u32::from_le_bytes(*field.first_chunk::<4>()?)).ok();
+        // A path within its limit, from the book's top; none for one that leads above it.
+        let path = |field: &[u8]| (field.len() <= MAX_PATH).then(|| std::str::from_utf8(field).ok().and_then(|path| from_the_top("", path)));
+        let fixed = matches!(fields.next()?, [1]);
+        let cover = path(fields.next()?)?;
+        let chapters = count(fields.next()?).filter(|count| *count <= MAX_CHAPTERS)?;
+        let mut read = Vec::new();
+        for _ in 0..chapters {
+            let (file, media_type) = (fields.next()?, fields.next()?);
+            read.push(Chapter { path: path(file)?, kind: Kind::of(media_type) });
+        }
+        let protected = count(fields.next()?).filter(|count| *count <= MAX_PROTECTED)?;
+        let mut files = Vec::new();
+        for _ in 0..protected {
+            files.extend(path(fields.next()?)?);
+        }
+        files.sort_unstable();
+        fields.next().is_none().then_some(Self { chapters: read, cover, fixed, protected: files })
+    }
+}
+
+/// Why chapters were left out of a book assembled, and how many for each; and how many are shown.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Left {
     /// Not in the book: the manifest names a file the zip doesn't hold, or the spine an item the
@@ -547,26 +620,38 @@ struct Left {
     unreadable: usize,
     /// More than [`MAX_CHAPTER`].
     too_large: usize,
-    /// Not XHTML.
+    /// Neither XHTML nor a picture, with no fallback that is.
     other: usize,
     /// Past what a book assembled may come to ([`MAX_WRITTEN`], [`MAX_MARKS`], [`MAX_TEXT`]).
     past: usize,
+    /// Protected: encrypted by anything but a font's obfuscation.
+    protected: usize,
+    /// The chapters written into the book.
+    shown: usize,
 }
 
 impl Left {
-    /// What the first page says of the chapters left out, a line for each reason.
-    fn notes(&self) -> Vec<String> {
+    /// What the first page says of the chapters left out, a line for each reason; and of a book
+    /// made to be laid out page by page (`fixed`), which this isn't.
+    fn notes(&self, fixed: bool) -> Vec<String> {
         let said = |count: usize, why: &str| match count {
             0 => None,
             1 => Some(format!("1 chapter is left out: {why}")),
             count => Some(format!("{count} chapters are left out: {why}")),
         };
+        let protected = match self.protected {
+            0 => None,
+            1 => Some("1 chapter is protected (DRM)".to_owned()),
+            count => Some(format!("{count} chapters are protected (DRM)")),
+        };
         [
+            protected,
             said(self.missing, "not in the book"),
             said(self.unreadable, "unreadable, or not text"),
             said(self.too_large, &format!("more than {} MiB", MAX_CHAPTER >> 20)),
             said(self.other, &format!("not a kind of chapter {} shows", crate::NAME)),
             said(self.past, &format!("the book is longer than {} lays out", crate::NAME)),
+            fixed.then(|| "a fixed-layout book: its pages are laid out as its text flows, not as they were made".to_owned()),
         ]
         .into_iter()
         .flatten()
@@ -585,16 +670,20 @@ fn start() -> String {
 }
 
 /// The book `plan` orders, read from `zipped`, as one HTML document: each chapter's body in a
-/// `<div>` that starts a page, in the spine's order; and how many chapters were left out, and why.
+/// `<div>` that starts a page, in the spine's order, a chapter that is a picture as a page of it;
+/// before them the cover, a page of its own, when the package names one that the first chapter
+/// shown doesn't show already. And how many chapters were left out, and why.
 fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
     let mut out = start();
     let (mut left, mut marks, mut text) = (Left::default(), 0usize, 0usize);
+    // The cover, as a picture the book holds and may show.
+    let cover = plan.cover.as_deref().filter(|cover| zipped.index_of(cover).is_some() && !plan.protects(cover));
     for (number, chapter) in plan.chapters.iter().enumerate() {
         let Some(path) = chapter.path.as_deref() else {
             left.missing = left.missing.saturating_add(1);
             continue;
         };
-        if chapter.kind != Kind::Xhtml {
+        if chapter.kind == Kind::Other {
             left.other = left.other.saturating_add(1);
             continue;
         }
@@ -602,34 +691,64 @@ fn assembled(plan: &Plan, zipped: &Zipped) -> (String, Left) {
             left.missing = left.missing.saturating_add(1);
             continue;
         };
-        let bytes = match zipped.within(index, MAX_CHAPTER) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => {
-                left.too_large = left.too_large.saturating_add(1);
-                continue;
-            }
-            Err(_) => {
-                left.unreadable = left.unreadable.saturating_add(1);
-                continue;
-            }
-        };
-        let Some(xhtml) = decoded(bytes) else {
-            left.unreadable = left.unreadable.saturating_add(1);
+        if plan.protects(path) {
+            left.protected = left.protected.saturating_add(1);
             continue;
+        }
+        let number = number.saturating_add(1);
+        let (body, body_text) = match chapter.kind {
+            Kind::Picture => (page_of(&format!("c{number}"), path), 0),
+            _ => {
+                let bytes = match zipped.within(index, MAX_CHAPTER) {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        left.too_large = left.too_large.saturating_add(1);
+                        continue;
+                    }
+                    Err(_) => {
+                        left.unreadable = left.unreadable.saturating_add(1);
+                        continue;
+                    }
+                };
+                let Some(xhtml) = decoded(bytes) else {
+                    left.unreadable = left.unreadable.saturating_add(1);
+                    continue;
+                };
+                let written = Written { chapter: number, directory: path.rsplit_once('/').map_or("", |(directory, _)| directory), zipped };
+                written.body(&xhtml)
+            }
         };
-        let written = Written { chapter: number.saturating_add(1), directory: path.rsplit_once('/').map_or("", |(directory, _)| directory), zipped };
-        let (body, body_text) = written.body(&xhtml);
-        let body_marks = body.bytes().filter(|b| matches!(b, b'<' | b'\r' | b'\n')).count();
+        // Before the first chapter shown, unless that one shows it.
+        let first = match cover.filter(|cover| left.shown == 0 && !body.contains(&pictured_from_the_top(cover))) {
+            Some(cover) => page_of("cover", cover),
+            None => String::new(),
+        };
+        let body_marks = first.bytes().chain(body.bytes()).filter(|b| matches!(b, b'<' | b'\r' | b'\n')).count();
         let (marks_now, text_now) = (marks.saturating_add(body_marks), text.saturating_add(body_text));
-        if out.len().saturating_add(body.len()) > MAX_WRITTEN || marks_now > MAX_MARKS || text_now > MAX_TEXT {
+        if out.len().saturating_add(first.len()).saturating_add(body.len()) > MAX_WRITTEN || marks_now > MAX_MARKS || text_now > MAX_TEXT {
             // With those after it: a book cut short reads to where it is cut.
-            left.past = plan.chapters.len().saturating_sub(number);
+            left.past = plan.chapters.len().saturating_add(1).saturating_sub(number);
             break;
         }
         (marks, text) = (marks_now, text_now);
+        out.push_str(&first);
         out.push_str(&body);
+        left.shown = left.shown.saturating_add(1);
     }
     (out, left)
+}
+
+/// A page of the picture at `path`, from the book's top, with the id `id`: a chapter that is a
+/// picture, or the cover.
+fn page_of(id: &str, path: &str) -> String {
+    format!("<div id=\"{id}\" style=\"page-break-before: always\"><p><img src=\"{}\" alt=\"\"/></p></div>\n", pictured_from_the_top(path))
+}
+
+/// The picture at `path`, from the book's top, as the book's document refers to it: written as a
+/// document's pictures are read (their `%XX` undone), so that every character that would mean
+/// something there is escaped.
+fn pictured_from_the_top(path: &str) -> String {
+    format!("./{}", percent_encoded(path))
 }
 
 /// A chapter's text: UTF-8, or UTF-16 with its byte-order mark, without that mark. `None` for any
@@ -669,6 +788,34 @@ const BEFORE_A_TABLE: &str = "<p style=\"font-size: 1pt; margin: 0\">&#8203;</p>
 /// The elements that show something without any text in them: a chapter that starts with one has
 /// started.
 const SHOWN: [&str; 5] = ["img", "hr", "svg", "table", "br"];
+
+/// HTML's void elements, which have no end tag: written short (`<br/>`), one is all there.
+const VOID: [&str; 14] = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
+
+/// The picture an `<svg>` wraps, when that is all it holds, as a cover's page writes it
+/// (`<svg><image xlink:href="cover.jpg"/></svg>`): its reference as written, and where the
+/// `<svg>`, whose content starts at `at` in `xhtml`, ends. `None` for a drawing of anything else,
+/// or of two pictures, which is left to be read as it is.
+fn wrapped_picture(xhtml: &str, mut at: usize) -> Option<(&str, usize)> {
+    let mut picture = None;
+    while let Some((piece, next)) = Piece::at(xhtml, at) {
+        at = next;
+        match piece {
+            Piece::Text(run) if run.trim().is_empty() => {}
+            Piece::Other => {}
+            Piece::End(name) if name.eq_ignore_ascii_case("svg") => return picture.map(|picture| (picture, at)),
+            Piece::End(name) if name.eq_ignore_ascii_case("image") => {}
+            // What says what the drawing is, to a reader that can't see it.
+            Piece::Start(tag) if (tag.is("title") || tag.is("desc")) && !tag.self_closed => at = past_end_tag(xhtml, at, tag.name),
+            Piece::Start(tag) if tag.is("image") && picture.is_none() => {
+                let href = |name: &str| tag.attributes().find(|attribute| attribute.name.eq_ignore_ascii_case(name)).map(|attribute| attribute.value);
+                picture = Some(href("xlink:href").or_else(|| href("href")).filter(|href| !href.trim().is_empty())?);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
 
 /// A chapter being written into the book.
 struct Written<'a> {
@@ -729,7 +876,14 @@ impl Written<'_> {
                         out.push_str(BEFORE_A_TABLE);
                     }
                     shown |= SHOWN.iter().any(|name| tag.is(name));
-                    self.start_tag(&tag, &mut out);
+                    // A drawing that only wraps a picture, as a cover's page does, is that picture.
+                    match Some(&tag).filter(|tag| tag.is("svg") && !tag.self_closed).and_then(|_| wrapped_picture(xhtml, at)) {
+                        Some((picture, past)) => {
+                            let _ = write!(out, "<img src=\"{}\" alt=\"\"/>", self.pictured(picture));
+                            at = past;
+                        }
+                        None => self.start_tag(&tag, &mut out),
+                    }
                 }
             }
         }
@@ -753,7 +907,15 @@ impl Written<'_> {
             let quote = if value.contains('"') { '\'' } else { '"' };
             let _ = write!(out, " {name}={quote}{}{quote}", value.replace('\'', if quote == '\'' { "&#39;" } else { "'" }));
         }
-        out.push_str(if tag.self_closed { "/>" } else { ">" });
+        // XHTML writes any element short when it is empty; read as HTML, only a void one ends
+        // there, and any other would stay open over what follows it.
+        match (tag.self_closed, VOID.iter().any(|name| tag.is(name))) {
+            (true, false) => {
+                let _ = write!(out, "></{}>", tag.name);
+            }
+            (true, true) => out.push_str("/>"),
+            (false, _) => out.push('>'),
+        }
     }
 
     /// The path `reference` names, from this chapter, as a path from the book's top, and what
@@ -775,7 +937,7 @@ impl Written<'_> {
     /// mean something there is escaped. One that leads above the book's top is left to say so.
     fn pictured(&self, src: &str) -> String {
         match self.resolved(src) {
-            Some((Some(path), _)) => format!("./{}", percent_encoded(&path)),
+            Some((Some(path), _)) => pictured_from_the_top(&path),
             Some((None, _)) => "../above-the-book".to_owned(),
             None => src.to_owned(),
         }
@@ -986,10 +1148,11 @@ fn in_the_book(mut link: super::Link) -> super::Link {
 
 // The worker's side.
 
-/// A book's package, to read: the request. Its path in the book, then its bytes ([`put`]).
+/// A book's package, to read: the request. Its path in the book, its bytes, and the bytes of the
+/// book's list of protected files, empty for a book without one ([`put`]).
 const READ: u8 = 1;
 
-/// Its reading order ([`Plan::written`]): an answer.
+/// Its reading order, its cover and its protected files ([`Answer::written`]): an answer.
 const PLAN: u8 = 2;
 
 /// Why rbook refused it, in its words: an answer.
@@ -1004,15 +1167,17 @@ const MALFORMED: u8 = 1;
 const READ_CPU: u64 = 2;
 const MAX_HEAP: usize = 256 << 20;
 
-/// The longest request: a package's path and the package ([`MAX_PATH`], [`MAX_OPF`]), each with
-/// its length.
-const MAX_REQUEST: usize = MAX_PATH + (MAX_OPF as usize) + 8;
+/// The longest request: a package's path, the package and the book's list of protected files
+/// ([`MAX_PATH`], [`MAX_OPF`], [`MAX_ENCRYPTION`]), each with its length.
+const MAX_REQUEST: usize = MAX_PATH + (MAX_OPF as usize) + (MAX_ENCRYPTION as usize) + 12;
 
 /// The longest media type kept of a manifest's item, in bytes.
 const MAX_MEDIA_TYPE: usize = 255;
 
-/// The longest answer: every chapter's path and media type, each with its length, and their count.
-const MAX_ANSWER: usize = 8 + MAX_CHAPTERS * (MAX_PATH + MAX_MEDIA_TYPE + 8);
+/// The longest answer: the cover's path, every chapter's path and media type, and the protected
+/// files' paths, which together are no longer than the list they are read from; each with its
+/// length, and their counts.
+const MAX_ANSWER: usize = 32 + MAX_PATH + MAX_CHAPTERS * (MAX_PATH + MAX_MEDIA_TYPE + 8) + (MAX_ENCRYPTION as usize) + MAX_PROTECTED * 4;
 
 /// The worker that reads a book's package: `clv --worker epub`.
 pub(crate) struct Package;
@@ -1046,23 +1211,26 @@ impl Session for Reading {
             return (FAILED, vec![MALFORMED]);
         }
         let mut fields = Fields(&payload);
-        let (Some(path), Some(opf), None) = (fields.next().and_then(|path| std::str::from_utf8(path).ok()), fields.next(), fields.next()) else {
+        let (Some(path), Some(opf), Some(encryption), None) =
+            (fields.next().and_then(|path| std::str::from_utf8(path).ok()), fields.next(), fields.next(), fields.next())
+        else {
             return (FAILED, vec![MALFORMED]);
         };
-        let read = std::panic::catch_unwind(|| read(path, opf));
+        let read = std::panic::catch_unwind(|| read(path, opf, encryption));
         match read.unwrap_or_else(|_| Err(UNREAD.into())) {
-            Ok(chapters) => (PLAN, Plan::written(&chapters)),
+            Ok(answer) => (PLAN, answer.written()),
             Err(why) => (REFUSED, cut(&why, MAX_WHY).as_bytes().to_vec()),
         }
     }
 }
 
-/// The reading order of the package `opf`, the file at `path` in its book, as rbook reads it: each
-/// item of the spine, in order, as its file's path from the book's top and its media type; or why
-/// not. rbook is given a zip holding the package alone, under a container that names it, and reads
-/// neither the table of contents (`skip_toc`: one it can't read fails the whole package) nor any
-/// other file.
-fn read(path: &str, opf: &[u8]) -> Result<Vec<(Option<String>, String)>, String> {
+/// What rbook reads of the package `opf`, the file at `path` in its book: each item of the spine,
+/// in order, as the path from the book's top and the media type of the file shown for it; the
+/// cover picture it names; and whether it says the book is laid out page by page. With them, the
+/// files `encryption`, the book's list of them, says are protected. Or why not. rbook is given a
+/// zip holding the package alone, under a container that names it, and reads neither the table of
+/// contents (`skip_toc`: one it can't read fails the whole package) nor any other file.
+fn read(path: &str, opf: &[u8], encryption: &[u8]) -> Result<Answer, String> {
     let escaped = path.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
     let container = format!(
         "<?xml version=\"1.0\"?><container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile \
@@ -1080,22 +1248,86 @@ fn read(path: &str, opf: &[u8]) -> Result<Vec<(Option<String>, String)>, String>
     if spine.len() > MAX_CHAPTERS {
         return Err(format!("its reading order has more than {MAX_CHAPTERS} chapters"));
     }
+    let located = |item: &rbook::epub::manifest::EpubManifestEntry<'_>| -> Result<String, String> {
+        let path = item.href().path().decode().into_owned();
+        match path.len() > MAX_PATH {
+            true => Err("a file's path is too long".into()),
+            false => Ok(path),
+        }
+    };
     let mut chapters = Vec::new();
     for entry in spine.iter() {
         let Some(item) = entry.manifest_entry() else {
             chapters.push((None, String::new()));
             continue;
         };
-        let path = item.href().path().decode().into_owned();
-        if path.len() > MAX_PATH {
-            return Err("a chapter's path is too long".into());
+        // What is shown for it: itself, or the first of its fallbacks that is XHTML or a picture.
+        let mut shown = item;
+        for _ in 0..MAX_FALLBACKS {
+            if Kind::of(shown.media_type().as_bytes()) != Kind::Other {
+                break;
+            }
+            let Some(fallback) = shown.fallback() else { break };
+            shown = fallback;
         }
-        chapters.push((Some(path), item.media_type().to_owned()));
+        let shown = if Kind::of(shown.media_type().as_bytes()) == Kind::Other { item } else { shown };
+        chapters.push((Some(located(&shown)?), shown.media_type().to_owned()));
     }
     if chapters.is_empty() {
         return Err("its package lists no chapters to read".into());
     }
-    Ok(chapters)
+    let cover = epub.manifest().cover_image().map(|cover| located(&cover)).transpose()?;
+    let fixed = epub.metadata().by_property("rendition:layout").any(|layout| layout.value().trim() == "pre-paginated");
+    Ok(Answer { chapters, cover, fixed, protected: protected(&String::from_utf8_lossy(encryption))? })
+}
+
+/// The algorithms that only obfuscate a font, IDPF's and Adobe's: a file encrypted by one of them
+/// is no protected file, and a document's fonts aren't used anyway.
+const OBFUSCATIONS: [&str; 2] = ["http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC"];
+
+/// The files `xml`, a book's `META-INF/encryption.xml`, says are encrypted by anything but a font's
+/// obfuscation, by their paths from the book's top: each `EncryptedData`'s `CipherReference`, unless
+/// its `EncryptionMethod` is one of [`OBFUSCATIONS`]. rbook doesn't read this file: a scan of the
+/// worker's own, which a hostile file can at most kill the worker on.
+fn protected(xml: &str) -> Result<Vec<String>, String> {
+    // An element's name without its namespace's prefix.
+    let local = |name: &str| name.rsplit(':').next().unwrap_or(name).to_owned();
+    let mut found = Vec::new();
+    // The data being read: whether its method is a font's obfuscation, once said, and its file.
+    let mut data: Option<(Option<bool>, Option<String>)> = None;
+    let mut at = 0;
+    while let Some((piece, next)) = Piece::at(xml, at) {
+        at = next;
+        match piece {
+            Piece::Start(tag) if local(tag.name) == "EncryptedData" => data = Some((None, None)),
+            Piece::Start(tag) => {
+                let Some((method, file)) = &mut data else { continue };
+                let attribute = |name: &str| tag.attributes().find(|attribute| attribute.name == name).map(|attribute| unescaped(attribute.value));
+                match local(tag.name).as_str() {
+                    // Its own, which comes first; a key's, inside it, comes after.
+                    "EncryptionMethod" if method.is_none() => {
+                        *method = Some(attribute("Algorithm").is_some_and(|algorithm| OBFUSCATIONS.contains(&algorithm.trim())))
+                    }
+                    "CipherReference" if file.is_none() => {
+                        *file = attribute("URI").and_then(|uri| percent_decoded(uri.trim())).and_then(|path| from_the_top("", &path))
+                    }
+                    _ => {}
+                }
+            }
+            Piece::End(name) if local(name) == "EncryptedData" => {
+                if let Some((method, Some(file))) = data.take()
+                    && method != Some(true)
+                {
+                    if found.len() >= MAX_PROTECTED {
+                        return Err(format!("it protects more than {MAX_PROTECTED} files"));
+                    }
+                    found.push(file);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(found)
 }
 
 /// `text` cut to at most `most` bytes, at a character.
@@ -1180,6 +1412,11 @@ mod tests {
         asked(|| worker::spawn(&PACKAGE), kind, payload)
     }
 
+    /// What the worker answers of a package whose spine is `chapters`, and nothing else.
+    fn answered(chapters: Vec<(Option<String>, String)>) -> Vec<u8> {
+        Answer { chapters, ..Answer::default() }.written()
+    }
+
     fn paths(plan: &Plan) -> Vec<Option<&str>> {
         plan.chapters.iter().map(|chapter| chapter.path.as_deref()).collect()
     }
@@ -1216,7 +1453,8 @@ mod tests {
                 "{version}"
             );
             let kinds: Vec<Kind> = plan.chapters.iter().map(|chapter| chapter.kind).collect();
-            assert_eq!(kinds, [Kind::Xhtml, Kind::Xhtml, Kind::Xhtml, Kind::Other, Kind::Other, Kind::Xhtml], "{version}");
+            assert_eq!(kinds, [Kind::Xhtml, Kind::Xhtml, Kind::Xhtml, Kind::Other, Kind::Picture, Kind::Xhtml], "{version}");
+            assert_eq!((plan.cover.as_deref(), plan.fixed, plan.protected.len()), (None, false, 0), "{version}");
         }
         // A package at the book's top, named with a space, as the container writes it.
         let package = opf("3.0", &[("one", "one.xhtml", XHTML)], r#"<itemref idref="one"/>"#);
@@ -1274,13 +1512,13 @@ mod tests {
             |_, _| Ok((PLAN, Vec::new())),
             |_, _| Ok((PLAN, vec![0xFF; 64])),
             // More chapters than a book has, said and unsaid; and a path past its limit.
-            |_, _| Ok((PLAN, Plan::written(&vec![(Some("a".to_owned()), String::new()); MAX_CHAPTERS + 1]))),
+            |_, _| Ok((PLAN, answered(vec![(Some("a".to_owned()), String::new()); MAX_CHAPTERS + 1]))),
             |_, _| {
-                let mut answer = Plan::written(&[(Some("a".to_owned()), String::new())]);
+                let mut answer = answered(vec![(Some("a".to_owned()), String::new())]);
                 answer.extend_from_slice(&[0; 9]);
                 Ok((PLAN, answer))
             },
-            |_, _| Ok((PLAN, Plan::written(&[(Some("a".repeat(MAX_PATH + 1)), String::new())]))),
+            |_, _| Ok((PLAN, answered(vec![(Some("a".repeat(MAX_PATH + 1)), String::new())]))),
         ];
         for answer in answers {
             assert_eq!(planned(&book, answer).unwrap_err(), UNREAD);
@@ -1289,12 +1527,13 @@ mod tests {
         assert!(planned(&book, |_, _| Err(Died::Unstarted("no such file".into()))).unwrap_err().ends_with("couldn't be started (no such file)"));
         assert_eq!(planned(&book, |_, _| Ok((REFUSED, "rbook's reason".into()))).unwrap_err(), "rbook's reason");
         // What the worker answers is checked, not trusted: a path above the top is no chapter.
-        let above = planned(&book, |_, _| Ok((PLAN, Plan::written(&[(Some("../../etc/passwd".to_owned()), XHTML.to_owned())])))).unwrap();
+        let above = planned(&book, |_, _| Ok((PLAN, answered(vec![(Some("../../etc/passwd".to_owned()), XHTML.to_owned())])))).unwrap();
         assert_eq!(paths(&above), [None]);
     }
 
     fn plan(chapters: &[(&str, Kind)]) -> Plan {
-        Plan { chapters: chapters.iter().map(|(path, kind)| Chapter { path: (!path.is_empty()).then(|| (*path).to_owned()), kind: *kind }).collect() }
+        let chapters = chapters.iter().map(|(path, kind)| Chapter { path: (!path.is_empty()).then(|| (*path).to_owned()), kind: *kind }).collect();
+        Plan { chapters, ..Plan::default() }
     }
 
     /// A book is its chapters' bodies, in the spine's order, each in a `<div>` that starts a page,
@@ -1315,7 +1554,7 @@ mod tests {
         ]);
         let plan = plan(&[("OEBPS/text/two.xhtml", Kind::Xhtml), ("OEBPS/text/one.xhtml", Kind::Xhtml), ("OEBPS/three.xhtml", Kind::Xhtml)]);
         let (html, left) = assembled(&plan, &book);
-        assert_eq!(left, Left::default());
+        assert_eq!(left, Left { shown: 3, ..Left::default() });
         let (head, chapters) = html.split_at(HEAD as usize);
         assert!(head.starts_with("<!doctype html><!--") && head.ends_with("-->") && !head[19..head.len() - 3].contains("--"), "{head}");
         assert_eq!(
@@ -1371,12 +1610,12 @@ mod tests {
             ("plate.jpg", Kind::Other),
         ];
         let (html, left) = assembled(&plan(&order), &book);
-        assert_eq!(left, Left { missing: 2, unreadable: 2, too_large: 1, other: 1, past: 0 });
+        assert_eq!(left, Left { missing: 2, unreadable: 2, too_large: 1, other: 1, shown: 4, ..Left::default() });
         let shown: Vec<&str> = ["fine", "sixteen", "big", "marked", "caf"].into_iter().filter(|text| html.contains(&format!("<p>{text}"))).collect();
         assert_eq!(shown, ["fine", "sixteen", "big", "marked"]);
         assert!(html.contains(r#"<div id="c8""#) && !html.contains(r#"<div id="c9""#), "numbered by their place in the reading order");
         assert_eq!(
-            left.notes(),
+            left.notes(false),
             [
                 "2 chapters are left out: not in the book",
                 "2 chapters are left out: unreadable, or not text",
@@ -1400,12 +1639,12 @@ mod tests {
         };
         let short = || chapter("<p>short</p>");
         let marks = |count: usize| chapter(&format!("<p>first</p>{}", "<br/>".repeat(count)));
-        assert_eq!(cut_after(&[marks(MAX_MARKS / 2), marks(MAX_MARKS / 2), short(), short()]), (Left { past: 3, ..Left::default() }, 1));
-        assert_eq!(cut_after(&[marks(MAX_MARKS / 4), marks(MAX_MARKS / 4), short()]).0, Left::default(), "within them");
+        assert_eq!(cut_after(&[marks(MAX_MARKS / 2), marks(MAX_MARKS / 2), short(), short()]), (Left { past: 3, shown: 1, ..Left::default() }, 1));
+        assert_eq!(cut_after(&[marks(MAX_MARKS / 4), marks(MAX_MARKS / 4), short()]).0.past, 0, "within them");
         let lines = |count: usize| chapter(&format!("<pre>first\n{}</pre>", "\n".repeat(count)));
         assert_eq!(cut_after(&[lines(MAX_MARKS / 2), lines(MAX_MARKS / 2), short()]).0.past, 2, "a line's end is a mark");
         let text = |bytes: usize| chapter(&format!("<p>first {}</p>", "a".repeat(bytes)));
-        assert_eq!(cut_after(&[text(MAX_TEXT / 2), short(), text(MAX_TEXT / 2), short()]), (Left { past: 2, ..Left::default() }, 2));
+        assert_eq!(cut_after(&[text(MAX_TEXT / 2), short(), text(MAX_TEXT / 2), short()]), (Left { past: 2, shown: 2, ..Left::default() }, 2));
         let attributes = |bytes: usize| chapter(&format!("<p title=\"{}\">first</p>", "a".repeat(bytes)));
         // Each within a chapter's own limit.
         let fifth = MAX_WRITTEN / 5;
@@ -1414,7 +1653,7 @@ mod tests {
             2,
             "by its bytes"
         );
-        assert_eq!(Left { past: 2, ..Left::default() }.notes(), ["2 chapters are left out: the book is longer than clv lays out"]);
+        assert_eq!(Left { past: 2, ..Left::default() }.notes(false), ["2 chapters are left out: the book is longer than clv lays out"]);
     }
 
     /// A reference in a chapter is a path from the book's top, or none: resolved from the chapter's
@@ -1475,6 +1714,228 @@ mod tests {
         {
             assert_eq!(in_the_book(link("as written", target.clone())).target, target);
         }
+    }
+
+    /// A package as [`opf`] writes one, with `metadata` of its own after what it must have, and its
+    /// manifest's `items` as written.
+    fn package(version: &str, metadata: &str, items: &str, itemrefs: &str) -> String {
+        opf(version, &[], itemrefs).replace("</metadata>", &format!("{metadata}</metadata>")).replace("<manifest>", &format!("<manifest>{items}"))
+    }
+
+    /// The plan of the book whose package is `package`, with `more` files, read by the worker.
+    fn planned_of(package: &str, more: &[(&str, &[u8])]) -> Result<Plan, String> {
+        let container = container("OEBPS/content.opf");
+        let mut files = vec![("META-INF/container.xml", container.as_bytes()), ("OEBPS/content.opf", package.as_bytes())];
+        files.extend_from_slice(more);
+        planned(&book(&files), in_a_thread)
+    }
+
+    const CHAPTER_ITEM: &str = r#"<item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/>"#;
+
+    /// The cover the package names, as EPUB 3 does and as EPUB 2 did, is a page of its own before
+    /// the first chapter shown, unless that chapter shows it, as a picture or wrapped in a drawing:
+    /// then it isn't shown twice. A cover the book doesn't hold is no page.
+    #[test]
+    fn the_cover_comes_first_unless_the_first_chapter_shows_it() {
+        let epub3 = package(
+            "3.0",
+            "",
+            &format!(r#"{CHAPTER_ITEM}<item id="c" href="images/cover%201.jpg" media-type="image/jpeg" properties="cover-image"/>"#),
+            r#"<itemref idref="one"/>"#,
+        );
+        let epub2 = package(
+            "2.0",
+            r#"<meta name="cover" content="c"/>"#,
+            &format!(r#"{CHAPTER_ITEM}<item id="c" href="images/cover%201.jpg" media-type="image/jpeg"/>"#),
+            r#"<itemref idref="one"/>"#,
+        );
+        for (version, package) in [("3.0", &epub3), ("2.0", &epub2)] {
+            assert_eq!(planned_of(package, &[]).unwrap().cover.as_deref(), Some("OEBPS/images/cover 1.jpg"), "{version}");
+        }
+        assert_eq!(planned_of(&package("3.0", "", CHAPTER_ITEM, r#"<itemref idref="one"/>"#), &[]).unwrap().cover, None);
+        let plan = planned_of(&epub3, &[]).unwrap();
+        let covered = |first: &str, held: bool| {
+            let (one, two) = (chapter(first), chapter("<p>two</p>"));
+            let mut files: Vec<(&str, &[u8])> = vec![("OEBPS/text/one.xhtml", one.as_bytes()), ("OEBPS/text/two.xhtml", two.as_bytes())];
+            if held {
+                files.push(("OEBPS/images/cover 1.jpg", b"jpeg"));
+            }
+            assembled(&plan, &book(&files)).0.split_off(HEAD as usize)
+        };
+        let cover = r#"<div id="cover" style="page-break-before: always"><p><img src="./OEBPS/images/cover%201.jpg" alt=""/></p></div>"#;
+        let text = covered("<p>one</p>", true);
+        assert!(text.starts_with(&format!("{cover}\n<div id=\"c1\"")) && text.matches("cover%201.jpg").count() == 1, "{text}");
+        for shows in [
+            r#"<p><img src="../images/cover%201.jpg" alt="Cover"/></p>"#,
+            r#"<div><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 800 1104"><image width="800" height="1104" xlink:href="../images/cover%201.jpg"/></svg></div>"#,
+        ] {
+            let text = covered(shows, true);
+            assert!(text.starts_with(r#"<div id="c1""#) && text.matches("./OEBPS/images/cover%201.jpg").count() == 1, "not twice: {text}");
+        }
+        assert!(covered("<p>one</p>", false).starts_with(r#"<div id="c1""#), "a cover the book doesn't hold");
+        // Before the first chapter that is shown, not one left out.
+        let later = Plan {
+            chapters: plan.chapters.iter().cloned().chain([Chapter { path: Some("OEBPS/text/two.xhtml".into()), kind: Kind::Xhtml }]).collect(),
+            cover: plan.cover.clone(),
+            ..Plan::default()
+        };
+        let two = chapter("<p>two</p>");
+        let (html, left) = assembled(&later, &book(&[("OEBPS/text/two.xhtml", two.as_bytes()), ("OEBPS/images/cover 1.jpg", b"jpeg")]));
+        assert!(html[HEAD as usize..].starts_with(&format!("{cover}\n<div id=\"c2\"")) && (left.missing, left.shown) == (1, 1), "{html}");
+    }
+
+    /// A drawing that only wraps a picture is that picture, as a cover's page writes it; a drawing
+    /// of anything else, or of two pictures, is left as it is.
+    #[test]
+    fn an_svg_that_only_wraps_a_picture_is_that_picture() {
+        let book = book(&[]);
+        let written = Written { chapter: 1, directory: "text", zipped: &book };
+        let body = |svg: &str| {
+            let body = written.body(&chapter(svg)).0;
+            body.strip_prefix(r#"<div id="c1" style="page-break-before: always">"#).and_then(|body| body.strip_suffix("</div>\n")).unwrap().to_owned()
+        };
+        for wraps in [
+            r#"<svg viewBox="0 0 8 11"><image width="8" height="11" xlink:href="../images/c.jpg"/></svg>"#,
+            r#"<svg><title>The cover</title><desc>A painting</desc> <image href="../images/c.jpg"></image> </svg>"#,
+            "<svg>\n<!-- the cover -->\n<IMAGE HREF='../images/c.jpg'/>\n</svg>",
+        ] {
+            assert_eq!(body(wraps), r#"<img src="./images/c.jpg" alt=""/>"#, "{wraps}");
+        }
+        assert_eq!(
+            body(r#"<p>before</p><svg><image href="c.jpg"/></svg><p>after</p>"#),
+            r#"<p>before</p><img src="./text/c.jpg" alt=""/><p>after</p>"#
+        );
+        for drawn in [
+            r#"<svg><image href="a.jpg"/><image href="b.jpg"/></svg>"#,
+            r#"<svg><rect width="1" height="1"/><image href="a.jpg"/></svg>"#,
+            r#"<svg><image href="a.jpg"/><text>words</text></svg>"#,
+            r#"<svg><image href="a.jpg"/>words</svg>"#,
+            r#"<svg><image/></svg>"#,
+            r#"<svg></svg>"#,
+            r#"<svg><image href="a.jpg"/>"#,
+        ] {
+            assert!(body(drawn).starts_with("<svg>"), "{drawn}: {}", body(drawn));
+        }
+    }
+
+    /// XHTML writes an empty element short, whichever it is; HTML reads only a void one so. Each is
+    /// written as HTML reads it empty: `<div/>` as `<div></div>`, `<br/>` as it is.
+    #[test]
+    fn an_element_written_short_is_read_as_empty() {
+        let book = book(&[]);
+        let written = Written { chapter: 2, directory: "", zipped: &book };
+        let (body, _) = written.body(&chapter(r#"<div class="gap"/><p>one<a id="note"/><br/>two<img src="a.png"/><span/></p><hr /><td/>"#));
+        assert_eq!(
+            body,
+            concat!(
+                r#"<div id="c2" style="page-break-before: always"><div class="gap"></div><p>one<a id="c2-note"></a><br/>two<img src="./a.png"/><span></span></p><hr/><td></td></div>"#,
+                "\n"
+            )
+        );
+    }
+
+    /// A spine's item that is neither XHTML nor a picture is shown as the first of its fallbacks
+    /// that is, at most eight along; a chain that comes back on itself, or is longer, leaves it
+    /// what it was, to be left out. A picture or a drawing in the spine is a page of it.
+    #[test]
+    fn a_spines_item_is_shown_as_its_fallback_and_a_picture_as_its_page() {
+        let thing = |id: &str, fallback: &str| format!(r#"<item id="{id}" href="{id}.bin" media-type="application/x-thing" fallback="{fallback}"/>"#);
+        let chain = |length: usize| {
+            (0..length).map(|n| thing(&format!("t{n}"), &if n + 1 == length { "one".to_owned() } else { format!("t{}", n + 1) })).collect::<String>()
+        };
+        let shown = |items: &str, idref: &str| {
+            let plan = planned_of(&package("3.0", "", &format!("{CHAPTER_ITEM}{items}"), &format!(r#"<itemref idref="{idref}"/>"#)), &[]).unwrap();
+            (plan.chapters[0].path.clone().unwrap(), plan.chapters[0].kind)
+        };
+        assert_eq!(shown(&chain(1), "t0"), ("OEBPS/text/one.xhtml".into(), Kind::Xhtml));
+        assert_eq!(shown(&chain(MAX_FALLBACKS), "t0"), ("OEBPS/text/one.xhtml".into(), Kind::Xhtml), "eight along");
+        assert_eq!(shown(&chain(MAX_FALLBACKS + 1), "t0"), ("OEBPS/t0.bin".into(), Kind::Other), "no further");
+        assert_eq!(shown(&format!("{}{}", thing("a", "b"), thing("b", "a")), "a"), ("OEBPS/a.bin".into(), Kind::Other), "a loop");
+        assert_eq!(shown(&thing("a", "gone"), "a"), ("OEBPS/a.bin".into(), Kind::Other), "a fallback the manifest hasn't");
+        let picture = format!(r#"{}<item id="p" href="images/plate.svg" media-type="image/svg+xml"/>"#, thing("a", "p"));
+        assert_eq!(shown(&picture, "a"), ("OEBPS/images/plate.svg".into(), Kind::Picture), "a picture is shown too");
+        // A page of the picture, where it comes.
+        let plan = plan(&[("images/plate one.png", Kind::Picture), ("gone.png", Kind::Picture)]);
+        let (html, left) = assembled(&plan, &book(&[("images/plate one.png", b"png")]));
+        assert_eq!(
+            &html[HEAD as usize..],
+            "<div id=\"c1\" style=\"page-break-before: always\"><p><img src=\"./images/plate%20one.png\" alt=\"\"/></p></div>\n"
+        );
+        assert_eq!((left.shown, left.missing), (1, 1));
+    }
+
+    /// What a book's list of encrypted files says is protected: every file encrypted by anything
+    /// but a font's obfuscation, IDPF's or Adobe's, by its path from the book's top.
+    #[test]
+    fn a_file_encrypted_by_anything_but_a_fonts_obfuscation_is_protected() {
+        let data = |algorithm: &str, uri: &str| {
+            format!(
+                r#"<enc:EncryptedData xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptionMethod Algorithm="{algorithm}"/><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><enc:EncryptedKey><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/></enc:EncryptedKey></ds:KeyInfo><enc:CipherData><enc:CipherReference URI="{uri}"/></enc:CipherData></enc:EncryptedData>"#
+            )
+        };
+        const AES: &str = "http://www.w3.org/2001/04/xmlenc#aes256-cbc";
+        let xml = format!(
+            r#"<?xml version="1.0"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><EncryptedKey><EncryptionMethod Algorithm="rsa"/><CipherData><CipherValue>AAAA</CipherValue></CipherData></EncryptedKey>{}{}{}{}{}<EncryptedData><CipherData><CipherReference URI="OEBPS/unsaid.xhtml"/></CipherData></EncryptedData></encryption>"#,
+            data("http://www.idpf.org/2008/embedding", "OEBPS/fonts/a.otf"),
+            data("http://ns.adobe.com/pdf/enc#RC", "OEBPS/fonts/b.otf"),
+            data(AES, "OEBPS/text/chapter%202.xhtml"),
+            data(AES, "OEBPS/images/../images/plate.jpg"),
+            data(AES, "../../etc/passwd"),
+        );
+        assert_eq!(protected(&xml).unwrap(), ["OEBPS/text/chapter 2.xhtml", "OEBPS/images/plate.jpg", "OEBPS/unsaid.xhtml"]);
+        assert_eq!(protected("").unwrap(), Vec::<String>::new());
+        assert_eq!(protected("<EncryptedData><CipherReference URI='a'/>").unwrap(), Vec::<String>::new(), "one never ended");
+        let many: String = (0..=MAX_PROTECTED).map(|n| format!("<EncryptedData><CipherReference URI='{n}'/></EncryptedData>")).collect();
+        assert!(many.len() < MAX_ENCRYPTION as usize && protected(&many).is_err_and(|why| why == "it protects more than 16384 files"));
+        // Through the worker, with the package; and a list past what is read of one refuses the book.
+        let item = r#"<item id="two" href="text/chapter%202.xhtml" media-type="application/xhtml+xml"/>"#;
+        let spine = r#"<itemref idref="one"/><itemref idref="two"/>"#;
+        let book_of = package("3.0", "", &format!("{CHAPTER_ITEM}{item}"), spine);
+        let plan = planned_of(&book_of, &[("META-INF/encryption.xml", xml.as_bytes())]).unwrap();
+        assert_eq!(plan.protected, ["OEBPS/images/plate.jpg", "OEBPS/text/chapter 2.xhtml", "OEBPS/unsaid.xhtml"], "sorted, to be looked up");
+        assert!(plan.protects("OEBPS/text/chapter 2.xhtml") && !plan.protects("OEBPS/text/one.xhtml") && !plan.protects("OEBPS/fonts/a.otf"));
+        let large = vec![b' '; MAX_ENCRYPTION as usize + 1];
+        assert_eq!(planned_of(&book_of, &[("META-INF/encryption.xml", &large)]).unwrap_err(), "its list of protected files is more than 1024 KiB");
+    }
+
+    /// A protected chapter is left out, and counted for the first page to say; a protected cover is
+    /// no page; a protected picture is not read for a chapter; and a book says so when it is made
+    /// to be laid out page by page.
+    #[test]
+    fn a_protected_chapter_is_left_out_and_a_protected_picture_not_read() {
+        let (one, two) = (chapter(r#"<p>one <img src="plate.jpg"/></p>"#), chapter("<p>two</p>"));
+        let files: [(&str, &[u8]); 4] =
+            [("one.xhtml", one.as_bytes()), ("two.xhtml", b"\x00\x9f\x92 not text"), ("plate.jpg", b"jpeg"), ("cover.jpg", b"jpeg")];
+        let chapters = [("one.xhtml", Kind::Xhtml), ("two.xhtml", Kind::Xhtml), ("plate.jpg", Kind::Picture)];
+        let protecting = |protected: &[&str]| {
+            let mut plan = plan(&chapters);
+            plan.cover = Some("cover.jpg".to_owned());
+            plan.protected = protected.iter().map(|path| (*path).to_owned()).collect();
+            plan.protected.sort_unstable();
+            plan
+        };
+        let (html, left) = assembled(&protecting(&["two.xhtml", "plate.jpg", "cover.jpg"]), &book(&files));
+        assert_eq!((left.protected, left.shown, left.unreadable), (2, 1, 0));
+        assert!(html[HEAD as usize..].starts_with(r#"<div id="c1""#) && !html.contains(r#"id="cover""#), "a protected cover is no page: {html}");
+        assert_eq!(left.notes(false), ["2 chapters are protected (DRM)"]);
+        assert_eq!(
+            Left { protected: 1, ..Left::default() }.notes(true),
+            ["1 chapter is protected (DRM)", "a fixed-layout book: its pages are laid out as its text flows, not as they were made"]
+        );
+        // Nothing of the book shown, and something protected: what `opened` refuses the book by.
+        let (_, left) = assembled(&protecting(&["one.xhtml", "two.xhtml", "plate.jpg"]), &book(&files));
+        assert_eq!((left.protected, left.shown), (3, 0));
+        // A picture the book protects is refused to its chapter, as one it doesn't hold is.
+        let kept = Kept::Open(Arc::new(book(&files)));
+        let near = near(&kept, &Arc::new(protecting(&["plate.jpg"])), "book.epub");
+        assert_eq!(near("plate.jpg").err().as_deref(), Some("book.epub/plate.jpg: protected (DRM)"));
+        assert_eq!(near("gone.jpg").err().as_deref(), Some("book.epub/gone.jpg: not in the book"));
+        assert_eq!(near("cover.jpg").unwrap().bytes().unwrap(), b"jpeg");
+        let _ = two;
+        // The package says how the book is laid out.
+        let fixed = package("3.0", r#"<meta property="rendition:layout">pre-paginated</meta>"#, CHAPTER_ITEM, r#"<itemref idref="one"/>"#);
+        let flowing = package("3.0", r#"<meta property="rendition:layout">reflowable</meta>"#, CHAPTER_ITEM, r#"<itemref idref="one"/>"#);
+        assert!(planned_of(&fixed, &[]).unwrap().fixed && !planned_of(&flowing, &[]).unwrap().fixed);
     }
 
     /// Which zips are books: one that says so in its first file, stored, whatever its name; one
@@ -1549,17 +2010,27 @@ mod tests {
         #[test]
         fn any_answer_is_a_plan_or_none(answer in prop::collection::vec(any::<u8>(), 0..256), count in 0u32..8, paths in prop::collection::vec("[a-c/.%]{0,12}", 0..8)) {
             let _ = Plan::read(&answer);
+            // Framed as an answer is, its counts and its paths whatever they are.
             let mut framed = Vec::new();
+            put(&mut framed, &[u8::from(count % 2 == 1)]);
+            put(&mut framed, paths.first().map_or(&b""[..], |path| path.as_bytes()));
             put(&mut framed, &count.to_le_bytes());
-            for path in &paths {
+            for path in paths.iter().take(count as usize) {
                 put(&mut framed, path.as_bytes());
                 put(&mut framed, b"application/xhtml+xml");
             }
-            if let Some(plan) = Plan::read(&framed) {
-                prop_assert_eq!(plan.chapters.len(), count as usize);
-                for chapter in &plan.chapters {
-                    prop_assert!(chapter.path.as_deref().is_none_or(|path| !path.split('/').any(|part| part == ".." || part.is_empty())));
+            put(&mut framed, &u32::try_from(paths.len()).unwrap().to_le_bytes());
+            for path in &paths {
+                put(&mut framed, path.as_bytes());
+            }
+            let within = |path: &str| !path.split('/').any(|part| part == ".." || part.is_empty());
+            match Plan::read(&framed) {
+                Some(plan) => {
+                    prop_assert_eq!(plan.chapters.len(), count as usize);
+                    prop_assert!(plan.chapters.iter().filter_map(|chapter| chapter.path.as_deref()).chain(plan.cover.as_deref()).all(within));
+                    prop_assert!(plan.protected.iter().all(|path| within(path)) && plan.protected.is_sorted());
                 }
+                None => prop_assert!(paths.len() < count as usize, "an answer as the worker writes one is read"),
             }
         }
     }

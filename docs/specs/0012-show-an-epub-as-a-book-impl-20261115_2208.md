@@ -153,3 +153,60 @@ advisories` too, with rbook and the newer zip in the lock.
   times a layout against a key.
 - Two versions of `lzma-rust2` are built now. The tar backend's could move to 0.25 with zip's:
   told to the lead, not done here.
+
+## Task 3: covers, fallbacks and DRM
+
+**The spec's open question, measured**
+
+- **The cost of a book's tile**: the 22 real books open to their first page in 0.11 to 1.13 s each
+  (ADR-0038's table), and all 22 printed as a list take 10 s and 655 MiB, half a second a book,
+  each laid out whole for its tile. In the pager they open four at a time, as their tiles are
+  wanted. Whether that is too slow for a shelf is the owner's to judge in kitty (the task's manual
+  check); a tile from the cover alone is in the backlog's More documents.
+
+**Changed from the plan**
+
+- **A fixed-layout book says so on its first page** (`a fixed-layout book: its pages are laid out
+  as its text flows, not as they were made`), besides usage's known issue: the worker answers the
+  layout, and a reader of a comic laid out as text should be told why.
+- **The cover is found twice by its path**: "the first chapter doesn't show it already" is whether
+  that chapter's body, as written into the book, refers to the cover's path from the book's top.
+  A chapter that shows the same picture under another file's name gets the cover page too.
+- **A protected picture** is refused by the book's `Near`, so its chapter leaves it out and
+  counts it, as a picture that is missing: a document has no grey box for a picture it couldn't
+  measure.
+- **16,384 protected files** at most, a limit the spec didn't name: past it the book is refused.
+  A list of 1 MiB can't name many more.
+- **The table before a chapter** (task 2) and **`<x/>` as `<x></x>`** are in `Written`; the
+  void elements are HTML's fourteen.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| no cover page | `epub::tests::the_cover_comes_first_unless_the_first_chapter_shows_it`, `epub::a_books_cover_is_its_first_page_and_its_tile_in_a_list` |
+| the cover shown though the first chapter shows it | `epub::tests::the_cover_comes_first_unless_the_first_chapter_shows_it` |
+| an `<svg>` that wraps a picture left a drawing | `epub::tests::an_svg_that_only_wraps_a_picture_is_that_picture`, `epub::a_books_cover_is_its_first_page_and_its_tile_in_a_list` |
+| an element written short left open | `epub::tests::an_element_written_short_is_read_as_empty` |
+| no fallback followed | `epub::tests::a_spines_item_is_shown_as_its_fallback_and_a_picture_as_its_page` |
+| a picture in the spine no page | the same |
+| a font's obfuscation taken for protection | `epub::tests::a_file_encrypted_by_anything_but_a_fonts_obfuscation_is_protected` |
+| any number of protected files | the same |
+| the list of protected files read past 1 MiB | the same |
+| a protected chapter read | `epub::tests::a_protected_chapter_is_left_out_and_a_protected_picture_not_read`, `epub::a_protected_chapter_is_left_out_and_a_book_all_protected_refused` |
+| a protected picture read | `epub::tests::a_protected_chapter_is_left_out_and_a_protected_picture_not_read` |
+| a book all protected shown empty | `epub::a_protected_chapter_is_left_out_and_a_book_all_protected_refused` |
+| fixed layout not said | both of those |
+
+**Looked at, not in kitty**: *Alice's Adventures in Wonderland* (Gutenberg's 11, EPUB 3) printed
+with `--protocol kitty` and its pages read back as pictures: its cover is the first page, shown
+once, from the drawing that wraps it; Standard Ebooks' *Alice* has its cover first, which its
+title page doesn't show, and is its tile in a list of the 22. The task's manual check, in kitty,
+is the owner's, and its box stays open until it is confirmed.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (586 unit, 13 docs, 291 integration), all passing.
+
+A trap met on the way, for whoever reverts a fix to see a test fail: a file copied back with its
+old time (`cp -p`, `shutil.copy2`) is older than the binary built from the revert, and cargo then
+builds nothing, so the next run tests the reverted code. Copy it back with a new time.

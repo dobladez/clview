@@ -490,9 +490,16 @@ through its command) and that a key means one setting
   `epub::opened` reads the book's `META-INF/container.xml` (64 KiB at most, for one attribute,
   `package_path`) and the package it names (the OPF, 4 MiB at most) through `zipped.rs`, and has
   rbook read the package in a worker process, `clv --worker epub` (`epub::PACKAGE`, in
-  `source::WORKERS`): one `READ` request, the package's path and its bytes, answered `PLAN` with
-  the spine's items in order, each its file's path from the book's top and its media type
-  (`Plan::written`), or `REFUSED` with rbook's reason (256 bytes at most, cut at a character). The
+  `source::WORKERS`): one `READ` request, the package's path, its bytes and the bytes of the
+  book's `META-INF/encryption.xml` (1 MiB at most; none for a book without one), answered `PLAN`
+  (`Answer::written`) or `REFUSED` with rbook's reason (256 bytes at most, cut at a character).
+  The answer is the spine's items in order, each as the path from the book's top and the media
+  type of the file shown for it: itself, or for one that is neither XHTML nor a picture, the first
+  of its fallbacks that is, at most eight along (`MAX_FALLBACKS`); the cover picture rbook names
+  (`cover_image`); whether the package says `rendition:layout` is `pre-paginated`; and the files
+  the book protects, read by a scan of the worker's own (`epub::protected`, with `markup.rs`'s
+  lexer, since rbook doesn't read that file): each `EncryptedData`'s `CipherReference`, unless its
+  own `EncryptionMethod` is one of the two that obfuscate fonts (`OBFUSCATIONS`). The
   worker gives rbook a zip of its own holding the package alone, under a container that names it,
   with `skip_toc`, so rbook reads no other file, and a table of contents it can't read doesn't
   cost the package. Its caps are 2 s of CPU and 256 MiB of heap (`READ_CPU`, `MAX_HEAP`): a
@@ -505,12 +512,21 @@ through its command) and that a key means one setting
   the document: a first 1,024 bytes of clv's own (`start`, a doctype and a comment), so nothing a
   book writes is among the bytes a backend is chosen by, then each chapter in the spine's order,
   what its `<body>` holds, in a `<div>` with `page-break-before: always` and the id `c` and its
-  number (a page break on a `<div>` reaches the first paragraph in it, at the Word backend's pin).
+  number (a page break on a `<div>` reaches the first paragraph in it, at the Word backend's pin;
+  a table is none, so one that is the first thing a chapter shows gets a paragraph of a zero-width
+  space before it, `BEFORE_A_TABLE`). A chapter that is a picture is a `<div>` of an `<img>` of it
+  (`page_of`), and so is the cover, before the first chapter shown, unless that chapter's body
+  refers to the cover's path as written from the book's top. A chapter the book protects
+  (`Plan::protects`) is left out and counted, and a book with none shown and some protected is
+  refused.
   `Written::body` goes through the chapter with `markup.rs`'s lexer, tag by tag: `<head>`,
   `<title>`, `<style>`, `<script>` and what the importer reads no text of are dropped with what
   they hold, `<link>`, `<meta>` and `<base>` dropped; an `id` gets its chapter's number before it
   (`c3-s1`), since two chapters' ids would meet; a `src` is written as a path from the book's top,
-  percent-encoded, since the pictures' reader decodes it; an `href` that is a path is marked as a
+  percent-encoded, since the pictures' reader decodes it; an `<svg>` that holds one `<image>` and
+  nothing else (`wrapped_picture`) is written as an `<img>` of it; an element written short that
+  isn't one of HTML's void ones gets its end tag (`<div/>` as `<div></div>`), since read as HTML
+  it would stay open; an `href` that is a path is marked as a
   file the book holds or one it doesn't (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the
   top. It counts as it writes, and stops before the chapter that would take the document past
   bounds of its own (`MAX_WRITTEN`, `MAX_MARKS`, `MAX_TEXT`: 48 MiB, 400,000 marks, 6 MiB of
@@ -518,9 +534,9 @@ through its command) and that a key means one setting
   document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,
   for the first render and each relayout, asking the worker nothing; its `Near` (`epub::near`)
   reads a picture from the book by its very name in the zip, with its first bytes alone for its
-  size. What the backend gives is wrapped in a `Book`, which hands every `Source` method on, the
-  source a relayout's job makes too; puts the chapters left out among the first page's warnings
-  (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
+  size, and refuses one the book protects. What the backend gives is wrapped in a `Book`, which hands every `Source` method on, the
+  source a relayout's job makes too; puts the chapters left out or protected among the first page's
+  warnings, and that a fixed-layout book is laid out flowing (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
   `Target::Other` saying which it is), so the viewer never looks for a file beside the `.epub`.
   The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
   `margin`, `fences`), so that a list knows a book has them before it is opened

@@ -41,10 +41,13 @@ The viewer has two shapes for many things shown together: a list of files, each 
    and has rbook read that with `skip_toc`. So nothing large crosses the pipe, the worker reads no
    file, rbook never parses the book's own container, and a table of contents it can't read
    doesn't cost the reading order.
-3. **It answers the reading order and nothing else**: the spine's items in order, each its file's
-   path from the book's top and its media type. The worker never asks rbook what kind of file an
-   item is. The backend checks the answer as any input: 4,096 chapters, 4 KiB a path, every path
-   brought to one from the book's top or dropped.
+3. **It answers what the book is made of, small**: the spine's items in order, each as the path
+   from the book's top and the media type of the file shown for it (itself, or the first of its
+   fallbacks that is XHTML or a picture, at most eight along); the cover picture; whether the
+   book is fixed-layout; and the files the book protects, which rbook doesn't read, from a scan of
+   the worker's own over `META-INF/encryption.xml` (1 MiB at most). The worker never asks rbook
+   what kind of file an item is. The backend checks the answer as any input: 4,096 chapters,
+   16,384 protected files, 4 KiB a path, every path brought to one from the book's top or dropped.
 4. **Capped at 2 s of CPU and 256 MiB of heap**, one worker a book, gone once it has answered, one
    at a time. The cap is not the costliest package rbook accepts: it is above every package a
    book could really have, and below what a package made to cost the most takes, which is
@@ -167,8 +170,10 @@ that is the first thing a chapter shows.
     books that for each tile wanted.
   - A chapter whose first content is a table starts a point lower than any other.
   - A book past the bounds shows its first chapters only: 6 MiB of text is some 3,700 pages.
-  - The reading order is all that is read of the package here: its cover, its fallbacks, its
-    protected files and its table of contents are the same worker's to answer, as they come.
+  - A fixed-layout book is laid out flowing, and says so
+    ([backlog](../backlog.md#fixed-layout-epubs-through-blitz)).
+  - A book's tile in a list costs the whole book's layout: 22 real books printed as a list take
+    10 s and 655 MiB, half a second a book.
 - **Follow-ups:** the book's stylesheets applied a chapter at a time
   ([backlog](../backlog.md#more-documents)); a cheaper tile, the cover alone, which is a contract
   change of its own; a worker kept between books, as Mermaid's is, if a shelf of books turns out
