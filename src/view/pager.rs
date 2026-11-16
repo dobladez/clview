@@ -57,6 +57,9 @@ use super::{
 const TICK: Duration = Duration::from_millis(200);
 /// How often renders in progress are checked on.
 const POLL: Duration = Duration::from_millis(10);
+/// How long a message that takes the whole status line has it, before the line comes back
+/// ([`Nav::notice`]): long enough to read a line, short enough that the place isn't missed.
+const NOTICE: Duration = Duration::from_secs(1);
 /// How long a lone ESC waits for more before it counts as the Esc key. A longer escape sequence
 /// cut off waits for the rest up to [`PENDING_LIMIT`], and is never a key.
 const ESCAPE_WAIT: Duration = Duration::from_millis(50);
@@ -183,6 +186,7 @@ pub(super) fn run(
         settings,
         dark: terminal.dark,
         tmux_check: watch.as_ref().map(|_| Instant::now() + TMUX_EVERY),
+        moment: Moment::default(),
         watch,
         hidden: false,
         transmitted: 0,
@@ -247,6 +251,8 @@ pub(super) fn run(
         // A room that changed is laid out for once it has held: wake then.
         let wait = pager.hold.due().map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
         let wait = pager.tmux_check.map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
+        // A message that has the whole status line gives it back then.
+        let wait = pager.moment.due().map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
         let read = tty.read_timeout(wait)?;
         if let Some(bytes) = &read {
             if pending.is_empty() {
@@ -277,6 +283,9 @@ pub(super) fn run(
                     continue;
                 }
                 redraw = true;
+                // A key takes the status line back from a message that had it whole; one said by
+                // this key has it from now.
+                pager.moment.key();
                 // A key says where the reader wants to be: the place a link named is no longer waited for.
                 pager.stop_seeking();
                 // Reading a container gone into: the keys that leave or go back stop it, and
@@ -337,6 +346,7 @@ pub(super) fn run(
             redraw |= pager.read_on(opener)?;
         }
         redraw |= pager.go_on_into()?;
+        redraw |= pager.notice_on(Instant::now());
         redraw |= pager.watch_room();
         pager.refresh_bounds();
         redraw |= pager.relayout()?;
@@ -442,6 +452,11 @@ struct Nav {
     typed: String,
     /// Shown in the status line until the next key.
     message: Option<String>,
+    /// A message that is all the status line says, for a moment: one too long for its place beside
+    /// the rest, said once and then taken back by the pager ([`Pager::notice_on`]), or by the next
+    /// key, whichever comes first. Apart from [`Nav::message`], which may come meanwhile from
+    /// elsewhere (a page's warning) and is there when this goes.
+    notice: Option<String>,
     /// Whether the status line still reminds of the keys: until the first key.
     hint: bool,
     /// Whether the keys are on screen, in place of the pages (`?`).
@@ -507,9 +522,9 @@ struct Filter {
 #[derive(Debug, Default)]
 struct Settings {
     declared: Vec<&'static Setting>,
-    /// The formats whose files have each, by its name, said together ([`super::having`]): what is
-    /// said of a setting names them, the viewer knowing no format itself.
-    having: Vec<(&'static str, String)>,
+    /// The formats whose files have each, by its name ([`super::having`]): what is said of a setting
+    /// names them, the viewer knowing no format itself.
+    having: Vec<(&'static str, Vec<&'static str>)>,
     values: std::cell::Cell<Values>,
     /// A value changed since the last draw: every page sent goes, whichever level draws next. Kept
     /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`D`
@@ -520,6 +535,43 @@ struct Settings {
     keymaps: Keymaps,
 }
 
+/// The moment a message has the whole status line for ([`Nav::notice`]): from when the pager first
+/// sees it shown, for [`NOTICE`]. A key starts it over, for what that key says.
+#[derive(Debug, Default)]
+struct Moment(Option<Instant>);
+
+impl Moment {
+    /// A key was pressed: whatever it says has a moment of its own.
+    fn key(&mut self) {
+        self.0 = None;
+    }
+
+    /// When the moment under way is over, for the pager to wake then.
+    fn due(&self) -> Option<Instant> {
+        self.0
+    }
+
+    /// Whether the message `shown`, if one is, is to go at `now`: [`NOTICE`] after it was first seen
+    /// here. With none shown, there is no moment.
+    fn over(&mut self, shown: bool, now: Instant) -> bool {
+        match (shown, self.0) {
+            (false, _) => {
+                self.0 = None;
+                false
+            }
+            (true, Some(until)) if now >= until => {
+                self.0 = None;
+                true
+            }
+            (true, Some(_)) => false,
+            (true, None) => {
+                self.0 = now.checked_add(NOTICE);
+                false
+            }
+        }
+    }
+}
+
 /// What a setting's keys say on a file that hasn't it, where no format is said to have it: the
 /// backends' own tests keep a build from getting here.
 const NOT_HERE: &str = "not for this file";
@@ -527,24 +579,29 @@ const NOT_HERE: &str = "not for this file";
 impl Settings {
     /// The settings `declared`, the formats `having` each, at `values`, and the keymaps their keys
     /// make with the viewer's.
-    fn of(declared: Vec<&'static Setting>, having: Vec<(&'static str, String)>, values: Values) -> Self {
+    fn of(declared: Vec<&'static Setting>, having: Vec<(&'static str, Vec<&'static str>)>, values: Values) -> Self {
         Self { keymaps: Keymaps::new(&declared), declared, having, values: std::cell::Cell::new(values), changed: Default::default() }
     }
 
-    /// The formats whose files have `setting`, said together, if any lists it.
-    fn formats(&self, setting: &Setting) -> Option<&str> {
-        self.having.iter().find(|(name, _)| *name == setting.name).map(|(_, formats)| formats.as_str())
+    /// The formats whose files have `setting`, if any lists it.
+    fn formats(&self, setting: &Setting) -> Option<&[&'static str]> {
+        self.having.iter().find(|(name, _)| *name == setting.name).map(|(_, formats)| formats.as_slice())
     }
 
-    /// What `setting`'s keys say on a file that hasn't it: the formats that have, and what they do
-    /// ([`Setting::does`]), `only Markdown and HTML go dark`.
-    fn only(&self, setting: &Setting) -> String {
-        self.formats(setting).map_or_else(|| NOT_HERE.to_owned(), |formats| format!("only {formats} {}", setting.does))
+    /// What `setting`'s keys say on a file that hasn't it, or in a `list` none of whose files has:
+    /// that it doesn't do what the files that have it do ([`Setting::does`]), and the first two of
+    /// the formats that do, `this format doesn't go dark (Markdown, HTML and others do)`. Short, and
+    /// still more than the status line has room for beside the rest: it is said on the whole line,
+    /// for a moment ([`Nav::notice`]).
+    fn not_here(&self, setting: &Setting, list: bool) -> String {
+        let these = if list { "these files don't" } else { "this format doesn't" };
+        self.formats(setting).map_or_else(|| NOT_HERE.to_owned(), |formats| format!("{these} {} ({})", setting.does, super::some_do(formats)))
     }
 
-    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), after the formats they do it to.
+    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), after the formats they do it
+    /// to, all of them ([`super::together`]).
     fn help(&self, setting: &Setting) -> String {
-        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{formats} {}", setting.help))
+        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{} {}", super::together(formats), setting.help))
     }
 }
 
@@ -730,6 +787,7 @@ impl Nav {
             scroll_to: None,
             typed: String::new(),
             message: None,
+            notice: None,
             hint: true,
             help: false,
             rerender: false,
@@ -857,6 +915,7 @@ impl Nav {
 
     fn key(&mut self, key: Key) -> Step {
         self.message = None;
+        self.notice = None;
         self.hint = false;
         if let Some(search) = self.search.as_mut() {
             search.heard();
@@ -1164,7 +1223,7 @@ impl Nav {
         }
         let count = setting.numbers.and_then(|_| (!self.typed.is_empty()).then(|| std::mem::take(&mut self.typed)));
         if !self.has.contains(&setting.name) {
-            self.message = Some(settings.only(setting));
+            self.notice = Some(settings.not_here(setting, self.list));
             return Step::Continue;
         }
         if setting.effect == Effect::Relayout && (self.list || self.picked) {
@@ -1521,6 +1580,11 @@ impl Nav {
         if !self.typed.is_empty() {
             return self.typing(width);
         }
+        // A message that takes the whole line is all it says, as much of it as fits.
+        if let Some(notice) = &self.notice {
+            let line = format!(" {}", cut(notice, width.saturating_sub(2)));
+            return printable(&line.chars().chain(std::iter::repeat(' ')).take(width).collect::<String>());
+        }
         let (place, widest) = self.place();
         let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
         let slot = if rendering { '…' } else { ' ' };
@@ -1874,6 +1938,8 @@ struct Pager<'a> {
     /// Inside tmux: which terminals show the pane and what they missed, and when to ask again.
     watch: Option<tmux::Watch>,
     tmux_check: Option<Instant>,
+    /// When a message that has the whole status line gives it back ([`Nav::notice`]).
+    moment: Moment,
     /// Inside tmux: no terminal shows the pane, so nothing is sent (tmux would throw it away).
     hidden: bool,
     /// Images sent so far.
@@ -2667,6 +2733,17 @@ impl Pager<'_> {
     }
 
     /// `said` on the status line, the rest of the screen as it is.
+    /// A message that has the whole status line ([`Nav::notice`]) goes once its moment is over
+    /// ([`Moment`]), and the line comes back: whether it went, at `now`. A key takes the line back
+    /// sooner, by itself ([`Nav::key`]).
+    fn notice_on(&mut self, now: Instant) -> bool {
+        let over = self.moment.over(self.level.nav.notice.is_some(), now);
+        if over {
+            self.level.nav.notice = None;
+        }
+        over
+    }
+
     fn say(&mut self, said: String) -> Result<(), String> {
         let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
         self.level.nav.message = Some(said);
@@ -3693,13 +3770,37 @@ mod tests {
 
     /// `nav`, in a build that declares [`SHADE`], showing what has it if `has`.
     fn declaring(nav: Nav, has: bool) -> Nav {
-        let settings = Rc::new(Settings::of(vec![&SHADE], vec![(SHADE.name, "Ink and Wash".into())], Values::default()));
+        let settings = Rc::new(Settings::of(vec![&SHADE], vec![(SHADE.name, vec!["Ink", "Wash", "Dye"])], Values::default()));
         Nav { settings, has: if has { vec![SHADE.name] } else { Vec::new() }, ..nav }
     }
 
     /// The value `nav` has for [`SHADE`], if it was set.
     fn shade(nav: &Nav) -> Option<Value> {
         nav.settings.values.get().get(SHADE.name)
+    }
+
+    /// A message that has the whole status line has it for a second from when the pager first sees
+    /// it, and no longer; a key gives what it says a second of its own; and with none shown there is
+    /// nothing to wake for.
+    #[test]
+    fn a_message_on_the_whole_line_has_it_for_a_moment() {
+        let (start, ms) = (Instant::now(), Duration::from_millis);
+        let mut moment = Moment::default();
+        assert!(!moment.over(false, start) && moment.due().is_none());
+        assert!(!moment.over(true, start));
+        assert_eq!(moment.due(), Some(start + NOTICE));
+        assert!(!moment.over(true, start + ms(999)));
+        assert!(moment.over(true, start + ms(1000)) && moment.due().is_none(), "over, once");
+        // Said again by a key half way through: a moment from then.
+        assert!(!moment.over(true, start + ms(2000)));
+        moment.key();
+        assert!(!moment.over(true, start + ms(2500)));
+        assert!(!moment.over(true, start + ms(3100)), "not the first one's end");
+        assert!(moment.over(true, start + ms(3500)));
+        // Taken back by a key that says nothing: no moment left under way.
+        assert!(!moment.over(true, start + ms(4000)));
+        moment.key();
+        assert!(!moment.over(false, start + ms(4100)) && moment.due().is_none());
     }
 
     /// A setting's key, the viewer's taking none: on what has it, it goes to the next named value
@@ -3716,11 +3817,29 @@ mod tests {
         }
         let mut nav = declaring(reader(0, 12, 40, 40), false);
         press(&mut nav, &[Key::Char('D')]);
-        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only Ink and Wash go deep".to_owned()), false));
+        let said = "this format doesn't go deep (Ink, Wash and others do)";
+        assert_eq!((shade(&nav), nav.notice.clone(), nav.message.clone(), nav.wants_rerender()), (None, Some(said.to_owned()), None, false));
+        // It has the whole status line, whatever the window: nothing of where the reader is beside
+        // it, and in a narrow one as much of it as fits. The next key gives the line back.
+        assert_eq!(nav.status("a.pdf", 80, false), format!(" {said:<79}"));
+        let narrow = nav.status("a.pdf", 40, true);
+        assert!(chars(&narrow) == 40 && narrow.starts_with(" this format") && narrow.contains('…') && !narrow.contains("page"), "{narrow:?}");
+        press(&mut nav, &[Key::Char('j')]);
+        assert!(nav.notice.is_none() && nav.message.is_none() && nav.status("a.pdf", 80, false).ends_with(" · ? help "));
+        // What is said meanwhile from elsewhere waits behind it, and is there when it goes.
+        press(&mut nav, &[Key::Char('D')]);
+        nav.message = Some("a page's warning".to_owned());
+        assert_eq!(nav.status("a.pdf", 80, false), format!(" {said:<79}"));
+        nav.notice = None;
+        assert!(nav.status("a.pdf", 80, false).contains(" a page's warning "));
+        // In a list none of whose files has it, it is said of them.
+        let mut tiles = declaring(list(9), false);
+        press(&mut tiles, &[Key::Char('D')]);
+        assert_eq!(tiles.notice.as_deref(), Some("these files don't go deep (Ink, Wash and others do)"));
         // A setting no format is said to have: said without one.
         let mut nav = Nav { settings: Rc::new(Settings::of(vec![&SHADE], Vec::new(), Values::default())), ..reader(0, 12, 40, 40) };
         press(&mut nav, &[Key::Char('D')]);
-        assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some(NOT_HERE.to_owned()), false));
+        assert_eq!((shade(&nav), nav.notice.clone(), nav.wants_rerender()), (None, Some(NOT_HERE.to_owned()), false));
         assert!(nav.help_lines().contains(&("D".into(), "pale or deep".into())), "its line in `?` as it is: {:?}", nav.help_lines());
         let mut nav = declaring(reader(0, 12, 40, 40), true);
         press(&mut nav, &[Key::Char('4'), Key::Char('D')]);
@@ -3758,7 +3877,7 @@ mod tests {
         zero: Value::Named("window"),
         keys: Keys::Step('[', ']'),
         help: "narrower or wider",
-        does: "are as wide",
+        does: "widen",
         effect: Effect::Relayout,
         sets_width: true,
         ..SHADE
@@ -3772,7 +3891,7 @@ mod tests {
 
     /// [`declaring_both`], the width's values sitting as `bounds` say.
     fn declaring_in(nav: Nav, has: &[&'static str], bounds: Bounds) -> Nav {
-        let settings = Rc::new(Settings::of(vec![&SHADE, &WIDTH], vec![(WIDTH.name, "some".into())], Values::default()));
+        let settings = Rc::new(Settings::of(vec![&SHADE, &WIDTH], vec![(WIDTH.name, vec!["Some"])], Values::default()));
         let bounds = if has.contains(&WIDTH.name) { vec![(WIDTH.name, bounds)] } else { Vec::new() };
         Nav { settings, has: has.to_vec(), bounds, ..nav }
     }
@@ -4033,7 +4152,11 @@ mod tests {
         assert!(!tiles.wants_rerender());
         let mut none_has_it = declaring_both(list(9), &[]);
         press(&mut none_has_it, &[Key::Char(']')]);
-        assert_eq!(width(&none_has_it), (None, Some("only some are as wide")), "the setting's own message first");
+        assert_eq!(
+            (width(&none_has_it).0, none_has_it.notice.as_deref()),
+            (None, Some("these files don't widen (Some does)")),
+            "the setting's own message first"
+        );
         let mut picked = Nav { picked: true, ..declaring_both(reader(0, 12, 40, 40), &["width"]) };
         press(&mut picked, &[Key::Char(']')]);
         assert_eq!(width(&picked), (None, Some(REFLOW_WITH_PAGES)));
@@ -4235,16 +4358,16 @@ mod tests {
         let mut nav = declaring_both(reader(0, 12, 40, 40), &["shade"]);
         press(&mut nav, &[Key::Char('7'), Key::Char('2'), Key::Char(']')]);
         assert!(!nav.wants_rerender());
-        assert_eq!((width(&nav), nav.typed.as_str()), ((None, Some("only some are as wide")), ""));
+        assert_eq!((width(&nav).0, nav.notice.as_deref(), nav.typed.as_str()), (None, Some("this format doesn't widen (Some does)"), ""));
         // `?` gives a count's form too.
-        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "some narrower or wider".into())));
+        assert!(nav.help_lines().contains(&("[ ]  12]".into(), "Some narrower or wider".into())));
     }
 
     /// `?` lists the keys of the settings this build declares, after the viewer's and before the
     /// way out, whatever is shown: what each does, after the formats it does it to.
     #[test]
     fn the_keys_list_the_settings_after_the_viewers() {
-        const SAID: &str = "Ink and Wash pale or deep";
+        const SAID: &str = "Ink, Wash and Dye pale or deep";
         for nav in [declaring(reader(0, 3, 40, 40), false), declaring(list(3), true)] {
             let lines = nav.help_lines();
             let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();

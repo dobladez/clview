@@ -237,15 +237,19 @@ a backend's files are shown, a `Setting` with its named values and what each say
 (`Numbers`: least, most, step, and the unit a number is said with, `%` or nothing), its default,
 where a count of 0 sends it (`zero`: `0]` is `window`, `0+` 100%), `auto` by the terminal's
 background, its keys (`Keys::Cycle`, `Keys::Step`, or `Keys::Zoom`, the viewer's own zoom keys, below),
-its option, two phrases to be said after formats' names, what its keys do (`help`: `light on dark, or
-dark on light`) and what the files that have it do (`does`: `go dark`), and its `Effect`: `Redraw`, the
+its option, two phrases to be said of formats, what its keys do (`help`: `light on dark, or
+dark on light`, said after their names) and what the files that have it do (`does`: `go dark`, said of a
+file that doesn't, and of those that do), and its `Effect`: `Redraw`, the
 pages drawn again with the value, or `Relayout`, the document laid out again at it
 ([Relayout](#relayout)). A format lists the settings its files have, by name (`Format::settings`,
 through `Format::having`, as it lists its fences), and that is all the viewer knows of which files
-have a setting before one is shown: `view::having` joins the names of the formats that list each, in
-the backends' order, and the pager says a setting's phrases after them (`pager::Settings`), its line
-in `?` (`Mermaid, Markdown, HTML and EPUB light on dark, or dark on light`) and what its key says on a file without
-it (`only Mermaid, Markdown, HTML and EPUB go dark`, Mermaid's backend coming before the documents', and the epub's after).
+have a setting before one is shown: `view::having` gives the names of the formats that list each, in
+the backends' order, and the pager says a setting's phrases with them (`pager::Settings`): its line
+in `?` after all of them (`view::together`: `Mermaid, Markdown, HTML and EPUB light on dark, or dark on
+light`), and what its key says on a file without it with the first two of them (`view::some_do`: `this
+format doesn't go dark (Mermaid, Markdown and others do)`, Mermaid's backend coming before the
+documents', and the epub's after), short enough for a status line of 80 columns however many formats
+come to share the setting.
 No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
 checks that a format lists only settings its backend declares, that every setting is listed by
 one, and that a setting two backends declare is declared alike, their option's help apart, since
@@ -267,7 +271,11 @@ and asks the terminal for its background only when what is shown has a setting w
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a
 request stays `Copy`) and dark paper's colour (`Request::dark`), and the backend draws by them. The
 pager's `Nav` runs a setting's command, which a key the setting suggested is bound to (`Nav::turn`), then
-says which formats have the setting if what is shown hasn't it (`Settings::only`); a redraw value changed goes the way `r` goes. A `Cycle` setting's command goes to the next named
+says that what is shown hasn't the setting, and which formats have (`Settings::not_here`), as a message that has the
+whole status line (`Nav::notice`, which `Nav::status` writes alone, as much of it as fits): apart from `Nav::message`,
+which may come meanwhile from elsewhere and is there when it goes. It goes with the next key (`Nav::key`), or after a
+second (`NOTICE`): the pager's loop sees it shown (`Pager::notice_on`), keeps when its moment is over (`Moment`, started
+over by any key), wakes then, and redraws. A redraw value changed goes the way `r` goes. A `Cycle` setting's command goes to the next named
 value; a `Step` setting's two to the next among the steps down or up (`stepped`): the multiples of the step from
 the least up to the most here (the setting's, or the room's where that is under it), and the named
 value set among them (`Bounds::named_at`), after the number equal to it (`window` at 94 in a window

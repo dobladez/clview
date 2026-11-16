@@ -44,7 +44,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0030 | [A document's text read from the pool's layout, on a thread](0030-a-documents-text-read-from-the-pools-layout-on-a-thread.md) | Accepted |
 | 0031 | [Mermaid diagrams through merman, in a worker process capped at 2 s and 512 MiB](0031-mermaid-diagrams-through-merman-in-a-worker-process.md) | Accepted |
 | 0032 | [A fenced block is drawn by the backend that lists its language](0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md) | Accepted |
-| 0033 | [Backends share a setting by declaring its name, and the viewer says of it only what they declare](0033-backends-share-a-setting-by-declaring-its-name.md) | Accepted |
+| 0033 | [Backends share a setting by declaring its name, and the viewer says of it only what they declare](0033-backends-share-a-setting-by-declaring-its-name.md) | Accepted; what a key says where its setting isn't, updated 2026-11-16 |
 | 0034 | [Open a file through the platform's opener, by its real path, only where its name agrees](0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) | Accepted |
 | 0035 | [The links' labels are placements of one image of letters, over the page](0035-link-labels-as-placements-of-one-image-of-letters.md) | Accepted |
 | 0036 | [Keys are bound to named commands](0036-keys-are-bound-to-named-commands.md) | Accepted |

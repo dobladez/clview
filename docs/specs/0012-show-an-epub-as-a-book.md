@@ -408,6 +408,17 @@ over left out, and said:
   view_pager::epub_contents` (`f` on the Contents page's third entry lands on its chapter, `u`
   back); `Manual: in kitty, a Standard Ebooks epub (its own contents in the spine): no second page;
   a publisher's epub without one: the Contents page, f, a chapter`.
+- [x] **A shorter sentence where a setting isn't, on the whole status line** (the owner's, 2026-11-16,
+  the sentence having outgrown 80 columns with one more format in it) — `this format doesn't
+  reflow (Markdown, HTML and others do)`, two formats named from what the backends declare; it has
+  the whole status line for a second, then the line comes back, a key bringing it back at once;
+  the three tests' windows back to 80 columns; usage, architecture, the changelog, an update to
+  ADR-0033. *Files:* `src/view/mod.rs`, `src/view/pager.rs`, `src/source.rs`,
+  `src/source/wordcraft.rs`, `src/source/epub.rs`, `tests/it/view_pager.rs`, `docs/`,
+  `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv view::` (the sentence's shapes; the
+  message alone on the line at any width; a moment of a second, started over by a key) and `cargo
+  test -j 2 --test it view_pager` (at 80 columns, `d`, `]` and `s` on a PDF: the sentence on the
+  whole line, the status line back after a second, and at once with a key).
 
 ## Done
 
@@ -434,3 +445,5 @@ over left out, and said:
   and Done's manual item stay open for their checks in kitty, which are the owner's; the worker
   was found never to be killed by a table of contents within its 1 MiB, nor by `application/fontè`
   or a chain of `refines`, at rbook 0.7.13 (the notes say what each test does instead).
+- 2026-11-16 — A sixth task, the owner's: what a key says where its setting isn't, shorter and on
+  the whole status line for a second.

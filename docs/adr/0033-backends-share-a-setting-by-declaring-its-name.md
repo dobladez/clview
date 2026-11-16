@@ -108,3 +108,24 @@ No measurement: a choice of where code lives. What holds it:
   dark form of a drawing, not anything of the contract.
 - **Revisit when:** two backends want one name to mean different values or keys, or a setting's
   words can't be put as a phrase after its formats' names.
+
+## Update 2026-11-16: what a key says where its setting isn't, shortly and on the whole line
+
+A third backend came to declare the documents' settings, the epub's
+([Spec-0012](../specs/0012-show-an-epub-as-a-book.md)), and the sentence a key says on a file
+without its setting grew with it: `only Mermaid, Markdown, HTML and EPUB go dark` no longer fitted
+its place on a status line of 80 columns, and was cut in its middle. The owner's answer,
+2026-11-16:
+
+- **The sentence names two formats, whatever their number**: `this format doesn't go dark (Mermaid,
+  Markdown and others do)`. The viewer still puts it together, from the formats that list the
+  setting, in the backends' order (`view::some_do`), and from the setting's own phrase
+  (`Setting::does`), now said of a file that doesn't and of those that do, so a phrase that reads
+  either way: `draw fenced blocks`, where it was `draw their blocks`. Decision 3 stands: the viewer
+  names no format of its own.
+- **It has the whole status line, for a second**, then the line comes back; a key brings it back
+  at once and does what it does (`Nav::notice`, `pager::Moment`).
+
+`?` still lists every format that has a setting, after its keys (`Mermaid, Markdown, HTML and EPUB
+light on dark, or dark on light`): its lines are cut in their middle where a window is too narrow
+for them, as two of them already were at 80 columns.

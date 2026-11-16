@@ -113,7 +113,7 @@ In a file's pages:
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
-| `D` | Markdown, HTML, [books](#books) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
+| `D` | Markdown, HTML, [books](#books) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
 | `[`, `]` | Markdown, HTML and [books](#books) laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
@@ -197,6 +197,12 @@ at the end still differ), and a message (a page that failed, `fully zoomed in`) 
 right side, cutting the name shorter while it is there. Until the first key, the message is a
 reminder of the main keys. A [search](#searching-a-documents-text) is said there too, before any
 message: what is typed and its count, then the match you are on.
+
+A key that changes how a file looks (`d`, `[`, `{`, `s`), pressed on a file that has no such thing,
+says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,
+naming two of the formats that do, and `these files don't…` in a list none of whose files does.
+It has the line for a second, then the status line comes back; any key brings it back at once,
+and does what it does.
 
 While you type a number, the status line says only the number and the keys that take it on this
 file: `7: g page · . per row` on a PDF, and `· n p match` after them with a search kept; on a Markdown
@@ -865,7 +871,7 @@ own on either paper. One that can't be drawn for a page's paper is a grey box th
 saying so, never its drawing for the other paper; it isn't tried again until the document is laid
 out again. A diagram shown by path (`![a flow](flow.mmd)`) follows the paper the same way, and so
 does a `.mmd` file shown by itself ([Mermaid diagrams](#mermaid-diagrams)). A Word document, an RTF
-or a PDF is a page as printed, and stays so; `D` says which formats go dark. What `c` copies is the
+or a PDF is a page as printed, and stays so; `D` says that it doesn't go dark, and which formats do. What `c` copies is the
 page as it is shown
 ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 

@@ -377,10 +377,10 @@ pub(super) fn settings(backends: &[&dyn Backend]) -> Vec<&'static Setting> {
 }
 
 /// The formats whose files have each setting `backends` declare, by the setting's name: the names of
-/// the formats that list it ([`crate::source::Format::settings`]), in the backends' order, each once,
-/// said together (`Markdown and HTML`). All the viewer knows of which files have a setting before one
-/// is shown, and all it says of them. A setting no format lists isn't in it.
-pub(super) fn having(backends: &[&dyn Backend]) -> Vec<(&'static str, String)> {
+/// the formats that list it ([`crate::source::Format::settings`]), in the backends' order, each once.
+/// All the viewer knows of which files have a setting before one is shown, and all it says of them
+/// ([`together`], [`some_do`]). A setting no format lists isn't in it.
+pub(super) fn having(backends: &[&dyn Backend]) -> Vec<(&'static str, Vec<&'static str>)> {
     let mut having: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
     for format in backends.iter().flat_map(|backend| backend.formats()) {
         for &setting in format.settings {
@@ -391,15 +391,37 @@ pub(super) fn having(backends: &[&dyn Backend]) -> Vec<(&'static str, String)> {
             }
         }
     }
-    having.into_iter().map(|(setting, formats)| (setting, together(&formats))).collect()
+    having
 }
 
 /// `names` said together: `a`, `a and b`, `a, b and c`; nothing for none.
-fn together(names: &[&str]) -> String {
+pub(super) fn together(names: &[&str]) -> String {
     match names {
         [] => String::new(),
         [one] => (*one).to_owned(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// `names` said shortly: the first two, and that there are others, `a`, `a and b`, `a, b and
+/// others`; nothing for none. The status line has room for no more as formats come to share a
+/// setting.
+pub(super) fn shortly(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [one, two] => format!("{one} and {two}"),
+        [one, two, ..] => format!("{one}, {two} and others"),
+    }
+}
+
+/// `names`, said shortly ([`shortly`]), as those that do what another doesn't: `a does`, `a and b
+/// do`, `a, b and others do`; nothing for none.
+pub(super) fn some_do(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [_] => format!("{} does", shortly(names)),
+        _ => format!("{} do", shortly(names)),
     }
 }
 
@@ -1804,11 +1826,22 @@ mod tests {
             Having(&[PAPER, TINT], &[("Print", &[]), ("Marked", &["paper", "tint"]), ("Hyper", &["paper"]), ("Marked", &["paper"])]);
         static UNLISTED: Having = Having(std::slice::from_ref(&TINT), &[("Plain", &[])]);
         let said = |backends: &[&dyn Backend]| having(backends);
-        assert_eq!(said(&[&PDF, &DOCUMENTS]), [("paper", "Marked and Hyper".to_owned()), ("tint", "Marked".to_owned())]);
-        assert_eq!(said(&[&DIAGRAMS, &PDF, &DOCUMENTS]), [("paper", "Diagram, Marked and Hyper".to_owned()), ("tint", "Marked".to_owned())]);
-        assert_eq!(said(&[&DOCUMENTS, &DIAGRAMS]).first(), Some(&("paper", "Marked, Hyper and Diagram".to_owned())), "in the backends' order");
-        assert_eq!(said(&[&DIAGRAMS]), [("paper", "Diagram".to_owned())]);
+        assert_eq!(said(&[&PDF, &DOCUMENTS]), [("paper", vec!["Marked", "Hyper"]), ("tint", vec!["Marked"])]);
+        assert_eq!(said(&[&DIAGRAMS, &PDF, &DOCUMENTS]), [("paper", vec!["Diagram", "Marked", "Hyper"]), ("tint", vec!["Marked"])]);
+        assert_eq!(said(&[&DOCUMENTS, &DIAGRAMS]).first(), Some(&("paper", vec!["Marked", "Hyper", "Diagram"])), "in the backends' order");
+        assert_eq!(said(&[&DIAGRAMS]), [("paper", vec!["Diagram"])]);
         assert!(said(&[&PDF, &UNLISTED]).is_empty() && said(&[]).is_empty());
+        // Said shortly: the first two, and that there are others; and as those that do what another
+        // doesn't.
+        let names = |backends: &[&dyn Backend]| having(backends).first().map(|(_, formats)| (shortly(formats), some_do(formats)));
+        assert_eq!(names(&[&DIAGRAMS]), Some(("Diagram".to_owned(), "Diagram does".to_owned())));
+        assert_eq!(names(&[&PDF, &DOCUMENTS]), Some(("Marked and Hyper".to_owned(), "Marked and Hyper do".to_owned())));
+        assert_eq!(
+            names(&[&DIAGRAMS, &PDF, &DOCUMENTS]),
+            Some(("Diagram, Marked and others".to_owned(), "Diagram, Marked and others do".to_owned()))
+        );
+        assert_eq!((shortly(&[]), some_do(&[]), together(&[])), (String::new(), String::new(), String::new()));
+        assert_eq!((together(&["a"]), together(&["a", "b"]), together(&["a", "b", "c"])), ("a".into(), "a and b".into(), "a, b and c".into()));
         assert_eq!(settings(&[&DIAGRAMS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper", "tint"], "one setting, shared");
     }
 

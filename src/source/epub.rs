@@ -141,7 +141,7 @@ const FENCES: Setting = Setting {
         alias: None,
     },
     help: "fenced blocks drawn, or as code",
-    does: "draw their blocks",
+    does: "draw fenced blocks",
     effect: Effect::Relayout,
     sets_width: false,
 };

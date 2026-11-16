@@ -81,6 +81,11 @@ works today. A version's section becomes the notes of its
 
 ### Changed
 
+- A key that changes how a file looks (`d`, `[`, `{`, `s`), on a file that has no such thing, says
+  so shorter, and on the whole status line, which comes back after a second or with the next key:
+  `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
+  HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
+  window of 80 columns.
 - An archive's folder in a list has a zipper down its front and a plate at its corner saying which
   kind it is (`ZIP`, `TAR`, or `TGZ`, `TBZ`, `TXZ` for a compressed tar), where it was tied up
   with tape and a bow.

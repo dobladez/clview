@@ -238,9 +238,9 @@ pub(crate) struct Setting {
     /// that do ([`Format::settings`]): `light on dark, or dark on light`, listed as `Markdown and HTML
     /// light on dark, or dark on light`.
     pub(crate) help: &'static str,
-    /// What the files that have it do, said of their formats: `go dark`. Its keys say so on a file
-    /// that hasn't it, after the names of the formats that have ([`Format::settings`]): `only
-    /// Markdown and HTML go dark`.
+    /// What the files that have it do, as said of one that doesn't and of those that do: `go dark`.
+    /// Its keys say so on a file that hasn't it, with the names of formats that have
+    /// ([`Format::settings`]): `this format doesn't go dark (Markdown, HTML and others do)`.
     pub(crate) does: &'static str,
     /// What a change of its value takes.
     pub(crate) effect: Effect,
@@ -366,7 +366,7 @@ pub(crate) struct Format {
     pub(crate) fences: &'static [&'static str],
     /// The settings its files have, by name, of those its backend declares ([`Backend::settings`]):
     /// what the viewer says of a setting names the formats that list it, in the backends' order
-    /// (`only Markdown and HTML go dark`). What a file has is still its source's to say
+    /// (`this format doesn't go dark (Markdown, HTML and others do)`). What a file has is still its source's to say
     /// ([`Source::settings`]): this is what is said of the format. Empty for most formats.
     pub(crate) settings: &'static [&'static str],
     /// The extensions its files go by, in lowercase, without the dot: what the desktop picks the

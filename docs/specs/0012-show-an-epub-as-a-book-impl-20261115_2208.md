@@ -327,3 +327,59 @@ open until it is confirmed.
   Markdown README in a zip with its screenshots.
 
 The spec stays `Implementing` until those are confirmed.
+
+## Task 6: a shorter sentence where a setting isn't, on the whole status line
+
+**The owner's decision, 2026-11-16**, through the lead, on the sentence that no longer fitted 80
+columns (task 2's discovery): do both. A shorter sentence of the shape `this format doesn't reflow
+(X, Y and others do)`, X and Y from what the backends declare at run time, never written in the
+core; and while it shows, it has the whole status bar, for about a second, then the status line
+comes back. The three tests' windows back to 80 columns; tested there.
+
+**Choices made on the way**, as the lead asked, to be told:
+
+- **A key pressed during the second takes the line back at once, and does what it does**: `Nav::key`
+  drops the message as it drops any, before the key acts. The same key says it again, for a
+  second of its own.
+- **How the loop wakes**: the pager keeps when the message's moment is over (`Moment`), counts it
+  into the wait before the next read, as it does a room that changed or tmux's check, and redraws
+  when it is over. The moment starts when the loop first sees the message, not when the key was
+  decoded: the same within a few milliseconds.
+- **It is kept apart from the status line's ordinary message** (`Nav::notice`, not `Nav::message`):
+  a page's warning that arrives during the second isn't shown on the whole line, nor lost when the
+  second ends.
+- **Only this sentence takes the whole line.** Every other message keeps its place beside the
+  rest, cut where it is too long, as before.
+- **In a list none of whose files has the setting, `these files don't…`**: `this format` names
+  nothing there.
+- **`draw fenced blocks`**, where the documents' and the books' `fences` setting said `draw their
+  blocks`: the phrase is now said of a file that doesn't (`doesn't draw…`) and of those that do.
+- **One format alone is `X does`, two `X and Y do`, more `X, Y and others do`.**
+- **`?` is left as it was**: every format that has a setting, after its keys. Its `d` line is now
+  cut in its middle at 80 columns (`Mermaid, Markdown,…nd EPUB light on dark, or dark on light`),
+  as its `[ ]` and `{ }` lines already were. Whether `?` should name two formats too is the
+  owner's: told to the lead.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| said as any message, in its place beside the rest | `view::pager::tests::a_settings_key_cycles_its_values_where_what_is_shown_has_it`, `view_pager::s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_open_one` |
+| the status line as ever while it is said | `view::pager::tests::a_settings_key_cycles_its_values_where_what_is_shown_has_it` |
+| a moment that is never over | `view::pager::tests::a_message_on_the_whole_line_has_it_for_a_moment`, `view_pager::on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow` |
+| a key that starts no moment over | `view::pager::tests::a_message_on_the_whole_line_has_it_for_a_moment` |
+| every format named | `view::tests::the_formats_that_have_a_setting_are_those_their_backends_list` |
+| said of a format in a list too | `view::pager::tests::a_settings_key_cycles_its_values_where_what_is_shown_has_it` and the list's |
+| the old phrase for fenced blocks | `view_pager::s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_open_one` |
+| a key that leaves the message on the line | `view::pager::tests::a_settings_key_cycles_its_values_where_what_is_shown_has_it`, `view_pager::what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark` |
+
+Not held by a test that fails without it: the loop's call to `Moment::key` and its wake at the
+moment's end. Without the first, a sentence said twice within a second would go with the first's
+second; without the second, it would go at the loop's next tick, a fifth of a second late at most.
+`Moment` itself is unit-tested for both.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (595 unit, 13 docs, 294 integration), all passing. In kitty, for the owner: on a
+PDF in a window of 80 columns, `]`: `this format doesn't reflow (Markdown, HTML and others do)`
+alone on the status line, the line back after a second; `d` then at once `j`: the line back with
+the key.

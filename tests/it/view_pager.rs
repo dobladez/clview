@@ -306,6 +306,17 @@ pub(crate) fn drawn(text: &str, place: &str) -> bool {
     text.contains(&format!("  {place} "))
 }
 
+/// Wait until `said` is all the last status line drawn says, in a window of any width, with nothing
+/// of where the reader is beside it; and then until the status line is back without it, which
+/// takes about a second from when it was said.
+fn whole_line_for_a_moment(view: &Session, said: &str) {
+    view.wait_until("said, on the whole status line", |t| last_bar(t).trim() == said);
+    let since = Instant::now();
+    view.wait_until("the status line back", |t| !last_bar(t).contains(said) && last_bar(t).contains(" page "));
+    let took = since.elapsed();
+    assert!(took > Duration::from_millis(600) && took < Duration::from_secs(4), "the status line came back after {took:?}");
+}
+
 /// `text` with each run of spaces made one: what the status line says, whatever its padding.
 pub(crate) fn bar(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -1449,11 +1460,10 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     if !pty_works() {
         return;
     }
-    // Wide enough for the sentence whole: the status line shortens it in 80 columns.
-    let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 110, 40);
+    let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 80, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("s");
-    view.wait_until("said", |t| bar(t).contains("only Markdown, HTML and EPUB draw their blocks"));
+    whole_line_for_a_moment(&view, "this format doesn't draw fenced blocks (Markdown, HTML and others do)");
     assert_eq!(transmitted(&view.text()), 1);
     view.press("q");
     assert!(view.finish().success());
@@ -1462,7 +1472,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     std::fs::create_dir_all(&dir).unwrap();
     flow_document("fences-list", "shelf/a.md");
     std::fs::copy(fixture("fences-list", 1), dir.join("b.pdf")).unwrap();
-    let mut view = Session::start_on(KITTY, &dir, &[], 120, 40);
+    let mut view = Session::start_on(KITTY, &dir, &[], 100, 40);
     view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
     let tiles = pngs(&view.text());
     assert!(tiles.len() == 2 && tiles.iter().any(|(_, tile)| shows_flow(tile)), "the document's tile shows its block drawn");
@@ -1484,7 +1494,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     view.press("\r");
     view.wait_until("b opened", |t| bar(last_draw(t)).contains(" b.pdf "));
     view.press("s");
-    view.wait_until("said", |t| last_bar(t).contains("only Markdown, HTML and EPUB draw their blocks"));
+    view.wait_until("said", |t| last_bar(t).trim() == "this format doesn't draw fenced blocks (Markdown, HTML and others do)");
     view.press("q");
     assert!(view.finish().success());
 }
@@ -2664,15 +2674,23 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
         return;
     }
     let pdf = fixture("no-dark", 1);
-    // Wide enough for the sentence whole: the status line shortens it in 80 columns.
-    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 110, 40);
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
     view.press("D");
-    view.wait_until("said", |t| bar(t).contains("only Mermaid, Markdown, HTML and EPUB go dark"));
+    const SAID: &str = "this format doesn't go dark (Mermaid, Markdown and others do)";
+    whole_line_for_a_moment(&view, SAID);
     assert_eq!(transmitted(&view.text()), 1, "sent again");
+    // A key takes the line back at once, and does what it does: here, nothing to move to.
+    view.press("d");
+    view.wait_until("said again", |t| last_bar(t).trim() == SAID);
+    let pressed = Instant::now();
+    view.press("k");
+    view.wait_until("the line back with the key", |t| last_bar(t).contains(" page 1/1 "));
+    assert!(pressed.elapsed() < Duration::from_millis(700), "{:?}", pressed.elapsed());
     assert!(!view.text().contains("\x1b]11;"), "asked about the background");
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown, HTML and EPUB light on dark, or dark on light"));
+    // Every format that has it, in `?`: more than a line of 80 columns holds, so cut in its middle.
+    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown,") && bar(t).contains("EPUB light on dark, or dark on light"));
     view.press("qq");
     assert!(view.finish().success());
 }
@@ -2852,12 +2870,15 @@ fn on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow() {
     if !pty_works() {
         return;
     }
-    let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 110, 40);
+    let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 80, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("]");
-    view.wait_until("said", |t| bar(t).contains("only Markdown, HTML and EPUB reflow"));
+    const SAID: &str = "this format doesn't reflow (Markdown, HTML and others do)";
+    view.wait_until("said", |t| last_bar(t).trim() == SAID);
+    // Said again by the next key, for a moment of its own.
     view.press("72[");
-    view.wait_until("said again", |t| bar(t).matches("only Markdown, HTML and EPUB reflow").count() >= 2);
+    view.wait_until("said again", |t| bar(t).matches(SAID).count() >= 2);
+    whole_line_for_a_moment(&view, SAID);
     assert_eq!(transmitted(&view.text()), 1);
     view.press("q");
     assert!(view.finish().success());
