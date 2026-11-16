@@ -39,9 +39,9 @@ clv --password PW secret.pdf
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
-| `--theme auto` | [Markdown and HTML](#documents), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
+| `--theme auto` | [Markdown and HTML](#documents), a [book](#books), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
 | `--theme light`, `--theme dark` | Markdown, HTML and Mermaid diagrams that way, whatever the terminal |
-| `--width window` | Markdown and HTML on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
+| `--width window` | Markdown, HTML and [books](#books) on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
 | `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
 | `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
 | `--margin 5` | Markdown and HTML side margins of that many characters of code, 0 to 20 (3 by default) ([Documents](#a-page-the-windows-size)). With documents |
@@ -113,8 +113,8 @@ In a file's pages:
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
-| `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
-| `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
+| `D` | Markdown, HTML, [books](#books) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
+| `[`, `]` | Markdown, HTML and [books](#books) laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
@@ -609,9 +609,10 @@ that only another backend takes is refused, since it would do nothing for the fi
 | [Mermaid diagrams](#mermaid-diagrams) | Their name: `.mermaid`, and that it is text; `.mmd`, and that its first line past blank lines, `%%` comments and front matter, within its first 1024 bytes, names a kind of diagram merman draws (`flowchart`, `graph`, `sequenceDiagram`, `stateDiagram-v2`…) or is an `%%{init: …}%%` directive, since MultiMarkdown names its files `.mmd` too, which clv doesn't open. Not through a pipe, as a diagram has no signature | none |
 | [Word documents, OpenDocument text, RTF, Markdown and HTML](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too; HTML by how it starts (a doctype or an `<html>` element), whatever its name, or a name (`.html`, `.htm`, `.xhtml`) and that it is text; Markdown by its name only (`.md`, `.markdown`, `.mdown`, `.mkd`), and that it is text | `--password PW`: the password of a protected Word document |
 | [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
+| [Ebooks (epub)](#books) | A zip whose first file, `mimetype`, says it is an epub, whatever its name; or a `.epub` name, for a zip whose first bytes don't say what it is (a `mimetype` that isn't first, or is compressed, as some tools write it) | none |
 | [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
 | [Images](#images) | Their signature: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, PNM and farbfeld; and TGA, which has no signature, by its `.tga` name | none |
-| [Zip archives](#archives) | Their signature (`PK`), whatever their name: jars, cbz comics, epubs and other zips that aren't documents or workbooks, as directories | none |
+| [Zip archives](#archives) | Their signature (`PK`), whatever their name: jars, cbz comics and other zips that aren't documents, workbooks or books, as directories | none |
 | [Tar archives and compressed files](#archives) | A POSIX or GNU tar header, as directories; files compressed with gzip, bzip2 or xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | none |
 
 ### PDFs
@@ -782,8 +783,7 @@ front matter (`---`) is left out. HTML is read for its text and what its tags an
 elements (`p`, `.note`). Scripts and linked stylesheets are skipped, so a page designed with CSS shows as
 its words in order, not as a browser draws it, and one that counts on rules that aren't read can come out
 oddly: a dark theme's colours on white paper, say
-([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)). An epub's chapters, being XHTML, open from
-its list the same way. What may cost too much to lay out is refused, at its [limits](#limits)
+([ADR-0017](adr/0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md)). What may cost too much to lay out is refused, at its [limits](#limits)
 ([ADR-0012](adr/0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md)).
 
 They say little of how they should look, so clv gives them a look of its own, the same on any machine:
@@ -816,7 +816,7 @@ ones this build draws. It goes by that word alone, never by what the block holds
 language stays code, ` ```svg ` included, as does one with no language, or one that is indented
 rather than fenced.
 
-In HTML, and so in an epub's chapters, such a block is a `<pre>` that says its language, as what
+In HTML, and so in a [book](#books)'s chapters, such a block is a `<pre>` that says its language, as what
 writes HTML from Markdown says it:
 
 - a class `language-mermaid`, of the `<pre>` or of the `<code>` it starts with
@@ -964,6 +964,47 @@ it opens. With `--pages`, which picks pages as laid out, `[` and `]` say so and 
 Word document, an RTF or a PDF has a page of its own, and `[` and `]` say so on one
 ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md),
 [ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
+
+### Books
+
+An ebook (epub) is shown as a book: its chapters in its reading order, all of them, each starting a
+new page, as one document. A chapter out of the main flow (`linear="no"`: a note, an answer) comes
+where the book lists it. The book's package, which says that order, is read by
+[rbook](https://github.com/DevinSterling/rbook), in a process of its own; its chapters, which are
+XHTML, are joined and laid out as [HTML is](#documents), on pages the window's size or to a width
+of your own. So a book has what a document has: `[` and `]` for the width of its line, `+` and `-`
+for its font size, `{` and `}` for its margins, `d` for dark paper, `s` for its fenced blocks, each
+with its option; `/` [searches](#searching-a-documents-text) the whole book, across its chapters;
+`--pages` picks pages; and `o` opens the `.epub` itself.
+
+Its pictures are read from the book, by their paths from their chapter, `..` included but never
+above the book's top, and drawn by whatever shows them, as a document's are from its directory.
+Each is measured from its first bytes, so opening a book, or a list of them, unpacks none whole. A
+picture on the web is its alt text.
+
+The book's look is `clv`'s own ([ADR-0016](adr/0016-how-markdown-and-html-look.md)), with what its
+markup says on top through `style` attributes. **Its stylesheets are not read**, linked or in a
+chapter's `<style>`: a book made to look a certain way comes out plainer, as its words in order.
+
+**No link from a book is followed to a file**, and none is ever looked for beside the `.epub` on
+disk. A link to a file in the book that is no chapter (a picture, a stylesheet) says `a file in the
+book, which clv doesn't open alone`, one to a file the book doesn't hold says `not in this book`. A
+web address is [followed](#following-links) as in any document.
+
+A chapter that is missing, that can't be read (neither UTF-8, nor UTF-16 with its byte-order mark),
+that is larger than 16 MiB or that isn't XHTML is left out, and the first page says how many were,
+and why. A book longer than `clv` lays out ([limits](#limits)) is cut at the chapter that would
+pass them, and the first page says how many chapters that left out.
+
+A file that is a book but can't be read as one is refused, with why, and isn't shown as a zip
+instead: one without its `META-INF/container.xml` or the package that names, with a package that
+lists no chapters, or one rbook refuses, in rbook's words. A package whose reading takes rbook
+past the limits of its process is refused as one that `couldn't be read`.
+
+A book in a list is opened when its tile is wanted, and its tile is its first page. One in an
+archive is read from the archive each time it is laid out or a picture of it is drawn; one through
+a pipe is kept whole while it is open, and refused past 256 MiB
+([ADR-0038](adr/0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md)).
 
 ### Spreadsheets
 
@@ -1164,6 +1205,12 @@ limit, it does as the last column says. How large a page is drawn is under
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to, the fenced blocks it draws among them; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning, a block as its code; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
+| A book (epub): its `container.xml`; its package (OPF) | 64 KiB; 4 MiB | refused |
+| A book's reading order | 4,096 chapters; a file's path of 4 KiB | refused |
+| A book's chapter | 16 MiB | that chapter is left out, and the first page says so |
+| A book, its chapters joined | 48 MiB; 400,000 lines and tags; 6 MiB of text between its tags, some 3,700 pages: below what any HTML file may be, above | the chapter that would pass one is left out, with those after it, and the first page says how many |
+| A book through a pipe, or in an archive | 256 MiB | refused |
+| The process that reads a book's package: its CPU time, and its memory | 2 s, or three times that on the clock; 256 MiB | the process is killed and the book refused: `its package couldn't be read` |
 | A fenced block drawn as a picture | what a file of its kind may be: a Mermaid diagram's 1 MiB, and merman's limits | it stays code, and the first page says how many did |
 | A document's page | 64 million pixels | the page fails with why |
 | A spreadsheet's file | 64 MiB | refused |
@@ -1191,6 +1238,11 @@ limit, it does as the last column says. How large a page is drawn is under
   declaration in a `<style>` (a `box-shadow` list of 600 KB) takes some 45 seconds to open, labels
   or not, and a stylesheet of 3 MiB some 8; the [limits](#limits) above count rules times elements,
   not that. The parse runs in `clv`'s own process, so it can't be stopped; `q` still quits.
+
+- **A book's own stylesheets are not read.** An epub is laid out in `clv`'s own look, with only
+  what its markup's `style` attributes say on top: a book that counts on its CSS for its headings,
+  its indents, its drop caps or its centred lines comes out plainer than a reader app shows it
+  ([Books](#books)).
 
 ## Errors
 

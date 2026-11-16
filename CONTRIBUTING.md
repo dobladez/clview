@@ -11,7 +11,7 @@ How to build, test and release clview, and the rules its code keeps. How it work
 cargo install --path .      # installs `clv`
 ```
 
-It takes Rust 1.95 or later, the `rust-version`. All nine features are on by default;
+It takes Rust 1.95 or later, the `rust-version`. All ten features are on by default;
 `cargo build --no-default-features --features image` builds the viewer with images alone, and
 `--no-default-features` alone without any backend.
 [Backends](docs/architecture.md#backends) lists the features.
@@ -47,6 +47,18 @@ it runs in rest on what its costliest diagrams cost at the pin
 ([ADR-0031](docs/adr/0031-mermaid-diagrams-through-merman-in-a-worker-process.md)): when it moves,
 measure them again with `docs/adr/0031-measure/` (`gen within`, `gen worst`, through `clv --worker
 mermaid`), and run `tests/it/mermaid.rs`, whose costliest diagrams must still be drawn under them.
+
+The epub backend's rbook comes from crates.io too, pinned to one version (`=`) in `Cargo.toml`,
+without its default features: not its writer, nor `threadsafe`, since the worker reads on one
+thread. Only `src/source/epub.rs` and `tests/it/epub.rs` name it, and it reaches the Word backend
+only by asking which backend opens the HTML it assembles, never by name. It asks for the zip crate
+at 9.5.1 or later, which the zip and spreadsheet backends read with too. The caps of the worker it
+runs in rest on what the costliest packages cost at the pin
+([ADR-0038](docs/adr/0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md)): when
+it moves, measure them again with `docs/adr/0038-measure/` (`measure gen metas 599000`, then
+`measure read`), and run `tests/it/epub.rs`, whose hostile packages must still cost the book alone.
+The worker never asks rbook what kind of file a manifest's item is, which panics on a media type
+with a character past ASCII at the pin: check that still holds if the worker comes to ask.
 
 **Moving Blitz** (the SVG backend's HTML labels, `src/source/svg/html.rs`): every `=` pin in
 `Cargo.toml` moves together (`blitz-dom`, `blitz-html`, `blitz-paint`, `blitz-traits`, `anyrender`,
@@ -109,7 +121,8 @@ mermaid`), and run `tests/it/mermaid.rs`, whose costliest diagrams must still be
   it) and `Cargo.toml`; Blitz and what it paints an SVG's HTML labels with (blitz, anyrender,
   kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
   checks it) and `Cargo.toml`; merman only in `src/source/mermaid.rs`, `tests/it/mermaid.rs` (which checks it)
-  and `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
+  and `Cargo.toml`; rbook only in `src/source/epub.rs`, `tests/it/epub.rs` (which checks it) and
+  `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
   `src/source/worker.rs`, `tests/it/view.rs` (which checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
   work wanted, a result arrives only while its request is listed, `try_recv` never blocks. A backend
@@ -242,7 +255,25 @@ CodeQL's default setup scans the Rust and the workflows.
   `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
-  else names its decompressors.
+  else names its decompressors. A Markdown document in a zip and in a tar drawing the pictures
+  beside it, by `..` too, never from above the archive's top or from disk, in its list's tile and
+  opened from the list, still after a relayout; and a picture measured from its first bytes, its
+  rest failing the zip's checksum. What a held file's first bytes and neighbours are is unit-tested
+  in `src/source/zip.rs` and `src/source/tar.rs`, a held document's pictures in
+  `src/source/picture.rs`, and a held picture measured in every format in `src/source/image.rs`.
+- **`tests/it/epub.rs`**: books through the viewer, written by the tests: chapters in order, a page
+  each, with their pictures; which zips are books (one that says so under any name, a `.epub`
+  whose `mimetype` is compressed or missing); through a pipe and in an archive; a book that can't
+  be read refused and not shown as a zip; hostile packages (a chain of `refines` 4 MiB long, 599,000
+  empty elements that take the worker past its heap) costing the book and never the viewer; a
+  chapter missing left out and said; a width and dark paper; and that nothing else names rbook.
+  In `tests/it/view_pager.rs` (`epub_…`): a word of the third chapter found from the first, the
+  worker gone once the book shows and none started by a relayout (`ps`); and a link to a file
+  said, with files where a path beside the `.epub` would lead never opened. What the worker
+  answers of a package (EPUB 2 and 3, hrefs with `..` and `%20`), a worker that dies or answers
+  too much, chapters assembled and cut at their bounds, and property tests that no chapter and no
+  answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
+  lexer's attributes are in `src/source/markup.rs`.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
   heading, that the changelog has this version, and that the specs' Index says what their headers

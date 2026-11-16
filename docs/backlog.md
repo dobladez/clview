@@ -29,8 +29,10 @@ rules out.
 ### More documents
 
 Org-mode, AsciiDoc and reStructuredText, their source blocks (`#+begin_src`, `[source,x]`,
-`.. code::`) drawn as Markdown's fenced blocks are. Proper support for ebooks: an epub as a book
-(its chapters in order, its pictures), not a list of its files.
+`.. code::`) drawn as Markdown's fenced blocks are. An ebook's own stylesheets, applied a chapter
+at a time: an epub is a book now ([Spec-0012](specs/0012-show-an-epub-as-a-book.md)), in clv's
+own look, since the stylesheets of its chapters would meet in the one document they are joined
+into. Other ebook formats: MOBI, AZW, FB2.
 
 ### `/` as a search in lists too
 
@@ -51,7 +53,7 @@ with the keys it suggests in it (`72] sets 72, 0] the window's`), and the manual
 ### More pictures and archives
 
 AVIF, colour profiles, and an animation's frames as its pages. zstd and 7z; a comic book archive
-(cbz) as a book, its pictures its pages; an epub's pictures.
+(cbz) as a book, its pictures its pages.
 
 ### Lighter on memory, and steadier
 

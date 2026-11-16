@@ -51,7 +51,8 @@ Options such as `--no-pager`, `--per-row` and `--protocol ascii`, and every key,
 | Word documents (docx, doc), OpenDocument text (odt) and RTF | [wordcraft](https://github.com/storytold/wordcraft)'s readers, layout and renderer, with fonts of its own under the SIL Open Font License |
 | Markdown and HTML, with the pictures they refer to on disk | [wordcraft](https://github.com/storytold/wordcraft) again, and [pulldown-cmark](https://crates.io/crates/pulldown-cmark) for Markdown |
 | Spreadsheets (xlsx, xlsm, xlsb, xls, ods, csv, tsv) | [gridcraft](https://github.com/storytold/gridcraft)'s engine, which prints a workbook to a PDF that clv then shows |
-| Zip archives (and what is a zip inside: jar, cbz, epub…), as directories | the [`zip`](https://crates.io/crates/zip) crate |
+| Ebooks (epub), as books: their chapters in order, with their pictures | [rbook](https://github.com/DevinSterling/rbook) for the book's package, then [wordcraft](https://github.com/storytold/wordcraft) as for HTML |
+| Zip archives (and what is a zip inside: jar, cbz…), as directories | the [`zip`](https://crates.io/crates/zip) crate |
 | Tar archives, plain or compressed with gzip, bzip2 or xz (tgz, cbt…), as directories; and a file compressed alone (`paper.pdf.gz`) | [flate2](https://crates.io/crates/flate2), the [`bzip2`](https://crates.io/crates/bzip2) crate and [lzma-rust2](https://crates.io/crates/lzma-rust2), and a tar reader of clv's own |
 
 Missing a format you use? [Open an issue](https://github.com/dobladez/clview/issues) saying which.

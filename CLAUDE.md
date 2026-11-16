@@ -21,7 +21,10 @@ documenting, `CONTRIBUTING.md`'s "Where a fact goes" says which doc it belongs i
   `clv --worker <name>`, for a backend's work that can only be bounded as it is spent: its CPU
   time and heap capped, killed past them; `source::WORKERS` lists them, as `BACKENDS` does
   backends), `threads.rs` (render threads for a backend with nothing better), `head.rs` and
-  `tree.rs` (what a zip's first files say, and the directories an archive's names make).
+  `tree.rs` (what a zip's first files say, and the directories an archive's names make),
+  `zipped.rs` (a zip read within its limits, for the zip backend and the epub's) and `markup.rs`
+  (HTML cut into tags and text as the Word backend's importer cuts it, for the passes over HTML
+  of that backend and the epub's).
 
 ## Specs
 A change larger than a commit goes through a spec in `docs/specs/` (its README has the lifecycle,

@@ -1,0 +1,18 @@
+[package]
+name = "measure"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone, its own workspace: not part of clv's build. Measures what a book's package costs
+# rbook to read, as clv's `epub` worker reads it (from a zip holding only the package's files),
+# for ADR-0038: `cargo build --release` here, then `target/release/measure`. rbook and zip at the
+# versions clv builds.
+[workspace]
+
+[dependencies]
+rbook = { version = "=0.7.13", default-features = false }
+zip = { version = "=9.5.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[profile.release]
+debug = false

@@ -81,6 +81,13 @@ merman = { version = "=0.10.0", default-features = false, features = ["all-diagr
 # reader of `source/tar.rs`'s own. Not zstd (the zstd C library), as for zip.
 bzip2 = { version = "0.6", optional = true }
 lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz"], optional = true }
+# Ebooks (epub): rbook reads a book's package (its reading order, its cover, its table of
+# contents), in a worker process of clv's own, since it can panic, recurse without bound and read
+# without a cap on a hostile file: `source/epub.rs`, ADR-0038. Without its default features: not
+# its writer, its prelude, nor `threadsafe` (the worker reads on one thread). Pinned, for what
+# reading a package costs, which the worker's caps rest on: measured again with
+# docs/adr/0038-measure/ when it moves.
+rbook = { version = "=0.7.13", default-features = false, optional = true }
 # Markdown, into the HTML wordcraft's importer reads, which can be given pictures: ADR-0014.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
 # Word documents, OpenDocument text, RTF, Markdown and HTML, read, laid out and drawn in Rust by
@@ -104,7 +111,7 @@ base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet"]
+default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet", "epub"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
@@ -140,6 +147,10 @@ tar = ["dep:flate2", "dep:bzip2", "dep:lzma-rust2"]
 # Word documents (docx, doc), OpenDocument text, RTF, Markdown and HTML: `source/wordcraft.rs`,
 # which lays them out and draws them through wordcraft.
 word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:wordcraft-formats", "dep:wordcraft-layout", "dep:wordcraft-render", "dep:pulldown-cmark"]
+# Ebooks (epub), as books: `source/epub.rs`, which has rbook read a book's package in a worker
+# process and joins its chapters into one HTML document for the documents' backend to show, so it
+# brings that backend too, and the zip crate to read the book's files.
+epub = ["dep:rbook", "dep:zip", "word"]
 # Spreadsheets (xlsx, xls, xlsb, ods, csv): `source/gridcraft.rs`, which prints them to a PDF
 # through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate
 # to see what an xlsx's sheets unpack to before gridcraft reads them.

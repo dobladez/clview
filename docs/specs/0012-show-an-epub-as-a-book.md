@@ -356,7 +356,7 @@ over left out, and said:
   `../` one, `../../` past the top stays alt text, still drawn after `+`'s relayout, opened late from
   a list, a 10 MB picture measured without being read whole) and `cargo test -j 2 --bin clv
   picture::tests` (a `Near` path normalized, `%2F` and an absolute path refused).
-- [ ] **An epub's chapters as a book, its package read in a worker** — `epub.rs`'s worker
+- [x] **An epub's chapters as a book, its package read in a worker** — `epub.rs`'s worker
   (rbook, its caps measured, its answer's format) and backend (the package's files read and sent,
   the answer checked and kept; the book assembled: chapters in order a page each, ids prefixed,
   `src`s from the root, styles dropped, clv's own first 1,024 bytes, the assembly's limits; opened

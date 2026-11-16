@@ -18,12 +18,13 @@
 //! payload's length (four) and its payload. The kinds are a [`Worker`]'s, but for [`HELLO`], which
 //! starts every worker and says which clv it is, and [`FAILED`].
 
-// Only the SVG backend's labels, the PDF backend's text and Mermaid diagrams start a worker, and
-// each uses its part of this (the labels no shared payload, the labels and diagrams no kill from
-// another thread); a build without them still serves `--worker`, and tests the viewer's side.
+// Only the SVG backend's labels, the PDF backend's text, Mermaid diagrams and a book's package
+// start a worker, and each uses its part of this (the labels and a package no shared payload, the
+// labels, diagrams and a package no kill from another thread); a build without them still serves
+// `--worker`, and tests the viewer's side.
 #![cfg_attr(
-    not(all(feature = "pdf", any(feature = "svg-html", feature = "mermaid"))),
-    allow(dead_code, reason = "what is used of this depends on which of svg-html, pdf and mermaid start a worker")
+    not(all(feature = "pdf", any(feature = "svg-html", feature = "mermaid", feature = "epub"))),
+    allow(dead_code, reason = "what is used of this depends on which of svg-html, pdf, mermaid and epub start a worker")
 )]
 
 use std::alloc::System;

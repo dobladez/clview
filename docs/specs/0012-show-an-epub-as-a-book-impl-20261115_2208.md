@@ -57,8 +57,99 @@ out, as a document on disk does, and still draws nothing from beside the archive
 Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
 `cargo test -j 2` (565 unit, 13 docs, 279 integration), all passing.
 
-## For task 2, found while waiting
+## Task 2: an epub's chapters as a book, its package read in a worker
 
-- rbook 0.7.13's `Archive` trait is private: the worker feeds it a zip in memory, as planned.
-- 22 real epubs (Gutenberg ×20, Standard Ebooks ×2) are in the session's scratchpad, not the repo.
-- The last nightly CI run (2026-11-15, schedule) failed in under two minutes: worth a look.
+**The spec's open questions, answered**
+
+- **rbook on a zip of the package alone**: yes. With `strict(false)` and `skip_toc(true)` it gave
+  the spine, the manifest and the cover of 22 real books from a zip holding only the container
+  and the OPF. The worker is never sent the epub.
+- **The worker's caps**: 2 s of CPU and 256 MiB of heap. A real package takes under a quarter of
+  a millisecond and 175 KiB; the costliest 4 MiB package found (599,000 empty `<meta/>`) takes
+  189 ms and 564 MiB, and is refused by the cap, on purpose (ADR-0038's decision 4).
+- **A page break on a `<div>`**: it reaches the first paragraph in it, so each chapter is a
+  `<div style="page-break-before: always">`. Not when the `<div>`'s first content is a table: the
+  join writes a paragraph of one zero-width space, a point high, before such a table.
+
+**Changed from the plan**
+
+- **The worker writes the container itself**, naming the package the backend found, and is sent
+  the package's path and bytes, not the book's `container.xml`: rbook parses one hostile file
+  less, and its reading of the container can't disagree with the backend's.
+- **`application/fontè` doesn't refuse the book.** rbook panics on it only when asked whether an
+  item is a font, which the worker never asks: the book shows. The spec expected it refused.
+- **A chain of `refines` doesn't recurse past the stack** at rbook 0.7.13: it is followed 255
+  deep and then refused as a cycle (in a debug build, a panic on an overflowing addition, which
+  the worker catches). Either way the book is refused; the test takes both wordings.
+- **`skip_toc` skips the EPUB 2 guide too**, so the reading order's answer can't say which
+  chapter is the book's own contents page: that comes with the table of contents, in task 5.
+- **The lock moved further than the spec said**: zip 9.1.3 to 9.5.1 brings `lzma-rust2` 0.25.0
+  beside the tar backend's 0.23, and `constant_time_eq`. Cargo would have taken zip 9.6.0; the
+  lock is held at 9.5.1, as the spec names.
+- **A link to a file is marked when the book is assembled** (`clv-in-the-book/`,
+  `clv-not-in-the-book/`), and `Book` answers by the mark: answering by looking in the zip would
+  read the book from `Links::try_recv`, which never blocks.
+- **Links between chapters wait for task 4**: until then a link to another chapter says `a file
+  in the book, which clv doesn't open alone`, and `#s3` in a chapter says the place is missing,
+  its id having its chapter's number before it.
+- **`Kind`, the cover, fallbacks and protected files** aren't in the worker's answer yet: tasks 3
+  and 5 add to its format, which the viewer and the worker, one binary, always agree on.
+- **`markup.rs`'s attributes are an iterator** over the tag's text (`StartTag::attributes`), not
+  a list kept in every tag: the documents' passes go through half a million tags and want three
+  attributes of each.
+- Files beyond the task's list: `CLAUDE.md` (its Layout names the two new modules),
+  `docs/adr/0038-measure/`.
+
+**Tests, each seen failing** with its fix reverted:
+
+| Reverted | Failed |
+|---|---|
+| a chapter's path as the manifest writes it, not from the book's top | `epub::tests::the_worker_answers_a_packages_reading_order` |
+| a package with no chapters accepted | `epub::tests::a_book_whose_package_cant_be_read_is_refused_with_why`, `epub::a_book_that_cant_be_read_is_refused_not_shown_as_a_zip` |
+| an answer of more chapters than a book has accepted | `epub::tests::a_worker_that_dies_or_answers_too_much_costs_the_book` |
+| ids left as written | `epub::tests::chapters_are_assembled_in_order_each_on_a_page` |
+| any kind of file read as a chapter | `epub::tests::a_chapter_that_cant_be_read_is_left_out_and_counted` |
+| no bounds on the book assembled | `epub::tests::a_book_is_cut_at_the_chapter_that_would_pass_its_bounds` |
+| a picture's path as the chapter writes it | `epub::tests::a_chapters_references_are_paths_from_the_books_top` |
+| a link to a file left one | `epub::tests::a_books_link_to_a_file_is_a_message_never_a_file`, `view_pager::epub_a_link_to_a_file_is_said_and_no_file_beside_the_book_is_opened` |
+| a `.epub` that doesn't say so no book | `epub::tests::a_book_is_a_zip_that_says_so_or_is_named_so` |
+| the container's path not unescaped | `epub::tests::a_container_names_its_package` |
+| a field cut short read as far as it goes | `epub::tests::fields_are_read_as_they_were_written_and_no_further` |
+| a chapter that isn't UTF-8 unwrapped | `epub::tests::any_chapter_is_assembled_or_left_out` |
+| a field past the answer's end sliced | `epub::tests::any_answer_is_a_plan_or_none` |
+| no page break on a chapter's `<div>` | `epub::an_epub_is_a_book_its_chapters_in_order_each_on_a_new_page` |
+| nothing found beside the book's document | `epub::an_epub_is_read_through_a_pipe_and_from_an_archive` |
+| the worker without its heap cap | `epub::a_hostile_package_costs_the_book_and_never_the_viewer` |
+| the chapters left out not said | `epub::a_chapter_missing_is_left_out_and_said` |
+| the options not handed on | `epub::a_book_is_laid_out_to_a_width_and_drawn_on_dark_paper` |
+| rbook not credited | `epub::help_lists_books_and_credits_rbook` |
+| rbook named in `zipped.rs` | `epub::nothing_but_this_backend_names_rbook` |
+| a chapter's classes dropped | `mermaid::a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub` |
+| a book without its text | `view_pager::epub_a_search_finds_a_word_in_a_later_chapter_and_the_worker_is_gone` |
+| the worker left alive after its answer | the same |
+
+**Existing tests changed with the behaviour**, each because a sentence now names books:
+`view::a_file_no_backend_opens_is_refused_and_a_pdf_is_known_by_its_header` (what clv shows),
+`view::help_and_version` (a heading for the books' options, and their format), and four of the
+pager's that quote which formats have a setting (`only Markdown, HTML and EPUB reflow`, `… draw
+their blocks`, `only Mermaid, Markdown, HTML and EPUB go dark`, and `?`'s lines). Three of those
+ran in 80 columns, where the status line now shortens the sentence in its middle (`only Markdown,
+HTML …PUB draw their blocks`): their windows are 110 columns now, to read it whole.
+
+Gates on 2026-11-16: `cargo fmt --check`, `cargo clippy --all-targets -j 2 -- -D warnings`,
+`cargo test -j 2` (580 unit, 13 docs, 289 integration), all passing; `cargo deny check
+advisories` too, with rbook and the newer zip in the lock.
+
+**Discoveries, raised**
+
+- The last nightly CI run on `main` (2026-11-15, schedule) failed in under two minutes, before
+  this branch: told to the lead.
+- **A setting's sentence no longer fits 80 columns** with one more format in it, and is
+  shortened in its middle there. The spec asked for the format to list the settings; whether the
+  status line should give such a sentence more room, or say it shorter, is the owner's: told to
+  the lead.
+- `view_pager::keys_work_while_the_document_is_laid_out_again_and_the_new_pages_show_with_no_key`
+  failed once in a full run, under load, and passed alone three times and in the runs after: it
+  times a layout against a key.
+- Two versions of `lzma-rust2` are built now. The tar backend's could move to 0.25 with zip's:
+  told to the lead, not done here.

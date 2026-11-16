@@ -76,7 +76,9 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source/joined.rs` | Several sources as one: a list's tiles |
 | `src/source/later.rs` | A list's file not opened until its tile is wanted, and the threads that open them |
 | `src/source/folder.rs` | A container as a list shows it, to be opened: one page, a folder drawn in code |
-| `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word and spreadsheet backends |
+| `src/source/head.rs` | What the first bytes of a zip or a compound file say, for the Word, spreadsheet and epub backends |
+| `src/source/markup.rs` | HTML cut into text, start tags with their attributes, and end tags, as the Word backend's importer cuts it: for the passes of clv's own over HTML before it is imported, the Word backend's and the epub's |
+| `src/source/zipped.rs` | A zip read through the `zip` crate, within its limits, a panic of the crate's caught: a file whole, to a bound or its first bytes alone, holding no open file while idle. For the zip backend and the epub's |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
 | `assets/` | The icon `--help` shows: its drawing, and the PNG built into the binary |
 | `build.rs` | The version `--help` and `--version` show, as `CLV_VERSION`: `Cargo.toml`'s, and past a release the commit, from `git describe` (`0.3.0+50.g3f677cb`, `.dirty` when tracked files changed). It reruns when a commit, a tag or a staged file changes the answer, and gives the version alone without git or outside clview's checkout |
@@ -156,11 +158,12 @@ PDF one, since a PDF's header may come anywhere in its first 1024 bytes:
 | 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | As for SVG: a tar's first file starts 512 bytes in |
 | 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | As for SVG (an RTF's text), and before zip, since a docx is a zip |
 | 5 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
-| 6 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
-| 7 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
-| 8 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word and spreadsheet backends don't take |
+| 6 | `epub.rs` | `epub`, which brings `word` | A zip whose first file is `mimetype`, stored, saying `application/epub+zip`, whatever its name; a zip named `.epub` whose first file isn't a stored `mimetype` | Before zip, since an epub is a zip; after the Word and spreadsheet backends, which take the zips that say they are theirs |
+| 7 | `pdfcraft.rs` | `pdf` | `%PDF-` in its first 1024 bytes | After those above, whose files may hold that |
+| 8 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
+| 9 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word, spreadsheet and epub backends don't take |
 
-`source/head.rs` reads what a zip's first files say, for the Word and spreadsheet backends.
+`source/head.rs` reads what a zip's first files say, for the Word, spreadsheet and epub backends.
 
 ### What a backend says of itself
 
@@ -241,8 +244,8 @@ pages drawn again with the value, or `Relayout`, the document laid out again at 
 through `Format::having`, as it lists its fences), and that is all the viewer knows of which files
 have a setting before one is shown: `view::having` joins the names of the formats that list each, in
 the backends' order, and the pager says a setting's phrases after them (`pager::Settings`), its line
-in `?` (`Mermaid, Markdown and HTML light on dark, or dark on light`) and what its key says on a file without
-it (`only Mermaid, Markdown and HTML go dark`, Mermaid's backend coming before the documents').
+in `?` (`Mermaid, Markdown, HTML and EPUB light on dark, or dark on light`) and what its key says on a file without
+it (`only Mermaid, Markdown, HTML and EPUB go dark`, Mermaid's backend coming before the documents', and the epub's after).
 No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
 checks that a format lists only settings its backend declares, that every setting is listed by
 one, and that a setting two backends declare is declared alike, their option's help apart, since
@@ -481,6 +484,47 @@ through its command) and that a key means one setting
   another width or font size, or for another room, as a new `Paged`
   ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md),
   [ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
+- **A book** (epub) is one HTML document, its chapters joined, opened by the backend that opens
+  that HTML, found the way any file's backend is, never by name, as a diagram's SVG is
+  ([ADR-0038](adr/0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md)).
+  `epub::opened` reads the book's `META-INF/container.xml` (64 KiB at most, for one attribute,
+  `package_path`) and the package it names (the OPF, 4 MiB at most) through `zipped.rs`, and has
+  rbook read the package in a worker process, `clv --worker epub` (`epub::PACKAGE`, in
+  `source::WORKERS`): one `READ` request, the package's path and its bytes, answered `PLAN` with
+  the spine's items in order, each its file's path from the book's top and its media type
+  (`Plan::written`), or `REFUSED` with rbook's reason (256 bytes at most, cut at a character). The
+  worker gives rbook a zip of its own holding the package alone, under a container that names it,
+  with `skip_toc`, so rbook reads no other file, and a table of contents it can't read doesn't
+  cost the package. Its caps are 2 s of CPU and 256 MiB of heap (`READ_CPU`, `MAX_HEAP`): a
+  package of 599,000 empty elements in 4 MiB takes rbook 566 MiB, and is refused by the cap. One
+  worker a book, gone once it has answered, one at a time (`TURN`), so a list of books takes one
+  of the six workers' places. The answer is checked as any input is (`Plan::read`: 4,096 chapters,
+  4 KiB a path, each path brought to one from the book's top or dropped) and kept with the book
+  (`Plan`), with where the book's bytes are (`Kept`: the zip's directory, for a file on disk or
+  one come through a pipe; how to read it again, for one held in another file). `assembled` writes
+  the document: a first 1,024 bytes of clv's own (`start`, a doctype and a comment), so nothing a
+  book writes is among the bytes a backend is chosen by, then each chapter in the spine's order,
+  what its `<body>` holds, in a `<div>` with `page-break-before: always` and the id `c` and its
+  number (a page break on a `<div>` reaches the first paragraph in it, at the Word backend's pin).
+  `Written::body` goes through the chapter with `markup.rs`'s lexer, tag by tag: `<head>`,
+  `<title>`, `<style>`, `<script>` and what the importer reads no text of are dropped with what
+  they hold, `<link>`, `<meta>` and `<base>` dropped; an `id` gets its chapter's number before it
+  (`c3-s1`), since two chapters' ids would meet; a `src` is written as a path from the book's top,
+  percent-encoded, since the pictures' reader decodes it; an `href` that is a path is marked as a
+  file the book holds or one it doesn't (`IN_THE_BOOK`, `NOT_IN_THE_BOOK`) and written from the
+  top. It counts as it writes, and stops before the chapter that would take the document past
+  bounds of its own (`MAX_WRITTEN`, `MAX_MARKS`, `MAX_TEXT`: 48 MiB, 400,000 marks, 6 MiB of
+  text), below those the Word backend refuses a file past, so a long book shows its start. The
+  document is handed on as a held `Input`: its `Again` assembles it again from the `Plan` kept,
+  for the first render and each relayout, asking the worker nothing; its `Near` (`epub::near`)
+  reads a picture from the book by its very name in the zip, with its first bytes alone for its
+  size. What the backend gives is wrapped in a `Book`, which hands every `Source` method on, the
+  source a relayout's job makes too; puts the chapters left out among the first page's warnings
+  (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
+  `Target::Other` saying which it is), so the viewer never looks for a file beside the `.epub`.
+  The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
+  `margin`, `fences`), so that a list knows a book has them before it is opened
+  (`Backend::deferred`) ([Settings](#settings)).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings

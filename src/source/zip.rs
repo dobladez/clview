@@ -1,25 +1,15 @@
-//! Zip archives, read through the `zip` crate, shown as directories: the archive is a container,
-//! and so is each directory in it. A file in it is read from the archive when the list opens it,
-//! its first bytes only to choose a backend, and read again, whole, when it renders. Nothing is
-//! written out: a name in the archive is only ever a name.
+//! Zip archives, read through the `zip` crate ([`Zipped`]), shown as directories: the archive is a
+//! container, and so is each directory in it. A file in it is read from the archive when the list
+//! opens it, its first bytes only to choose a backend, and read again, whole, when it renders.
+//! Nothing is written out: a name in the archive is only ever a name.
 
-use std::fs::File;
-use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::zip::ZipArchive;
-
 use super::tree::Tree;
+use super::zipped::{MAX_BYTES, MAX_ENTRIES, Zipped};
 use super::{Again, Backend, Badge, Bounded, Container, Format, HEAD, Input, Listing, Near, Opened, Reopenable, Start};
 use crate::args::{OptionSpec, Parsed};
-
-/// The most bytes a file in an archive is read to: a picture larger than that is more than the
-/// image backend opens, and it bounds what an entry that unpacks without end (a zip bomb) costs.
-const MAX_BYTES: u64 = 512 << 20;
-
-/// The most entries read from an archive's central directory, shown or not.
-const MAX_ENTRIES: usize = 100_000;
 
 /// The zip backend.
 pub(crate) struct Zip;
@@ -53,13 +43,14 @@ impl Backend for Zip {
 
     fn open(&self, input: Input, _options: &Parsed<'_>) -> Result<Opened, String> {
         let path = input.path.clone();
-        let reader = match input.reopenable()? {
-            Reopenable::Disk(file) => Reader::Disk { path: Arc::from(path.as_str()), file: Some(file), at: 0 },
-            Reopenable::Bytes(bytes) => Reader::Memory(Cursor::new(bytes.into())),
+        let error = |e: String| format!("{path}: {e}");
+        let zipped = match input.reopenable()? {
+            Reopenable::Disk(file) => Zipped::on_disk(&path, file),
+            Reopenable::Bytes(bytes) => Zipped::in_memory(bytes),
             // An archive in an archive: read out of it whole, for the zip crate to seek through.
-            Reopenable::Again(again) => Reader::Memory(Cursor::new(again().map_err(|e| format!("{path}: {e}"))?.into())),
+            Reopenable::Again(again) => again().and_then(Zipped::in_memory),
         };
-        let archive = Archive::read(path, reader)?;
+        let archive = Archive::read(path.clone(), zipped.map_err(error)?);
         Ok(Opened::Files(Rc::new(Directory { path: archive.path.clone(), at: Vec::new(), archive: Arc::new(archive) })))
     }
 }
@@ -67,8 +58,7 @@ impl Backend for Zip {
 /// An archive opened: its central directory, parsed once, and the directories its names make.
 struct Archive {
     path: String,
-    /// Holding no file while idle: each read works on a clone, which opens the file for itself.
-    zip: ZipArchive<Reader>,
+    zipped: Zipped,
     tree: Tree,
     /// The names left out, and why, said when the archive's top is listed.
     unread: Vec<(String, String)>,
@@ -77,43 +67,27 @@ struct Archive {
 }
 
 impl Archive {
-    /// The archive at `path`, which `reader` reads.
-    fn read(path: String, reader: Reader) -> Result<Self, String> {
-        let parsed = caught(|| ZipArchive::new(reader).map_err(|e| e.to_string())).map_err(|e| format!("{path}: {e}"))?;
-        // A clone shares what was parsed, without the file the parse opened, which goes with
-        // `parsed`.
-        let zip = parsed.clone();
-        drop(parsed);
+    /// The archive at `path`, which `zipped` reads.
+    fn read(path: String, zipped: Zipped) -> Self {
         let (mut tree, mut unread) = (Tree::default(), Vec::new());
-        let cut = zip.len() > MAX_ENTRIES;
-        for index in 0..zip.len().min(MAX_ENTRIES) {
-            let Some(Ok(name)) = zip.name_for_index(index) else { continue };
+        let cut = zipped.len() > MAX_ENTRIES;
+        for index in 0..zipped.len().min(MAX_ENTRIES) {
+            let Some(name) = zipped.name(index) else { continue };
             if let Err(why) = tree.add(&name, false, index) {
-                unread.push((name.to_string(), format!("{path}/{name}: {why}")));
+                unread.push((name.clone(), format!("{path}/{name}: {why}")));
             }
         }
-        Ok(Self { path, zip, tree, unread, cut })
-    }
-
-    /// The first `most` bytes of the file at `index`, or all of a shorter one, unpacking no more.
-    fn first(&self, index: usize, most: u64) -> Result<Vec<u8>, String> {
-        caught(|| {
-            let mut zip = self.zip.clone();
-            let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-            let mut first = Vec::new();
-            entry.take(most.min(MAX_BYTES)).read_to_end(&mut first).map_err(|e| e.to_string())?;
-            Ok(first)
-        })
+        Self { path, zipped, tree, unread, cut }
     }
 
     /// The file at `index`, called `path` for the reader, as a file held here: its first [`HEAD`]
     /// bytes read now, and the rest when it is asked for, whole, to a bound or its first bytes alone.
     fn held(self: &Arc<Self>, index: usize, path: String) -> Result<Input, String> {
-        let head = self.first(index, HEAD).map_err(|e| format!("{path}: {e}"))?;
+        let head = self.zipped.first(index, HEAD).map_err(|e| format!("{path}: {e}"))?;
         let (whole, bound, first) = (self.clone(), self.clone(), self.clone());
-        let again: Again = Arc::new(move || whole.whole(index, MAX_BYTES));
-        let bounded: Bounded = Arc::new(move |most| bound.within(index, most));
-        let start: Start = Arc::new(move |most| first.first(index, most));
+        let again: Again = Arc::new(move || whole.zipped.whole(index, MAX_BYTES));
+        let bounded: Bounded = Arc::new(move |most| bound.zipped.within(index, most));
+        let start: Start = Arc::new(move |most| first.zipped.first(index, most));
         Ok(Input::held_bounded(path, head, again, bounded).starting(start))
     }
 
@@ -126,50 +100,6 @@ impl Archive {
             archive.held(index, format!("{}/{path}", archive.path))
         })
     }
-
-    /// The file at `index`, whole, as long as it unpacks to at most `max` bytes.
-    fn whole(&self, index: usize, max: u64) -> Result<Vec<u8>, String> {
-        caught(|| {
-            let mut zip = self.zip.clone();
-            let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-            let too_large = || format!("it unpacks to more than {} MiB, more than {} reads from an archive", max >> 20, crate::NAME);
-            // What the archive says first, then what it unpacks to, which may be more.
-            if entry.size() > max {
-                return Err(too_large());
-            }
-            let mut bytes = Vec::new();
-            entry.take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            match u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max {
-                true => Err(too_large()),
-                false => Ok(bytes),
-            }
-        })
-    }
-
-    /// File `index`, unpacked whole if it is no more than `most` bytes, else `None`, unpacking no more
-    /// than a byte past them: past [`MAX_BYTES`], as [`Archive::whole`] says.
-    fn within(&self, index: usize, most: u64) -> Result<Option<Vec<u8>>, String> {
-        if most >= MAX_BYTES {
-            return self.whole(index, MAX_BYTES).map(Some);
-        }
-        caught(|| {
-            let mut zip = self.zip.clone();
-            let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-            // What the archive says first, then what it unpacks to, which may be more.
-            if entry.size() > most {
-                return Ok(None);
-            }
-            let mut bytes = Vec::new();
-            entry.take(most.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            Ok((u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= most).then_some(bytes))
-        })
-    }
-}
-
-/// What `read` returns, or an error if the zip crate panics on the archive: its bug costs the
-/// archive or the file, not the viewer.
-fn caught<T>(read: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|_| Err("the archive reader failed on it".into()))
 }
 
 /// A directory in an archive, the archive's top or one in it, as a container.
@@ -212,63 +142,9 @@ impl Container for Directory {
     }
 }
 
-/// An archive's bytes, for the zip crate to seek through: in memory, or on disk, where the file
-/// is open only while it is read. A clone opens it for itself, so the archive kept between reads
-/// holds no file, and reads on several threads don't share one.
-enum Reader {
-    Disk { path: Arc<str>, file: Option<File>, at: u64 },
-    Memory(Cursor<Arc<[u8]>>),
-}
-
-impl Reader {
-    /// The file, opened at the position read up to, if it wasn't open.
-    fn file<'a>(file: &'a mut Option<File>, path: &str, at: u64) -> std::io::Result<&'a mut File> {
-        if file.is_none() {
-            let mut opened = File::open(path)?;
-            opened.seek(SeekFrom::Start(at))?;
-            *file = Some(opened);
-        }
-        file.as_mut().ok_or_else(|| std::io::Error::other("the archive isn't open"))
-    }
-}
-
-impl Clone for Reader {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Disk { path, at, .. } => Self::Disk { path: path.clone(), file: None, at: *at },
-            Self::Memory(bytes) => Self::Memory(bytes.clone()),
-        }
-    }
-}
-
-impl Read for Reader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Disk { path, file, at } => {
-                let read = Self::file(file, path, *at)?.read(buf)?;
-                *at = at.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-                Ok(read)
-            }
-            Self::Memory(bytes) => bytes.read(buf),
-        }
-    }
-}
-
-impl Seek for Reader {
-    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
-        match self {
-            Self::Disk { path, file, at } => {
-                *at = Self::file(file, path, *at)?.seek(to)?;
-                Ok(*at)
-            }
-            Self::Memory(bytes) => bytes.seek(to),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::io::{Cursor, Write};
 
     use ::zip::write::SimpleFileOptions;
     use ::zip::{CompressionMethod, ZipWriter};
@@ -451,10 +327,10 @@ mod tests {
             assert!(error.starts_with(&format!("{path}/{name}: ")) && error.contains(why), "{error}");
         }
         // Larger unpacked than read: by what the archive says, before reading it.
-        let archive = Archive::read(path.clone(), Reader::Disk { path: Arc::from(path.as_str()), file: None, at: 0 }).unwrap();
+        let archive = Archive::read(path.clone(), Zipped::on_disk(&path, std::fs::File::open(&path).unwrap()).unwrap());
         let index = archive.tree.file(&[], "open.txt").unwrap();
-        assert!(archive.whole(index, 99).is_err_and(|e| e.contains("unpacks to more than")));
-        assert_eq!(archive.whole(index, 100).unwrap(), [7; 100]);
+        assert!(archive.zipped.whole(index, 99).is_err_and(|e| e.contains("unpacks to more than")));
+        assert_eq!(archive.zipped.whole(index, 100).unwrap(), [7; 100]);
         // Not an archive after all.
         let path = on_disk("refused", "fake.zip", b"PK\x03\x04 and then nothing");
         assert!(opened(&path).is_err_and(|e| e.starts_with(&path)));

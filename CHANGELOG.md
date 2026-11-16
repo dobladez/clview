@@ -10,6 +10,12 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
+- An ebook (epub) is shown as a book: its chapters in its reading order, each starting a new page,
+  with its pictures, as one document laid out for the window. It has what Markdown and HTML have:
+  `[` and `]` for its width, `+` and `-` for its font size, `{` and `}` for its margins, `d` for
+  dark paper, `/` to search the whole book. It was a list of its files, each chapter opened alone
+  and without its pictures. Its own stylesheets aren't read, and a link from it is never followed
+  to a file. A zip that says it is an epub is one whatever its name.
 - A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
   their paths from it, `..` included but never above the archive's top: a README in a zip of a
   repository shows its screenshots. They were left as their alt text. Opening the document unpacks

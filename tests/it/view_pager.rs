@@ -1426,7 +1426,7 @@ fn s_shows_a_documents_blocks_as_code_and_draws_them_again() {
     assert!(shows_flow(&page));
     view.wait_until("said", |t| last_bar(t).contains(" blocks drawn "));
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" s Markdown and HTML fenced blocks drawn, or as code"));
+    view.wait_until("listed", |t| bar(t).contains(" s Markdown, HTML and EPUB fenced blocks drawn, or as code"));
     // Any key leaves the keys; the next one quits.
     view.press("qq");
     assert!(view.finish().success());
@@ -1449,10 +1449,11 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     if !pty_works() {
         return;
     }
-    let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 80, 40);
+    // Wide enough for the sentence whole: the status line shortens it in 80 columns.
+    let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 110, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("s");
-    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML draw their blocks"));
+    view.wait_until("said", |t| bar(t).contains("only Markdown, HTML and EPUB draw their blocks"));
     assert_eq!(transmitted(&view.text()), 1);
     view.press("q");
     assert!(view.finish().success());
@@ -1461,7 +1462,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     std::fs::create_dir_all(&dir).unwrap();
     flow_document("fences-list", "shelf/a.md");
     std::fs::copy(fixture("fences-list", 1), dir.join("b.pdf")).unwrap();
-    let mut view = Session::start_on(KITTY, &dir, &[], 100, 40);
+    let mut view = Session::start_on(KITTY, &dir, &[], 120, 40);
     view.wait_until("both tiles", |t| drawn(t, "1/2 · 2 per row"));
     let tiles = pngs(&view.text());
     assert!(tiles.len() == 2 && tiles.iter().any(|(_, tile)| shows_flow(tile)), "the document's tile shows its block drawn");
@@ -1483,7 +1484,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     view.press("\r");
     view.wait_until("b opened", |t| bar(last_draw(t)).contains(" b.pdf "));
     view.press("s");
-    view.wait_until("said", |t| last_bar(t).contains("only Markdown and HTML draw their blocks"));
+    view.wait_until("said", |t| last_bar(t).contains("only Markdown, HTML and EPUB draw their blocks"));
     view.press("q");
     assert!(view.finish().success());
 }
@@ -2663,14 +2664,15 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
         return;
     }
     let pdf = fixture("no-dark", 1);
-    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
+    // Wide enough for the sentence whole: the status line shortens it in 80 columns.
+    let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 110, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
     view.press("D");
-    view.wait_until("said", |t| bar(t).contains("only Mermaid, Markdown and HTML go dark"));
+    view.wait_until("said", |t| bar(t).contains("only Mermaid, Markdown, HTML and EPUB go dark"));
     assert_eq!(transmitted(&view.text()), 1, "sent again");
     assert!(!view.text().contains("\x1b]11;"), "asked about the background");
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown and HTML light on dark, or dark on light"));
+    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown, HTML and EPUB light on dark, or dark on light"));
     view.press("qq");
     assert!(view.finish().success());
 }
@@ -2850,12 +2852,12 @@ fn on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow() {
     if !pty_works() {
         return;
     }
-    let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 80, 40);
+    let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 110, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("]");
-    view.wait_until("said", |t| bar(t).contains("only Markdown and HTML reflow"));
+    view.wait_until("said", |t| bar(t).contains("only Markdown, HTML and EPUB reflow"));
     view.press("72[");
-    view.wait_until("said again", |t| bar(t).matches("only Markdown and HTML reflow").count() >= 2);
+    view.wait_until("said again", |t| bar(t).matches("only Markdown, HTML and EPUB reflow").count() >= 2);
     assert_eq!(transmitted(&view.text()), 1);
     view.press("q");
     assert!(view.finish().success());
@@ -4599,4 +4601,85 @@ fn links_followed_from_the_middle_of_a_long_paragraph_are_come_back_to_on_their_
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A book is searched as one document: a word of its third chapter is found from its first, and
+/// the reader taken to that chapter's page. The worker that read its package has answered and is
+/// gone by the time the book shows, and neither the search nor a relayout starts another.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_a_search_finds_a_word_in_a_later_chapter_and_the_worker_is_gone() {
+    use crate::epub::{Mimetype, three_chapters, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let path = write(crate::view::tmp("pager-epub-search", "book.epub"), &zipped(&three_chapters(), Mimetype::Stored));
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("the book", |t| drawn(t, "page 1/3"));
+    let workers = |view: &Session| descendants_running(view.child.id(), "--worker epub");
+    assert!(workers(&view).is_empty(), "the worker outlived its answer");
+    view.press("/green\r");
+    view.wait_until("found in the third chapter", |t| last_bar(t).contains(" /green 1/1 ") && place_now(t).is_some_and(|(page, _)| page == 3));
+    // Apart from the key after it: an escape and a `]` together start an escape code.
+    view.press("\x1b");
+    view.wait_until("the search ended", |t| !last_bar(t).contains("/green"));
+    // Laid out again, from the reading order kept: the worker isn't asked again.
+    let before = view.text().len();
+    view.press("[");
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + PATIENCE;
+    let narrower = |t: &str| last_bar(t).split("width ").nth(1).is_some_and(|width| width.starts_with(|c: char| c.is_ascii_digit()));
+    while !view.text().get(before..).is_some_and(|t| narrower(t) && !last_bar(t).contains('…')) {
+        assert!(Instant::now() < deadline, "never laid out again: {}", last_bar(&view.text()));
+        seen.extend(workers(&view));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(seen.is_empty() && workers(&view).is_empty(), "a worker for a relayout: {seen:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A book's link to a file is never followed to one: one to a picture the book holds says it is a
+/// file in the book, one to a file it doesn't hold says so, and the reader stays in the book, even
+/// with files of those names where a path beside the `.epub` would lead.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_a_link_to_a_file_is_said_and_no_file_beside_the_book_is_opened() {
+    use crate::epub::{Mimetype, RED, book_of, plain, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("epub-links");
+    let body = r#"<p><a href="../Images/red.png">the plate</a>, <a href="../../notes.png">some notes</a> and <a href="https://example.com/">a site</a>.</p>"#;
+    let files = book_of(&[body.to_owned()], &[("OEBPS/Images/red.png", plain(60, RED))]);
+    let path = write(dir.join("shelf/book.epub"), &{
+        std::fs::create_dir_all(dir.join("shelf")).unwrap();
+        zipped(&files, Mimetype::Stored)
+    });
+    // Where each path would lead on disk: from the book's file as the chapter writes it, as the
+    // book's document writes it, and from the book's top.
+    for beside in [
+        "Images/red.png",
+        "notes.png",
+        "shelf/OEBPS/Images/red.png",
+        "shelf/clv-in-the-book/OEBPS/Images/red.png",
+        "shelf/clv-not-in-the-book/notes.png",
+    ] {
+        std::fs::create_dir_all(dir.join(beside).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(beside), plain(60, RED)).unwrap();
+    }
+    let mut view = Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("the book", |t| drawn(t, "page 1/1"));
+    let before = follow(&mut view, 3, "s");
+    said_since(&view, before, "a file in the book, which clv doesn't open alone");
+    let before = follow(&mut view, 3, "a");
+    said_since(&view, before, "not in this book");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        last_bar(&view.text()).contains(" book.epub ") && place_now(&view.text()).is_some_and(|(page, _)| page == 1),
+        "{}",
+        last_bar(&view.text())
+    );
+    view.press("q");
+    assert!(view.finish().success());
 }

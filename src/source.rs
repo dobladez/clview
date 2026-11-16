@@ -3,6 +3,8 @@
 //! and its own threads, so one can cancel or time out work the way it knows how.
 
 mod dir;
+#[cfg(feature = "epub")]
+mod epub;
 mod folder;
 #[cfg(feature = "sheet")]
 mod gridcraft;
@@ -12,6 +14,8 @@ mod head;
 mod image;
 mod joined;
 mod later;
+#[cfg(feature = "word")]
+mod markup;
 #[cfg(feature = "mermaid")]
 mod mermaid;
 #[cfg(feature = "pdf")]
@@ -32,6 +36,8 @@ mod wordcraft;
 mod worker;
 #[cfg(feature = "zip")]
 mod zip;
+#[cfg(any(feature = "zip", feature = "epub"))]
+mod zipped;
 
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -50,8 +56,8 @@ pub(crate) use worker::{Worker, serve};
 /// The backends this build has, in the order they are asked whether they open a file. SVG
 /// first: it goes by how a file starts, where a PDF's header may be anywhere in the first
 /// 1024 bytes, which a drawing's text may hold. Mermaid diagrams next, for the same reason, and
-/// tar, for the same reason: a tar's first file starts 512 bytes in. Then documents, for the same reason (an RTF's text), and spreadsheets,
-/// both before zip, since a docx and an xlsx are zips.
+/// tar, for the same reason: a tar's first file starts 512 bytes in. Then documents, for the same reason (an RTF's text), spreadsheets
+/// and books, all before zip, since a docx, an xlsx and an epub are zips.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -63,6 +69,8 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &wordcraft::Wordcraft,
     #[cfg(feature = "sheet")]
     &gridcraft::Gridcraft,
+    #[cfg(feature = "epub")]
+    &epub::Epub,
     #[cfg(feature = "pdf")]
     &pdfcraft::Pdfcraft,
     #[cfg(feature = "image")]
@@ -80,6 +88,8 @@ pub(crate) const WORKERS: &[&'static dyn Worker] = &[
     &pdfcraft::TEXT,
     #[cfg(feature = "mermaid")]
     &mermaid::DIAGRAMS,
+    #[cfg(feature = "epub")]
+    &epub::PACKAGE,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -485,7 +495,10 @@ impl Input {
 
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
-    #[cfg_attr(not(any(feature = "mermaid", feature = "sheet", test)), expect(dead_code, reason = "only what a backend hands another is held so"))]
+    #[cfg_attr(
+        not(any(feature = "mermaid", feature = "sheet", feature = "epub", test)),
+        expect(dead_code, reason = "only what a backend hands another is held so")
+    )]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
         Self { path, head, rest: Rest::Held { again, bounded: None, start: None, beside: None } }
     }
@@ -497,7 +510,10 @@ impl Input {
 
     /// This held file, for a holder that can give its first bytes alone ([`Start`]). A file of its
     /// own is read from its start as it is.
-    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives give a file's first bytes"))]
+    #[cfg_attr(
+        not(any(feature = "zip", feature = "tar", feature = "epub", test)),
+        expect(dead_code, reason = "only archives and books give a file's first bytes")
+    )]
     fn starting(mut self, start: Start) -> Self {
         if let Rest::Held { start: first, .. } = &mut self.rest {
             *first = Some(start);
@@ -507,7 +523,10 @@ impl Input {
 
     /// This held file, at `path` from its holder's top, where `near` reads what is beside it
     /// ([`Beside`]). A file of its own has its directory.
-    #[cfg_attr(not(any(feature = "zip", feature = "tar", test)), expect(dead_code, reason = "only archives say what is beside a file"))]
+    #[cfg_attr(
+        not(any(feature = "zip", feature = "tar", feature = "epub", test)),
+        expect(dead_code, reason = "only archives and books say what is beside a file")
+    )]
     fn held_near(mut self, near: Near, path: String) -> Self {
         if let Rest::Held { beside, .. } = &mut self.rest {
             *beside = Some(Arc::new((near, path)));

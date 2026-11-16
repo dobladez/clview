@@ -511,8 +511,8 @@ fn a_mermaid_block_in_html_is_drawn_as_its_diagram() {
     assert!(drawn[0] == code[0], "not the code block it would have been");
 }
 
-/// HTML says what it is by how it starts, so its blocks are drawn through a pipe; and an epub's
-/// chapter, XHTML held in a zip, draws its own, where its pictures by path can't be reached.
+/// HTML says what it is by how it starts, so its blocks are drawn through a pipe; and a book's
+/// chapter, XHTML in an epub, draws its own.
 #[cfg(feature = "word")]
 #[test]
 fn a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub() {
@@ -531,22 +531,14 @@ fn a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub() {
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     let pages = images(&out.stdout);
     assert!(pages.len() == 1 && shows_flow(&image::load_from_memory(&pages[0].png).unwrap().into_rgba8()), "through a pipe");
-    #[cfg(feature = "zip")]
+    #[cfg(all(feature = "epub", feature = "image"))]
     {
-        let chapter = format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head><title>One</title></head>\n<body>\n<h1>Chapter one</h1>\n{block}\n</body>\n</html>\n"
-        );
-        let book = tmp("mermaid-epub", "book.epub");
-        let mut zip = ::zip::ZipWriter::new(std::fs::File::create(&book).unwrap());
-        let stored = ::zip::write::SimpleFileOptions::default().compression_method(::zip::CompressionMethod::Stored);
-        zip.start_file("mimetype", stored).unwrap();
-        zip.write_all(b"application/epub+zip").unwrap();
-        zip.start_file("chapter-1.xhtml", ::zip::write::SimpleFileOptions::default()).unwrap();
-        zip.write_all(chapter.as_bytes()).unwrap();
-        zip.finish().unwrap();
-        let (tiles, said) = pages_at(&book, &[]);
+        use crate::epub::{Mimetype, book_of, write, zipped};
+        let chapter = format!("<h1>Chapter one</h1>\n{block}");
+        let book = write(tmp("mermaid-epub", "book.epub"), &zipped(&book_of(&[chapter], &[]), Mimetype::Stored));
+        let (pages, said) = pages_at(&book, &[]);
         assert!(said.is_empty(), "{said}");
-        assert!(tiles.len() == 1 && shows_flow(&tiles[0]), "an epub's chapter");
+        assert!(pages.len() == 1 && shows_flow(&pages[0]), "a book's chapter");
     }
 }
 
