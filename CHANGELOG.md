@@ -81,8 +81,8 @@ works today. A version's section becomes the notes of its
   file's pages, in a list, through the links followed and while a folder is being opened.
 - `Alt` and a character, from a terminal that sends Alt or Option as `ESC`, is no longer read as
   `Esc` and then that character, which went back or quit: one the pager has no use for does
-  nothing. Alt with `Enter` or with a `Ctrl` key, and `Alt-]` and `Alt-_`, are still read as `Esc`
-  and then that key.
+  nothing. Alt with `Enter` or with a `Ctrl` key is still read as `Esc` and then that key.
+  `Alt-]` and `Alt-_` do nothing.
 
 ## 0.4.0 (2026-11-10)
 

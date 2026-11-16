@@ -181,3 +181,18 @@ As planned, with these readings of what the spec leaves to the code:
   nothing". Only Alt with a printable character is an Alt key: Alt with Enter or a Ctrl key, and
   `Alt-]` and `Alt-_`, are still Esc and then that key, as ADR-0036 and the task 1 notes record.
   Both say so now.
+
+## Codex review, round 2 (2026-11-16)
+
+- **`Alt-]` and `Alt-_` do nothing; they are not Esc and that key.** Round 1's correction, and the
+  task 1 note above ("where no answer follows them they are Esc and that key"), got them wrong for
+  the keys pressed alone: `decode` holds `ESC ]` and `ESC _` back as the start of an answer, even
+  with `flush`, and the pager drops them after `PENDING_LIMIT`, a second. Only with another key
+  right after them, which makes them no answer, are they Esc and the keys (`\x1b]q`), as before
+  this spec. The changelog, the manual, the architecture's paragraph, ADR-0036 and the decoder's
+  comment say so now.
+- **Pinned** in `keys::tests::esc_and_a_printable_character_in_one_read_is_alt`: `ESC ]` and
+  `ESC _` alone are no key, flushed or not. It already held (`graphics_answers_are_never_keys` and
+  `clipboard_answers_are_never_keys` have the same bytes after a `j`), so nothing was fixed in the
+  code; with `decode`'s two arms that hold them back taken out, all three tests failed, and
+  `answers_among_keys_cut_anywhere_are_never_keys` with them. File copied back, `cmp` clean.

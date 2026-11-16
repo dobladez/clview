@@ -114,7 +114,8 @@ bytes to the pager on a pseudo-terminal.
 - **Accepted:** `d` no longer turns the paper and `u` no longer goes back, which readers of
   earlier versions have in their fingers: the changelog says so. Esc and then a key within 50 ms
   is Alt and that key: typed by hand that is rare, and it is what a paste or a test that writes
-  both at once gets. `M-_` and `M-]` can't be told from an answer's start, and aren't keys.
+  both at once gets. `M-_` and `M-]` can't be told from an answer's start, and aren't keys:
+  pressed, they wait a second for an answer's rest and are dropped, doing nothing.
   Alt with Enter, or with a Ctrl key, is still Esc and that key. A setting's phrase in `?` still
   names its keys as its backend declared them (`72] sets 72`).
 - **Follow-ups:** the config file; running a command by name

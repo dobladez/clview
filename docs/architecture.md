@@ -1049,7 +1049,9 @@ read as keys: no wait could tell it from typing, and terminals send each reply i
 an `ESC` alone, with nothing after it for 50 ms, is the Esc key. An `ESC` and a printable character
 read together, or within those 50 ms, are `Key::Alt` and that character, as a terminal that sends
 Alt or Option as `ESC` writes them: never Esc and then the key. But for `[` and `O`, which start a
-sequence, and `_` and `]`, which start an answer and are Esc and that key where none follows. A byte
+sequence, and `_` and `]`, which start an answer: alone they wait for its rest as one cut off does,
+and are dropped after that second, so `Alt-]` and `Alt-_` do nothing; with another key right after
+them that makes them no answer, they are Esc, that character and the key, as before. A byte
 from 1 to 26 is `Key::Ctrl` and its letter, apart from the ones that are Enter, Backspace, Tab and
 Ctrl-C. At the end, the pager waits up to 100 ms after its last placements,
 so no late answer lands on the shell's command line.

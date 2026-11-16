@@ -177,8 +177,10 @@ fn escape(bytes: &[u8]) -> Option<(Option<Key>, usize)> {
         }
         // A string terminator on its own: the end of something cut off, never a key.
         Some(b'\\') => Some((None, 2)),
-        // What starts an answer or an OSC sequence, and wasn't one (the caller takes those): Esc,
-        // then that key, as before there were Alt keys. `M-_` and `M-]` can't be told from them.
+        // What starts an answer or an OSC sequence, and wasn't one (the caller takes those, and
+        // holds the two bytes back while nothing follows them): Esc, then that key, as before
+        // there were Alt keys. `M-_` and `M-]` can't be told from an answer's start, so pressed
+        // alone they wait for its rest and are dropped: no keys.
         Some(b'_' | b']') => Some((Some(Key::Escape), 1)),
         // Alt and a printable character, as a terminal that sends Alt as ESC does: the two arrive
         // together. (Esc, then a key typed later, is read alone first: the caller waits a while
@@ -403,6 +405,13 @@ mod tests {
         assert_eq!(keys(b"\x1b\xc2\x9bj"), [Key::Escape, Key::Char('j')]);
         // Alt and a Ctrl key is Esc and that key: no Alt key.
         assert_eq!(keys(b"\x1b\x16"), [Key::Escape, Key::Ctrl('v')]);
+        // Alt-] and Alt-_ are how an answer starts: alone they are no key, however long nothing
+        // follows (the pager drops them), and never Esc, which would leave. Only with a key after
+        // them that makes them no answer are they Esc and the keys.
+        for start in [b"\x1b]".as_slice(), b"\x1b_"] {
+            assert_eq!((decode(start, false), decode(start, true)), ((vec![], 0), (vec![], 0)), "{start:?}");
+        }
+        assert_eq!(keys(b"\x1b]q"), [Key::Escape, Key::Char(']'), Key::Char('q')]);
     }
 
     #[test]
