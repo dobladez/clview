@@ -193,6 +193,23 @@ with their pages) could be shown over the pages as `?`'s keys are, and one chose
 following a link to a place in the document goes there
 ([Spec-0011](specs/0011-follow-a-documents-links.md)), `u` coming back.
 
+### Fixed-layout epubs through Blitz
+
+A fixed-layout epub (`rendition:layout` `pre-paginated`: comics, picture books, magazines) is a page
+an XHTML file, of the size its `<meta name="viewport">` says, its text and pictures placed by CSS,
+often text over a picture that fills the page.
+[Spec-0012](specs/0012-show-an-epub-as-a-book.md) lays such a book out flowing, through wordcraft's
+importer, which has no positioning and reads none of the book's stylesheets: a page of one picture
+comes out well, text placed over a picture comes out beside it. Shown as it is made, each page would
+be drawn by Blitz at its viewport's size, a page of clv each, in a worker process capped as the SVG
+labels' Blitz is ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)):
+with the book's stylesheets, its pictures read from the book, its embedded fonts (an obfuscated one
+undone, by the key the OPF's identifier gives), and its text and links from Blitz's layout for `/`
+and `f`. A book that mixes fixed and flowing chapters would need both in one source. A cheaper step
+first: a book whose every page is one picture shown as those pictures, each at its own size, as a
+comic archive would be ([More pictures and archives](#more-pictures-and-archives)). Weighed with
+[HTML through Blitz](#html-through-blitz-maybe), which would draw them the same way.
+
 ### Running a command by name (`M-x`)
 
 Every key the pager takes goes to a command with a name, its help and whether it takes a count

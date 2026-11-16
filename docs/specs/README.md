@@ -47,6 +47,7 @@ fails while it disagrees with them.
 | 0009 | [Draw a document's fenced blocks as pictures](0009-draw-fenced-blocks-as-pictures.md) | Done |
 | 0010 | [Open a file in the desktop's default app](0010-open-file-in-default-app.md) | Done |
 | 0011 | [Follow a document's links with hints](0011-follow-a-documents-links.md) | Done |
+| 0012 | [Show an epub as a book](0012-show-an-epub-as-a-book.md) | Ready |
 | 0013 | [Bind keys to named commands, and rebind them](0013-bind-keys-to-named-commands.md) | Ready |
 
 ## Lifecycle
