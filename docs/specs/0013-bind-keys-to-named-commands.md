@@ -1,6 +1,6 @@
 # Spec-0013: Bind keys to named commands, and rebind them
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-15
 - **Related:** [ADR-0021](../adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)
   (a backend declares its settings and their keys; "the viewer's keys come first", which this
@@ -206,3 +206,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 ## Changelog
 
 - 2026-11-15 — Ready (spec-new).
+- 2026-11-15 — Implementing ([notes](0013-bind-keys-to-named-commands-impl-20261115_2206.md)).
