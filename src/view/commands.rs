@@ -9,7 +9,8 @@
 //! built once a run from the viewer's defaults ([`PAGES`], [`LIST`]) and the keys the settings
 //! suggest ([`Keys`]). The pager looks a key up and does what its command says; `?`, the status
 //! line's reminders ([`Hint`]) and whatever else names a key look the command up, so a key is
-//! written nowhere but in the defaults here and in a setting's declaration.
+//! written nowhere but in the defaults here and in a setting's declaration
+//! ([ADR-0036](../../docs/adr/0036-keys-are-bound-to-named-commands.md)).
 //!
 //! Outside the keymaps: the digits, which are the number typed before a key, and while one is
 //! typed Esc and Backspace, which drop it and its last digit; the links' labels; and the text of
@@ -222,7 +223,7 @@ struct Chord {
     key: Key,
     counted: bool,
     /// Whether `?` and the reminders list it: not a key that is another with Shift or without (`=`,
-    /// which is `+`), nor one `?` has no room for, which are bound all the same.
+    /// which is `+`), which is bound all the same.
     listed: bool,
 }
 
@@ -241,19 +242,19 @@ const fn counted(key: Key) -> Chord {
     Chord { key, counted: true, listed: true }
 }
 
-/// `key` too, bound and not listed: one that is the key before it with Shift or without (`=`,
-/// which is `+`), or that `?` has no room to list.
-const fn also(key: Key) -> Chord {
-    Chord { key, counted: false, listed: false }
+/// `c` too, the same key as the one before it with Shift or without: bound, and not listed.
+const fn also(c: char) -> Chord {
+    Chord { key: Key::Char(c), counted: false, listed: false }
 }
 
-/// The viewer's keys in a file's pages: each command's, in the order `?` lists them. A setting's
-/// keys are the setting's to suggest ([`Keys`]), and come after these.
+/// The viewer's keys in a file's pages: each command's, in the order `?` lists them, `less`'s and
+/// `vi`'s with Emacs's beside them. A setting's keys are the setting's to suggest ([`Keys`]), and
+/// come after these: none may be one of them, which is why the paper's is `D`, not `d`.
 const PAGES: &[(Command, &[Chord])] = &[
-    (Command::ScreenDown, &[ch(' '), key(Key::PageDown)]),
-    (Command::ScreenUp, &[ch('b'), key(Key::PageUp)]),
-    (Command::ScrollDown, &[ch('j'), key(Key::Down), key(Key::Enter)]),
-    (Command::ScrollUp, &[ch('k'), key(Key::Up)]),
+    (Command::ScreenDown, &[ch(' '), key(Key::PageDown), ch('d'), key(Key::Ctrl('v'))]),
+    (Command::ScreenUp, &[ch('b'), key(Key::PageUp), ch('u'), key(Key::Alt('v'))]),
+    (Command::ScrollDown, &[ch('j'), key(Key::Down), key(Key::Ctrl('n')), key(Key::Enter)]),
+    (Command::ScrollUp, &[ch('k'), key(Key::Up), key(Key::Ctrl('p'))]),
     (Command::Next, &[ch('n')]),
     (Command::Previous, &[ch('p')]),
     (Command::NextPage, &[key(Key::Right)]),
@@ -261,8 +262,8 @@ const PAGES: &[(Command, &[Chord])] = &[
     (Command::PreviousMatch, &[ch('N')]),
     (Command::GoTo, &[ch('g'), key(Key::Home), counted(Key::Enter)]),
     (Command::Last, &[ch('G'), key(Key::End)]),
-    (Command::ZoomIn, &[ch('+'), also(Key::Char('='))]),
-    (Command::ZoomOut, &[ch('-'), also(Key::Char('_'))]),
+    (Command::ZoomIn, &[ch('+'), also('=')]),
+    (Command::ZoomOut, &[ch('-'), also('_')]),
     (Command::MorePerRow, &[ch(',')]),
     (Command::FewerPerRow, &[ch('.')]),
     (Command::Search, &[ch('/')]),
@@ -271,7 +272,7 @@ const PAGES: &[(Command, &[Chord])] = &[
     (Command::Copy, &[ch('c')]),
     (Command::OpenInApp, &[ch('o')]),
     (Command::Rerender, &[ch('r'), key(Key::Ctrl('l'))]),
-    (Command::Back, &[key(Key::Backspace), ch('u')]),
+    (Command::Back, &[key(Key::Backspace)]),
     (Command::Leave, &[key(Key::Escape)]),
     (Command::Quit, &[ch('q'), key(Key::Interrupt)]),
     (Command::Help, &[ch('?')]),
@@ -279,24 +280,24 @@ const PAGES: &[(Command, &[Chord])] = &[
 
 /// And in a list.
 const LIST: &[(Command, &[Chord])] = &[
-    (Command::TileLeft, &[key(Key::Left), ch('h')]),
-    (Command::TileRight, &[key(Key::Right), ch('l')]),
-    (Command::TileUp, &[key(Key::Up), ch('k')]),
-    (Command::TileDown, &[key(Key::Down), ch('j')]),
-    (Command::ScreenDown, &[ch(' '), ch('n'), also(Key::PageDown)]),
-    (Command::ScreenUp, &[ch('b'), ch('p'), also(Key::PageUp)]),
+    (Command::TileLeft, &[key(Key::Left), ch('h'), key(Key::Ctrl('b'))]),
+    (Command::TileRight, &[key(Key::Right), ch('l'), key(Key::Ctrl('f'))]),
+    (Command::TileUp, &[key(Key::Up), ch('k'), key(Key::Ctrl('p'))]),
+    (Command::TileDown, &[key(Key::Down), ch('j'), key(Key::Ctrl('n'))]),
+    (Command::ScreenDown, &[ch(' '), ch('n'), ch('d'), key(Key::Ctrl('v')), key(Key::PageDown)]),
+    (Command::ScreenUp, &[ch('b'), ch('p'), ch('u'), key(Key::Alt('v')), key(Key::PageUp)]),
     (Command::GoTo, &[ch('g'), key(Key::Home), counted(Key::Enter)]),
     (Command::Last, &[ch('G'), key(Key::End)]),
     (Command::Open, &[key(Key::Enter)]),
     (Command::Filter, &[ch('/')]),
-    (Command::ZoomIn, &[ch('+'), also(Key::Char('='))]),
-    (Command::ZoomOut, &[ch('-'), also(Key::Char('_'))]),
+    (Command::ZoomIn, &[ch('+'), also('=')]),
+    (Command::ZoomOut, &[ch('-'), also('_')]),
     (Command::MorePerRow, &[ch(',')]),
     (Command::FewerPerRow, &[ch('.')]),
     (Command::Copy, &[ch('c')]),
     (Command::OpenInApp, &[ch('o')]),
     (Command::Rerender, &[ch('r'), key(Key::Ctrl('l'))]),
-    (Command::Back, &[key(Key::Backspace), ch('u')]),
+    (Command::Back, &[key(Key::Backspace)]),
     (Command::Leave, &[key(Key::Escape)]),
     (Command::Quit, &[ch('q'), key(Key::Interrupt)]),
     (Command::Help, &[ch('?')]),
@@ -517,7 +518,8 @@ impl Keymaps {
     /// [`Keymaps::new`], and what was wrong with what it was given, each left out: a key the
     /// defaults bind twice, a setting's key that is one of the viewer's, a digit among them, or
     /// another setting's, or a setting whose command would be called as one of the viewer's is. The
-    /// viewer's defaults come first: a setting's key never takes one of them.
+    /// viewer's defaults come first: a setting's key never takes one of them
+    /// ([ADR-0036](../../docs/adr/0036-keys-are-bound-to-named-commands.md)).
     fn build(settings: &[&'static Setting]) -> (Self, Vec<String>) {
         let mut wrong = Vec::new();
         let mut keymaps = Self { pages: Keymap::defaults(Mode::Pages, PAGES, &mut wrong), list: Keymap::defaults(Mode::List, LIST, &mut wrong) };
@@ -730,7 +732,7 @@ mod tests {
     use crate::source::Numbers;
     use crate::source::tests::cycled;
 
-    static PAPER: Setting = cycled("paper", 'd', "--theme");
+    static PAPER: Setting = cycled("paper", 'D', "--theme");
     static WIDTH: Setting =
         Setting { keys: Keys::Step('[', ']'), numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }), ..cycled("width", '[', "--width") };
     static FONT: Setting = Setting { keys: Keys::Zoom, ..cycled("font", '+', "--font") };
@@ -757,7 +759,7 @@ mod tests {
             assert_eq!(names.iter().filter(|other| *other == name).count(), 1, "{name}");
         }
         // A setting's commands are the same command whichever backend's declaration they came from.
-        static AGAIN: Setting = cycled("paper", 'd', "--theme");
+        static AGAIN: Setting = cycled("paper", 'D', "--theme");
         assert_eq!(Command::Setting(&PAPER, Turn::Next), Command::Setting(&AGAIN, Turn::Next));
         assert_ne!(Command::Setting(&WIDTH, Turn::Down), Command::Setting(&WIDTH, Turn::Up));
         assert_ne!(Command::Setting(&PAPER, Turn::Next), Command::Setting(&WIDTH, Turn::Next));
@@ -808,10 +810,27 @@ mod tests {
         assert_eq!((pages.command(Key::Char('g'), false), pages.command(Key::Char('g'), true)), (Some(Command::GoTo), Some(Command::GoTo)));
         assert_eq!((pages.command(Key::Char('j'), true), list.command(Key::Char('j'), true)), (Some(Command::ScrollDown), Some(Command::TileDown)));
         assert_eq!((pages.command(Key::Char('='), false), pages.command(Key::Char('_'), false)), (Some(Command::ZoomIn), Some(Command::ZoomOut)));
+        // `d` and `u` a screen, and Emacs's keys beside the ones they are: no key goes back but
+        // Backspace, and `u` is none of them.
+        for (key, in_pages, in_list) in [
+            (Key::Char('d'), Command::ScreenDown, Command::ScreenDown),
+            (Key::Char('u'), Command::ScreenUp, Command::ScreenUp),
+            (Key::Ctrl('v'), Command::ScreenDown, Command::ScreenDown),
+            (Key::Alt('v'), Command::ScreenUp, Command::ScreenUp),
+            (Key::Ctrl('n'), Command::ScrollDown, Command::TileDown),
+            (Key::Ctrl('p'), Command::ScrollUp, Command::TileUp),
+            (Key::Backspace, Command::Back, Command::Back),
+        ] {
+            assert_eq!((pages.command(key, false), list.command(key, false)), (Some(in_pages), Some(in_list)), "{key:?}");
+        }
+        assert_eq!((list.command(Key::Ctrl('f'), false), list.command(Key::Ctrl('b'), false)), (Some(Command::TileRight), Some(Command::TileLeft)));
+        assert_eq!((pages.command(Key::Ctrl('f'), false), pages.command(Key::Ctrl('b'), false)), (None, None), "no tiles in a file's pages");
         for keymap in [pages, list] {
             assert_eq!(keymap.command(Key::Ctrl('l'), false), Some(Command::Rerender));
             assert_eq!(keymap.command(Key::Interrupt, true), Some(Command::Quit));
-            for key in [Key::Char('x'), Key::Char('é'), Key::Ctrl('a'), Key::Alt('q'), Key::Alt('x'), Key::Missing(3), Key::Clipboard(true)] {
+            for key in
+                [Key::Char('x'), Key::Char('é'), Key::Ctrl('a'), Key::Alt('q'), Key::Alt('n'), Key::Ctrl('x'), Key::Missing(3), Key::Clipboard(true)]
+            {
                 assert_eq!(keymap.command(key, false), None, "{key:?}");
             }
         }
@@ -826,14 +845,14 @@ mod tests {
         assert_eq!(wrong, Vec::<String>::new());
         for mode in [Mode::Pages, Mode::List] {
             let keymap = keymaps.of(mode);
-            assert_eq!(keymap.command(Key::Char('d'), false), Some(Command::Setting(&PAPER, Turn::Next)), "{mode:?}");
+            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&PAPER, Turn::Next)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char('['), true), Some(Command::Setting(&WIDTH, Turn::Down)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char(']'), false), Some(Command::Setting(&WIDTH, Turn::Up)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char('+'), false), Some(Command::ZoomIn), "{mode:?}");
             assert!(!keymap.bindings.iter().any(|(_, command)| matches!(command, Command::Setting(setting, _) if setting.name == "font")));
             assert_eq!(
                 (keymap.each(&[Command::Setting(&PAPER, Turn::Next)]), keymap.numbered(12, Command::Setting(&WIDTH, Turn::Up))),
-                ("d".into(), "12]".into())
+                ("D".into(), "12]".into())
             );
         }
         assert_eq!((Command::Setting(&PAPER, Turn::Next).count(), Command::Setting(&WIDTH, Turn::Up).count()), (Count::Left, Count::Taken));
@@ -842,7 +861,7 @@ mod tests {
         static LEFT: Setting = cycled("tint", 'h', "--tint");
         static DIGIT: Setting = cycled("tint", '7', "--tint");
         static EQUALS: Setting = cycled("tint", '=', "--tint");
-        static OTHER: Setting = cycled("tint", 'd', "--tint");
+        static OTHER: Setting = cycled("tint", 'D', "--tint");
         static PLUS: Setting = Setting { keys: Keys::Step('-', '+'), ..cycled("font", '+', "--font") };
         static QUIT: Setting = cycled("quit", 'x', "--quit");
         static SCREEN: Setting = Setting { keys: Keys::Step('<', '>'), ..cycled("screen", '<', "--screen") };
@@ -865,7 +884,7 @@ mod tests {
             let keymap = keymaps.of(mode);
             assert_eq!(keymap.command(Key::Char('q'), false), Some(Command::Quit));
             assert_eq!(keymap.command(Key::Char('h'), false), (mode == Mode::List).then_some(Command::TileLeft));
-            assert_eq!(keymap.command(Key::Char('d'), false), Some(Command::Setting(&PAPER, Turn::Next)));
+            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&PAPER, Turn::Next)));
         }
     }
 
@@ -879,9 +898,9 @@ mod tests {
         assert_eq!(
             shown(pages, PAGE_LINES),
             [
-                "space  PageDown",
-                "b  PageUp",
-                "j k  ↓ ↑  Enter",
+                "space  PageDown  d  Ctrl-V",
+                "b  PageUp  u  Alt-v",
+                "j k  ↓ ↑  Ctrl-N Ctrl-P  Enter",
                 "n p  → ←",
                 "g G  Home End",
                 "12 Enter  12g",
@@ -891,7 +910,7 @@ mod tests {
                 "n  N p  3n",
                 "f",
                 "F",
-                "Backspace  u",
+                "Backspace",
                 "r  Ctrl-L",
                 "c",
                 "o"
@@ -899,12 +918,25 @@ mod tests {
         );
         assert_eq!(
             shown(list, LIST_LINES),
-            ["← →  h l", "↑ ↓  k j", "space b  n p", "g G  Home End", "12 Enter  12g", "Enter", "/", "+ -", ", .  3.", "r  Ctrl-L", "c", "o"]
+            [
+                "← →  h l  Ctrl-B Ctrl-F",
+                "↑ ↓  k j  Ctrl-P Ctrl-N",
+                "space b  n p  d u  Ctrl-V Alt-v  PageDown PageUp",
+                "g G  Home End",
+                "12 Enter  12g",
+                "Enter",
+                "/",
+                "+ -",
+                ", .  3.",
+                "r  Ctrl-L",
+                "c",
+                "o"
+            ]
         );
         assert_eq!(shown(pages, &[COLUMNS_LINE, HELP_LINE]), [", .  3.", "?"]);
         assert_eq!(
             (shown(pages, BACK_LINES), shown(list, QUIT_LINES)),
-            (vec!["Esc  Backspace  u".to_owned(), "q  Ctrl-C".to_owned()], vec!["q  Esc  Ctrl-C".to_owned()])
+            (vec!["Esc  Backspace".to_owned(), "q  Ctrl-C".to_owned()], vec!["q  Esc  Ctrl-C".to_owned()])
         );
         // What a line says names keys through the keymap too.
         assert_eq!(pages.fill(PER_ROW_LINE.says), "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto");

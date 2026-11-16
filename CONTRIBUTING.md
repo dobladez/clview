@@ -187,7 +187,9 @@ CodeQL's default setup scans the Rust and the workflows.
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. It plays one
   without the protocol as well, for text cells. A list's file opened on demand is sent at its true size,
-  and one that turns out broken keeps its tile. `--help`'s icon is tested here too, since it depends
+  and one that turns out broken keeps its tile. The keys bound by default that came last: `d`, `u`
+  and Emacs's among a file's pages and a list's tiles, `Alt-V` written as an ESC and `v`, an Alt key
+  bound to nothing, and `u` leaving neither a file nor a list. `--help`'s icon is tested here too, since it depends
   on stdout being a terminal. A PDF's search too: its text read in a worker seen with `ps`, gone
   with the search, the file and the pager, and a page past the worker's heap, written by the test,
   costing the search that page; and its tint, read back from the PNGs sent: on the matches and
@@ -229,9 +231,9 @@ CodeQL's default setup scans the Rust and the workflows.
   paper's colour, within the light drawing's room), and that nothing else names merman; in `tests/it/view_pager.rs`, that a list's diagram
   starts the worker only once its tile is wanted, and a document's diagram, by path or in a block,
   is turned into SVG once however it is laid out, watched with `ps`; `s`, a document's blocks
-  as code and drawn again, in a list, on a PDF, and under a search kept; and `d`, a block drawn
+  as code and drawn again, in a list, on a PDF, and under a search kept; and `D`, a block drawn
   again for each paper, the diagram laid out once a theme; a diagram shown by itself on a dark terminal's own colour,
-  `d` turning it, in a list beside a PDF too, and `d` on a PDF naming the formats that go dark; in `tests/it/wordcraft.rs`, a diagram as a document's
+  `D` turning it, in a list beside a PDF too, and `D` on a PDF naming the formats that go dark; in `tests/it/wordcraft.rs`, a diagram as a document's
   picture. The
   worker's service (one worker in turn, gone once idle, paused after kills, with fake workers that
   die), the cache of what it answered, each theme's apart, and a diagram drawn for dark paper (its

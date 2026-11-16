@@ -163,7 +163,7 @@ fn slow(zeros: u64) -> Vec<u8> {
 }
 
 /// In the pager, a tar gone into is read on a thread of its own, the status line saying how far
-/// it has got, and Esc stops it; one that reads quickly opens at once, and `u` comes back up.
+/// it has got, and Esc stops it; one that reads quickly opens at once, and Backspace comes back up.
 #[test]
 fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
     if !pty_works() {
@@ -181,7 +181,7 @@ fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
     view.wait_until("stopped", |t| bar(t).contains(" stopped opening big.tar.gz/ "));
     view.press("l\r");
     view.wait_until("in small", |t| bar(t).contains(" small.tar.gz/b.png 1/2 ") && chosen(t).as_deref() == Some("b.png"));
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back", |t| bar(t).contains(" small.tar.gz/ 2/2 ") && chosen(t).as_deref() == Some("small.tar.gz/"));
     view.press("q");
     assert!(view.finish().success());

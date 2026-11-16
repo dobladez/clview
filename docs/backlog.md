@@ -6,7 +6,7 @@ ends not yet planned: not promised, and not in the Plans until they are. What `c
 
 ## The Plans, in detail
 
-### `d` for drawings too
+### `D` for drawings too
 
 An SVG shown alone following the paper: on white, or transparent on the terminal's colour. Markdown,
 HTML and Mermaid diagrams already do, a diagram shown alone and one a document shows alike. Nothing
@@ -193,7 +193,7 @@ A PDF's outline (pdfcraft's `DocInfo.outline`: titles, levels, each a page and a
 document's headings (paragraphs with an outline level, which wordcraft's PDF exporter already lists
 with their pages) could be shown over the pages as `?`'s keys are, and one chosen gone to, as
 following a link to a place in the document goes there
-([Spec-0011](specs/0011-follow-a-documents-links.md)), `u` coming back.
+([Spec-0011](specs/0011-follow-a-documents-links.md)), Backspace coming back.
 
 ### Fixed-layout epubs through Blitz
 

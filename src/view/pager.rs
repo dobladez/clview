@@ -74,7 +74,7 @@ const SEARCH_KEYS: &str = "⏎ search · esc cancel";
 /// that starts one named from the keymap ([`Keymap::fill`]).
 const NO_TEXT: &str = "no text to search";
 const NO_SEARCH: &str = "no search: {search} starts one";
-/// The most places the reader comes back to with `u`, the links followed last: an older one is
+/// The most places the reader comes back to with `back`, the links followed last: an older one is
 /// forgotten.
 const MAX_JUMPS: usize = 100;
 /// How many files deep links are followed into, each a level of its own: past it, a link to
@@ -369,7 +369,7 @@ enum Step {
     Quit,
     /// Esc: back, or, with nowhere to go back to, quit.
     Leave,
-    /// Backspace or `u` (up): back, if there is somewhere to go back to; at the top, nothing.
+    /// `back` (Backspace): back, if there is somewhere to go back to; at the top, nothing.
     Back,
     /// Open the list's item at this place.
     Open(usize),
@@ -387,12 +387,12 @@ enum Step {
     Hints(Aim),
     /// A label typed whole: the link chosen ([`Nav::chosen`]) is followed.
     Follow,
-    /// Backspace or `u` with a link followed: back to where the reader was before the last one
+    /// `back` with a link followed: back to where the reader was before the last one
     /// ([`Nav::jumps`]).
     Return,
 }
 
-/// Where the reader was when a link was followed, to come back to (`u`): the page and how far down
+/// Where the reader was when a link was followed, to come back to (`back`): the page and how far down
 /// it, in the page's unit, which is where to come back to while the layout is the one it was
 /// (`level`); and the paragraph at the top of the screen, for a source that knows its paragraphs
 /// ([`Source::anchor`]), which finds it again once the document is laid out otherwise. A paragraph
@@ -476,7 +476,7 @@ struct Nav {
     hints: Option<Hints>,
     /// The link whose label was typed, and what for, until the pager takes it ([`Step::Follow`]).
     chosen: Option<(Link, Aim)>,
-    /// Where the reader was before each link followed in this file, the last one last: `u` goes back
+    /// Where the reader was before each link followed in this file, the last one last: `back` goes back
     /// through them, at most [`MAX_JUMPS`].
     jumps: Vec<Jump>,
     /// Where to scroll to once the page's rows are known: the place a link led to, as a share of the
@@ -512,8 +512,8 @@ struct Settings {
     having: Vec<(&'static str, String)>,
     values: std::cell::Cell<Values>,
     /// A value changed since the last draw: every page sent goes, whichever level draws next. Kept
-    /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`d`
-    /// then `u`, read together) doesn't lose it.
+    /// here, not in a level's `Nav`, so that leaving the level it changed in before the draw (`D`
+    /// then Backspace, read together) doesn't lose it.
     changed: std::cell::Cell<bool>,
     /// The keys, in a file's pages and in a list: the viewer's defaults, and those the settings
     /// declared suggest for their commands ([`Keymaps`]). Built once, with the settings.
@@ -573,6 +573,17 @@ fn bounds_in(settings: &Settings, source: &dyn Source, has: &[&'static str], roo
 /// Setting `name`'s bounds among `bounds`, if the source said any.
 fn bounds_of(bounds: &[(&'static str, Bounds)], name: &str) -> Option<Bounds> {
     bounds.iter().find(|(setting, _)| *setting == name).map(|(_, bounds)| *bounds)
+}
+
+/// The widest `?`'s column of keys is. A command with more keys than fit it (a screen down has
+/// four) has what it does after them, further right: its own line's, not every line's.
+const KEYS_COLUMN: usize = 17;
+
+/// `?` as it is written, under its title: each of `help`'s lines, its keys and then what they do, in
+/// two columns, the first as wide as the longest keys of [`KEYS_COLUMN`] characters or fewer.
+fn keys_listed(help: &[(String, String)]) -> Vec<String> {
+    let column = help.iter().map(|(keys, _)| chars(keys)).filter(|keys| *keys <= KEYS_COLUMN).max().unwrap_or(0);
+    std::iter::once(String::from("Keys")).chain(help.iter().map(|(keys, what)| format!("  {keys:<column$}   {what}"))).collect()
 }
 
 /// A setting's line in `?`, its keys as `keymap` binds its commands: the one that cycles it, or the
@@ -1016,7 +1027,7 @@ impl Nav {
     }
 
     /// The reader follows a link to the page at `index` in `pages`, `share` of the way down it, from
-    /// `from`, which `u` comes back to: the place comes a third of the way down the screen, where the
+    /// `from`, which `back` comes back to: the place comes a third of the way down the screen, where the
     /// page scrolls. Of the places to come back to, the last [`MAX_JUMPS`] are kept.
     fn jump(&mut self, index: usize, share: Option<f32>, from: Jump) {
         if self.jumps.len() >= MAX_JUMPS {
@@ -2483,7 +2494,7 @@ impl Pager<'_> {
 
     /// To page `page` of the document, `y` of its unit down it, as a link leads there: where it is
     /// first among the pages paged through, the place a third of the way down the screen where the
-    /// page scrolls; the place the reader leaves is kept, for `u`. A page that isn't among those
+    /// page scrolls; the place the reader leaves is kept, for `back`. A page that isn't among those
     /// given (`--pages`) is said, and not gone to.
     fn go_to_place(&mut self, page: usize, y: f32) {
         let number = page.saturating_add(1);
@@ -2505,7 +2516,7 @@ impl Pager<'_> {
         Some(Jump { level: self.level.id, anchor: self.level.source.anchor(page, y), page, y })
     }
 
-    /// `u` or Backspace with a link followed: back to where the reader was before the last one: the
+    /// `back` with a link followed: back to where the reader was before the last one: the
     /// page and the place on it, while the document is laid out as it was then; once it has been
     /// laid out again, its paragraph where the source finds it now ([`Source::find`]), or else its
     /// page. Scrolled as it was.
@@ -3102,9 +3113,7 @@ impl Pager<'_> {
         self.placed.clear();
         self.on_glass.clear();
         self.spots.clear();
-        let help = self.level.nav.help_lines();
-        let keys = help.iter().map(|(keys, _)| chars(keys)).max().unwrap_or(0);
-        let lines = std::iter::once(String::from("Keys")).chain(help.iter().map(|(k, what)| format!("  {k:<keys$}   {what}")));
+        let lines = keys_listed(&self.level.nav.help_lines());
         let width = usize::from(size.cols).saturating_sub(2);
         // Above the status line, as many as fit.
         for (row, line) in (1..size.rows.saturating_sub(1)).zip(lines) {
@@ -3663,7 +3672,7 @@ mod tests {
     const TILES_ZOOM_SAID: &str = "bigger, fewer to a row; smaller, more to a row";
     const COLUMNS_SAID: &str = "one more column, or one fewer, down to one; 3. sets 3, 0. auto";
 
-    /// A setting the tests declare, as a backend would: two named values, cycled by `d`.
+    /// A setting the tests declare, as a backend would: two named values, cycled by `D`.
     const SHADE: Setting = Setting {
         name: "shade",
         named: &[Named { name: "pale", says: "pale now" }, Named { name: "deep", says: "deep now" }],
@@ -3671,7 +3680,7 @@ mod tests {
         default: Value::Named("pale"),
         zero: Value::Named("pale"),
         auto: None,
-        keys: Keys::Cycle('d'),
+        keys: Keys::Cycle('D'),
         option: crate::args::OptionSpec { name: "--shade", short: None, value: Some("pale|deep"), help: "", alias: None },
         help: "pale or deep",
         does: "go deep",
@@ -3697,39 +3706,39 @@ mod tests {
     fn a_settings_key_cycles_its_values_where_what_is_shown_has_it() {
         for nav in [reader(0, 12, 40, 40), list(9)] {
             let mut nav = declaring(nav, true);
-            assert_eq!(press(&mut nav, &[Key::Char('d')]), Step::Continue);
+            assert_eq!(press(&mut nav, &[Key::Char('D')]), Step::Continue);
             assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (Some(Value::Named("deep")), Some("deep now".to_owned()), true));
-            press(&mut nav, &[Key::Char('d')]);
+            press(&mut nav, &[Key::Char('D')]);
             assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (Some(Value::Named("pale")), Some("pale now".to_owned()), true));
         }
         let mut nav = declaring(reader(0, 12, 40, 40), false);
-        press(&mut nav, &[Key::Char('d')]);
+        press(&mut nav, &[Key::Char('D')]);
         assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some("only Ink and Wash go deep".to_owned()), false));
         // A setting no format is said to have: said without one.
         let mut nav = Nav { settings: Rc::new(Settings::of(vec![&SHADE], Vec::new(), Values::default())), ..reader(0, 12, 40, 40) };
-        press(&mut nav, &[Key::Char('d')]);
+        press(&mut nav, &[Key::Char('D')]);
         assert_eq!((shade(&nav), nav.message.clone(), nav.wants_rerender()), (None, Some(NOT_HERE.to_owned()), false));
-        assert!(nav.help_lines().contains(&("d".into(), "pale or deep".into())), "its line in `?` as it is: {:?}", nav.help_lines());
+        assert!(nav.help_lines().contains(&("D".into(), "pale or deep".into())), "its line in `?` as it is: {:?}", nav.help_lines());
         let mut nav = declaring(reader(0, 12, 40, 40), true);
-        press(&mut nav, &[Key::Char('4'), Key::Char('d')]);
+        press(&mut nav, &[Key::Char('4'), Key::Char('D')]);
         assert_eq!((nav.typed.as_str(), shade(&nav)), ("4", Some(Value::Named("deep"))), "the number is still there");
         // Shared: a level opened from this one, and this one gone back to, have the same.
         let other = Nav { has: vec![SHADE.name], settings: nav.settings.clone(), ..reader(0, 3, 40, 40) };
         assert_eq!(shade(&other), Some(Value::Named("deep")));
         // Without the setting declared, the key is nobody's.
         let mut nav = reader(0, 12, 40, 40);
-        press(&mut nav, &[Key::Char('d')]);
+        press(&mut nav, &[Key::Char('D')]);
         assert_eq!((nav.message.clone(), nav.wants_rerender()), (None, false));
     }
 
-    /// A value changed in a file opened from a list, and the file left before the next draw (`d`
-    /// then `u`, read together): the list, drawn next, still makes its tiles again with the new value,
+    /// A value changed in a file opened from a list, and the file left before the next draw (`D`
+    /// then Backspace, read together): the list, drawn next, still makes its tiles again with the new value,
     /// rather than keeping those made with the old. Once.
     #[test]
     fn a_value_changed_in_a_level_left_before_the_draw_still_renders_again() {
         let mut list = declaring(list(9), true);
         let mut opened = Nav { nested: true, has: vec![SHADE.name], settings: list.settings.clone(), ..reader(0, 3, 40, 40) };
-        assert_eq!(press(&mut opened, &[Key::Char('d'), Key::Char('u')]), Step::Back);
+        assert_eq!(press(&mut opened, &[Key::Char('D'), Key::Backspace]), Step::Back);
         drop(opened);
         assert_eq!(shade(&list), Some(Value::Named("deep")));
         assert!(list.wants_rerender(), "the list's tiles were made on the old value");
@@ -4011,7 +4020,7 @@ mod tests {
     }
 
     /// A relayout setting's keys change nothing in a list, or while `--pages` picks the pages, and say
-    /// why; on a document they change the value without asking for a redraw, so `]` then `u`, read
+    /// why; on a document they change the value without asking for a redraw, so `]` then Backspace, read
     /// together, leaves the list as it is, the value set for the next document gone into.
     #[test]
     fn a_relayout_key_is_refused_in_a_list_and_with_pages_and_asks_for_no_redraw() {
@@ -4027,13 +4036,13 @@ mod tests {
         assert_eq!(width(&picked), (None, Some(REFLOW_WITH_PAGES)));
         assert!(!picked.wants_rerender());
         let mut opened = Nav { nested: true, settings: tiles.settings.clone(), ..declaring_both(reader(0, 3, 40, 40), &["width"]) };
-        assert_eq!(press(&mut opened, &[Key::Char(']'), Key::Char('u')]), Step::Back);
+        assert_eq!(press(&mut opened, &[Key::Char(']'), Key::Backspace]), Step::Back);
         assert_eq!(width(&opened).0, Some(Value::Number(84)));
         drop(opened);
         assert!(!tiles.wants_rerender(), "the list's tiles keep their layout");
         // A redraw setting still asks for one.
         let mut both = declaring_both(reader(0, 12, 40, 40), &["shade", "width"]);
-        press(&mut both, &[Key::Char('d')]);
+        press(&mut both, &[Key::Char('D')]);
         assert!(both.wants_rerender());
     }
 
@@ -4213,7 +4222,7 @@ mod tests {
         press(&mut nav, &[Key::Char(']')]);
         assert_eq!((width(&nav).0, nav.typed.as_str()), (Some(Value::Number(200)), ""), "as long as can be typed");
         // Before a setting without numbers, the count stays, and goes to a page after.
-        press(&mut nav, &[Key::Char('3'), Key::Char('d')]);
+        press(&mut nav, &[Key::Char('3'), Key::Char('D')]);
         assert_eq!(nav.typed, "3");
         press(&mut nav, &[Key::Char('g')]);
         assert_eq!((page(&nav), width(&nav).0), (2, Some(Value::Number(200))));
@@ -4236,7 +4245,7 @@ mod tests {
         for nav in [declaring(reader(0, 3, 40, 40), false), declaring(list(3), true)] {
             let lines = nav.help_lines();
             let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();
-            assert_eq!(lines.get(at(SAID)).map(|(keys, _)| keys.as_str()), Some("d"));
+            assert_eq!(lines.get(at(SAID)).map(|(keys, _)| keys.as_str()), Some("D"));
             assert!(at(SAID) > lines.iter().position(|(keys, _)| keys.starts_with("r  Ctrl-L")).unwrap());
             assert!(at(SAID) < at("quit"));
         }
@@ -4274,7 +4283,7 @@ mod tests {
         }
         assert!(bound > 60 && unbound > 150, "{bound} bound, {unbound} not");
         for nav in [reader(1, 12, 20, 40), tiles(10, 3, 2)] {
-            assert_eq!((nav.command(Key::Ctrl('l')), nav.command(Key::Alt('q')), nav.command(Key::Ctrl('n'))), (Some(Command::Rerender), None, None));
+            assert_eq!((nav.command(Key::Ctrl('l')), nav.command(Key::Alt('q')), nav.command(Key::Ctrl('x'))), (Some(Command::Rerender), None, None));
         }
         // A command that means nothing where the reader is does nothing, were it run there.
         let mut nav = reader(1, 12, 20, 40);
@@ -4288,6 +4297,82 @@ mod tests {
             (Step::Continue, Step::Continue, Step::Continue)
         );
         assert_eq!(format!("{nav:?}"), before);
+    }
+
+    /// `d` and `u`, Ctrl-V and Alt-V go a screen down and up as Space and `b` do, in a file's pages and
+    /// in a list; Ctrl-N and Ctrl-P are `j` and `k` in both, and in a list Ctrl-F and Ctrl-B are `l`
+    /// and `h`: each leaves the reader where the key it stands beside does, pressed once and twice.
+    #[test]
+    fn d_u_and_emacss_keys_do_what_the_keys_they_stand_beside_do() {
+        let (space, b, j, k) = (Key::Char(' '), Key::Char('b'), Key::Char('j'), Key::Char('k'));
+        let both =
+            [(Key::Char('d'), space), (Key::Ctrl('v'), space), (Key::Char('u'), b), (Key::Alt('v'), b), (Key::Ctrl('n'), j), (Key::Ctrl('p'), k)];
+        let tiles_only = [(Key::Ctrl('f'), Key::Char('l')), (Key::Ctrl('b'), Key::Char('h'))];
+        // A page taller than the window, pages side by side, and a tile in the middle of a list.
+        let tall = || reader(1, 12, 20, 40);
+        let grid = || {
+            let mut nav = reader(4, 12, 40, 40);
+            nav.grid(2, 1, 8);
+            nav
+        };
+        let list = || {
+            let mut nav = tiles(10, 3, 2);
+            nav.select(4);
+            nav
+        };
+        let after = |mut nav: Nav, keys: &[Key]| {
+            assert_eq!(press(&mut nav, keys), Step::Continue, "{keys:?}");
+            // Any key takes the first reminder away: not what is compared.
+            nav.hint = true;
+            format!("{nav:?}")
+        };
+        for (key, same) in both {
+            for times in [1, 2] {
+                let (keys, sames) = (vec![key; times], vec![same; times]);
+                for (start, moves) in [(&tall as &dyn Fn() -> Nav, true), (&grid, true), (&list, true)] {
+                    let got = after(start(), &keys);
+                    assert_eq!(got, after(start(), &sames), "{key:?} {times} times, as {same:?}");
+                    assert_eq!(got != after(start(), &[]), moves, "{key:?} moved");
+                }
+            }
+        }
+        for (key, same) in tiles_only {
+            assert_eq!(after(list(), &[key]), after(list(), &[same]), "{key:?} as {same:?}");
+            assert_ne!(after(list(), &[key]), after(list(), &[]), "{key:?} moved");
+            // In a file's pages they are bound to nothing.
+            assert_eq!(after(tall(), &[key]), after(tall(), &[]), "{key:?} in a file's pages");
+        }
+        // While a filter is typed, `d` and `u` are letters of it, and Emacs's keys still move.
+        let mut nav = list();
+        type_in(&mut nav, "/du");
+        assert_eq!((filter_text(&nav), nav.pages.len()), (Some("du"), 0));
+        let mut nav = list();
+        type_in(&mut nav, "/");
+        let at = nav.at;
+        press(&mut nav, &[Key::Ctrl('f')]);
+        assert_eq!((nav.at, filter_text(&nav), typing(&nav)), (at + 1, Some(""), true), "Ctrl-F moves, and types nothing");
+    }
+
+    /// `?` sets what the keys do in a column of its own, as far right as the longest keys of
+    /// [`KEYS_COLUMN`] characters or fewer: a command with more keys than that, as a screen down has
+    /// now, has its own line's text further right and leaves every other line's where it was.
+    #[test]
+    fn a_command_with_many_keys_doesnt_narrow_every_line_of_the_keys() {
+        for nav in [reader(0, 3, 40, 40), Nav { nested: true, ..reader(0, 3, 40, 40) }, tiles(10, 3, 2), declaring(tiles(10, 3, 2), true)] {
+            let help = nav.help_lines();
+            let lines = keys_listed(&help);
+            assert_eq!((lines.len(), lines[0].as_str()), (help.len() + 1, "Keys"));
+            let column = help.iter().map(|(keys, _)| chars(keys)).filter(|keys| *keys <= KEYS_COLUMN).max().unwrap();
+            // As wide as it was before a screen had four keys: a list's `o` still fits 100 columns.
+            assert!((13..=15).contains(&column), "{column}: {help:?}");
+            assert!(help.iter().any(|(keys, _)| chars(keys) > KEYS_COLUMN), "some line has more keys than the column: {help:?}");
+            for ((keys, what), line) in help.iter().zip(&lines[1..]) {
+                let at = 2 + chars(keys).max(column) + 3;
+                assert_eq!(line.chars().skip(at).collect::<String>(), *what, "{line:?}");
+                assert!(line.starts_with(&format!("  {keys} ")), "{line:?}");
+                assert!(chars(line) <= 98 || chars(what) > 75, "fits a window of 100 columns: {line:?}");
+            }
+        }
     }
 
     /// `keys` pressed: what the first that asks more of the pager than a move asks.
@@ -4617,7 +4702,8 @@ mod tests {
         assert_eq!(press(&mut nav, &[Key::Char('9'), Key::Char('9'), Key::Enter]), Step::Continue);
         assert_eq!((nav.at, nav.message.as_deref()), (8, Some("no tile 99 (1–10)")));
         assert_eq!((press(&mut nav, &[Key::Escape]), press(&mut nav, &[Key::Backspace])), (Step::Leave, Step::Back));
-        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Back);
+        // `u` is a screen up, and goes back nowhere.
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), nav.at), (Step::Continue, 2));
         // An empty list opens nothing.
         assert_eq!(press(&mut list(0), &[Key::Enter]), Step::Continue);
     }
@@ -4688,7 +4774,7 @@ mod tests {
         assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
         // Without the pages to a row where there isn't room for them.
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[1])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace  u".into(), "back to the list, or to the file a link led from".into())));
+        assert!(opened.help_lines().contains(&("Esc  Backspace".into(), "back to the list, or to the file a link led from".into())));
         assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit".into())));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
@@ -4730,9 +4816,9 @@ mod tests {
         assert_eq!(nav.typed, "");
         assert_eq!(press(&mut nav, &[Key::Escape]), Step::Leave);
         assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Back);
-        // `u` goes up, a number typed or not.
-        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Back);
-        assert_eq!(press(&mut nav, &[Key::Char('4'), Key::Char('u')]), Step::Back);
+        // `u` is a screen up, a number typed or not: it goes back nowhere.
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), page(&nav)), (Step::Continue, 3));
+        assert_eq!((press(&mut nav, &[Key::Char('4'), Key::Char('u')]), page(&nav), nav.typed.as_str()), (Step::Continue, 3, "4"));
         // Long numbers stop growing and simply name no page.
         let mut nav = reader(0, 12, 40, 40);
         press(&mut nav, &[Key::Char('9'); 30]);
@@ -4825,10 +4911,10 @@ mod tests {
     }
 
     /// A link followed takes the reader to its page, the place a third of the way down the screen
-    /// where the page scrolls, and `u` and Backspace come back through the places left, the last
+    /// where the page scrolls, and Backspace comes back through the places left, the last
     /// first, before they leave the file; a search kept is cleared first, and Esc never steps back.
     #[test]
-    fn u_goes_back_through_the_links_followed_before_it_leaves_the_file() {
+    fn backspace_goes_back_through_the_links_followed_before_it_leaves_the_file() {
         let from = |page| Jump { level: 0, anchor: None, page, y: 0.0 };
         let mut nav = reader(1, 12, 30, 100);
         nav.jump(7, Some(0.5), from(1));
@@ -4845,17 +4931,18 @@ mod tests {
         assert_eq!((page(&nav), nav.scroll), (4, 0));
         assert_eq!(nav.jumps, [from(1), from(7), from(2), from(3)]);
         // The pager pops them: here, what the keys ask.
-        assert_eq!(press(&mut nav, &[Key::Char('u')]), Step::Return);
         assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Return);
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), nav.jumps.len()), (Step::Continue, 4), "`u` comes back from nowhere");
         assert_eq!(press(&mut nav, &[Key::Escape]), Step::Leave, "Esc leaves, with places to come back to");
         assert_eq!(press(&mut nav, &[Key::Char('5'), Key::Backspace]), Step::Continue, "a number typed is edited first");
         nav.typed.clear();
         nav.search = Some(Search::new(Box::new(search::tests::Fake::of(&["text"])), &nav.pages, nav.count));
         nav.search.as_mut().unwrap().typed('t');
         nav.search.as_mut().unwrap().enter(&search::Screen { top: 4, pages: &[4], near: &[], visible: None });
-        assert_eq!((press(&mut nav, &[Key::Char('u')]), nav.search.is_none(), nav.jumps.len()), (Step::Continue, true, 4), "the search first");
+        assert_eq!((press(&mut nav, &[Key::Char('u')]), nav.search.is_some()), (Step::Continue, true), "`u` clears no search");
+        assert_eq!((press(&mut nav, &[Key::Backspace]), nav.search.is_none(), nav.jumps.len()), (Step::Continue, true, 4), "the search first");
         nav.jumps.clear();
-        assert_eq!((press(&mut nav, &[Key::Char('u')]), press(&mut nav, &[Key::Backspace])), (Step::Back, Step::Back));
+        assert_eq!(press(&mut nav, &[Key::Backspace]), Step::Back);
         // Two pages side by side don't scroll: the place's page comes on screen, at its top.
         let mut nav = reader(0, 12, 40, 40);
         nav.grid(2, 1, 8);
@@ -5313,8 +5400,8 @@ mod tests {
     }
 
     #[test]
-    fn with_a_filter_kept_esc_backspace_and_u_clear_it_before_they_go_back() {
-        for key in [Key::Escape, Key::Backspace, Key::Char('u')] {
+    fn with_a_filter_kept_esc_and_backspace_clear_it_before_they_go_back() {
+        for key in [Key::Escape, Key::Backspace] {
             let mut nav = named(&PHOTOS);
             type_in(&mut nav, "/b");
             press(&mut nav, &[Key::Enter, Key::Char('G')]);
@@ -5627,11 +5714,11 @@ mod tests {
         }
     }
 
-    /// A number being typed is cleared first, as ever. Then Esc, Backspace and `u` clear a kept
+    /// A number being typed is cleared first, as ever. Then Esc and Backspace clear a kept
     /// search before they go back or quit, and `n` turns pages again; `/` again edits the query kept.
     #[test]
-    fn with_a_search_kept_esc_backspace_and_u_clear_it_before_they_go_back() {
-        for key in [Key::Escape, Key::Backspace, Key::Char('u')] {
+    fn with_a_search_kept_esc_and_backspace_clear_it_before_they_go_back() {
+        for key in [Key::Escape, Key::Backspace] {
             let (mut nav, texts) = searching();
             search_for(&mut nav, &texts, "/page");
             search_keys(&mut nav, &texts, &[Key::Enter, Key::Char('n')]);

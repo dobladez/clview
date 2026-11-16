@@ -76,8 +76,12 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 
 ## Keys
 
-`?` lists them in the pager too, a backend's after the viewer's: `d` is the documents', and does
-nothing in a `clv` built without them. `+` and `-` are listed once, as what they do where you are:
+`?` lists them in the pager too, a backend's after the viewer's: `D` is the documents', and does
+nothing in a `clv` built without them. Each key does what the command it is bound to does, and
+several keys may be bound to one: the keys of `less` and `vi`, and some of Emacs's, written here
+as `Ctrl-V` and `Alt-V`. For the Alt keys the terminal has to send Alt, or on a Mac Option, as
+`ESC` and the key: in kitty on macOS, `macos_option_as_alt yes`; an Alt key bound to nothing does
+nothing. `+` and `-` are listed once, as what they do where you are:
 the font size on a Markdown or HTML file, the zoom elsewhere, and the first status line's reminder
 says which (`+ - font`, `+ - zoom`). `,` and `.` set the pages to a row everywhere, on a Markdown or
 HTML file too, and the reminder says `, . per row` where it has room.
@@ -86,17 +90,17 @@ In a file's pages:
 
 | Keys | Action |
 |---|---|
-| `space`, `PgDn` | down a screen; at the bottom of a page, on to the next page (or pages) |
-| `b`, `PgUp` | up a screen; at the top of a page, back to the previous page (or pages) |
-| `j`, `↓`, `Enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
-| `k`, `↑` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
-| `n`, `→` | next page (or screen of pages); with a search kept, `n` goes to the next match |
-| `p`, `←` | previous page (or screen of pages); with a search kept, `p` goes to the match before |
+| `space`, `PgDn`, `d`, `Ctrl-V` | down a screen; at the bottom of a page, on to the next page (or pages) |
+| `b`, `PgUp`, `u`, `Alt-V` | up a screen; at the top of a page, back to the previous page (or pages) |
+| `j`, `↓`, `Ctrl-N`, `Enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
+| `k`, `↑`, `Ctrl-P` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
+| `n`, `→` | next page (or screen of pages); with a search kept, `n` goes to the next match, and `→` still turns the page |
+| `p`, `←` | previous page (or screen of pages); with a search kept, `p` goes to the match before, and `←` still turns the page |
 | `/` | search the file's text ([Searching a document's text](#searching-a-documents-text)): type, then `Enter` |
 | `N` | with a search kept, the match before, as `p`; a number, then `n`, `N` or `p`, goes that many matches on or back |
 | `g`, `Home` | first page |
 | `G`, `End` | last page |
-| a number, then `Enter` or `g` | that page |
+| a number, then `Enter`, `g` or `Home` | that page |
 | `-`, `_` | zoom out: one more page to a row. On a Markdown or HTML file, its text 10% smaller ([Documents](#documents)) |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
 | `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto`. On a Markdown or HTML file, columns: the document laid out again on that many pages to a row ([Documents](#a-page-the-windows-size)) |
@@ -106,12 +110,12 @@ In a file's pages:
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
-| `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
+| `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says which formats go dark; with documents or Mermaid diagrams |
 | `[`, `]` | Markdown and HTML laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
 | `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace`, `u` | clear the search, if one is kept; then `Backspace` and `u` go back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
+| `Esc`, `Backspace` | clear the search, if one is kept; then `Backspace` goes back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
 | `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
 
 A Markdown or HTML page is as tall as the window ([Documents](#documents)), so it has nothing to
@@ -121,20 +125,20 @@ In a list:
 
 | Keys | Action |
 |---|---|
-| `←` `→`, `h` `l` | the tile before or after |
-| `↑` `↓`, `k` `j` | the tile above or below; below the last row's tiles, the last |
-| `space`, `b`, `n`, `p`, `PgDn`, `PgUp` | a screen on or back |
+| `←` `→`, `h` `l`, `Ctrl-B` `Ctrl-F` | the tile before or after |
+| `↑` `↓`, `k` `j`, `Ctrl-P` `Ctrl-N` | the tile above or below; below the last row's tiles, the last |
+| `space` `b`, `n` `p`, `d` `u`, `Ctrl-V` `Alt-V`, `PgDn` `PgUp` | a screen on or back |
 | `g`, `G`, `Home`, `End` | the first or the last tile |
-| a number, then `Enter` | that tile |
+| a number, then `Enter`, `g` or `Home` | that tile |
 | `Enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `o` | open the tile's file in the app the desktop opens it with, or its folder in the file manager ([Opening in another app](#opening-in-another-app)) |
-| `d` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
+| `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
 | `[`, `]`, `{`, `}`, `s` | nothing: only a document opened from the list is laid out again, and they say so |
-| `Esc`, `Backspace`, `u` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, the others do nothing |
+| `Esc`, `Backspace` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, and `Backspace` does nothing |
 | `q`, `Ctrl-C` | quit |
 
 ## Paging through a document
@@ -254,7 +258,7 @@ either, since it is what keeps an app for the terminal off `clv`'s screen.
 `clv *.png` and `clv a.pdf b.pdf` show the files as a list: a tile for each, its first page, its
 name under it, in the order given. The arrows choose a tile, its name highlighted and on the
 status line with its place (`3/12`), and Enter opens it: its pages, paged through as if it had
-been given alone. Esc, Backspace or `u` goes back to the list as you left it. `/` narrows the
+been given alone. Esc or Backspace goes back to the list as you left it. `/` narrows the
 list to the files whose names hold what you type ([Filtering a list](#filtering-a-list)).
 Printed, a list is its tiles, in rows, each row's names under it.
 
@@ -297,7 +301,7 @@ the list: for a PDF that is its whole file, however many of them you have come p
 
 A directory is a list too, like a gallery: a tile for each of its files that a backend opens, by
 its first page (a directory of PDFs shows their covers), and a folder for each subdirectory,
-which Enter goes into, to a list of its own; Esc, Backspace or `u` (up) comes back. A folder with
+which Enter goes into, to a list of its own; Esc or Backspace comes back. A folder with
 many files says how far opening them has got (`opening photos/… 120 of 500`), and Esc stops
 it. They come in the order of their names, numbers by their value (`img2` before `img10`), letters
 regardless of case, subdirectories among the files. Hidden files are left out, and so, without a
@@ -360,12 +364,13 @@ their order, upper and lower case alike. The name is the one under the tile: `be
 status line shows `/beach` as you type, and where you are among the tiles that match:
 `7/40 · 2 of 3`, the tile's number in the list, then its place among the matches; or
 `no match`. Every key that types a character is part of the filter, `q`, `j` and digits too
-(`Ctrl-C` still quits). `Backspace` takes the last one back, and the arrows, `PgUp`, `PgDn`,
-`Home` and `End` move among the matches.
+(`Ctrl-C` still quits). `Backspace` takes the last one back, and the keys that type nothing still
+move among the matches: the arrows, `PgUp`, `PgDn`, `Home` and `End`, and `Ctrl-N`, `Ctrl-P`,
+`Ctrl-F`, `Ctrl-B`, `Ctrl-V` and `Alt-V`.
 
 `Enter` keeps the filter, and the list's keys move among the matches as they do among all the
 tiles: `Enter` again opens the tile chosen, and `/` edits the filter. `Esc` while typing puts the
-list back as it was before `/`. With a filter kept, `Esc`, `Backspace` or `u` clears it before
+list back as it was before `/`. With a filter kept, `Esc` or `Backspace` clears it before
 they go back or quit. With nothing typed, `Enter` or `Backspace` leaves no filter. The tile chosen
 stays chosen while it matches, and otherwise the first after it that matches is chosen; when the
 filter changes or is cleared, it stays in its row of the screen where the list allows. A number
@@ -422,7 +427,7 @@ and `←` still turn pages. A match on a page not shown brings that page on
 screen, and zoomed in to a page that scrolls, the match is scrolled into view, a third of the way
 down the window. The status line says which match you are on and how many there are (`/word
 3/17`, with `…` after while text is still being read), or `no match`; at most 10,000 are kept and
-counted, the first in the file, and more say `10000+`. `Esc`, `Backspace` or `u` clear the search
+counted, the first in the file, and more say `10000+`. `Esc` or `Backspace` clear the search
 before they go back to the list or quit, after which `n` and `p` turn pages again; a number being typed
 is cleared first, as ever. `/` again edits what was searched for. A search belongs to its file: it
 ends on going back to the list. It outlives Markdown or HTML laid out again (`[` `]`, `{` `}`, `+`
@@ -506,8 +511,8 @@ kept within its page; the cells come back as they were when the labels go.
 **A place in the document** (a PDF's link to a page, its table of contents, a named destination;
 a Word cross-reference; Markdown's `[see](#usage)`, HTML's `<a href="#usage">`) is gone to: its
 page, and on a page taller than the window, scrolled so that the place is a third of the way down
-the screen. `u` and `Backspace` go back to where you were before the last link followed, the
-newest first, for the last 100 of them; with none left they go back to the list, as they did, or
+the screen. `Backspace` goes back to where you were before the last link followed, the
+newest first, for the last 100 of them; with none left it goes back to the list, or
 to the document a link led from. A search kept is cleared first, and `Esc` never steps back: it
 clears the search, or leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
 again. With `--pages`, a link to a page that isn't among those given says so (`page 12 isn't
@@ -517,7 +522,7 @@ laid out again (`]`, the window resized) keeps the places to go back to: each is
 were at, found again in the new pages.
 
 **Another file** (`[the guide](docs/guide.md)`, `../README.md#install`, a PDF's link to another
-PDF) opens in `clv`, as a level of its own, the way a list's tile is gone into: `u`, `Backspace`
+PDF) opens in `clv`, as a level of its own, the way a list's tile is gone into: `Backspace`
 and `Esc` come back to the document, where you left it. Its path is looked for beside the
 document, made real (every symbolic link followed), and opened only if it is a regular file or a
 directory, a directory as a list: a pipe, a socket or a device is refused before anything opens
@@ -707,13 +712,13 @@ its own, where a drawing shows the terminal's background wherever it is transpar
 A diagram follows the paper, as [Markdown and HTML](#documents) do. On a terminal with a dark
 background it is drawn in Mermaid's dark theme, light on dark, on exactly the terminal's colour,
 so that it is no rectangle at all; otherwise in Mermaid's default theme on white, as
-`mmdc -b white` draws it, since that theme's ink is made for white. `d` turns it to the other and
+`mmdc -b white` draws it, since that theme's ink is made for white. `D` turns it to the other and
 back, in a list too, `--theme light` or `--theme dark` says how it starts, and a terminal that
-doesn't say what its background is gets it on white, with `d` still going to a dark grey. The page
+doesn't say what its background is gets it on white, with `D` still going to a dark grey. The page
 is as large on either paper, the size of the default theme's drawing: where the dark theme lays a
 diagram out a little larger (a class diagram, a tenth wider), it is drawn that much smaller, in
 the middle. A diagram that can't be drawn in the dark theme fails on dark paper, saying why, and
-`d` still shows it on white. A ` ```mermaid ` block of a document, and a diagram a document shows
+`D` still shows it on white. A ` ```mermaid ` block of a document, and a diagram a document shows
 by path, follow that document's paper the same way.
 
 merman draws every kind of diagram it parses: flowcharts,
@@ -833,12 +838,12 @@ without it. On a file that is neither Markdown nor HTML `s` says so; in a list i
 document, and the tiles stay as they were opened: drawn, or as code with `--fences code`.
 
 Markdown and HTML have no paper of their own, so on a terminal with a dark background they go light
-on dark, the page exactly the terminal's colour, so that it is no rectangle at all. `d` turns them to
+on dark, the page exactly the terminal's colour, so that it is no rectangle at all. `D` turns them to
 dark on light and back, `--theme` says how they start, and a terminal that doesn't say what its
-background is gets them as printed, with `d` still going to a dark grey. Pictures stay as they are,
+background is gets them as printed, with `D` still going to a dark grey. Pictures stay as they are,
 but for thin near-black ink, a logo or a line drawing made for white paper, which would vanish on dark:
 it comes with white behind it. A fenced block drawn as a diagram follows the paper: on dark paper it
-is drawn again in Mermaid's own dark theme, on the paper's colour with no white behind it, and `d`
+is drawn again in Mermaid's own dark theme, on the paper's colour with no white behind it, and `D`
 turns it with the page. It takes the room its light drawing took, so nothing on the page moves:
 where the dark theme lays a diagram out a little larger (a class diagram, a tenth wider), it is
 drawn that much smaller, in the middle of that room. A diagram's own theme (`%%{init: …}%%`) is its
@@ -846,7 +851,7 @@ own on either paper. One that can't be drawn for a page's paper is a grey box th
 saying so, never its drawing for the other paper; it isn't tried again until the document is laid
 out again. A diagram shown by path (`![a flow](flow.mmd)`) follows the paper the same way, and so
 does a `.mmd` file shown by itself ([Mermaid diagrams](#mermaid-diagrams)). A Word document, an RTF
-or a PDF is a page as printed, and stays so; `d` says which formats go dark. What `c` copies is the
+or a PDF is a page as printed, and stays so; `D` says which formats go dark. What `c` copies is the
 page as it is shown
 ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
 
@@ -1162,8 +1167,8 @@ limit, it does as the last column says. How large a page is drawn is under
 | A page's [links](#following-links) | 1,024, each active over 64 rectangles at most; an address or a path of 4 KiB, a place's name of 256 bytes | past 1,024, the rest have no label, and the status line says how many; past 64, the rest of a link's rectangles are left out; a link whose address, path or name is longer isn't followed, and says so |
 | The links labelled at once | 1,000, in reading order | the rest have no label, and the status line says how many |
 | The wait for the links of the pages on screen | 2 s | a page that hasn't answered has no labels, and the status line names it |
-| The places `u` goes back to | the last 100 links followed in a file | an older one is forgotten |
-| Files followed into through links, each from the one before | 16 | the next link to a file isn't followed, and the status line says so; `u` goes back |
+| The places `Backspace` goes back to | the last 100 links followed in a file | an older one is forgotten |
+| Files followed into through links, each from the one before | 16 | the next link to a file isn't followed, and the status line says so; `Backspace` goes back |
 | A web address followed, or an address copied | 4 KiB | not followed, saying so; not copied |
 
 ## Known issues

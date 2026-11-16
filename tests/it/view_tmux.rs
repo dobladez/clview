@@ -742,7 +742,7 @@ fn inside_tmux_a_pane_without_passthrough_stops_rather_than_drawing_text() {
 }
 
 /// Inside tmux it is tmux that answers about the background, with the pane's own colour; and asking
-/// leaves the pager's keys working: `d` turns the page and says so, and `q` quits.
+/// leaves the pager's keys working: `D` turns the page and says so, and `q` quits.
 #[cfg(feature = "word")]
 #[test]
 fn inside_tmux_markdown_takes_the_panes_colour_and_d_turns_it() {
@@ -762,9 +762,9 @@ fn inside_tmux_markdown_takes_the_panes_colour_and_d_turns_it() {
     server.tmux(&["send-keys", "-t", &pane, &format!("'{BIN}' '{}' --protocol blocks --pager", notes.display()), "Enter"]);
     until("the page", &|c| c.contains("page 1/1"));
     assert!(!white(&capture()), "white on a black pane: {:?}", capture());
-    server.tmux(&["send-keys", "-t", &pane, "d"]);
+    server.tmux(&["send-keys", "-t", &pane, "D"]);
     until("turned to white", &|c| c.contains("dark on light") && white(c));
-    server.tmux(&["send-keys", "-t", &pane, "d"]);
+    server.tmux(&["send-keys", "-t", &pane, "D"]);
     until("turned back", &|c| c.contains("light on dark") && !white(c));
     server.tmux(&["send-keys", "-t", &pane, "q"]);
     until("the shell back", &|c| !c.contains("light on dark"));

@@ -950,7 +950,7 @@ fn placed_tinted(view: &crate::view_pager::Session, what: &str, since: u32) -> u
 
 /// A Markdown paragraph that runs from one page onto the next is searched on either: with its last
 /// page alone on screen, Enter goes to the match in its tail, there, and tints it; with its first,
-/// to the one in its head. On dark paper (`d`) the match is tinted with the dark blend.
+/// to the one in its head. On dark paper (`D`) the match is tinted with the dark blend.
 #[test]
 fn a_paragraph_across_a_page_break_is_searched_on_the_page_shown_and_on_dark_paper() {
     use crate::view_pager::{OWN_TINT, PLACED, Session, TINT, ids_after, last_bar, next_image, pty_works};
@@ -982,7 +982,7 @@ fn a_paragraph_across_a_page_break_is_searched_on_the_page_shown_and_on_dark_pap
     view.wait_until("the head's match", |t| last_bar(t).contains(&format!(" /marker 1/2 page 1/{pages} ")));
     placed_tinted(&view, "the head's match tinted on the first page", tinted);
     // Dark paper: the reader's match a dark orange, under light text, neither colour of white paper's.
-    view.press("d");
+    view.press("D");
     let shown = ids_after(&view.text(), PLACED).last().copied().unwrap();
     let (_, dark) = next_image(&view, "the page on dark paper", shown);
     assert!(dark.get_pixel(0, 0).0.iter().all(|v| *v < 100), "not dark paper: {:?}", dark.get_pixel(0, 0));
@@ -1031,10 +1031,10 @@ fn followed(view: &mut crate::view_pager::Session, links: usize, label: &str) ->
     place_now(&view.text()).unwrap().0
 }
 
-/// Back with `u`, to the first page.
+/// Back with Backspace, to the first page.
 fn back(view: &mut crate::view_pager::Session) {
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back", |t| t.len() > before && crate::view_pager::place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
 }
 

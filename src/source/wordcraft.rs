@@ -63,7 +63,7 @@ const PAPER: Setting = Setting {
     default: Value::Named(LIGHT),
     zero: Value::Named(LIGHT),
     auto: Some(Auto { light: LIGHT, dark: DARK }),
-    keys: Keys::Cycle('d'),
+    keys: Keys::Cycle('D'),
     option: OptionSpec {
         name: "--theme",
         short: None,

@@ -26,13 +26,13 @@ Use [`template.md`](template.md) as the starting point.
 | 0012 | [Bound what Markdown and HTML cost by their marks and their text](0012-bound-what-markdown-and-html-cost-by-their-marks-and-text.md) | Accepted |
 | 0013 | [A document's pictures are drawn by the backends, and only from near it](0013-a-documents-pictures-are-drawn-by-the-backends.md) | Accepted |
 | 0014 | [Markdown through pulldown-cmark into wordcraft's HTML importer](0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md) | Accepted |
-| 0015 | [Markdown and HTML on dark paper, the terminal's own colour](0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) | Accepted; `--theme` being the viewer's superseded by ADR-0021 |
+| 0015 | [Markdown and HTML on dark paper, the terminal's own colour](0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md) | Accepted; `--theme` being the viewer's superseded by ADR-0021; its key `d` moved to `D` by ADR-0036 |
 | 0016 | [How Markdown and HTML look](0016-how-markdown-and-html-look.md) | Accepted |
 | 0017 | [HTML's style rules apply, as far as wordcraft reads them](0017-htmls-style-rules-apply-as-far-as-wordcraft-reads-them.md) | Accepted |
 | 0018 | [wordcraft stays before its proofing needs a checkout to build](0018-wordcraft-stays-before-its-proofing-needs-a-checkout-to-build.md) | Accepted |
 | 0019 | [A list opens its files when their tiles are wanted](0019-a-list-opens-its-files-when-their-tiles-are-wanted.md) | Accepted |
 | 0020 | [New versions through a Homebrew tap, not a check inside clv](0020-new-versions-through-a-homebrew-tap-not-a-check-inside-clv.md) | Accepted |
-| 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted; the viewer's keys first set aside for the zoom keys by ADR-0023; a setting's sentences put together by the viewer by ADR-0033 |
+| 0021 | [A backend declares its settings, and their options hold for any file](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md) | Accepted; the viewer's keys first set aside for the zoom keys by ADR-0023; a setting's sentences put together by the viewer by ADR-0033; its keys suggestions the keymaps take by ADR-0036 |
 | 0022 | [Markdown and HTML reflow to a width in characters, as a new level](0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md) | Accepted; its US Letter page superseded by ADR-0023 |
 | 0023 | [The window is the page of Markdown and HTML](0023-the-window-is-the-page-of-markdown-and-html.md) | Accepted; its pages to a row given keys of their own by ADR-0024 |
 | 0024 | [Pages to a row of Markdown and HTML are columns, and the last key wins](0024-pages-to-a-row-of-markdown-and-html-are-columns-and-the-last-key-wins.md) | Accepted |
@@ -47,6 +47,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0033 | [Backends share a setting by declaring its name, and the viewer says of it only what they declare](0033-backends-share-a-setting-by-declaring-its-name.md) | Accepted |
 | 0034 | [Open a file through the platform's opener, by its real path, only where its name agrees](0034-open-a-file-through-the-platforms-opener-by-its-real-path.md) | Accepted |
 | 0035 | [The links' labels are placements of one image of letters, over the page](0035-link-labels-as-placements-of-one-image-of-letters.md) | Accepted |
+| 0036 | [Keys are bound to named commands](0036-keys-are-bound-to-named-commands.md) | Accepted |
 
 ## When to write one
 

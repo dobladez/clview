@@ -25,15 +25,15 @@ After you open a file, you can do these things:
   `+` to zoom in. Use `?` to show the keys.
 - **Lists.** Two or more files, a directory or an archive open as a list of tiles. A tile shows
   the first page of a file and its name. Use the arrow keys to select a tile. Use `Enter` to open
-  it. Use `Esc` or `u` (up) to go back.
+  it. Use `Esc` or `Backspace` to go back.
 - **Copying.** Use `c` to copy the current page or tile to the clipboard as a picture.
 - **Searching.** Use `/` to search the text of a document. Type the text and push `Enter`. Use `n`
   and `N` to go to the next and previous match.
 - **Links.** Use `f` to label the links on the screen. Type a label to follow its link: to a place
   in the document, to another file, or to a web address. This works like Vimium in a browser. Use
-  `u` to go back. Use `F` to copy the link's address.
+  `Backspace` to go back. Use `F` to copy the link's address.
 - **Dark and light.** On a dark terminal, Markdown, HTML and Mermaid diagrams show light text on a
-  dark background. Use `d` to change between dark and light.
+  dark background. Use `D` to change between dark and light.
 
 Options such as `--no-pager`, `--per-row` and `--protocol ascii`, and every key, are in
 [`docs/usage.md`](docs/usage.md).
@@ -86,7 +86,7 @@ High level, roughly in order; the details of each, and ideas not yet planned, ar
 - Plain text files (yes, not yet: ironic).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
-- `d` for SVG drawings too, as for Markdown, HTML and Mermaid diagrams.
+- `D` for SVG drawings too, as for Markdown, HTML and Mermaid diagrams.
 - More documents: Org-mode, AsciiDoc and reStructuredText; ebooks (epub) as books.
 - A config file: customization, settings and positions remembered.
 - `/` as a search in lists too.

@@ -1692,7 +1692,7 @@ mod tests {
     use super::*;
 
     /// A setting declared as the documents' paper is: `auto` by the background.
-    static PAPER: Setting = crate::source::tests::cycled("paper", 'd', "--theme");
+    static PAPER: Setting = crate::source::tests::cycled("paper", 'D', "--theme");
     /// One with numbers, and no `auto`.
     static WIDTH: Setting = Setting {
         numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4, unit: "" }),

@@ -183,7 +183,7 @@ mod tests {
     use crate::source::{Keys, Named, Numbers, Value};
 
     /// A redraw setting and a relayout one, as the documents' backend declares them.
-    static PAPER: Setting = crate::source::tests::cycled("paper", 'd', "--theme");
+    static PAPER: Setting = crate::source::tests::cycled("paper", 'D', "--theme");
     static WIDTH: Setting = Setting {
         name: "width",
         named: &[Named { name: "window", says: "width window" }],

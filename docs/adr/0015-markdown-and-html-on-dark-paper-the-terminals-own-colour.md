@@ -1,6 +1,7 @@
 # ADR-0015: Markdown and HTML on dark paper, the terminal's own colour
 
-- **Status:** Accepted; `--theme` and `d` being the viewer's superseded by [ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)
+- **Status:** Accepted; `--theme` and `d` being the viewer's superseded by [ADR-0021](0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md);
+  its key, `d` here, is `D` since [ADR-0036](0036-keys-are-bound-to-named-commands.md)
 - **Date:** 2026-11-02
 
 ## Context

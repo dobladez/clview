@@ -4,7 +4,9 @@
   document with a font size, by [ADR-0023](0023-the-window-is-the-page-of-markdown-and-html.md); a
   setting's line in `?` and its message for a file that hasn't it, sentences of the backend's here,
   are put together by the viewer from what the formats list, by
-  [ADR-0033](0033-backends-share-a-setting-by-declaring-its-name.md)
+  [ADR-0033](0033-backends-share-a-setting-by-declaring-its-name.md); "the viewer's keys come
+  first" is the viewer's defaults coming first in the keymaps, a setting's keys suggestions they
+  take, and the paper's key `D`, by [ADR-0036](0036-keys-are-bound-to-named-commands.md)
 - **Date:** 2026-11-07
 
 ## Context

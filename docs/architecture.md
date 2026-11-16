@@ -209,7 +209,7 @@ declare, never the viewer's to know:
   colour in `Request::dark`). A source says which it has (`Source::settings`) and draws by a value
   as it likes, or not at all.
 - **Two backends share a setting by declaring the same name.** The documents' backend and
-  Mermaid's each declare `paper`, alike but for their option's help: `d` and `--theme` then turn
+  Mermaid's each declare `paper`, alike but for their option's help: `D` and `--theme` then turn
   Markdown, HTML and a diagram shown by itself together, and neither backend names the other. The
   name is the contract's convention, as a fence's language is.
 - **Everything the viewer says of a setting comes from those declarations**: its keys in `?`, its
@@ -239,7 +239,7 @@ checks that a format lists only settings its backend declares, that every settin
 one, and that a setting two backends declare is declared alike, their option's help apart, since
 `view::settings` takes it from the first; the documents' backend, which decides a document's settings by its kind when it opens
 (`settings_of`), holds its formats' lists to that (`a_format_lists_the_settings_its_documents_have`).
-The documents' backend declares five, `paper` (`d`, `--theme`, a redraw),
+The documents' backend declares five, `paper` (`D`, `--theme`, a redraw),
 `width` (`[` and `]`, `--width`), `font` (`+` and `-`, `--font`), `margin` (`{` and `}`, `--margin`)
 and `fences` (`s`, `--fences`), those four relayouts; Mermaid's declares `paper` too
 ([How each opens](#how-each-opens-and-what-it-keeps)). Which a file has is its source's
@@ -275,7 +275,7 @@ one `+ -` line, the setting's in place of the zoom's where the keys go to it, an
 first reminder says `+ - font` there (`Keymap::reminder`). `a_settings_keys_are_its_own_in_every_backend`
 lets `Keys::Zoom` through, which suggests no key ([ADR-0023](adr/0023-the-window-is-the-page-of-markdown-and-html.md)).
 The values are shared by every level (`pager::Settings`), and so is the change, so a level left before
-the next draw (`d` then `u`, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
+the next draw (`D` then Backspace, read together) doesn't keep the parent's pages on the old value. `source::tests::a_settings_keys_are_its_own_in_every_backend`
 checks that no setting suggests a key the viewer's keymaps bind by default (`view::wrong_keys`; the
 pager's `a_key_does_what_it_is_bound_to_and_nothing_otherwise` checks that a key does nothing but
 through its command) and that a key means one setting
@@ -452,7 +452,7 @@ through its command) and that a key means one setting
   ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
   Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
-  it (`on_paper`). The viewer holds the value and puts it in each request, so `d` needs only what `r`
+  it (`on_paper`). The viewer holds the value and puts it in each request, so `D` needs only what `r`
   does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). They have
   the `width` setting too, which is the source's own (`Width`, from `--width` when it opens, `window`
   or a number of characters), and `font`, a percentage (`Document::font`, from `--font`), and are
@@ -614,7 +614,7 @@ what the level's source is laid out at and for (`Source::laid_at`: the values an
 values wanted and the room it shows in (`Pager::room`), for the relayout settings the source has
 (`relayout::wanted`: the values, and the room through `Room::same`), and when either differs asks the
 source for a job (`Source::relayout`, a `Job`: a `Send` closure owning the bytes the source keeps, the
-values and the room, which gives a new source laid out at them). So `]` then `u`, read together,
+values and the room, which gives a new source laid out at them). So `]` then Backspace, read together,
 reflows nothing in the list, and the next document gone into is laid out at the new value, and for the
 pager's room rather than the preview's it was opened for, as it shows. A layout is asked for, and its
 result taken in, by its values and its room together.
@@ -723,7 +723,8 @@ is listed is from the true size.
 
 ## Commands and keymaps (`commands.rs`, `pager.rs`)
 
-What the pager can do is apart from the keys that do it. `commands.rs` holds both halves:
+What the pager can do is apart from the keys that do it, as in Emacs
+([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)). `commands.rs` holds both halves:
 
 - **The catalog.** A `Command` is one thing the reader can ask for, known by its name
   (`Command::name`, kebab-case): the viewer's own (`VIEWER`: `screen-down`, `tile-left`, `go-to`,
@@ -747,7 +748,10 @@ What the pager can do is apart from the keys that do it. `commands.rs` holds bot
   holds the defaults. A key may be bound only with a number typed before it (`counted`): Enter is
   `scroll-down` in a file's pages and `open` in a list, and `go-to` in both after a number (`12⏎`).
   A key may also be bound and not listed (`also`): `=` and `_`, which are `+` and `-` with Shift or
-  without, and in a list PageDown and PageUp, for which `?`'s column of keys has no room.
+  without. The defaults are `less`'s and `vi`'s keys with some of Emacs's beside them (`Ctrl-N`,
+  `Ctrl-P`, `Ctrl-F`, `Ctrl-B`, `Ctrl-V`, `Alt-V`), and `back` is Backspace alone: `u` is a screen
+  up, as `d` is a screen down, and a setting's key is never one of them, so the paper's is `D`
+  ([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)).
 
 `Nav::key` takes what is typed outside the keymaps first: any key while `?` shows, the links' labels,
 the text of a filter or a search being typed, and the number typed before a key, which is its digits
@@ -763,7 +767,10 @@ is still being read, the run loop looks the key up the same way and takes only `
 Nothing else writes a key. `?` lists each `Line`'s commands with the keys bound to them here
 (`Keymap::shown`: `each` key, or two commands' keys `beside` each other, `j k  ↓ ↑  Enter`, a
 number before the first key of one that takes it, `3.`, and the keys bound with a number, `12
-Enter`), and leaves out a line whose commands have no key. What a line says names keys through the
+Enter`), and leaves out a line whose commands have no key. The keys are a column of their own, as
+wide as the longest of 17 characters or fewer (`KEYS_COLUMN`, `keys_listed`): a command with more
+keys than that, as a screen down has, has what it does further right on its own line, so that one
+long list of keys doesn't take 14 columns from every line's text. What a line says names keys through the
 keymap too: `{fewer-per-row}` in its text is the first key bound to the command so named
 (`Keymap::fill`), and so is the `/` in `no search: / starts one`. The status line's first reminder
 is put together from `Hint`s, the first keys of a few commands and a word (`Keymap::reminder`,
@@ -1470,8 +1477,8 @@ grid as it keeps the placeholders, so a terminal that attaches later is drawn bo
 paged through, or said not to be among them (`--pages`); `Nav::jump` keeps where the reader was
 (a `Jump`: the level, the page and how far down it, and the paragraph at the top of the screen, as
 `Source::anchor` gives it), goes to the page, and asks for the place a third of the way down the
-screen once the page's rows are known (`Nav::land`). `u` and `Backspace`, after a kept search,
-give `Step::Return` while `Nav::jumps` holds any, at most 100 (`MAX_JUMPS`): the last is gone back
+screen once the page's rows are known (`Nav::land`). `back` (Backspace), after a kept search,
+gives `Step::Return` while `Nav::jumps` holds any, at most 100 (`MAX_JUMPS`): the last is gone back
 to and scrolled to as it was (`Pager::jump_back`), by its page while the level is the one it was
 made in, since an anchor is found where its paragraph starts and a paragraph may run over several
 pages. A document laid out again hands its jumps to the new level (`Pager::replace`), as it does

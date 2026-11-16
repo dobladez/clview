@@ -735,8 +735,70 @@ fn several_files_are_a_list_and_enter_opens_one() {
     assert!(view.finish().success());
 }
 
+/// `d` and Ctrl-V go a screen down and `u` and Alt-V a screen up, as Space and `b` do, and Ctrl-N and
+/// Ctrl-P are `j` and `k`; in a list Ctrl-F, Ctrl-B, Ctrl-N and Ctrl-P go from tile to tile as `l`,
+/// `h`, `j` and `k` do, and `d` and `u` a screen of tiles. `u` goes back nowhere, in a file or in a
+/// list: Backspace does. Alt-V is an ESC and `v` written together, as a terminal that sends Alt as
+/// ESC writes them; an Alt key bound to nothing does nothing, where an Esc would leave the file.
+#[test]
+fn d_u_and_emacss_keys_page_and_move_and_u_goes_back_nowhere() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-emacs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, pages) in [("a.pdf", 4), ("b.pdf", 1), ("c.pdf", 1), ("e.pdf", 1)] {
+        std::fs::write(dir.join(name), crate::fixtures::letter(name, pages)).unwrap();
+    }
+    // A tall window: a page to the screen once a file is opened. Two tiles to a row: a b, c e.
+    let mut view = Session::start(&dir, &["--protocol", "kitty", "--per-row", "2"], 100, 60);
+    let tile = |view: &Session, what: &str, name: &str, at: usize| {
+        view.wait_until(what, |t| last_bar(t).contains(&format!(" {name} ")) && last_bar(t).contains(&format!(" {at}/4 ")));
+    };
+    view.wait_until("the list", |t| bar(t).contains(" a.pdf ") && drawn(t, "1/4"));
+    for (key, name, at) in [("\x06", "b.pdf", 2), ("\x0e", "e.pdf", 4), ("\x02", "c.pdf", 3), ("\x10", "a.pdf", 1)] {
+        view.press(key);
+        tile(&view, &format!("{key:?} in the list"), name, at);
+    }
+    // A screen of tiles down and up: off the first tile, and back to it.
+    for (down, up) in [("d", "u"), ("\x16", "\x1bv")] {
+        view.press(down);
+        view.wait_until("a screen down", |t| !last_bar(t).contains(" a.pdf ") && last_bar(t).contains("/4 "));
+        view.press(up);
+        tile(&view, &format!("{up:?} in the list"), "a.pdf", 1);
+    }
+    // Into a.pdf: a screen down and up is a page on and back.
+    view.press("\r");
+    let page = |view: &Session, what: &str, page: usize| view.wait_until(what, |t| last_bar(t).contains(&format!(" page {page}/4 ")));
+    page(&view, "a.pdf opened", 1);
+    for (key, at) in [("d", 2), ("\x16", 3), ("u", 2), ("\x1bv", 1), ("\x0e", 2), ("\x10", 1)] {
+        view.press(key);
+        page(&view, &format!("{key:?} in the file"), at);
+    }
+    // `u` at the first page stays in the file, and so does an Alt key bound to nothing (Alt-Q):
+    // the next page is still this file's.
+    view.press("u");
+    std::thread::sleep(Duration::from_millis(200));
+    view.press("\x1bq");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(view.child.try_wait().unwrap().is_none(), "`u` or Alt-Q quit");
+    assert!(last_bar(&view.text()).contains(" page 1/4 "), "`u` or Alt-Q left the file: {}", last_bar(&view.text()));
+    view.press("n");
+    page(&view, "still in the file", 2);
+    // Backspace is what goes back; in the first list, `u` goes nowhere and quits nothing.
+    view.press("\x7f");
+    tile(&view, "back to the list", "a.pdf", 1);
+    view.press("u");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(view.child.try_wait().unwrap().is_none(), "`u` quit");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A directory's subdirectories are folders to go into: Enter lists one, its files named from
-/// the first directory on the status line, and Backspace or `u` goes back; `u` at the top, where
+/// the first directory on the status line, and Backspace goes back; at the top, where
 /// there is nothing to go back to, doesn't quit. Recursing, their files are tiles instead.
 #[cfg(feature = "image")]
 #[test]
@@ -765,9 +827,9 @@ fn a_directorys_subdirectories_are_folders_to_go_into() {
     view.wait_until("back", |t| bar(t).contains(" trip/ 3/3 ") && chosen(t).as_deref() == Some("trip/"));
     view.press("\r");
     view.wait_until("in trip again", |t| bar(t).contains(" trip/b.png 1/2 "));
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("up", |t| bar(t).contains(" trip/ 3/3 ") && chosen(t).as_deref() == Some("trip/"));
-    view.press("ug");
+    view.press("\x7fg");
     view.wait_until("still there, at the first", |t| bar(t).contains(" a.png ") && bar(t).contains(" 1/3 "));
     view.press("q");
     assert!(view.finish().success());
@@ -1414,7 +1476,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     assert!(shows_flow(&page));
     view.press("s");
     assert!(!shows_flow(&next_image(&view, "its block as code", opened).1));
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back in the list", |t| bar(last_draw(t)).contains(" 1/2 ·"));
     view.press("\x1b[C");
     view.wait_until("b chosen", |t| chosen(t).as_deref() == Some("b.pdf"));
@@ -1453,7 +1515,7 @@ fn a_search_reads_a_block_shown_as_code_and_not_one_drawn() {
     }
 }
 
-/// `d` on a document with a diagram draws its block again for the paper: in Mermaid's dark theme on
+/// `D` on a document with a diagram draws its block again for the paper: in Mermaid's dark theme on
 /// a dark terminal's own colour, nothing white behind it, then in the default theme on white, and
 /// back. The diagram is laid out once a theme: turned to a paper it was on before, no worker starts.
 #[cfg(all(feature = "mermaid", feature = "word"))]
@@ -1478,7 +1540,7 @@ fn d_draws_a_documents_block_again_for_its_paper_and_lays_the_diagram_out_once_a
     assert!(on_dark(&page), "in the dark theme, on the terminal's colour");
     no_mermaid_worker(&view, "both themes laid out");
     for (turn, dark) in [(1, false), (2, true), (3, false)] {
-        view.press("d");
+        view.press("D");
         let (next, page) = next_image(&view, "turned", shown);
         assert!(if dark { on_dark(&page) } else { on_light(&page) }, "turn {turn}");
         assert!(mermaid_workers(&view).is_empty(), "turn {turn}: the diagram laid out again");
@@ -2531,7 +2593,7 @@ fn last_corner(view: &Session, count: usize) -> [u8; 3] {
 }
 
 /// On a dark terminal, Markdown takes the terminal's own colour, so the page is what is behind it, and
-/// `d` turns it to white and back: sent again each time, and saying so.
+/// `D` turns it to white and back: sent again each time, and saying so.
 #[cfg(feature = "word")]
 #[test]
 fn markdown_is_on_a_dark_terminals_own_colour_and_d_turns_it() {
@@ -2541,17 +2603,17 @@ fn markdown_is_on_a_dark_terminals_own_colour_and_d_turns_it() {
     let terminal = Terminal { background: Some(DARK), ..KITTY };
     let mut view = Session::start_on(terminal, &markdown("dark"), &["--pager"], 80, 40);
     assert_eq!(last_corner(&view, 1), DARK_COLOUR);
-    view.press("d");
+    view.press("D");
     assert_eq!(last_corner(&view, 2), [255; 3]);
     view.wait_until("said", |t| bar(t).contains("dark on light"));
-    view.press("d");
+    view.press("D");
     assert_eq!(last_corner(&view, 3), DARK_COLOUR);
     view.wait_until("said", |t| bar(t).contains("light on dark"));
     view.press("q");
     assert!(view.finish().success());
 }
 
-/// A light terminal, or one that doesn't say, gets a page as printed; `d` still takes it to dark paper,
+/// A light terminal, or one that doesn't say, gets a page as printed; `D` still takes it to dark paper,
 /// of a colour of `clv`'s own, since the terminal's isn't one or isn't known.
 #[cfg(feature = "word")]
 #[test]
@@ -2562,7 +2624,7 @@ fn on_a_light_terminal_or_one_that_doesnt_say_d_goes_to_a_dark_of_its_own() {
     for background in [Some("rgb:fdfd/f6f6/e3e3"), None] {
         let mut view = Session::start_on(Terminal { background, ..KITTY }, &markdown("light"), &["--pager"], 80, 40);
         assert_eq!(last_corner(&view, 1), [255; 3], "{background:?}");
-        view.press("d");
+        view.press("D");
         assert_eq!(last_corner(&view, 2), DARK_PAPER, "{background:?}");
         view.press("q");
         assert!(view.finish().success());
@@ -2580,7 +2642,7 @@ fn the_theme_decides_how_it_starts() {
     let dark = Terminal { background: Some(DARK), ..KITTY };
     let mut view = Session::start_on(dark, &markdown("theme"), &["--pager", "--theme", "light"], 80, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
-    view.press("d");
+    view.press("D");
     assert_eq!(last_corner(&view, 2), DARK_COLOUR);
     view.press("q");
     assert!(view.finish().success());
@@ -2592,8 +2654,8 @@ fn the_theme_decides_how_it_starts() {
     assert!(view.finish().success());
 }
 
-/// What has no dark form doesn't ask about the background, and `d` says which formats have one and
-/// sends nothing: `d` is the backends', and what it says names the formats of each that declares it.
+/// What has no dark form doesn't ask about the background, and `D` says which formats have one and
+/// sends nothing: `D` is the backends', and what it says names the formats of each that declares it.
 #[cfg(all(feature = "word", feature = "mermaid"))]
 #[test]
 fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
@@ -2603,21 +2665,21 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     let pdf = fixture("no-dark", 1);
     let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
-    view.press("d");
+    view.press("D");
     view.wait_until("said", |t| bar(t).contains("only Mermaid, Markdown and HTML go dark"));
     assert_eq!(transmitted(&view.text()), 1, "sent again");
     assert!(!view.text().contains("\x1b]11;"), "asked about the background");
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" d Mermaid, Markdown and HTML light on dark, or dark on light"));
+    view.wait_until("listed", |t| bar(t).contains(" D Mermaid, Markdown and HTML light on dark, or dark on light"));
     view.press("qq");
     assert!(view.finish().success());
 }
 
 /// A Mermaid diagram shown by itself follows the paper as Markdown does. On a dark terminal, asked
 /// its background, it is drawn in Mermaid's dark theme on the terminal's own colour, nothing white
-/// behind it; `d` turns it to the default theme on white and back, saying so. The diagram is laid
+/// behind it; `D` turns it to the default theme on white and back, saying so. The diagram is laid
 /// out once a theme: turned to a paper it was on before, no worker starts. On a light terminal it
-/// starts on white, and `d` goes to a dark of `clv`'s own; `--theme` says how it starts whatever
+/// starts on white, and `D` goes to a dark of `clv`'s own; `--theme` says how it starts whatever
 /// the terminal is.
 #[cfg(feature = "mermaid")]
 #[test]
@@ -2643,7 +2705,7 @@ fn a_diagram_shown_by_itself_is_on_a_dark_terminals_colour_and_d_turns_it() {
     assert!(view.text().contains("\x1b]11;"), "the terminal wasn't asked its background");
     no_mermaid_worker(&view, "both themes laid out");
     for (turn, dark) in [(1, false), (2, true), (3, false)] {
-        view.press("d");
+        view.press("D");
         let (next, page) = next_image(&view, "turned", shown);
         assert!(if dark { on(DARK_COLOUR)(&page) } else { on_light(&page) }, "turn {turn}");
         view.wait_until("said", |t| last_bar(t).contains(if dark { "light on dark" } else { "dark on light" }));
@@ -2657,7 +2719,7 @@ fn a_diagram_shown_by_itself_is_on_a_dark_terminals_colour_and_d_turns_it() {
     let mut view = Session::start_on(light, &path, &["--pager"], 100, 40);
     let (shown, page) = next_image(&view, "on white", 0);
     assert!(on_light(&page), "a light terminal: as Mermaid draws it by default");
-    view.press("d");
+    view.press("D");
     let (_, page) = next_image(&view, "turned", shown);
     assert!(on(DARK_PAPER)(&page), "a dark of its own");
     view.press("q");
@@ -2670,7 +2732,7 @@ fn a_diagram_shown_by_itself_is_on_a_dark_terminals_colour_and_d_turns_it() {
     assert!(view.finish().success());
 }
 
-/// In a list, a diagram's tile is on a dark terminal's colour beside a PDF's on white, and `d` turns
+/// In a list, a diagram's tile is on a dark terminal's colour beside a PDF's on white, and `D` turns
 /// it to white, the PDF's as it was: the list's tiles go through their pools, each diagram's dark
 /// renders on a thread of its own.
 #[cfg(feature = "mermaid")]
@@ -2688,11 +2750,11 @@ fn in_a_list_a_diagrams_tile_follows_the_paper_and_a_pdfs_stays() {
     view.wait_until("both tiles", |t| corners(t).len() >= 2);
     let tiles = corners(&view.text());
     assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
-    view.press("d");
+    view.press("D");
     view.wait_until("both again", |t| corners(t).len() >= 4);
     assert_eq!(corners(&view.text())[2..], [[255; 3], [255; 3]]);
     view.wait_until("said", |t| last_bar(t).contains("dark on light"));
-    view.press("d");
+    view.press("D");
     view.wait_until("and back", |t| corners(t).len() >= 6);
     let tiles = &corners(&view.text())[4..];
     assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
@@ -2700,7 +2762,7 @@ fn in_a_list_a_diagrams_tile_follows_the_paper_and_a_pdfs_stays() {
     assert!(view.finish().success());
 }
 
-/// In a list, `d` turns what has a dark form, and what hasn't stays white.
+/// In a list, `D` turns what has a dark form, and what hasn't stays white.
 #[cfg(feature = "word")]
 #[test]
 fn in_a_list_only_what_has_a_dark_form_turns() {
@@ -2715,7 +2777,7 @@ fn in_a_list_only_what_has_a_dark_form_turns() {
     view.wait_until("both tiles", |t| corners(t).len() >= 2);
     let tiles = corners(&view.text());
     assert!(tiles.contains(&DARK_COLOUR) && tiles.contains(&[255; 3]), "{tiles:?}");
-    view.press("d");
+    view.press("D");
     view.wait_until("both again", |t| corners(t).len() >= 4);
     assert_eq!(corners(&view.text())[2..], [[255; 3], [255; 3]]);
     view.press("q");
@@ -2840,7 +2902,7 @@ fn a_document_gone_into_after_a_change_is_laid_out_at_the_new_width_and_its_tile
     view.wait_until("a opened", |t| t.contains("  page 1/") && bar(t).contains(" a.md "));
     view.press("40]");
     view.wait_until("a laid out again", |t| bar(t).contains("· width 40 ·") && last_sent_shaped(t, NARROW, WINDOW.1));
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back in the list", |t| bar(last_draw(t)).contains(" 1/2 ·"));
     let sent = sizes_sent(&view.text()).len();
     std::thread::sleep(Duration::from_millis(300));
@@ -3379,7 +3441,7 @@ fn a_page_is_copied_on_the_paper_it_is_shown_on() {
     view.wait_until("copied", |t| t.contains("copied notes.md"));
     let colour = |png: &[u8]| ::image::load_from_memory(png).unwrap().to_rgb8().get_pixel(0, 0).0;
     assert_eq!(colour(&copied_png(&view.text(), 1)), DARK_COLOUR);
-    view.press("d");
+    view.press("D");
     assert_eq!(last_corner(&view, 2), [255; 3]);
     view.press("c");
     view.wait_until("copied again", |t| copied_png(t, 2).ends_with(b"\x60\x82"));
@@ -3847,7 +3909,7 @@ fn drawn_since(view: &Session, from: usize, place: &str) {
 
 /// `f` labels the links on screen: one image of letters is sent, and each label is a placement of
 /// its letter's part of it, over the page, down the page in reading order. A label typed goes to its
-/// link's place, the labels gone and their image deleted; `u` comes back, and at the top goes
+/// link's place, the labels gone and their image deleted; Backspace comes back, and at the top goes
 /// nowhere. A link that is never followed says what it is, `Esc` drops the labels, and `?` lists
 /// the key.
 #[test]
@@ -3891,14 +3953,14 @@ fn links_are_labelled_from_one_image_and_a_label_typed_goes_to_its_place() {
     view.press("s");
     drawn_since(&view, before, "page 3/3");
     view.wait_until("the labels' image deleted", |t| t[before..].contains(&format!("{DELETED}{sheet}\x1b")));
-    // `u` comes back, and then has nowhere to go: the pager stays.
+    // Backspace comes back, and then has nowhere to go: the pager stays.
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     drawn_since(&view, before, "page 1/3");
-    view.press("u\x7f");
+    view.press("\x7f\x7f");
     std::thread::sleep(Duration::from_millis(200));
-    assert!(view.child.try_wait().unwrap().is_none(), "u quit");
-    // `a`, the second: the named destination, on page 2; Backspace comes back as `u` does.
+    assert!(view.child.try_wait().unwrap().is_none(), "Backspace quit");
+    // `a`, the second: the named destination, on page 2; Backspace comes back again.
     view.press("f");
     view.wait_until("the labels again", |t| sheets(t).len() == 2 && letters(t).len() == 14);
     let before = view.text().len();
@@ -3967,7 +4029,7 @@ fn links_on_two_pages_side_by_side_have_two_letters_and_typing_narrows_them() {
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
-/// In a file opened from a list, `u` goes back through the links followed, and then to the list;
+/// In a file opened from a list, Backspace goes back through the links followed, and then to the list;
 /// and `f` in the list labels nothing.
 #[test]
 fn links_followed_in_a_file_from_a_list_are_gone_back_through_before_the_list() {
@@ -3990,17 +4052,17 @@ fn links_followed_in_a_file_from_a_list_are_gone_back_through_before_the_list() 
     view.press("s");
     drawn_since(&view, before, "page 3/3");
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     drawn_since(&view, before, "page 1/3");
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back to the list", |t| t.get(before..).is_some_and(|t| bar(t).contains(" links.pdf 1/2 · 2 per row ")));
-    // Gone into again, there is nothing to go back through: `u` is the list at once.
+    // Gone into again, there is nothing to go back through: Backspace is the list at once.
     view.press("\r");
     let before = view.text().len();
     drawn_since(&view, before.saturating_sub(1), "page 1/3");
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("the list again", |t| t.get(before..).is_some_and(|t| bar(t).contains(" links.pdf 1/2 · 2 per row ")));
     view.press("q");
     assert!(view.finish().success());
@@ -4030,7 +4092,7 @@ fn links_to_a_page_not_among_pages_are_said_and_not_gone_to() {
     view.press("a");
     drawn_since(&view, before, "page 2/3 · 1 of 4");
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     drawn_since(&view, before, "page 1/3 · 2 of 4");
     // And page 3, which isn't given.
     view.press("f");
@@ -4103,14 +4165,14 @@ fn links_in_text_cells_are_written_over_the_pages_cells() {
     view.press("s");
     drawn_since(&view, before, "page 3/3");
     assert!(!view.text()[before..].contains(LABEL));
-    view.press("u");
+    view.press("\x7f");
     drawn_since(&view, before, "page 1/3");
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
-/// In a Markdown document a link to a heading goes to it, and `u` comes back to the paragraph the
+/// In a Markdown document a link to a heading goes to it, and Backspace comes back to the paragraph the
 /// reader left, whatever the document is laid out at since: the places to come back to are handed
 /// to the new layout, and found again in it. The labels are read again from the new layout.
 #[cfg(feature = "word")]
@@ -4139,16 +4201,16 @@ fn links_followed_in_a_document_are_gone_back_through_after_it_is_laid_out_again
     // Narrower pages, more of them: the reader stays at the heading.
     view.press("40]");
     view.wait_until("laid out again", |t| bar(t).contains("· width 40 ·") && place_now(t).is_some_and(|(page, pages)| pages > count && page > usage));
-    // `u` goes back to the first paragraph, which is on the first page of any layout.
+    // Backspace goes back to the first paragraph, which is on the first page of any layout.
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back at the links", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
     // The new layout's links are read from it: `s`, the first, is the heading `Install`.
     view.press("f");
     view.wait_until("the labels of the new layout", |t| t.len() > before && letters(&t[before..]).len() == 2);
     view.press("s");
     view.wait_until("the other heading", |t| place_now(t).is_some_and(|(page, pages)| page > 2 && page + 3 < pages));
-    view.press("uq");
+    view.press("\x7fq");
     assert!(view.finish().success());
 }
 
@@ -4206,7 +4268,7 @@ fn copied_text(text: &str, id: u32) -> String {
     String::from_utf8(copied).unwrap()
 }
 
-/// A link to another file opens it in `clv`, a level of its own, at the place the link names; `u`
+/// A link to another file opens it in `clv`, a level of its own, at the place the link names; Backspace
 /// comes back to the document, and from there to the list. A folder opens as a list, a PDF at
 /// its first page. A path that leads nowhere, or to a pipe, is said, and nothing opens.
 #[cfg(feature = "word")]
@@ -4240,7 +4302,7 @@ fn links_to_other_files_open_them_as_levels_and_u_comes_back_to_the_document() {
     assert!(heading > 1 && heading < pages, "at page {heading} of {pages}");
     // Back: the document, as it was left.
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back in the document", |t| {
         t.len() > before && settled(t, "index.md") && place_now(&t[before..]).is_some_and(|(page, _)| page == 1)
     });
@@ -4254,16 +4316,16 @@ fn links_to_other_files_open_them_as_levels_and_u_comes_back_to_the_document() {
     let before = follow(&mut view, 5, "f");
     view.wait_until("the folder listed", |t| bar(&t[before..]).contains(" docs/guide.md 1/1 "));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back from the folder", |t| t.len() > before && settled(t, "index.md"));
     let before = follow(&mut view, 5, "j");
     view.wait_until("the PDF", |t| settled(t, "other.pdf") && drawn(&t[before..], "pages 1–2/3"));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back from the PDF", |t| t.len() > before && settled(t, "index.md"));
     // And from the document, the list.
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("the list again", |t| t.get(before..).is_some_and(|t| bar(t).contains(" index.md 1/2 ")));
     view.press("q");
     assert!(view.finish().success());
@@ -4289,7 +4351,7 @@ fn links_from_a_pdf_to_another_pdf_open_it_at_the_place_or_the_page_they_name() 
     let before = follow(&mut view, 14, "f");
     view.wait_until("the other PDF at its destination", |t| last_bar(t).contains(" other.pdf ") && drawn(&t[before..], "page 3/3"));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back", |t| t.len() > before && last_bar(t).contains(" links.pdf ") && drawn(&t[before..], "page 1/3"));
     // `j`, the fifth: its third page.
     let before = follow(&mut view, 14, "j");
@@ -4461,7 +4523,7 @@ fn links_to_the_web_over_ssh_are_copied_through_osc_52() {
 }
 
 /// Links followed into files go sixteen levels deep, two files that link to each other counting
-/// each time; the seventeenth says so, and `u` still comes back.
+/// each time; the seventeenth says so, and Backspace still comes back.
 #[cfg(feature = "word")]
 #[test]
 fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
@@ -4484,7 +4546,7 @@ fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
     said_since(&view, before, "b.md: not followed, 16 files deep in links already; u goes back");
     assert!(last_bar(&view.text()).contains(" a.md "));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     view.wait_until("back a level", |t| t.len() > before && settled(t, "b.md"));
     // And from there a link is followed again.
     let before = follow(&mut view, 1, "s");
@@ -4494,7 +4556,7 @@ fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// `u` comes back to the page the reader left, where a paragraph runs over several pages: a link
+/// Backspace comes back to the page the reader left, where a paragraph runs over several pages: a link
 /// followed from the middle of a long paragraph is come back to on its own page, not on the page
 /// the paragraph starts on.
 #[cfg(feature = "word")]
@@ -4529,7 +4591,7 @@ fn links_followed_from_the_middle_of_a_long_paragraph_are_come_back_to_on_their_
     view.press("s");
     view.wait_until("the end", |t| place_now(&t[before..]).is_some_and(|(page, pages)| page == pages));
     let before = view.text().len();
-    view.press("u");
+    view.press("\x7f");
     // Wherever it goes back to, it leaves the last page: then, which page it is on.
     view.wait_until("back", |t| place_now(&t[before..]).is_some_and(|(page, pages)| page != pages));
     assert_eq!(place_now(&view.text()).map(|(page, _)| page), Some(on), "back on the page the link is on");

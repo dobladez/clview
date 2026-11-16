@@ -48,7 +48,7 @@ const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["merm
 /// The paper a diagram shown by itself is drawn for: light, as Mermaid draws it by default, dark on
 /// white; or dark, in Mermaid's dark theme, light on the colour of dark paper ([`Request::dark`]).
 /// Declared under the name, the values, the key and the option other backends declare their paper
-/// by, so that it is one setting with theirs, which the viewer holds one value of: `d` and `--theme`
+/// by, so that it is one setting with theirs, which the viewer holds one value of: `D` and `--theme`
 /// turn whatever follows its paper, and no backend names another
 /// ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
 const PAPER: Setting = Setting {
@@ -58,7 +58,7 @@ const PAPER: Setting = Setting {
     default: Value::Named(LIGHT),
     zero: Value::Named(LIGHT),
     auto: Some(Auto { light: LIGHT, dark: DARK }),
-    keys: Keys::Cycle('d'),
+    keys: Keys::Cycle('D'),
     option: OptionSpec {
         name: "--theme",
         short: None,

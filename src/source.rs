@@ -1591,7 +1591,7 @@ pub(crate) mod tests {
     fn a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend() {
         assert_eq!(wrong_settings(BACKENDS), Vec::<String>::new());
         // What it would say.
-        const PAPER: Setting = cycled("paper", 'd', "--theme");
+        const PAPER: Setting = cycled("paper", 'D', "--theme");
         const HELPED: Setting = Setting { option: OptionSpec { help: "its own", ..PAPER.option }, ..PAPER };
         static INKS: Having = Having(&[PAPER], &[("Ink", &["paper"]), ("Plain", &[])]);
         static WASHES: Having = Having(&[HELPED], &[("Wash", &["paper"])]);
@@ -1636,10 +1636,10 @@ pub(crate) mod tests {
         names.dedup();
         assert!(names.len() <= MAX_SETTINGS, "{names:?}");
         // What it would say.
-        static PAPER: Declaring = Declaring(&[cycled("paper", 'd', "--theme")]);
+        static PAPER: Declaring = Declaring(&[cycled("paper", 'D', "--theme")]);
         static QUITS: Declaring = Declaring(&[cycled("paper", 'q', "--theme")]);
-        static OTHER: Declaring = Declaring(&[cycled("tint", 'd', "--tint")]);
-        static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("paper", 'd', "--theme") }]);
+        static OTHER: Declaring = Declaring(&[cycled("tint", 'D', "--tint")]);
+        static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("paper", 'D', "--theme") }]);
         static ZOOMS: Declaring = Declaring(&[Setting { keys: Keys::Zoom, ..cycled("font", '+', "--font") }]);
         static PLUS: Declaring = Declaring(&[Setting { keys: Keys::Step('-', '+'), ..cycled("font", '+', "--font") }]);
         assert!(wrong_keys(&[&PAPER, &PAPER]).is_empty(), "one setting in two backends");

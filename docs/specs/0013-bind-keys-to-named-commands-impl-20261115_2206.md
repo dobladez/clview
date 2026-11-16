@@ -96,3 +96,46 @@ As planned, with these readings of what the spec leaves to the code:
   `docs/backlog.md` (the discovery above, under A config file).
 - **Verify.** `cargo test -j 2`: 566 unit tests, 13 docs tests, 276 integration tests, none of the
   integration tests changed in this task; `fmt` and clippy clean.
+
+## Task 3: the new keys
+
+- **The bindings.** As the spec's tables, in `commands.rs`'s defaults; `u` is taken off `back` in
+  both keymaps, so nothing that asks for `back` or `leave` hears it: not the links followed, not a
+  list, not the run loop while a folder is gone into. `paper` suggests `D` in the documents' backend
+  and in Mermaid's. Nothing else in the pager changed for the keys themselves.
+- **The order keys are bound in is the order `?` lists them**, so `scroll-down` is `j`, ↓, `Ctrl-N`,
+  Enter (not the table's `j`, ↓, Enter, `Ctrl-N`): `?` sets down and up side by side, and Enter,
+  which has no partner, goes last: `j k  ↓ ↑  Ctrl-N Ctrl-P  Enter`.
+- **Ctrl and Alt keys in `?`** are `Ctrl-V` and `Alt-v`, as `Ctrl-L` and `Ctrl-C` already were, not
+  the spec's `C-v` and `M-v`; the manual writes `Alt-V`.
+- **`?`'s column of keys** (not in the spec). A screen down has four keys now (`space  PageDown  d
+  Ctrl-V`, 26 characters; a list's screens line, 48), and `?` set every line's text after the
+  longest keys: every line would have lost 10 to 30 columns of what it says, which is cut at the
+  window's edge. The column is now as wide as the longest keys of 17 characters or fewer
+  (`KEYS_COLUMN`, what the widest line was before), and a line with more has its text further right
+  by itself. With that, a list's PageDown and PageUp are listed again, where task 2 left them out
+  for room.
+- **While a filter is typed**, Emacs's keys move among the tiles as the arrows do (they type
+  nothing), and `d` and `u` are letters of the filter. The manual's Filtering a list says so.
+- **Tests that pressed `d` or `u`.** 15 presses of `d` for the paper are `D` (`view_pager.rs`,
+  `wordcraft.rs`, `view_tmux.rs`), 22 of `u` to go back are Backspace (`view_pager.rs`, `tar.rs`,
+  `wordcraft.rs`), and the unit tests' own setting is on `D`. Their names still say `d` (`…_and_d_turns_it`):
+  a test's name has no capitals.
+- **The unreleased changelog entries** that named `u` and `d` (links, Mermaid's dark theme) say
+  `Backspace` and `D`: they describe what will ship. "Keys changed" is for the keys 0.4.0 had.
+- **ADR-0036**, with ADR-0021's and ADR-0015's status lines saying what it changes of them. Its
+  Evidence says plainly that no terminal was measured: it rests on the tests and on the manual
+  check still to do.
+- **Seen failing.** With the defaults put back as task 2 left them, `paper` back on `d` and
+  `KEYS_COLUMN` out of the way (1700): in the unit tests
+  `commands::tests::a_key_is_its_command_and_with_a_number_the_one_bound_with_one`,
+  `the_keys_listed_and_the_reminders_are_read_from_the_keymap`,
+  `pager::tests::d_u_and_emacss_keys_do_what_the_keys_they_stand_beside_do`,
+  `a_command_with_many_keys_doesnt_narrow_every_line_of_the_keys` and four older ones that hold `u`
+  to going back nowhere; in `tests/it`, `view_pager::d_u_and_emacss_keys_page_and_move_and_u_goes_back_nowhere`
+  and the twelve that press `D` for the paper. All four files copied back, `cmp` clean.
+- **Not in *Files:*** `src/source.rs`, `src/view/mod.rs` and `src/view/relayout.rs` (their tests'
+  own `paper` on `D`), `CONTRIBUTING.md` (its Tests), ADR-0015 and ADR-0021 (their status lines).
+- **Manual check: not done.** The task's *Verify:* asks for kitty: `d`, `u`, `Ctrl-V`, `Alt-V`
+  (with `macos_option_as_alt`), `D` on Markdown, `Ctrl-F` and `Ctrl-N` in a list, Backspace leaving
+  a file where `u` doesn't. It is the owner's to confirm, so the task's box stays open.

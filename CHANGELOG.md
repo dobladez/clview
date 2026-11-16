@@ -12,10 +12,10 @@ works today. A version's section becomes the notes of its
   Vimium browser extension does; type a code and its link is followed, `Esc` drops the labels. A
   link to a place in the document goes there: a PDF's table of contents or named destination, a
   Word document's cross-reference, Markdown's `[see](#usage)`, which finds `## Usage` by the id
-  GitHub gives it, HTML's `#name`, which finds any element with that `id`. `u` or `Backspace` come
-  back, through the last 100 links followed, before they go back
+  GitHub gives it, HTML's `#name`, which finds any element with that `id`. `Backspace` comes
+  back, through the last 100 links followed, before it goes back
   to the list. A link to another file (`[guide](docs/guide.md#usage)`, a PDF's link to another
-  PDF) opens it in `clv`, at the place it names, and `u` comes back to the document; only a regular
+  PDF) opens it in `clv`, at the place it names, and `Backspace` comes back to the document; only a regular
   file or a folder is opened. A web address (`http`, `https` and `mailto` only, checked for hidden
   characters, and never a `mailto` that would attach a file) opens in your browser or mail app,
   the status line naming it; over SSH it is copied to your clipboard instead. `F` labels the links
@@ -30,7 +30,7 @@ works today. A version's section becomes the notes of its
   `/dev/stdin`), nor anything over SSH.
 - A Mermaid diagram shown by itself follows the paper, as Markdown does: on a terminal with a dark
   background it is drawn in Mermaid's dark theme on the terminal's own colour, where it was a white
-  rectangle; `d` turns it, in a list too, and `--theme auto|light|dark` says how it starts.
+  rectangle; `D` turns it, in a list too, and `--theme auto|light|dark` says how it starts.
   `--help` lists `--theme` under Mermaid diagrams too.
 - `/` in a file's pages searches its text: a PDF's, a spreadsheet's, through the PDF it prints
   to, and a Word document's, an OpenDocument text's, an RTF's, Markdown's and HTML's, their body a
@@ -54,8 +54,13 @@ works today. A version's section becomes the notes of its
   many did. `clv --help` lists the languages drawn, beside each format's extensions; a block in any
   other stays code, ` ```svg ` included. `s` shows a document's blocks as code, to read or search a
   diagram's source, and again draws them; `--fences code` starts that way. On dark paper a block is
-  drawn in Mermaid's dark theme, on the paper's colour, and `d` turns it with the page; so is a
+  drawn in Mermaid's dark theme, on the paper's colour, and `D` turns it with the page; so is a
   diagram a document shows by path (`![a flow](flow.mmd)`).
+- Emacs's keys beside `less`'s and `vi`'s: `Ctrl-V` and `Alt-V` go a screen down and up,
+  `Ctrl-N` and `Ctrl-P` are `j` and `k`, and in a list `Ctrl-F`, `Ctrl-B`, `Ctrl-N` and `Ctrl-P`
+  go to the tile after, before, below and above. `Alt-V` needs a terminal that sends Alt or Option
+  as `ESC` (in kitty on macOS, `macos_option_as_alt yes`). `Ctrl-L` still renders again.
+- A number, then `Home`, goes to that page or tile, as a number and `g` do.
 
 ### Changed
 
@@ -71,6 +76,9 @@ works today. A version's section becomes the notes of its
   fixes since. A PDF's page warns of an image whose colour table is malformed, and of a Type 3
   font without its widths. A spreadsheet's Arabic is drawn where Noto Sans Arabic is installed,
   where it was blank.
+- **Keys changed.** `d` and `u` go a screen down and up, as `space` and `b` do. Dark and light
+  paper is `D`, where it was `d`. `u` no longer goes back: `Backspace` does, and `Esc`, in a
+  file's pages, in a list, through the links followed and while a folder is being opened.
 - `Alt` and a key, from a terminal that sends Alt or Option as `ESC`, is no longer read as `Esc`
   and then that key, which went back or quit: an Alt key the pager has no use for does nothing.
 
