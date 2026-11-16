@@ -6,8 +6,6 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
-## 0.5.0 (2026-11-16)
-
 ### Added
 
 - An ebook (epub) is shown as a book: its chapters in its reading order, each starting a new page,
@@ -28,6 +26,24 @@ works today. A version's section becomes the notes of its
   their paths from it, `..` included but never above the archive's top: a README in a zip of a
   repository shows its screenshots. They were left as their alt text. Opening the document unpacks
   none of them whole.
+
+### Changed
+
+- A key that changes how a file looks (`D`, `[`, `{`, `s`), on a file that has no such thing, says
+  so shorter, and on the whole status line, which comes back after a second or with the next key:
+  `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
+  HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
+  window of 80 columns.
+- `?` says what a setting's key does and then two of the formats it does it to (`D  light on
+  dark, or dark on light (Mermaid, Markdown and others)`), where it started with every format.
+  The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
+  there are no contents to go to. What a line says goes on over the next row in a narrow window,
+  where it was cut in its middle.
+
+## 0.5.0 (2026-11-16)
+
+### Added
+
 - `f` in a file's pages labels every link on screen with a short code of home-row letters, as the
   Vimium browser extension does; type a code and its link is followed, `Esc` drops the labels. A
   link to a place in the document goes there: a PDF's table of contents or named destination, a
@@ -84,16 +100,6 @@ works today. A version's section becomes the notes of its
 
 ### Changed
 
-- A key that changes how a file looks (`D`, `[`, `{`, `s`), on a file that has no such thing, says
-  so shorter, and on the whole status line, which comes back after a second or with the next key:
-  `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
-  HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
-  window of 80 columns.
-- `?` says what a setting's key does and then two of the formats it does it to (`D  light on
-  dark, or dark on light (Mermaid, Markdown and others)`), where it started with every format.
-  The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
-  there are no contents to go to. What a line says goes on over the next row in a narrow window,
-  where it was cut in its middle.
 - An archive's folder in a list has a zipper down its front and a plate at its corner saying which
   kind it is (`ZIP`, `TAR`, or `TGZ`, `TBZ`, `TXZ` for a compressed tar), where it was tied up
   with tape and a bow.
