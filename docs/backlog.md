@@ -29,7 +29,11 @@ rules out.
 ### More documents
 
 Org-mode, AsciiDoc and reStructuredText, their source blocks (`#+begin_src`, `[source,x]`,
-`.. code::`) drawn as Markdown's fenced blocks are. An ebook's own stylesheets, applied a chapter
+`.. code::`) drawn as Markdown's fenced blocks are. Org is
+[Spec-0014](specs/0014-show-org-mode-documents.md); AsciiDoc and reStructuredText could go the way
+it and the epub go: a backend of their own, the one file naming their parser, that writes HTML and
+hands it to the backend that opens HTML, so they have what a document has without the documents'
+backend growing. An ebook's own stylesheets, applied a chapter
 at a time: an epub is a book now ([Spec-0012](specs/0012-show-an-epub-as-a-book.md)), in clv's
 own look, since the stylesheets of its chapters would meet in the one document they are joined
 into. A book's tile from its cover alone: a list lays each book out whole for its tile, as it does
