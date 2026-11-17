@@ -219,7 +219,7 @@ checks:
 
 ## Tasks
 
-- [ ] **Choose the parser, and its ADR** — evaluate orgize and org-rust-parser, existing
+- [x] **Choose the parser, and its ADR** — evaluate orgize and org-rust-parser, existing
   libraries, never one of our own, on a corpus (the Org manual's sources, worg, real notes) for
   fidelity (headings and their decorations, links and places,
   footnotes, drawers, blocks, tables), panics under a property test cutting input anywhere, and

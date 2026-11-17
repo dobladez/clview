@@ -1,0 +1,86 @@
+orgize	headlines	1000	491 KiB	1.1 ms	0 MiB	2001 nodes
+orgize	headlines	10000	48862 KiB	62.2 ms	50 MiB	20001 nodes
+orgize	headlines	100000	died: fatal runtime error: stack overflow, aborting
+orgize	headlines	1000000	died: 
+orgize	list	1000	982 KiB	5.0 ms	1 MiB	4002 nodes
+orgize	list	10000	died: fatal runtime error: stack overflow, aborting
+orgize	list	100000	died: fatal runtime error: stack overflow, aborting
+orgize	list	1000000	died: 
+orgize	quotes	1000	25 KiB	14.8 ms	0 MiB	2006 nodes
+orgize	quotes	10000	253 KiB	1336.8 ms	4 MiB	20006 nodes
+orgize	quotes	100000	died: 
+orgize	quotes	1000000	died: 
+orgize	specials	1000	23 KiB	69.6 ms	0 MiB	2003 nodes
+orgize	specials	10000	251 KiB	6753.8 ms	4 MiB	20003 nodes
+orgize	specials	100000	died: 
+orgize	specials	1000000	died: 
+orgize	drawers-nested	1000	12 KiB	0.5 ms	0 MiB	2003 nodes
+orgize	drawers-nested	10000	135 KiB	4.8 ms	2 MiB	20003 nodes
+orgize	drawers-nested	100000	1453 KiB	44.3 ms	27 MiB	200003 nodes
+orgize	drawers-nested	1000000	15516 KiB	446.1 ms	276 MiB	2000003 nodes
+orgize	emphasis	1000	1 KiB	3.6 ms	0 MiB	1003 nodes
+orgize	emphasis	10000	19 KiB	1609.2 ms	1 MiB	10003 nodes
+orgize	emphasis	100000	died: 
+orgize	emphasis	1000000	died: 
+orgize	emphasis-words	1000	5 KiB	1.5 ms	0 MiB	7 nodes
+orgize	emphasis-words	10000	58 KiB	1189.2 ms	0 MiB	7 nodes
+orgize	emphasis-words	100000	died: 
+orgize	emphasis-words	1000000	died: 
+orgize	unclosed	1000	2 KiB	1.5 ms	0 MiB	3 nodes
+orgize	unclosed	10000	29 KiB	1221.3 ms	0 MiB	3 nodes
+orgize	unclosed	100000	died: 
+orgize	unclosed	1000000	died: 
+orgize	unclosed-lines	1000	17 KiB	0.3 ms	0 MiB	3 nodes
+orgize	unclosed-lines	10000	175 KiB	2.7 ms	0 MiB	3 nodes
+orgize	unclosed-lines	100000	1757 KiB	25.2 ms	1 MiB	3 nodes
+orgize	unclosed-lines	1000000	17578 KiB	261.5 ms	17 MiB	3 nodes
+orgize	brackets	1000	1 KiB	1.4 ms	0 MiB	3 nodes
+orgize	brackets	10000	19 KiB	125.1 ms	0 MiB	3 nodes
+orgize	brackets	100000	195 KiB	12000.7 ms	0 MiB	3 nodes
+orgize	brackets	1000000	died: 
+orgize	links	1000	6 KiB	0.5 ms	0 MiB	4 nodes
+orgize	links	10000	68 KiB	3.4 ms	0 MiB	4 nodes
+orgize	links	100000	683 KiB	30.4 ms	0 MiB	4 nodes
+orgize	links	1000000	6835 KiB	301.1 ms	6 MiB	4 nodes
+orgize	footnotes	1000	6 KiB	3.7 ms	0 MiB	1003 nodes
+orgize	footnotes	10000	68 KiB	397.8 ms	4 MiB	10003 nodes
+orgize	footnotes	100000	died: fatal runtime error: stack overflow, aborting
+orgize	footnotes	1000000	died: fatal runtime error: stack overflow, aborting
+orgize	table	1000	41 KiB	2.6 ms	2 MiB	11003 nodes
+orgize	table	10000	410 KiB	22.3 ms	23 MiB	110003 nodes
+orgize	table	100000	4101 KiB	207.9 ms	236 MiB	1100003 nodes
+orgize	table	1000000	41015 KiB	2124.5 ms	2358 MiB	11000003 nodes
+orgize	drawers	1000	8 KiB	12.5 ms	0 MiB	3 nodes
+orgize	drawers	10000	87 KiB	1208.3 ms	0 MiB	3 nodes
+orgize	drawers	100000	died: 
+orgize	drawers	1000000	died: 
+orgize	blocks	1000	11 KiB	13.3 ms	0 MiB	1003 nodes
+orgize	blocks	10000	117 KiB	1255.1 ms	2 MiB	10003 nodes
+orgize	blocks	100000	died: 
+orgize	blocks	1000000	died: 
+orgize	line	1000	0 KiB	0.0 ms	0 MiB	3 nodes
+orgize	line	10000	9 KiB	0.0 ms	0 MiB	3 nodes
+orgize	line	100000	97 KiB	0.1 ms	0 MiB	3 nodes
+orgize	line	1000000	976 KiB	0.6 ms	0 MiB	3 nodes
+orgize	latex	1000	2 KiB	0.3 ms	0 MiB	3 nodes
+orgize	latex	10000	29 KiB	2.9 ms	0 MiB	3 nodes
+orgize	latex	100000	292 KiB	25.9 ms	0 MiB	3 nodes
+orgize	latex	1000000	2929 KiB	254.1 ms	2 MiB	3 nodes
+orgize	scripts	1000	3 KiB	4.0 ms	0 MiB	1003 nodes
+orgize	scripts	10000	died: fatal runtime error: stack overflow, aborting
+orgize	scripts	100000	died: fatal runtime error: stack overflow, aborting
+orgize	scripts	1000000	died: fatal runtime error: stack overflow, aborting
+orgize	timestamps	1000	11 KiB	0.3 ms	0 MiB	3 nodes
+orgize	timestamps	10000	117 KiB	3.1 ms	0 MiB	3 nodes
+orgize	timestamps	100000	1171 KiB	24.8 ms	1 MiB	3 nodes
+orgize	timestamps	1000000	11718 KiB	241.0 ms	11 MiB	3 nodes
+orgize	tags	1000	1 KiB	0.1 ms	0 MiB	4 nodes
+orgize	tags	10000	19 KiB	0.6 ms	1 MiB	4 nodes
+orgize	tags	100000	195 KiB	5.5 ms	13 MiB	4 nodes
+orgize	tags	1000000	1953 KiB	58.0 ms	123 MiB	4 nodes
+orgize	prose	1000	67 KiB	1.3 ms	1 MiB	4003 nodes
+orgize	prose	10000	673 KiB	12.1 ms	12 MiB	40003 nodes
+orgize	prose	100000	6738 KiB	112.5 ms	119 MiB	400003 nodes
+orgize	prose	1000000	67382 KiB	1110.5 ms	1165 MiB	4000003 nodes
+
+[exited with code 0]

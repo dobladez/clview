@@ -1,0 +1,74 @@
+== orgize
+298 files in the reference, 298 parsed, 0 panicked
+kind                     Org  parser  found  files agreeing
+headline                5527    5527   100%  266 of 266
+todo                     153     153   100%  31 of 31
+priority                   0       0      -  0 of 0
+tags                     104     104   100%  60 of 60
+planning                  24      24   100%  3 of 3
+property-drawer         1147    1147   100%  57 of 57
+drawer                     6       6   100%  3 of 3
+bracket-link            5080    4938    97%  236 of 250
+plain-link               504       0     0%  0 of 86
+footnote-reference       378     376    99%  38 of 40
+footnote-definition      193     193   100%  35 of 35
+src-block               1379    1379   100%  154 of 156
+example-block            945     945   100%  84 of 84
+quote-block               97      97   100%  29 of 29
+verse-block                4       4   100%  3 of 3
+center-block               2       2   100%  2 of 2
+special-block             80      79    99%  22 of 23
+export-block              79      79   100%  69 of 69
+comment-block              3       3   100%  3 of 3
+table                    328     305    93%  62 of 75
+table-row               8100    6376    79%  62 of 75
+plain-list              2196    2214   101%  215 of 221
+item                    9594    9594   100%  221 of 221
+checkbox                 625     625   100%  44 of 44
+target                    44      44   100%  17 of 17
+keyword                 6060    6662   110%  204 of 293
+fixed-width             1265    1264   100%  122 of 123
+timestamp                 52      77   148%  19 of 23
+bold                     886     882   100%  108 of 113
+italic                  1197    1179    98%  105 of 117
+underline                 37      33    89%  19 of 21
+strike-through             6      45   750%  3 of 9
+verbatim               11389   11207    98%  176 of 198
+code                    3891    3873   100%  83 of 88
+== orgrust
+298 files in the reference, 296 parsed, 2 panicked
+kind                     Org  parser  found  files agreeing
+headline                5513    5504   100%  262 of 265
+todo                     153     136    89%  24 of 31
+priority                   0       0      -  0 of 0
+tags                     104      99    95%  58 of 60
+planning                  24       0     0%  0 of 3
+property-drawer         1147    1143   100%  54 of 57
+drawer                     6      10   167%  3 of 6
+bracket-link            5057    5025    99%  216 of 250
+plain-link               504     586   116%  62 of 93
+footnote-reference       378     377   100%  39 of 40
+footnote-definition      193     193   100%  35 of 35
+src-block               1378    1362    99%  151 of 154
+example-block            945     945   100%  84 of 84
+quote-block               97      97   100%  29 of 29
+verse-block                4       4   100%  3 of 3
+center-block               2       2   100%  2 of 2
+special-block             80      79    99%  22 of 23
+export-block              79      79   100%  69 of 69
+comment-block              3       3   100%  3 of 3
+table                    328     328   100%  75 of 75
+table-row               8100    8100   100%  75 of 75
+plain-list              2196    2815   128%  124 of 221
+item                    9594    9605   100%  213 of 221
+checkbox                 625     625   100%  44 of 44
+target                    44      78   177%  14 of 27
+keyword                 6031    6326   105%  233 of 293
+fixed-width             1265       0     0%  0 of 123
+timestamp                 52       0     0%  0 of 21
+bold                     886     725    82%  93 of 116
+italic                  1196    1126    94%  96 of 121
+underline                 37      33    89%  16 of 22
+strike-through             6     176  2933%  2 of 23
+verbatim               11387   10636    93%  154 of 197
+code                    3890    3095    80%  72 of 96
