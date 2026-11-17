@@ -1,6 +1,6 @@
 # Spec-0014: Show Org-mode documents
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-17
 - **Related:** [ADR-0014](../adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)
   (Markdown through HTML into wordcraft's importer, the path Org takes);
@@ -250,3 +250,4 @@ checks:
 ## Changelog
 
 - 2026-11-17 — Ready (spec-new).
+- 2026-11-17 — Implementing ([notes](0014-show-org-mode-documents-impl-20261117_2015.md)).
