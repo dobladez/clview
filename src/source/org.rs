@@ -709,13 +709,19 @@ const PICTURES: [&str; 7] = ["avif", "gif", "jpeg", "jpg", "png", "svg", "webp"]
 /// The Org document `text` as HTML, clv's own of orgize's tree; or why not. `home`, the reader's
 /// home directory, is where `~/` in a link's path leads.
 fn html_of(text: &str, home: Option<&str>) -> Result<String, String> {
-    let config = orgize::ParseConfig {
-        todo_keywords: todo_keywords(text),
+    let mut config = orgize::ParseConfig {
         // `_` and `^` as written: a document's `a_b` is never a subscript.
         use_sub_superscript: orgize::config::UseSubSuperscript::Nil,
         ..Default::default()
     };
-    let org = config.clone().parse(text);
+    let mut org = config.clone().parse(text);
+    // The TODO keywords the file declares, which its headlines are parsed by: parsed again where
+    // they aren't Org's own.
+    let declared = todo_keywords(org.document().syntax());
+    if declared != config.todo_keywords {
+        config.todo_keywords = declared;
+        org = config.clone().parse(text);
+    }
     let root = fixed(org.document().syntax(), &config);
     let mut writer = Writer {
         out: start(),
@@ -736,20 +742,19 @@ fn html_of(text: &str, home: Option<&str>) -> Result<String, String> {
     }
 }
 
-/// The TODO keywords `text` declares, not done and done, as Org reads its `#+TODO:`, `#+SEQ_TODO:`
-/// and `#+TYP_TODO:` lines, in any case: the words before a `|` not done, those after it done; with
-/// no `|`, the last done; `TODO(t)` the word before its key. Org's own, `TODO` and `DONE`, where it
-/// declares none.
-fn todo_keywords(text: &str) -> (Vec<String>, Vec<String>) {
+/// The TODO keywords the document `root` declares, not done and done, as Org reads its `#+TODO:`,
+/// `#+SEQ_TODO:` and `#+TYP_TODO:` keywords, in any case: the words before a `|` not done, those
+/// after it done; with no `|`, the last done; `TODO(t)` the word before its key. Only keywords
+/// orgize parses as such count, as only those Emacs reads as keywords do: never a line in a block.
+/// Org's own, `TODO` and `DONE`, where it declares none.
+fn todo_keywords(root: &SyntaxNode) -> (Vec<String>, Vec<String>) {
     let (mut todo, mut done) = (Vec::new(), Vec::new());
-    for line in text.lines() {
-        let line = line.trim_start();
-        let Some(rest) = ["#+todo:", "#+seq_todo:", "#+typ_todo:"]
-            .iter()
-            .find_map(|key| line.get(..key.len()).filter(|start| start.eq_ignore_ascii_case(key)).and_then(|_| line.get(key.len()..)))
-        else {
+    for keyword in root.descendants().filter_map(orgize::ast::Keyword::cast) {
+        let key = keyword.key();
+        if !["TODO", "SEQ_TODO", "TYP_TODO"].iter().any(|name| key.eq_ignore_ascii_case(name)) {
             continue;
-        };
+        }
+        let rest = keyword.value();
         let words: Vec<String> = rest.split_whitespace().map(|word| word.split('(').next().unwrap_or(word).to_owned()).collect();
         match words.iter().position(|word| word == "|") {
             Some(bar) => {
@@ -788,21 +793,38 @@ fn collapsed(text: &str) -> String {
 ///
 /// Whatever doesn't come to something else when parsed again is left as it was.
 fn fixed(root: &SyntaxNode, config: &orgize::ParseConfig) -> SyntaxNode {
-    let paragraphs: Vec<SyntaxNode> = root.descendants().filter(|node| node.kind() == SyntaxKind::PARAGRAPH).collect();
-    // From the last, so that what is replaced moves nothing before it.
     let mut green = root.green().into_owned();
-    for paragraph in paragraphs.iter().rev() {
-        let Some(replacement) = mended(paragraph, config) else { continue };
+    // What is parsed again keeps every offset, so a paragraph is known by its range from one round
+    // to the next: those left as they were aren't parsed again.
+    let mut kept: HashSet<orgize::TextRange> = HashSet::new();
+    // Round after round, since what follows a name is parsed again whole, and may hold another
+    // element named, read as a paragraph again; until a round mends nothing.
+    loop {
         let tree = SyntaxNode::new_root(green.clone());
-        let Some(found) = tree.descendants().find(|node| node.kind() == SyntaxKind::PARAGRAPH && node.text_range() == paragraph.text_range()) else {
-            continue;
-        };
-        let Some(parent) = found.parent() else { continue };
-        let at = found.index();
-        let new_parent = parent.green().splice_children(at..at.saturating_add(1), replacement);
-        green = parent.replace_with(new_parent);
+        let paragraphs: Vec<SyntaxNode> =
+            tree.descendants().filter(|node| node.kind() == SyntaxKind::PARAGRAPH && !kept.contains(&node.text_range())).collect();
+        let mut mending = false;
+        // From the last, so that what is replaced moves nothing before it.
+        for paragraph in paragraphs.iter().rev() {
+            let Some(replacement) = mended(paragraph, config) else {
+                kept.insert(paragraph.text_range());
+                continue;
+            };
+            let tree = SyntaxNode::new_root(green.clone());
+            let Some(found) = tree.descendants().find(|node| node.kind() == SyntaxKind::PARAGRAPH && node.text_range() == paragraph.text_range())
+            else {
+                continue;
+            };
+            let Some(parent) = found.parent() else { continue };
+            let at = found.index();
+            let new_parent = parent.green().splice_children(at..at.saturating_add(1), replacement);
+            green = parent.replace_with(new_parent);
+            mending = true;
+        }
+        if !mending {
+            return SyntaxNode::new_root(green);
+        }
     }
-    SyntaxNode::new_root(green)
 }
 
 /// What `paragraph` should have been parsed as ([`fixed`]): the elements to put in its place, or
@@ -864,26 +886,58 @@ fn links_joined(text: &str) -> Option<String> {
             if matches!(byte, b'\n' | b'\r')
                 && let Some(slot) = out.get_mut(start.saturating_add(n))
             {
-                *slot = b' ';
+                *slot = WRAPPED as u8;
                 changed = true;
             }
         }
         at = start.saturating_add(end).max(at.saturating_add(1));
     }
-    // Only line ends, each one byte, were made spaces: still UTF-8.
+    // Only line ends, each one byte, were made another byte below 128: still UTF-8.
     changed.then(|| String::from_utf8(out).ok()).flatten()
 }
+
+/// What a line's end in a link's path is made by [`links_joined`]: a control of ASCII's, one byte as
+/// a line's end is, which orgize reads in a path where it reads no line's end, and [`unwrapped`]
+/// makes a space with the blanks around it.
+const WRAPPED: char = '\u{0B}';
 
 /// Each footnote definition (`[fn:name] …` on a line of its own) in `root`, by its label: the first
 /// of a label.
 fn definitions(root: &SyntaxNode) -> HashMap<String, SyntaxNode> {
     let mut found = HashMap::new();
-    for node in root.descendants().filter(|node| node.kind() == SyntaxKind::FN_DEF) {
-        if let Some(label) = footnote_label(&node) {
+    for node in root.descendants().filter(|node| matches!(node.kind(), SyntaxKind::FN_DEF | SyntaxKind::FN_REF)) {
+        let inline = node.kind() == SyntaxKind::FN_REF && is_inline(&node);
+        if (node.kind() == SyntaxKind::FN_DEF || inline)
+            && !hidden(&node)
+            && let Some(label) = footnote_label(&node)
+        {
             found.entry(label).or_insert(node);
         }
     }
     found
+}
+
+/// Whether a footnote's reference, `node`, defines its note inline: what comes after a second `:`.
+fn is_inline(node: &SyntaxNode) -> bool {
+    node.children_with_tokens().filter(|e| e.kind() == SyntaxKind::COLON).count() >= 2
+}
+
+/// Whether `node` is under what isn't shown, or is it: a drawer, a comment, a keyword, an export
+/// block but HTML's. What is there is neither a note nor a place.
+fn hidden(node: &SyntaxNode) -> bool {
+    use SyntaxKind as K;
+    node.ancestors().any(|above| match above.kind() {
+        K::DRAWER | K::PROPERTY_DRAWER | K::COMMENT_BLOCK | K::COMMENT | K::KEYWORD | K::BABEL_CALL => true,
+        K::EXPORT_BLOCK => !is_html(&above),
+        _ => false,
+    })
+}
+
+/// Whether an export block, `node`, is HTML's (`#+begin_export html`), which is shown.
+fn is_html(node: &SyntaxNode) -> bool {
+    node.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == SyntaxKind::EXPORT_BLOCK_TYPE && t.text().eq_ignore_ascii_case("html"))
 }
 
 /// The label of a footnote's reference or definition, `[fn:label…`: `None` for one with none
@@ -960,7 +1014,7 @@ fn folded(text: &str) -> String {
 fn places(root: &SyntaxNode) -> Places {
     use SyntaxKind as K;
     let mut places = Places::default();
-    for node in root.descendants() {
+    for node in root.descendants().filter(|node| !hidden(node)) {
         match node.kind() {
             K::HEADLINE => {
                 for (key, value) in properties(&node) {
@@ -987,6 +1041,9 @@ fn places(root: &SyntaxNode) -> Places {
                 let (true, Some(name), Some(element)) = (keyword.key().eq_ignore_ascii_case("NAME"), keyword.value(), node.parent()) else {
                     continue;
                 };
+                if element.kind() == K::FN_DEF {
+                    continue;
+                }
                 let name = collapsed(&name);
                 if let Some(id) = places.claim(&name) {
                     places.names.entry(folded(&name)).or_insert_with(|| id.clone());
@@ -998,8 +1055,9 @@ fn places(root: &SyntaxNode) -> Places {
     }
     let mut slugs = HashMap::new();
     for node in root.descendants().filter(|node| node.kind() == K::HEADLINE) {
-        let title = title_of(&node, false);
-        let slug = slugged(&title_of(&node, true), &mut slugs);
+        let title = title_of(&node);
+        let shown = shown_title(&node);
+        let slug = slugged(&shown, &mut slugs);
         for name in [title.clone(), slug] {
             if let Some(id) = places.claim(&name) {
                 places.mark(&node, id);
@@ -1010,7 +1068,8 @@ fn places(root: &SyntaxNode) -> Places {
             places.mark(&node, id);
         }
         if let Some(anchor) = places.of(&node).first().cloned() {
-            places.titles.entry(folded(&title)).or_insert(anchor);
+            places.titles.entry(folded(&title)).or_insert_with(|| anchor.clone());
+            places.titles.entry(folded(&shown)).or_insert(anchor);
         }
     }
     places
@@ -1024,10 +1083,8 @@ fn properties(node: &SyntaxNode) -> Vec<(String, String)> {
 
 /// A headline's title, `node`'s: as Org matches `[[*Heading]]`, as written without its statistics
 /// cookies (`[1/3]`), and without `COMMENT`, its TODO keyword, priority and tags (which orgize
-/// keeps out of it); or, `shown`, only its text as it shows, `COMMENT` and all, without its
-/// cookies and the marks of its emphasis.
-/// Its blank space collapsed.
-fn title_of(node: &SyntaxNode, shown: bool) -> String {
+/// keeps out of it). Its blank space collapsed. What it shows is [`shown_title`].
+fn title_of(node: &SyntaxNode) -> String {
     use SyntaxKind as K;
     let Some(title) = node.children().find(|child| child.kind() == K::HEADLINE_TITLE) else { return String::new() };
     let mut text = String::new();
@@ -1037,15 +1094,102 @@ fn title_of(node: &SyntaxNode, shown: bool) -> String {
         match element {
             NodeOrToken::Node(node) if node.kind() == K::COOKIE => {}
             NodeOrToken::Node(node) => stack.extend(node.children_with_tokens().collect::<Vec<_>>().into_iter().rev()),
-            NodeOrToken::Token(token) if !shown || matches!(token.kind(), K::TEXT | K::WHITESPACE | K::NEW_LINE) => text.push_str(token.text()),
-            NodeOrToken::Token(_) => {}
+            NodeOrToken::Token(token) => text.push_str(token.text()),
         }
     }
     let text = collapsed(&text);
     match text.strip_prefix("COMMENT") {
-        Some(rest) if !shown && (rest.is_empty() || rest.starts_with(' ')) => rest.trim().to_owned(),
+        Some(rest) if rest.is_empty() || rest.starts_with(' ') => rest.trim().to_owned(),
         _ => text,
     }
+}
+
+/// A headline's title, `node`'s, as it shows, which GitHub's slug is made from: its text as
+/// [`Writer`] writes it, an entity the character it names, a link its description or its address,
+/// code and verbatim their text, emphasis without its marks; without its statistics cookies, a
+/// footnote's number and a target, as its title as Org matches it ([`title_of`]) is. Its blank
+/// space collapsed.
+fn shown_title(node: &SyntaxNode) -> String {
+    let Some(title) = node.children().find(|child| child.kind() == SyntaxKind::HEADLINE_TITLE) else { return String::new() };
+    let mut text = String::new();
+    shown(title.children_with_tokens().collect(), &mut text, 0);
+    collapsed(&text)
+}
+
+/// `elements`, objects, as they show, onto `text`: [`shown_title`]'s, `depth` down.
+fn shown(elements: Vec<SyntaxElement>, text: &mut String, depth: usize) {
+    use SyntaxKind as K;
+    for element in elements {
+        let node = match element {
+            NodeOrToken::Token(token) => {
+                text.push_str(token.text());
+                continue;
+            }
+            NodeOrToken::Node(node) => node,
+        };
+        if depth > MAX_DEPTH {
+            text.push_str(&raw(&node));
+            continue;
+        }
+        let inner = || {
+            let children: Vec<SyntaxElement> = node.children_with_tokens().collect();
+            let end = children.len().saturating_sub(1);
+            children.into_iter().take(end).skip(1)
+        };
+        match node.kind() {
+            K::BOLD | K::ITALIC | K::UNDERLINE | K::STRIKE | K::VERBATIM | K::CODE | K::RADIO_TARGET => {
+                shown(inner().collect(), text, depth.saturating_add(1))
+            }
+            K::COOKIE | K::FN_REF | K::TARGET | K::SNIPPET => {}
+            K::ENTITY => match orgize::ast::Entity::cast(node.clone()) {
+                Some(entity) if !entity.utf8().is_empty() => text.push_str(entity.utf8()),
+                _ => text.push_str(&raw(&node)),
+            },
+            K::LINE_BREAK => text.push(' '),
+            K::INLINE_SRC => {
+                let source = raw(&node);
+                text.push_str(source.split_once('{').and_then(|(_, body)| body.rsplit_once('}')).map_or(source.as_str(), |(body, _)| body));
+            }
+            K::LINK => match orgize::ast::Link::cast(node.clone()) {
+                Some(link) if link.has_description() => {
+                    let description =
+                        node.children_with_tokens().skip_while(|e| e.kind() != K::L_BRACKET).skip(1).filter(|e| e.kind() != K::R_BRACKET2);
+                    shown(description.collect(), text, depth.saturating_add(1));
+                }
+                Some(link) => {
+                    let path = unwrapped(&link.path());
+                    if picture(&path).is_none() {
+                        text.push_str(path.strip_prefix('*').unwrap_or(&path));
+                    }
+                }
+                None => {}
+            },
+            _ => text.push_str(&raw(&node)),
+        }
+    }
+}
+
+/// `path`, a link's as written, with each line's end in it and the blanks around it one space, as Org
+/// reads a link that wraps; the rest of its spaces as they are. [`links_joined`] marks a line's
+/// end so ([`WRAPPED`]).
+fn unwrapped(path: &str) -> String {
+    let ends = |c: char| matches!(c, '\n' | '\r' | WRAPPED);
+    if !path.contains(ends) {
+        return path.to_owned();
+    }
+    let mut out = String::with_capacity(path.len());
+    let mut chars = path.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !ends(c) {
+            out.push(c);
+            continue;
+        }
+        let kept = out.trim_end_matches([' ', '\t']).len();
+        out.truncate(kept);
+        while chars.next_if(|c| ends(*c) || matches!(c, ' ' | '\t')).is_some() {}
+        out.push(' ');
+    }
+    out
 }
 
 /// The link abbreviations `root` declares (`#+LINK: word https://…/%s`): each its word and what it
@@ -1071,7 +1215,7 @@ const MAX_EXPANDED: usize = 8 << 10;
 fn encoded(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        if c.is_control() || matches!(c, ' ' | '"' | '#' | '%' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}') {
+        if c.is_control() || matches!(c, ' ' | '"' | '#' | '%' | '?' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}') {
             let mut bytes = [0; 4];
             for byte in c.encode_utf8(&mut bytes).bytes() {
                 let _ = write!(out, "%{byte:02X}");
@@ -1244,30 +1388,29 @@ impl Writer<'_> {
                 self.pre(&unescaped(&block_content(node)), language.as_deref(), node);
             }
             K::EXAMPLE_BLOCK => self.pre(&unescaped(&block_content(node)), None, node),
-            K::EXPORT_BLOCK => {
-                let html = node
-                    .descendants_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind() == K::EXPORT_BLOCK_TYPE && t.text().eq_ignore_ascii_case("html"));
-                if html {
-                    // As Markdown's HTML is: read by the importer as it is.
-                    self.push(&block_content(node));
-                }
+            // As Markdown's HTML is: read by the importer as it is.
+            K::EXPORT_BLOCK if is_html(node) => {
+                let id = self.id_of(node);
+                let _ = writeln!(self.out, "<div{id}>{}</div>", block_content(node));
             }
             K::QUOTE_BLOCK => self.block(node, "<blockquote>", "</blockquote>\n", deeper),
             K::CENTER_BLOCK => self.block(node, "<center>", "</center>\n", deeper),
             K::SPECIAL_BLOCK => self.block(node, "<div>", "</div>\n", deeper),
             K::VERSE_BLOCK => {
-                self.push("<p>");
+                let id = self.id_of(node);
+                let _ = write!(self.out, "<p{id}>");
                 if let Some(content) = node.children().find(|child| child.kind() == K::BLOCK_CONTENT) {
                     self.verse(&content, deeper);
                 }
                 self.push("</p>\n");
             }
             K::DYN_BLOCK => {
+                let id = self.id_of(node);
+                let _ = write!(self.out, "<div{id}>");
                 for child in node.children().filter(|child| !matches!(child.kind(), K::DYN_BLOCK_BEGIN | K::DYN_BLOCK_END)) {
                     self.element(&child, deeper);
                 }
+                self.push("</div>\n");
             }
             K::FIXED_WIDTH => {
                 let lines: Vec<String> = raw(node)
@@ -1281,9 +1424,13 @@ impl Writer<'_> {
                 self.pre(&lines.join("\n"), None, node);
             }
             K::LATEX_ENVIRONMENT => self.pre(raw(node).trim_end(), None, node),
-            K::RULE => self.push("<hr>\n"),
+            K::RULE => {
+                let id = self.id_of(node);
+                let _ = writeln!(self.out, "<hr{id}>");
+            }
             K::CLOCK => {
-                let _ = writeln!(self.out, "<p style=\"font-size:9pt;color:{GREY}\">{}</p>", escaped(&collapsed(&raw(node))));
+                let id = self.id_of(node);
+                let _ = writeln!(self.out, "<p{id} style=\"font-size:9pt;color:{GREY}\">{}</p>", escaped(&collapsed(&raw(node))));
             }
             // Hidden: drawers, keywords, comments; a footnote's definition is written with the notes.
             K::DRAWER | K::PROPERTY_DRAWER | K::KEYWORD | K::BABEL_CALL | K::COMMENT | K::COMMENT_BLOCK | K::FN_DEF | K::AFFILIATED_KEYWORD => {}
@@ -1569,18 +1716,18 @@ impl Writer<'_> {
     fn link(&mut self, node: &SyntaxNode, depth: usize) {
         use SyntaxKind as K;
         let Some(link) = orgize::ast::Link::cast(node.clone()) else { return };
-        let path = collapsed(&link.path());
+        let path = unwrapped(&link.path());
         let described = link.has_description();
         if !described && let Some(src) = picture(&path) {
-            let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&src));
+            let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&src)));
             return;
         }
         let href = escaped(&self.address(&path));
         let _ = write!(self.out, "<a href=\"{href}\">");
         if described {
-            match picture(&collapsed(&link.description_raw())) {
+            match picture(unwrapped(&link.description_raw()).trim()) {
                 Some(src) => {
-                    let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&src));
+                    let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&src)));
                 }
                 None => {
                     let description: Vec<SyntaxElement> =
@@ -1666,10 +1813,28 @@ impl Writer<'_> {
         if url.len().saturating_add(marks.max(1).saturating_mul(tag.len().saturating_mul(3))) > MAX_EXPANDED {
             return path.to_owned();
         }
-        match marks {
-            0 => format!("{url}{tag}"),
-            _ => url.replace("%s", tag).replace("%h", &hexified(tag)),
+        if marks == 0 {
+            return format!("{url}{tag}");
         }
+        // The template's own `%s` and `%h`, in one pass: what the tag holds is never read for them.
+        let mut out = String::with_capacity(url.len().saturating_add(tag.len()));
+        let mut rest = url.as_str();
+        while let Some(at) = rest.find('%') {
+            out.push_str(rest.get(..at).unwrap_or_default());
+            let after = rest.get(at.saturating_add(1)..).unwrap_or_default();
+            match after.chars().next() {
+                Some('s') => out.push_str(tag),
+                Some('h') => out.push_str(&hexified(tag)),
+                _ => {
+                    out.push('%');
+                    rest = after;
+                    continue;
+                }
+            }
+            rest = after.get(1..).unwrap_or_default();
+        }
+        out.push_str(rest);
+        out
     }
 
     /// A footnote's reference, `node`: its number, as a superscript leading to the note; or as
@@ -1677,8 +1842,7 @@ impl Writer<'_> {
     fn reference(&mut self, node: &SyntaxNode) {
         let label = footnote_label(node);
         // An inline definition: what comes after a second `:`.
-        let colons = node.children_with_tokens().filter(|e| e.kind() == SyntaxKind::COLON).count();
-        let inline = colons >= 2;
+        let inline = is_inline(node);
         let known = label.as_ref().and_then(|label| self.notes.numbered.get(label)).copied();
         let number = match known {
             Some(number) => number,
@@ -2124,10 +2288,14 @@ mod tests {
 
     #[test]
     fn a_line_end_in_a_links_path_is_a_space_and_nothing_else_moves() {
-        assert_eq!(links_joined("a [[b\nc]] [[d][e\nf]] [[g\r\nh"), Some("a [[b c]] [[d][e\nf]] [[g  h".into()));
+        assert_eq!(links_joined("a [[b\nc]] [[d][e\nf]] [[g\r\nh"), Some("a [[b\u{b}c]] [[d][e\nf]] [[g\u{b}\u{b}h".into()));
         assert_eq!(links_joined("no link\nhere"), None);
         assert_eq!(links_joined("[[a]]\n[[b]]"), None);
-        assert_eq!(links_joined("é[[\n"), Some("é[[ ".into()));
+        assert_eq!(links_joined("é[[\n"), Some("é[[\u{b}".into()));
+        // And read back: a line's end and the blanks around it one space, the rest as written.
+        assert_eq!(unwrapped("*A \u{b}   wrapped  heading"), "*A wrapped  heading");
+        assert_eq!(unwrapped("a\u{b}\u{b}b"), "a b");
+        assert_eq!(unwrapped("one  two"), "one  two");
     }
 
     /// Past [`MAX_DEPTH`], what is nested is written as its text, and nothing recurses further.
@@ -2314,6 +2482,102 @@ mod tests {
     fn an_abbreviation_too_long_once_expanded_is_left_as_it_is() {
         let tag = "x".repeat(4000);
         assert_eq!(hrefs(&format!("#+LINK: w https://w.org/%s%s%s\n[[w:{tag}]]\n")), [format!("clv-org-not-followed/w:{tag}")]);
+    }
+
+    /// A footnote's definition under what is hidden (a drawer, a comment) is no note: what it says
+    /// isn't shown, nor searched, and a reference to it is as written.
+    #[test]
+    fn a_footnote_defined_where_it_is_hidden_is_no_note() {
+        let html = body(
+            "* H\n:LOGBOOK:\n[fn:private] Secret.\n:END:\n#+begin_comment\n[fn:other] Hidden.\n#+end_comment\nText[fn:private] and[fn:other].\n",
+        );
+        assert!(!html.contains("Secret") && !html.contains("Hidden"), "{html}");
+        assert!(html.contains("Text[fn:private] and[fn:other]."), "{html}");
+    }
+
+    /// Only the TODO keywords Org reads as keywords are the file's: not a `#+TODO:` line in a
+    /// block, which is the block's text.
+    #[test]
+    fn a_todo_line_in_a_block_declares_nothing() {
+        for block in ["src org", "example", "comment"] {
+            let end = block.split(' ').next().unwrap();
+            let html = body(&format!("#+begin_{block}\n#+TODO: LATER | GONE\n#+end_{end}\n* TODO Still Org's own\n* LATER not one\n"));
+            assert!(html.contains(&format!("<span style=\"color:{NOT_DONE}\">TODO</span> Still")), "{block}: {html}");
+            assert!(!html.contains(">LATER</span>"), "{block}: {html}");
+        }
+    }
+
+    /// A picture's path and a file's are written as URLs, so that a `#`, a `?` or a `%` in a name is
+    /// read back as that name.
+    #[test]
+    fn a_pictures_path_and_a_files_are_written_as_urls() {
+        let html = body("[[file:plot#1.png]] [[./a%20b.png]] [[https://x.org][file:thumb?.png]] [[file:a#b.org]]\n");
+        for written in ["<img src=\"plot%231.png\"", "<img src=\"./a%2520b.png\"", "<img src=\"thumb%3F.png\"", "<a href=\"a%23b.org\">"] {
+            assert!(html.contains(written), "{written} in {html}");
+        }
+    }
+
+    /// A path's own spaces are kept; only a line's end and the blanks around it, where a link
+    /// wraps, are one space.
+    #[test]
+    fn a_links_spaces_are_kept_but_where_it_wraps() {
+        assert_eq!(hrefs("[[file:one  two.org]] [[file:a\n    b.org]]\n"), ["one%20%20two.org", "a%20b.org"]);
+        let html = body("[[*Some\n   heading][x]] [[file:one  two.org]]\n* Some heading\n");
+        assert!(html.contains("<a href=\"#Some%20heading\">x</a>") && html.contains(">file:one  two.org</a>"), "{html}");
+    }
+
+    /// A note defined inline after a reference to it by its name is that reference's note too: one
+    /// number, one note.
+    #[test]
+    fn a_note_defined_inline_after_its_first_reference_is_its_note() {
+        let html = body("First[fn:n]. Later[fn:n: The note.] and again[fn:n].\n");
+        assert_eq!(html.matches("<sup><a href=\"#fn.1\">1</a></sup>").count(), 3, "{html}");
+        assert!(html.contains("<p id=\"fn.1\" style=\"font-size:9.5pt\"><sup>1</sup>  The note.</p>") && !html.contains("[fn:n]"), "{html}");
+    }
+
+    /// Every place the document has is written as an `id`, whatever element it is: no name a link
+    /// leads to that the document doesn't have.
+    #[test]
+    fn every_place_is_written_where_it_is() {
+        let org = concat!(
+            "* Heading\n:PROPERTIES:\n:CUSTOM_ID: custom\n:ID: an-id\n:END:\nA <<target>> and <<<radio>>>.\n",
+            "#+NAME: para\nA paragraph.\n#+NAME: verse\n#+begin_verse\nA verse.\n#+end_verse\n#+NAME: rule\n-----\n",
+            "#+NAME: table\n| a |\n#+NAME: list\n- an item\n#+NAME: src\n#+begin_src sh\nls\n#+end_src\n",
+            "#+NAME: example\n#+begin_example\nx\n#+end_example\n#+NAME: fixed\n: fixed\n#+NAME: quote\n#+begin_quote\nq\n#+end_quote\n",
+            "#+NAME: centre\n#+begin_center\nc\n#+end_center\n#+NAME: special\n#+begin_note\nn\n#+end_note\n",
+            "#+NAME: latex\n\\begin{equation}\nx\n\\end{equation}\n",
+            "| a <<in a cell>> |\n- an <<in an item>> item\n",
+            "#+NAME: html\n#+begin_export html\n<b>raw</b>\n#+end_export\n#+NAME: table.el\n+---+\n| a |\n+---+\n",
+            ":LOGBOOK:\n<<in a drawer>>\n:END:\n",
+        );
+        let config = orgize::ParseConfig { use_sub_superscript: orgize::config::UseSubSuperscript::Nil, ..Default::default() };
+        let root = fixed(config.clone().parse(org).document().syntax(), &config);
+        let places = places(&root);
+        let html = html(org);
+        let ids: Vec<&String> = places.at.values().flatten().collect();
+        assert_eq!(ids.len(), 21, "every place named here: {ids:?}");
+        for id in ids {
+            assert!(html.contains(&format!("id=\"{}\"", escaped(id))), "{id} isn't written: {html}");
+        }
+        assert!(!places.targets.contains_key("in a drawer"), "a target hidden is no place");
+    }
+
+    /// A heading's slug is made from its title as it shows: an entity the character it names, a link
+    /// with no description its address; and `[[*…]]` finds it by what it shows too.
+    #[test]
+    fn a_headings_slug_is_made_from_what_it_shows() {
+        let html = body("[[*Greek α]]\n* Greek \\alpha\n* See [[https://x.org/a]]\n* A =code= [[*x][link]] \\to there\n");
+        for id in ["greek-α", "see-httpsxorga", "a-code-link--there"] {
+            assert!(html.contains(&format!("<a id=\"{id}\"></a>")), "{id} in {html}");
+        }
+        assert!(html.contains("<a href=\"#Greek%20%5Calpha\">"), "found by what it shows: {html}");
+    }
+
+    /// An abbreviation's template is expanded once: a `%h` in the tag a `%s` puts in it stays.
+    #[test]
+    fn an_abbreviation_is_expanded_once() {
+        assert_eq!(hrefs("#+LINK: w https://w.org/?q=%s&h=%h\n[[w:%h%s]]\n"), ["https://w.org/?q=%h%s&amp;h=%25h%25s"]);
+        assert_eq!(hrefs("#+LINK: w https://w.org/%x/%s\n[[w:t]]\n"), ["https://w.org/%x/t"]);
     }
 
     /// How much larger the HTML is than the Org it is written from (ADR-0040): over the files

@@ -617,8 +617,11 @@ through its command) and that a key means one setting
   (`org::DOCUMENTS`, in `source::WORKERS`), capped at 2 s of CPU and 512 MiB of heap, one at a
   time and gone once it has answered, is given the text and answers its HTML (`org::html_of`):
   orgize's tree, mended where orgize misreads it (`fixed`: a table after affiliated keywords, a
-  link whose path wraps a line, each parsed again by orgize, each with a canary test), its places
-  found (`places`), then written. The HTML starts with 1,024 bytes of clv's own, a doctype first,
+  link whose path wraps a line, each parsed again by orgize, each with a canary test, in rounds
+  until one mends nothing, since what follows a name is parsed again whole; a line's end in a
+  path is marked, `WRAPPED`, and read back as one space, `unwrapped`), its places found
+  (`places`, none under what is hidden), then written. The TODO keywords it is parsed by are
+  those orgize finds among its keywords, parsed once with Org's own to find them. The HTML starts with 1,024 bytes of clv's own, a doctype first,
   so that it is HTML to the backend that opens it and nothing the file writes chooses one. It is
   handed on as a held file, which the documents' backend reads again for each relayout: `CACHE`
   keeps what the worker wrote, 64 files and 64 MiB, by the Org file's bytes, so a relayout starts

@@ -175,3 +175,41 @@ from `wordcraft.rs` as it was.
   address to the viewer as the web address it is, so one place says it. A file in another user's
   home now says `a file: link, which isn't followed`. Seen failing with the article reverted:
   `view::link::tests::a_web_address_is_http_https_or_mailto` and `org::links_that_run_something_or_lead_nowhere_say_so`.
+
+## Codex review, round 1 (2026-11-18)
+
+All eight findings taken; each test below seen failing with its fix reverted.
+
+- **A note defined in a drawer** (`:LOGBOOK:` holding `[fn:private] Secret`) was written and
+  searched: nothing under what is hidden (`hidden`: a drawer, a comment, a keyword, an export
+  block but HTML's) is a note or a place now. `a_footnote_defined_where_it_is_hidden_is_no_note`;
+  the places' filter, `every_place_is_written_where_it_is`.
+- **A `#+TODO:` line in a block** replaced the file's keywords: they are read from the keywords
+  orgize parses, the file parsed once with Org's own to find them and again only where they
+  differ. `a_todo_line_in_a_block_declares_nothing`.
+- **A picture's path** wasn't written as a URL (`plot#1.png` read as `plot`; `%20` decoded into
+  another name): both the picture and the linked picture are `encoded`, and `?` is encoded too,
+  since a picture's path is cut there. `a_pictures_path_and_a_files_are_written_as_urls`.
+- **A path's spaces** were collapsed (`one  two.org`): only a line's end and the blanks around it
+  are one space now, for which `links_joined` marks a line's end with a byte of its own
+  (`WRAPPED`, U+000B) where it wrote a space, and `unwrapped` reads it back.
+  `a_links_spaces_are_kept_but_where_it_wraps`.
+- **A named inline note after its first reference** left that reference as text: named inline
+  definitions are found with the rest before anything is written.
+  `a_note_defined_inline_after_its_first_reference_is_its_note`.
+- **A named verse block and a rule** were places with no id written: every element that can be a
+  place writes its id (verse, rule, clock, an HTML export block in a `<div>`), and the test that
+  checks every place has its id found a second fault: what follows a name is parsed again whole,
+  and may hold another named element read as a paragraph, which was left so. `fixed` now mends in
+  rounds until one mends nothing, a paragraph left as it was not parsed again (its range kept).
+  `every_place_is_written_where_it_is` (21 places, every kind of element named; seen failing both
+  with a rule's id left out and with one round). A `#+NAME:` before a footnote's definition is no
+  place: the note has its own id. orgize reads `#+BEGIN:` as a keyword, so a dynamic block is its
+  content shown, never a named place; a link's description holds no target, as in Org.
+- **A heading's slug** wasn't made from what it shows (`* Greek \alpha` slugged `greek-alpha`):
+  `shown_title` reads it as the writer writes it, an entity the character, a link its
+  description or its address. The title Org matches stays as written (`[[*Greek \alpha]]`, and
+  another file's `::*Greek \alpha`), and the title as it shows is found by `[[*…]]` too.
+  `a_headings_slug_is_made_from_what_it_shows`.
+- **An abbreviation** was expanded in two passes, a `%h` that `%s` put there expanded again: one
+  pass over the template now. `an_abbreviation_is_expanded_once`.
