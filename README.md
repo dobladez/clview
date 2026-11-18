@@ -88,7 +88,7 @@ High level, not in order, no promises; more details and other idesa in the [back
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.
 - `D` for SVG drawings too, as for Markdown, HTML and Mermaid diagrams.
-- More documents: Org-mode, AsciiDoc and reStructuredText.
+- More documents: AsciiDoc and reStructuredText.
 - `/` as a search in lists too.
 - More pictures: AVIF, colour profiles, animations.
 - More archives: zstd, 7z; comic book archives as books.

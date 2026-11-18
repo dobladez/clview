@@ -135,3 +135,19 @@ heading's), `links_to_an_org_file_go_to_its_heading_from_org_and_from_markdown` 
 `::` dropped), `links_that_run_something_or_lead_nowhere_say_so` (every scheme written as it is,
 which the importer drops). `slug::tests::the_table_of_marks_is_in_order_and_knows_a_mark` moved
 from `wordcraft.rs` as it was.
+
+## Task 4: docs
+
+- `docs/usage.md`: an Org documents section after Books (which files, what it shows and hides);
+  its row in Which files it shows; Org's links and places under Following links; its limits; Org
+  in the options' and keys' rows, the search's intro, and the status line's example; a known issue
+  (orgize keeps a list across two blank lines).
+- `docs/architecture.md`: Org in the Backends table (fourth, the rest renumbered), how it opens and
+  how its places and links are resolved, `slug.rs` in Files, the settings' example.
+- `CONTRIBUTING.md`: orgize in Pinned dependencies with its two canaries and what to remove when
+  each fails (the owner's ask), the library rule, and `tests/it/org.rs` under Tests.
+- `CHANGELOG.md`: an Added line; the Unreleased Changed lines' examples of what a key says now
+  name Org (`(Org, Markdown and others do)`), since the order of the backends makes it so.
+- README's Plans and the backlog's More documents: Org out, AsciiDoc and reStructuredText left.
+- `CLAUDE.md`'s Layout: `slug.rs`.
+- Gates: `cargo test -j 2 --test docs` passes; no Rust changed since task 3's full gates.

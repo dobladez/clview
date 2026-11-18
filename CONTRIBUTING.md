@@ -60,6 +60,28 @@ it moves, measure them again with `docs/adr/0038-measure/` (`measure gen metas 5
 The worker never asks rbook what kind of file a manifest's item is, which panics on a media type
 with a character past ASCII at the pin: check that still holds if the worker comes to ask.
 
+The Org backend's orgize comes from crates.io, pinned to one version (`=`) in `Cargo.toml`. Only
+`src/source/org.rs` and `tests/it/org.rs` name it, and it reaches the Word backend only by asking
+which backend opens the HTML it writes, never by name. The caps of the worker it runs in rest on
+what it costs at the pin ([ADR-0040](docs/adr/0040-org-mode-through-orgize-in-a-worker-process.md)):
+when it moves, measure it again with `docs/adr/0040-measure/` (`measure count` and `measure
+compare` against `reference.el`'s counts over the corpus, `measure cut`, `hostile.sh orgize`), and
+run `tests/it/org.rs`, whose hostile files must still cost the document alone. Two of its mistakes
+are worked around in `org.rs` (`fixed`, `mended`), each by orgize parsing the text again, and each
+has a canary, a unit test in `org.rs` that asserts the mistake is still there and fails, saying what
+to remove, once orgize stops making it:
+
+- `orgize_still_reads_a_table_after_keywords_as_a_paragraph`: a table after affiliated keywords
+  (`#+NAME:`, `#+CAPTION:`) read as a paragraph. When it fails, take `mended`'s first case out
+  (the keywords and what follows them parsed again), with the canary.
+- `orgize_still_reads_no_link_whose_path_wraps`: a bracket link whose path goes on past a line's
+  end, not read as a link (upstream's unmerged
+  [PoiScript/orgize#94](https://github.com/PoiScript/orgize/pull/94)). When it fails, take
+  `mended`'s second case and `links_joined` out, with the canary.
+
+`a_table_after_keywords_and_a_link_that_wraps_are_read_as_org_has_them` stays, the behaviour's
+own test, whichever does the work.
+
 **Moving Blitz** (the SVG backend's HTML labels, `src/source/svg/html.rs`): every `=` pin in
 `Cargo.toml` moves together (`blitz-dom`, `blitz-html`, `blitz-paint`, `blitz-traits`, `anyrender`,
 `anyrender_vello_cpu`, `stylo`, `parley`; `wuff` and `kurbo` as they need). Then:
@@ -122,6 +144,7 @@ with a character past ASCII at the pin: check that still holds if the worker com
   kurbo, stylo, parley, taffy, wuff) only in `src/source/svg/html.rs`, `tests/it/resvg.rs` (which
   checks it) and `Cargo.toml`; merman only in `src/source/mermaid.rs`, `tests/it/mermaid.rs` (which checks it)
   and `Cargo.toml`; rbook only in `src/source/epub.rs`, `tests/it/epub.rs` (which checks it) and
+  `Cargo.toml`; orgize only in `src/source/org.rs`, `tests/it/org.rs` (which checks it) and
   `Cargo.toml`; the allocator that caps a worker process's heap (cap) only in
   `src/source/worker.rs`, `tests/it/view.rs` (which checks it) and `Cargo.toml`.
 - **A backend brings its own render threads**, honouring `Pool`'s contract: `set_queue` replaces the
@@ -298,6 +321,22 @@ CodeQL's default setup scans the Rust and the workflows.
   again, and a table of contents unread without costing the book (fake workers that die on
   it), and property tests that no chapter and no answer panics, are unit-tested in `src/source/epub.rs`, the worker's code run on a thread. The
   lexer's attributes are in `src/source/markup.rs`.
+- **`tests/it/org.rs`**: Org documents through the viewer, written by the tests: which files are
+  Org, by name in any case and by an Emacs mode line whatever the name (a `.txt`, none, a `.md`,
+  UTF-16), through a pipe too; a TODO keyword in colour, done and not, and a picture drawn from
+  beside the file, `..` included; in a list, a zip and a tar, its picture read from the archive;
+  dark paper and a width; a `#+begin_src mermaid` block drawn, and as code with `--fences code`;
+  the documents' limits before it is parsed and HTML's after, said; hostile files (special blocks
+  nested 10,000 deep, footnotes 90,000 deep) costing the document and never the viewer; `--help`;
+  and that nothing else names orgize. With `f`, on a pseudo-terminal (`links_…`): to a heading by
+  its title, a custom id, an `id:`, a target before a heading of its name, a footnote's note, a
+  heading whose title wraps a line in the link; to another Org file's heading from Org and from
+  Markdown, Backspace back; and an `elisp:` link and an `id:` not in the file saying so. In
+  `tests/it/view_pager.rs`, `/` on an Org file searching what it shows and not what it hides,
+  and `s` its source block as code. What the converter writes (every element Org has, what it
+  hides, places and every link form, the two workarounds and their canaries, a depth past which
+  it writes text), the worker's failures said, its cache, and a property test that no Org text
+  panics it, are unit-tested in `src/source/org.rs`, the worker's code run on a thread.
 
 - **`tests/docs.rs`**: that every relative link in the docs leads to a file, and its anchor to a
   heading, that the changelog has this version, and that the specs' Index says what their headers

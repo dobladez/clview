@@ -28,10 +28,9 @@ rules out.
 
 ### More documents
 
-Org-mode, AsciiDoc and reStructuredText, their source blocks (`#+begin_src`, `[source,x]`,
-`.. code::`) drawn as Markdown's fenced blocks are. Org is
-[Spec-0014](specs/0014-show-org-mode-documents.md); AsciiDoc and reStructuredText could go the way
-it and the epub go: a backend of their own, the one file naming their parser, that writes HTML and
+AsciiDoc and reStructuredText, their source blocks (`[source,x]`, `.. code::`) drawn as
+Markdown's fenced blocks are. Org shows now ([Spec-0014](specs/0014-show-org-mode-documents.md));
+AsciiDoc and reStructuredText could go the way it and the epub go: a backend of their own, the one file naming their parser, that writes HTML and
 hands it to the backend that opens HTML, so they have what a document has without the documents'
 backend growing. An ebook's own stylesheets, applied a chapter
 at a time: an epub is a book now ([Spec-0012](specs/0012-show-an-epub-as-a-book.md)), in clv's

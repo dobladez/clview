@@ -80,6 +80,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `src/source/markup.rs` | HTML cut into text, start tags with their attributes, and end tags, as the Word backend's importer cuts it: for the passes of clv's own over HTML before it is imported, the Word backend's and the epub's |
 | `src/source/zipped.rs` | A zip read through the `zip` crate, within its limits, a panic of the crate's caught: a file whole, to a bound or its first bytes alone, holding no open file while idle. For the zip backend and the epub's |
 | `src/source/tree.rs` | The directories an archive's names make, for zip and tar |
+| `src/source/slug.rs` | A heading's id as GitHub gives it (`slugged`), for the Word backend's Markdown and the Org backend's headings, so that a link finds either alike |
 | `assets/` | The icon `--help` shows: its drawing, and the PNG built into the binary |
 | `build.rs` | The version `--help` and `--version` show, as `CLV_VERSION`: `Cargo.toml`'s, and past a release the commit, from `git describe` (`0.3.0+50.g3f677cb`, `.dirty` when tracked files changed). It reruns when a commit, a tag or a staged file changes the answer, and gives the version alone without git or outside clview's checkout |
 
@@ -150,8 +151,8 @@ that another format's bytes may hold too: a PDF's header past its first byte, wh
 file, stored, or a drawing's text holds as well. The first backend sure of a file opens it; only
 when none is, the first that opens it loosely, one whose formats go by the file's name before the
 rest ([ADR-0039](adr/0039-a-backend-sure-of-a-file-wins-over-one-that-finds-a-mark-in-it.md)).
-The spreadsheet, epub and Mermaid backends ask the same of the others for the PDF, HTML or SVG
-they make. Those bytes are read once and handed on with the rest of the file (`Input`), so a pipe
+The spreadsheet, epub, Org and Mermaid backends ask the same of the others for the PDF, HTML or
+SVG they make. Those bytes are read once and handed on with the rest of the file (`Input`), so a pipe
 opens as well as a file. A backend opens a file to pages (`Opened::Pages`) or, for an archive, to
 the files it holds (`Opened::Files`, a `Container`).
 
@@ -162,12 +163,13 @@ All are on by default, and asked in this order, which settles only claims as sur
 | 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Before tar, which would take an svgz, gzipped, as the file it unpacks to |
 | 2 | `mermaid.rs` | `mermaid`, which brings `svg` | Its name alone: `.mermaid` and text; `.mmd` and text whose first line past a BOM, blank lines, `%%` comments and front matter, within the first 1024 bytes, starts with a kind of diagram merman draws (the first word of each label in `merman::diagram_header_facts()`, in its case, followed by a space, a `-` or the line's end), or is an `%%{init` directive, since MultiMarkdown is `.mmd` too | |
 | 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | After SVG, for an svgz |
-| 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | Before zip, since a docx and an odt are zips |
-| 5 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
-| 6 | `epub.rs` | `epub`, which brings `word` | A zip whose first file is `mimetype`, stored, saying `application/epub+zip`, whatever its name; a zip named `.epub` whose first file isn't a stored `mimetype` | Before zip, since an epub is a zip; after the Word and spreadsheet backends, which take the zips that say they are theirs |
-| 7 | `pdfcraft.rs` | `pdf` | `%PDF-` first; loosely, `%PDF-` further in its first 1024 bytes, where ISO 32000-2 lets readers allow bytes before the header | Anywhere: a header further in loses to any backend sure of the file |
-| 8 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
-| 9 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word, spreadsheet and epub backends don't take |
+| 4 | `org.rs` | `org`, which brings `word` | Its name, `.org` or `.org_archive` in any case, and text (no NUL, few controls; UTF-16 by its BOM); or text whose first line, or second after a `#!` line, holds an Emacs mode line naming Org (`-*- org -*-`, `mode: org` among its variables), whatever its name | Before the documents' backend, so that a `.md` that says it is Org is |
+| 5 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | Before zip, since a docx and an odt are zips |
+| 6 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
+| 7 | `epub.rs` | `epub`, which brings `word` | A zip whose first file is `mimetype`, stored, saying `application/epub+zip`, whatever its name; a zip named `.epub` whose first file isn't a stored `mimetype` | Before zip, since an epub is a zip; after the Word and spreadsheet backends, which take the zips that say they are theirs |
+| 8 | `pdfcraft.rs` | `pdf` | `%PDF-` first; loosely, `%PDF-` further in its first 1024 bytes, where ISO 32000-2 lets readers allow bytes before the header | Anywhere: a header further in loses to any backend sure of the file |
+| 9 | `image.rs` | `image` | Their signatures; TGA, which has none, by its name | |
+| 10 | `zip.rs` | `zip` | Its signature (`PK`), whatever its name | Last, for the zips the Word, spreadsheet and epub backends don't take |
 
 `source/head.rs` reads what a zip's first files say, for the Word, spreadsheet and epub backends.
 
@@ -252,9 +254,9 @@ through `Format::having`, as it lists its fences), and that is all the viewer kn
 have a setting before one is shown: `view::having` gives the names of the formats that list each, in
 the backends' order, and the pager says a setting's phrases with the first two of them
 (`pager::Settings`): its line in `?`, what its keys do and then the formats (`view::shortly`: `light on
-dark, or dark on light (Mermaid, Markdown and others)`), and what its key says on a file without it
-(`view::some_do`: `this format doesn't go dark (Mermaid, Markdown and others do)`, Mermaid's backend
-coming before the documents', and the epub's after), short enough for a status line of 80 columns
+dark, or dark on light (Mermaid, Org and others)`), and what its key says on a file without it
+(`view::some_do`: `this format doesn't go dark (Mermaid, Org and others do)`, Mermaid's backend
+and Org's coming before the documents', and the epub's after), short enough for a status line of 80 columns
 however many formats come to share the setting.
 No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
 checks that a format lists only settings its backend declares, that every setting is listed by
@@ -608,6 +610,39 @@ through its command) and that a key means one setting
   The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
   `margin`, `fences`), so that a list knows a book has them before it is opened
   (`Backend::deferred`) ([Settings](#settings)).
+- **An Org document** is HTML written by clv, opened by the backend that opens HTML, never named,
+  as a book is ([ADR-0040](adr/0040-org-mode-through-orgize-in-a-worker-process.md)).
+  `org::opened` reads the file (64 MiB at most) and counts its lines and marks (500,000), as
+  Markdown's are counted, before anything parses it; then a worker process, `clv --worker org`
+  (`org::DOCUMENTS`, in `source::WORKERS`), capped at 2 s of CPU and 512 MiB of heap, one at a
+  time and gone once it has answered, is given the text and answers its HTML (`org::html_of`):
+  orgize's tree, mended where orgize misreads it (`fixed`: a table after affiliated keywords, a
+  link whose path wraps a line, each parsed again by orgize, each with a canary test), its places
+  found (`places`), then written. The HTML starts with 1,024 bytes of clv's own, a doctype first,
+  so that it is HTML to the backend that opens it and nothing the file writes chooses one. It is
+  handed on as a held file, which the documents' backend reads again for each relayout: `CACHE`
+  keeps what the worker wrote, 64 files and 64 MiB, by the Org file's bytes, so a relayout starts
+  no worker. Its pictures are read through a `Near`: the holder's, for a file in an archive; for a
+  file on disk, one that reads any file by its path from the root, the document's own path from
+  there, so that `..` reads as `Where::Directory` does. A refusal of the HTML's (past HTML's own
+  limits) is said to be the HTML's (`as_html`). What the backend gives is wrapped in `Shown`,
+  which hands every `Source` method on, and makes the links its converter marks as not followed
+  what they are (`told`).
+- **An Org document's places** are resolved by its converter, which sees the whole file: each
+  place is one `id` or more (`Places`), the names the file gives itself first (a heading's
+  `:CUSTOM_ID:` and `:ID:`, `<<target>>`, `#+NAME:`), then each heading by its title as Org matches
+  `[[*Heading]]` (`title_of`) and by GitHub's slug of what it shows (`slug::slugged`, which the
+  documents' backend writes Markdown's headings with too), where no name has them in any case; a
+  heading left with neither gets one of its own. Each link is written as an `href` to the place it
+  resolves to (`Writer::address`), so the documents' backend's `Linker` follows it as any HTML's:
+  `[[*Heading]]`, `[[#custom]]`, `[[id:X]]` and `[[target]]` (a target, then a name, then a
+  heading's title) to `#id`; a file, with what follows its `::` as the place in it, to `path#place`;
+  `doi:` to `https://doi.org/`; `http`, `https` and `mailto` as they are. The documents'
+  backend's importer drops an `href` with any other scheme (`wordcraft_doc::link::is_safe_href`),
+  so such a link (`elisp:`, `shell:`, a file in another user's home) is written to a path of its
+  own, `clv-org-not-followed/` and the address, which `Shown` makes a `Target::Other` saying what
+  it is. Bare and angle links, which orgize doesn't parse, are found in its text
+  (`autolink`).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings
@@ -1739,13 +1774,16 @@ the places HTML and Markdown have are written as such anchors before it reads th
 picture after its tag (a picture's own before the picture itself): there it joins the paragraph
 the element starts, where right after the tag it would make an empty paragraph of its own between
 two blocks. `markdown_as_html` holds a heading's events until its end, and writes an anchor at its
-start named by the id GitHub gives its text (`slugged`; a line's end within the heading is a
+start named by the id GitHub gives its text (`slug::slugged`, which the Org backend's headings are
+named by too; a line's end within the heading is a
 space; what stays is letters and numbers, by the standard library's tests, combining marks, by a
 table of Unicode 15.0's `Mn`, `Mc` and `Me` ranges, `MARKS`, since the library has no test for
 them, connector punctuation and hyphens), with a private-use character before it (`SLUG`), which keeps a heading's place apart
 from the ids a document writes itself, looked for first.
 
-A spreadsheet's `Noted` hands `links` on to the PDF it prints to, as it does `texts`.
+A spreadsheet's `Noted` hands `links` on to the PDF it prints to, as it does `texts`. An Org
+document's places are resolved before the documents' backend sees its HTML ([How each opens](#how-each-opens-and-what-it-keeps)):
+its `Shown` only makes a link marked as not followed say what it is.
 
 ## The terminal's state
 

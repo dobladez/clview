@@ -236,7 +236,7 @@ checks:
   *Files:* `src/source/org.rs`, `tests/it/org.rs`, `tests/it/view_pager.rs`. *Verify:*
   `cargo test -j 2 --test it org::links`, and `Manual: in kitty, press f on an Org file and follow
   [[*Heading]], file:other.org::*Heading and a web link; u comes back`.
-- [ ] **Docs** — usage, architecture, `CONTRIBUTING.md`, `CHANGELOG.md`, README's Plans, the
+- [x] **Docs** — usage, architecture, `CONTRIBUTING.md`, `CHANGELOG.md`, README's Plans, the
   backlog. *Verify:* `cargo test -j 2 --test docs`.
 
 ## Done

@@ -4,7 +4,8 @@
 - **Date:** 2026-11-17
 - **Deciders:** the owner chose a parser library over one of clv's own, and orgize or
   org-rust-parser by an evaluation, patched if neither were good enough, on 2026-11-17
-  ([Spec-0014](../specs/0014-show-org-mode-documents.md))
+  ([Spec-0014](../specs/0014-show-org-mode-documents.md)); and, given orgize's two mistakes, the
+  workarounds in clv over a fork or a vendored copy, the same day
 
 ## Context
 
@@ -38,7 +39,8 @@ merman and rbook do.
    pipe. Capped at **2 s of CPU and 512 MiB of heap**, one worker a conversion, in turn.
 3. **Two of orgize's mistakes are worked around in clv's converter, never by a parser of clv's
    own**, each by orgize parsing the text again, and each with a canary test that fails once
-   orgize stops making it, saying what to remove:
+   orgize stops making it, saying what to remove (`CONTRIBUTING.md`'s
+   [Pinned dependencies](../../CONTRIBUTING.md#pinned-dependencies) names them):
    - a table after affiliated keywords (`#+NAME:`, `#+CAPTION:`, `#+ATTR_HTML:`, `#+TBLNAME:`) is
      read as a paragraph, its rule lines as strike-through: the text after the keywords is parsed
      again on its own, and what it parses to replaces the paragraph, the keywords kept with it;

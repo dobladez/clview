@@ -39,13 +39,13 @@ clv --password PW secret.pdf
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
-| `--theme auto` | [Markdown and HTML](#documents), a [book](#books), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
-| `--theme light`, `--theme dark` | Markdown, HTML and Mermaid diagrams that way, whatever the terminal |
-| `--width window` | Markdown, HTML and [books](#books) on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
-| `--width 72` | Markdown and HTML laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
-| `--font 150` | Markdown and HTML text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
-| `--margin 5` | Markdown and HTML side margins of that many characters of code, 0 to 20 (3 by default) ([Documents](#a-page-the-windows-size)). With documents |
-| `--fences drawn` | the [fenced blocks](#documents) of Markdown and HTML that `clv` draws (` ```mermaid `) shown as pictures of them (the default); taken whatever the files. With documents |
+| `--theme auto` | [Markdown and HTML](#documents), a [book](#books), an [Org document](#org-documents), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
+| `--theme light`, `--theme dark` | Markdown, HTML, books, Org documents and Mermaid diagrams that way, whatever the terminal |
+| `--width window` | Markdown, HTML, [books](#books) and [Org documents](#org-documents) on pages as wide as the window, or two to a row where it is wide (the default); taken whatever the files, like `--theme`. With documents |
+| `--width 72` | Markdown, HTML, books and Org documents laid out to lines of that many characters of code, 20 to 200, the pages as tall as the window ([Documents](#documents)) |
+| `--font 150` | Markdown, HTML, books and Org documents' text at that share of its size, 50 to 400 percent; at 100, the default, a character of code is a cell ([Documents](#documents)). With documents |
+| `--margin 5` | Markdown, HTML, books and Org documents' side margins of that many characters of code, 0 to 20 (3 by default) ([Documents](#a-page-the-windows-size)). With documents |
+| `--fences drawn` | the [fenced blocks](#documents) of Markdown and HTML, and the source blocks of [Org](#org-documents), that `clv` draws (` ```mermaid `, `#+begin_src mermaid`) shown as pictures of them (the default); taken whatever the files. With documents |
 | `--fences code` | those blocks shown as the code they are |
 | `--compression auto` | on this machine, temporary files when the terminal takes them and `fast` otherwise; `small` over SSH (the default) |
 | `--compression fast` | PNGs with the least work: pages ready sooner, about twice the bytes |
@@ -122,10 +122,10 @@ In a file's pages:
 | `r`, `Ctrl-L` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
-| `D` | Markdown, HTML, [books](#books) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
-| `[`, `]` | Markdown, HTML and [books](#books) laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
-| `{`, `}` | Markdown and HTML laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
-| `s` | Markdown and HTML's fenced blocks (` ```mermaid `) as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
+| `D` | Markdown, HTML, [books](#books), [Org documents](#org-documents) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
+| `[`, `]` | Markdown, HTML, [books](#books) and [Org documents](#org-documents) laid out again, 4 characters a line narrower or wider; a number, then `]` or `[`, to that many, and `0]` back to the window's ([Documents](#documents)); with documents |
+| `{`, `}` | Markdown, HTML, books and Org documents laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
+| `s` | Markdown and HTML's fenced blocks (` ```mermaid `), and Org's source blocks, as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
 | `Esc`, `Backspace` | clear the search, if one is kept; then `Backspace` goes back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
 | `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
@@ -208,7 +208,7 @@ reminder of the main keys. A [search](#searching-a-documents-text) is said there
 message: what is typed and its count, then the match you are on.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
-says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,
+says so on the whole status line: `this format doesn't reflow (Org, Markdown and others do)`,
 naming two of the formats that do, and `these files don't…` in a list none of whose files does.
 It has the line for a second, then the status line comes back; any key brings it back at once,
 and does what it does.
@@ -422,7 +422,7 @@ file's pages, `/` [searches its text](#searching-a-documents-text) instead.
 In a file's pages, `/` opens a prompt in the status line, as a list's filter does, and searches
 the file's text: a PDF's, a spreadsheet's, which is shown as the PDF it prints to, and a
 [document's](#documents): a Word document's, an OpenDocument text's, an RTF's, Markdown's and
-HTML's. Type what
+HTML's, a [book's](#books) and an [Org document's](#org-documents), as it is shown. Type what
 to find, at most 256 characters; `Backspace` takes one back, and every key that types a character
 is part of it, `q` and `n` too (`Ctrl-C` still quits; the arrows and the other keys do nothing
 meanwhile). A number typed before `/` is dropped. A picture or a drawing has no text to search,
@@ -600,6 +600,24 @@ Which files have links:
   link (a `REF` or `PAGEREF` field with `\h`). Not those in headers, footers, notes or text boxes,
   which a [search](#searching-a-documents-text) leaves out too. A place is a Word bookmark, by its
   name, in any case if no bookmark has it exactly.
+- **Org documents:** the links in their body and their headings, as Org has them, each resolved
+  when the file is read: `[[*Heading]]` to the heading of that title (without its TODO keyword,
+  priority, tags and cookies, in any case), `[[#custom-id]]` and `[[id:X]]` to the heading whose
+  `:CUSTOM_ID:` or `:ID:` it is, `[[target]]` to a `<<target>>`, else a `#+NAME:`, else a heading of
+  that title; a footnote's number to its note. An `id:` the file hasn't says `no #id:X in this
+  document` (`id:` links across files need Emacs's database). Files: `file:`, `file+sys:`,
+  `file+emacs:`, and `./x`, `../x`, `/x` and `~/x`, `~` your home (another user's, `~user`, isn't
+  followed); after `::`, `*Heading`, `#custom-id` and `target` are the place in that file, and a
+  line's number or a `/regex/` opens it at its top. On the web: `[[https://…][…]]`, `<https://…>`,
+  bare `http`, `https` and `mailto` addresses in the text, and `doi:X` as `https://doi.org/X`. The
+  abbreviations the file declares (`#+LINK:`, with `%s` and `%h`) are expanded. Anything else
+  (`elisp:`, `shell:`, `help:`, `info:`) is never run: the status line says what it is (`a elisp:
+  link, which isn't followed`). `F` copies the address as clv writes it: `other.org#Some%20Heading`.
+- **Places in Org documents:** a heading by its title, as `[[*Heading]]` finds it, and by the id
+  GitHub would give its text, so that a Markdown file's `[see](notes.org#some-heading)` finds it;
+  a `:CUSTOM_ID:`, an `:ID:`, a `<<target>>` and a `#+NAME:` by their names. A name the file gives
+  itself wins over a heading's: a heading whose title or id another place has is found by its
+  title through `[[*Heading]]` still.
 - **Places in Markdown and HTML:** in HTML, any element with an `id` (`<h2 id="usage">`,
   `<div id="usage">`), as well as `<a id>` and `<a name>`. Markdown's headings get the ids GitHub
   gives them: lower case, punctuation dropped, each space a hyphen, and `-1`, `-2` after it for a
@@ -626,6 +644,7 @@ that only another backend takes is refused, since it would do nothing for the fi
 | [SVG drawings](#svg-drawings), and svgz, gzipped | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz by what it unpacks to; a `.svg` or `.svgz` name when the first 1024 bytes end before the root element. Other XML is not one | none |
 | [Mermaid diagrams](#mermaid-diagrams) | Their name: `.mermaid`, and that it is text; `.mmd`, and that its first line past blank lines, `%%` comments and front matter, within its first 1024 bytes, names a kind of diagram merman draws (`flowchart`, `graph`, `sequenceDiagram`, `stateDiagram-v2`…) or is an `%%{init: …}%%` directive, since MultiMarkdown names its files `.mmd` too, which clv doesn't open. Not through a pipe, as a diagram has no signature | none |
 | [Word documents, OpenDocument text, RTF, Markdown and HTML](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too; HTML by how it starts (a doctype or an `<html>` element), whatever its name, or a name (`.html`, `.htm`, `.xhtml`) and that it is text; Markdown by its name only (`.md`, `.markdown`, `.mdown`, `.mkd`), and that it is text | `--password PW`: the password of a protected Word document |
+| [Org documents](#org-documents) | Their name, `.org` or `.org_archive`, in any case, and that they are text; or, whatever their name, through a pipe too, an Emacs mode line naming Org on their first line (their second, after a `#!` line): `-*- org -*-`, or `mode: org` among its variables. Asked before Markdown and HTML, so a `.md` that says it is Org is | none |
 | [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
 | [Ebooks (epub)](#books) | A zip whose first file, `mimetype`, says it is an epub, whatever its name; or a `.epub` name, for a zip whose first bytes don't say what it is (a `mimetype` that isn't first, or is compressed, as some tools write it) | none |
 | [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
@@ -1075,6 +1094,69 @@ archive is read from the archive each time it is laid out or a picture of it is 
 a pipe is kept whole while it is open, and refused past 256 MiB
 ([ADR-0038](adr/0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md)).
 
+### Org documents
+
+An Org-mode file (`.org`: Emacs's notes, plans and documentation) is shown as Markdown is: parsed by
+[orgize](https://github.com/PoiScript/orgize), in a process of its own, written as HTML, and laid
+out as [HTML is](#documents), on pages the window's size or to a width of your own. So it has what a
+document has: `[` and `]` for the width of its line, `+` and `-` for its font size, `{` and `}` for
+its margins, `D` for dark paper, `s` for its source blocks, each with its option; `/`
+[searches](#searching-a-documents-text) it as it is shown; `f` [follows its links](#following-links);
+`--pages` picks pages; and `o` opens the `.org` itself. Its look is Markdown's
+([ADR-0016](adr/0016-how-markdown-and-html-look.md)).
+
+**Which files are Org**: text named `.org` or `.org_archive`, in any case; and text, whatever its
+name, whose first line (its second, where the first starts with `#!`) holds an Emacs mode line
+naming Org, `-*- org -*-` or `-*- mode: org; … -*-` among its variables, in any case, as Emacs
+reads it. So an Org file comes through a pipe too, with its mode line, and a `.md` whose first line
+says Org is Org, as Emacs would have it. HTML starts with a doctype or an `<html>` element, so a
+mode line in an HTML comment after it isn't on its first line. It is read as UTF-8, or UTF-16 by
+its byte-order mark. A local-variables block at a file's end (`Local Variables: … mode: org`) isn't
+read: it is past what a file is told by.
+
+**What it shows**:
+
+- **Headlines** as headings, levels past 6 as 6: a TODO keyword in colour, red not done and green
+  done, the keywords the file declares (`#+TODO:`, `#+SEQ_TODO:`, `#+TYP_TODO:`) honoured; a
+  priority (`[#A]`) as written; its tags after the title, in grey. A heading's planning line
+  (`SCHEDULED`, `DEADLINE`, `CLOSED`) and a clock line, small and grey, under it.
+- **A title block** at the top, from `#+TITLE`, `#+SUBTITLE`, `#+AUTHOR` and `#+DATE`, wherever they
+  are in the file.
+- **Inline**: `*bold*`, `/italic/`, `_underline_`, `+strike+`, `=verbatim=` and `~code~`; `\\` a line
+  break; `-----` a rule; `src_x{…}` as code. As written: timestamps, macros (`{{{x}}}`), LaTeX
+  fragments, statistics cookies (`[1/3]`), and `_` and `^`, never a subscript or a superscript.
+  Entities (`\alpha`) as the character they name.
+- **Lists**, ordered, unordered and of descriptions; a checkbox `[ ]`, `[X]` or `[-]` as ☐, ☑ or ☒.
+- **Tables** in a grid, as Markdown's: the rows before the first rule its header, where rows follow
+  it; a row of alignment or width cookies (`<l>`, `<10>`) and `#+TBLFM` lines left out, and nothing
+  evaluated. A table.el table (`+---+`) as code.
+- **Blocks**: `#+begin_src` as code, or as a picture where a backend draws its language, as
+  Markdown's fenced blocks are (`#+begin_src mermaid`); `example` and fixed-width lines (`: `) as
+  code; `quote` as a quote; `verse` with its lines kept; `center` centred; any other block
+  (`#+begin_note`) as its text; `#+RESULTS:` and what follows it shown.
+- **Footnotes** of every kind (`[fn:1]`, `[fn:name]`, `[fn:: inline]`, `[fn:name: inline]`) as
+  numbers, in the order they are referred to, the notes at the end, as Markdown's.
+- **Pictures**: a link with no description to a file whose extension Org's HTML export inlines
+  (`avif`, `gif`, `jpeg`, `jpg`, `png`, `svg`, `webp`), `[[file:x.png]]` or `[[./x.png]]`, is that
+  picture, drawn as a document's are, from beside the file; a link whose description is such a
+  link is that picture, linked. A picture on the web is a link: nothing is fetched.
+- **What Org's export leaves out but you wrote**: a `COMMENT` heading and a `:noexport:` one, with
+  what is under them.
+
+**What it hides**: drawers (`:PROPERTIES:`, `:LOGBOOK:`, any `:NAME:` … `:END:`); `#+KEYWORD:`
+lines but the title block's; comments (`# …`, `#+begin_comment`); export blocks but HTML's, whose
+HTML is read as the HTML in Markdown is; `#+INCLUDE:` and `#+SETUPFILE:`, never read. Nothing is
+run or evaluated: no Babel, no table formulas, no macros expanded, no dynamic block updated (its
+text shows as last written).
+
+Its links, and the places they lead to, are under [Following links](#following-links).
+
+An Org file in a list is opened when its tile is wanted. One in an archive is read from it, its
+pictures from beside it there. orgize takes time that grows with what a file nests or leaves open,
+so it works in a process capped on time and memory, and an Org file past them is refused, with
+`orgize took too long on the document` ([Limits](#limits),
+[ADR-0040](adr/0040-org-mode-through-orgize-in-a-worker-process.md)).
+
 ### Spreadsheets
 
 A workbook (xlsx, xlsm, xlsb or xls), an OpenDocument spreadsheet (ods) or a file of values
@@ -1272,6 +1354,9 @@ limit, it does as the last column says. How large a page is drawn is under
 | Diagrams kept, drawn or failed, while clv runs | 4,096, and 64 MiB of them and their SVG | those used longest ago are let go of, and drawn again if opened again |
 | A PDF's pages | 100,000 | refused, saying how many it has; a page tree may name one page over and over, so a file of a few megabytes can have millions, and each costs some 2 KB to open |
 | A Word document, OpenDocument text or RTF | 256 MiB | refused; what else it may cost is bounded by wordcraft's own limits (how much a docx unpacks to, how deep it nests) |
+| An Org file | Markdown's, below, counted before it is parsed: 64 MiB; half a million lines and marks (its punctuation); then the HTML it is written as, as any HTML file's | refused, with which: `as the HTML it is written as, …` for the HTML's |
+| The process that parses an Org file and writes it as HTML: its CPU time, and its memory | 2 s, or three times that on the clock; 512 MiB | the process is killed, and the file refused: `orgize took too long on the document` |
+| Org files written as HTML, kept while clv runs | 64, and 64 MiB of them and their HTML | those used longest ago are let go of, and written again when laid out again |
 | A Markdown or HTML file | 64 MiB; half a million lines and marks (HTML's tags, Markdown's punctuation); 8 MiB of text, some 5,000 pages, which take 20 seconds to open and 1.6 GB | refused. Within them, a file made to cost the most takes about 6 GB and 15 seconds, at 20 characters a line as at the window's width, at the largest font size a window holds as at the smallest; laid out again (`]`, or the window resized), with the old layout held until the new one shows, that file peaks at 9.5 GB |
 | A document's pictures, in Markdown or HTML | 1,024 referred to, the fenced blocks it draws among them; each held at 1,600 pixels at most on its longer side; 256 MiB held in all | past 1,024, left out, with a warning, a block as its code; past 256 MiB, those drawn longest ago are let go of, and drawn again when wanted |
 | A book (epub): its `container.xml`; its package (OPF); its list of protected files (`encryption.xml`) | 64 KiB; 4 MiB; 1 MiB, and 16,384 files | refused |
@@ -1319,6 +1404,9 @@ limit, it does as the last column says. How large a page is drawn is under
   what its markup's `style` attributes say on top: a book that counts on its CSS for its headings,
   its indents, its drop caps or its centred lines comes out plainer than a reader app shows it
   ([Books](#books)).
+- **An Org list goes on past two blank lines.** Org ends a list at two blank lines in a row;
+  orgize, which parses Org for `clv`, keeps the items after them in it, so two lists written so show
+  as one ([Org documents](#org-documents)).
 
 ## Errors
 

@@ -22,6 +22,16 @@ works today. A version's section becomes the notes of its
   flowing. Its links between chapters are places in the book, which `f` goes to and Backspace comes
   back from; a link from it is never followed to a file. A zip that says it is an epub is one
   whatever its name.
+- Org-mode files (`.org`, `.org_archive`, or any text whose first line is an Emacs mode line
+  naming Org, `-*- org -*-`, through a pipe too) are shown as documents, as Markdown is: their
+  TODO keywords in colour (the file's own `#+TODO:` too), tags and planning lines in grey, a title
+  block, lists with their checkboxes, tables, footnotes, pictures, `#+begin_src mermaid` blocks
+  drawn as diagrams, with `[`, `]`, `+`, `-`, `{`, `}`, `D`, `s` and `/` as for Markdown. Drawers,
+  comments and keywords are hidden, and nothing is evaluated. `f` follows its links as Org has
+  them: to a heading by its title, a custom id, an `id:`, a target or a name in the file, to a
+  heading of another file (`file:other.org::*Heading`), and to the web; `elisp:`, `shell:` and the
+  rest are never run, the status line saying what each is. A Markdown file's link finds an Org
+  file's heading by the id GitHub would give it. They were nothing clv showed.
 - A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
   their paths from it, `..` included but never above the archive's top: a README in a zip of a
   repository shows its screenshots. They were left as their alt text. Opening the document unpacks
@@ -31,11 +41,11 @@ works today. A version's section becomes the notes of its
 
 - A key that changes how a file looks (`D`, `[`, `{`, `s`), on a file that has no such thing, says
   so shorter, and on the whole status line, which comes back after a second or with the next key:
-  `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
+  `this format doesn't reflow (Org, Markdown and others do)`, where it said `only Markdown and
   HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
   window of 80 columns.
 - `?` says what a setting's key does and then two of the formats it does it to (`D  light on
-  dark, or dark on light (Mermaid, Markdown and others)`), where it started with every format.
+  dark, or dark on light (Mermaid, Org and others)`), where it started with every format.
   The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
   there are no contents to go to. What a line says goes on over the next row in a narrow window,
   where it was cut in its middle.
