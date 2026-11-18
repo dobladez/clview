@@ -72,12 +72,13 @@ has a canary, a unit test in `org.rs` that asserts the mistake is still there an
 to remove, once orgize stops making it:
 
 - `orgize_still_reads_a_table_after_keywords_as_a_paragraph`: a table after affiliated keywords
-  (`#+NAME:`, `#+CAPTION:`) read as a paragraph. When it fails, take `mended`'s first case out
-  (the keywords and what follows them parsed again), with the canary.
+  (`#+NAME:`, `#+CAPTION:`) read as a paragraph. When it fails, take `named` out, with its call in
+  `mended` (the keywords and what follows them parsed again), and the canary.
 - `orgize_still_reads_no_link_whose_path_wraps`: a bracket link whose path goes on past a line's
   end, not read as a link (upstream's unmerged
-  [PoiScript/orgize#94](https://github.com/PoiScript/orgize/pull/94)). When it fails, take
-  `mended`'s second case and `links_joined` out, with the canary.
+  [PoiScript/orgize#94](https://github.com/PoiScript/orgize/pull/94)). It checks a link after
+  affiliated keywords too. When it fails, take the rest of `mended`, `links_joined` and the
+  `WRAPPED` mark `unwrapped` reads out, with the canary.
 
 `a_table_after_keywords_and_a_link_that_wraps_are_read_as_org_has_them` stays, the behaviour's
 own test, whichever does the work.

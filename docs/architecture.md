@@ -612,7 +612,8 @@ through its command) and that a key means one setting
   (`Backend::deferred`) ([Settings](#settings)).
 - **An Org document** is HTML written by clv, opened by the backend that opens HTML, never named,
   as a book is ([ADR-0040](adr/0040-org-mode-through-orgize-in-a-worker-process.md)).
-  `org::opened` reads the file (64 MiB at most) and counts its lines and marks (500,000), as
+  `org::opened` reads the file (64 MiB at most, never further: a pipe through `Input::at_most`, kept;
+  a file held in another through its holder's `Bounded`, `Input::holder`; one on disk again by its path) and counts its lines and marks (500,000), as
   Markdown's are counted, before anything parses it; then a worker process, `clv --worker org`
   (`org::DOCUMENTS`, in `source::WORKERS`), capped at 2 s of CPU and 512 MiB of heap, one at a
   time and gone once it has answered, is given the text and answers its HTML (`org::html_of`):
@@ -646,7 +647,9 @@ through its command) and that a key means one setting
   own, `clv-org-not-followed/` and the address, which `Shown` makes the `Target::Web` it is, for
   the viewer to say what it is (`link::web`: `an elisp: link, which isn't followed`), as of any
   document's. Bare and angle links, which orgize doesn't parse, are found in its text
-  (`autolink`).
+  (`autolink`, a bare one keeping its own balanced parentheses, `url_end`). A relative path whose
+  first name holds a colon is written after `./` (`relative`), so that `Linker::leads` reads no
+  scheme in it.
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft
   said on reading the workbook rides with the first page's warnings

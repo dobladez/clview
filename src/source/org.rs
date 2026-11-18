@@ -30,8 +30,8 @@ use orgize::{SyntaxElement, SyntaxKind, SyntaxNode, TextSize};
 use super::slug::slugged;
 use super::worker::{self, Died, FAILED, Session, WALL, Worker};
 use super::{
-    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounds, Deferred, Effect, Format, HEAD, Input, Job, Keys, Landmark, Links, Named, Near, Numbers,
-    Opened, Pool, Render, Reopenable, Room, Setting, Source, Target, Texts, Told, Value, Values, opener,
+    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, HEAD, Input, Job, Keys, Landmark, Links, Named, Near,
+    Numbers, Opened, Pool, Render, Room, Setting, Source, Target, Texts, Told, Value, Values, opener,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -319,8 +319,9 @@ enum Kept {
     Disk(PathBuf),
     /// As they came through a pipe.
     Memory(Arc<Vec<u8>>),
-    /// In another file (an archive), read whole from it each time.
-    Held(Again),
+    /// In another file (an archive), read from it each time: to a bound where the holder can stop
+    /// early, else whole, within the holder's limits.
+    Held(Again, Option<Bounded>),
 }
 
 impl Kept {
@@ -335,7 +336,11 @@ impl Kept {
                 Arc::new(bytes)
             }
             Self::Memory(bytes) => bytes.clone(),
-            Self::Held(again) => Arc::new(again()?),
+            Self::Held(_, Some(bounded)) => {
+                let most = u64::try_from(MAX_SOURCE).unwrap_or(u64::MAX);
+                Arc::new(bounded(most)?.ok_or_else(|| format!("the document is more than {} MiB", MAX_SOURCE >> 20))?)
+            }
+            Self::Held(again, None) => Arc::new(again()?),
         };
         match bytes.len() > MAX_SOURCE {
             true => Err(format!("the document is more than {} MiB", MAX_SOURCE >> 20)),
@@ -357,10 +362,15 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, convert: Conve
     let error = |e: String| format!("{path}: {e}");
     // What is beside it: in the file holding it, if it is held in one that says; else on disk.
     let beside = input.near().map(|beside| (beside.0.clone(), beside.1.clone())).or_else(|| on_disk(&input));
-    let kept = match input.reopenable()? {
-        Reopenable::Disk(_) => Kept::Disk(PathBuf::from(&path)),
-        Reopenable::Bytes(bytes) => Kept::Memory(Arc::new(bytes)),
-        Reopenable::Again(again) => Kept::Held(again),
+    // Read again from where it is, never further than the documents' limit: a pipe is read to a
+    // byte past it, and kept; a file held in another to a bound, where its holder can stop early.
+    let kept = match input.holder() {
+        Some((again, bounded)) => Kept::Held(again, bounded),
+        None if input.is_a_file() => Kept::Disk(PathBuf::from(&path)),
+        None => match input.at_most(MAX_SOURCE as u64)? {
+            Some(bytes) => Kept::Memory(Arc::new(bytes)),
+            None => return Err(error(format!("the document is more than {} MiB", MAX_SOURCE >> 20))),
+        },
     };
     let html = kept.html(convert).map_err(error)?;
     let head = html.get(..HEAD as usize).unwrap_or(&html).to_vec();
@@ -829,37 +839,10 @@ fn fixed(root: &SyntaxNode, config: &orgize::ParseConfig) -> SyntaxNode {
 
 /// What `paragraph` should have been parsed as ([`fixed`]): the elements to put in its place, or
 /// `None` where it is a paragraph.
-fn mended(paragraph: &SyntaxNode, config: &orgize::ParseConfig) -> Option<Vec<NodeOrToken<GreenNode, orgize::rowan::GreenToken>>> {
-    let keywords: Vec<SyntaxNode> = paragraph.children().take_while(|child| child.kind() == SyntaxKind::AFFILIATED_KEYWORD).collect();
-    if let Some(last) = keywords.last() {
-        let start = usize::from(last.text_range().end()).saturating_sub(usize::from(paragraph.text_range().start()));
-        let text = raw(paragraph);
-        let rest = text.get(start..)?;
-        // Keywords again would come to this paragraph again.
-        if rest.trim_start().starts_with("#+") {
-            return None;
-        }
-        let parsed = config.clone().parse(rest);
-        let section = parsed.document().syntax().children().find(|child| child.kind() == SyntaxKind::SECTION)?;
-        let elements: Vec<SyntaxNode> = section.children().collect();
-        if elements.iter().all(|element| element.kind() == SyntaxKind::PARAGRAPH) {
-            return None;
-        }
-        // The keywords as the first element's, as orgize keeps them for the elements it parses so.
-        let mut out = Vec::new();
-        for (n, element) in elements.iter().enumerate() {
-            let green = element.green().into_owned();
-            if n == 0 {
-                let kept = keywords.iter().map(|keyword| NodeOrToken::Node(keyword.green().into_owned()));
-                let children = kept.chain(green.children().map(|child| child.to_owned()));
-                out.push(NodeOrToken::Node(GreenNode::new(green.kind(), children.collect::<Vec<_>>())));
-            } else {
-                out.push(NodeOrToken::Node(green));
-            }
-        }
-        // What the section holds besides elements (blank lines), after them.
-        out.extend(section.children_with_tokens().filter_map(|child| child.into_token()).map(|token| NodeOrToken::Token(token.green().to_owned())));
-        return Some(out);
+fn mended(paragraph: &SyntaxNode, config: &orgize::ParseConfig) -> Option<Vec<Green>> {
+    // A paragraph that stays one after its keywords may still hold a link that wraps.
+    if let Some(elements) = named(paragraph, config) {
+        return Some(elements);
     }
     let text = raw(paragraph);
     let joined = links_joined(&text)?;
@@ -867,9 +850,51 @@ fn mended(paragraph: &SyntaxNode, config: &orgize::ParseConfig) -> Option<Vec<No
     let section = parsed.document().syntax().children().find(|child| child.kind() == SyntaxKind::SECTION)?;
     let mut children = section.children();
     let (Some(only), None) = (children.next(), children.next()) else { return None };
-    (only.kind() == SyntaxKind::PARAGRAPH && only.text_range().len() == paragraph.text_range().len())
+    // Every mark in a link's path, where [`unwrapped`] reads it: none left in the text.
+    let marked = |token: &orgize::SyntaxToken| token.kind() != SyntaxKind::LINK_PATH && token.text().contains(WRAPPED);
+    let stray = only.descendants_with_tokens().filter_map(|e| e.into_token()).any(|token| marked(&token));
+    (only.kind() == SyntaxKind::PARAGRAPH && only.text_range().len() == paragraph.text_range().len() && !stray)
         .then(|| vec![NodeOrToken::Node(only.green().into_owned())])
 }
+
+/// What `paragraph`, which starts with affiliated keywords, should have been parsed as: the
+/// elements what follows its keywords is ([`mended`]'s first case), or `None` where that is a
+/// paragraph still.
+fn named(paragraph: &SyntaxNode, config: &orgize::ParseConfig) -> Option<Vec<Green>> {
+    let keywords: Vec<SyntaxNode> = paragraph.children().take_while(|child| child.kind() == SyntaxKind::AFFILIATED_KEYWORD).collect();
+    let last = keywords.last()?;
+    let start = usize::from(last.text_range().end()).saturating_sub(usize::from(paragraph.text_range().start()));
+    let text = raw(paragraph);
+    let rest = text.get(start..)?;
+    // Keywords again would come to this paragraph again.
+    if rest.trim_start().starts_with("#+") {
+        return None;
+    }
+    let parsed = config.clone().parse(rest);
+    let section = parsed.document().syntax().children().find(|child| child.kind() == SyntaxKind::SECTION)?;
+    let elements: Vec<SyntaxNode> = section.children().collect();
+    if elements.iter().all(|element| element.kind() == SyntaxKind::PARAGRAPH) {
+        return None;
+    }
+    // The keywords as the first element's, as orgize keeps them for the elements it parses so.
+    let mut out = Vec::new();
+    for (n, element) in elements.iter().enumerate() {
+        let green = element.green().into_owned();
+        if n == 0 {
+            let kept = keywords.iter().map(|keyword| NodeOrToken::Node(keyword.green().into_owned()));
+            let children = kept.chain(green.children().map(|child| child.to_owned()));
+            out.push(NodeOrToken::Node(GreenNode::new(green.kind(), children.collect::<Vec<_>>())));
+        } else {
+            out.push(NodeOrToken::Node(green));
+        }
+    }
+    // What the section holds besides elements (blank lines), after them.
+    out.extend(section.children_with_tokens().filter_map(|child| child.into_token()).map(|token| NodeOrToken::Token(token.green().to_owned())));
+    Some(out)
+}
+
+/// What [`mended`] puts in a paragraph's place: elements and the blank lines after them.
+type Green = NodeOrToken<GreenNode, orgize::rowan::GreenToken>;
 
 /// `text`, a paragraph's, with each line's end inside a bracket link's path (between a `[[` and
 /// the next `]`, with no `[` between) made a space, as many bytes as it was; `None` where there is
@@ -882,7 +907,9 @@ fn links_joined(text: &str) -> Option<String> {
         let start = at.saturating_add(found).saturating_add(2);
         let Some(path) = text.get(start..) else { break };
         let end = path.find([']', '[']).unwrap_or(path.len());
-        for (n, byte) in path.bytes().take(end).enumerate() {
+        // Only a path a `]` closes: anything else is no link, and its line ends are the text's.
+        let closed = path.get(end..).is_some_and(|rest| rest.starts_with(']'));
+        for (n, byte) in path.bytes().take(if closed { end } else { 0 }).enumerate() {
             if matches!(byte, b'\n' | b'\r')
                 && let Some(slot) = out.get_mut(start.saturating_add(n))
             {
@@ -1023,10 +1050,15 @@ fn places(root: &SyntaxNode) -> Places {
                     if !custom && !key.eq_ignore_ascii_case("ID") {
                         continue;
                     }
-                    let Some(id) = places.claim(&value) else { continue };
+                    // The heading's own id of that name, given for its other property, leads to it too.
+                    let own = places.of(&node).iter().find(|id| id.eq_ignore_ascii_case(&value)).cloned();
+                    let claimed = places.claim(&value);
+                    let Some(id) = claimed.clone().or(own) else { continue };
                     let map = if custom { &mut places.custom } else { &mut places.ids };
                     map.entry(value).or_insert_with(|| id.clone());
-                    places.mark(&node, id);
+                    if claimed.is_some() {
+                        places.mark(&node, id);
+                    }
                 }
             }
             K::TARGET | K::RADIO_TARGET => {
@@ -1250,6 +1282,16 @@ fn web_or_not(address: String) -> String {
     }
 }
 
+/// `path`, a file's, as a path the documents' backend can't read as a URI: a relative one whose first
+/// name holds a colon (`notes:2026.org`, a scheme and its path to a URL's reader) after `./`.
+fn relative(path: &str) -> std::borrow::Cow<'_, str> {
+    let first = path.split('/').next().unwrap_or_default();
+    match !path.starts_with('/') && first.contains(':') {
+        true => format!("./{path}").into(),
+        false => path.into(),
+    }
+}
+
 /// Whether `text` starts with a URI's scheme and a colon (`https:`, `elisp:`).
 fn has_scheme(text: &str) -> bool {
     let Some((scheme, _)) = text.split_once(':') else { return false };
@@ -1285,7 +1327,7 @@ fn autolink(text: &str) -> Option<(&str, &str, &str)> {
         let scheme =
             ["http://", "https://", "mailto:"].into_iter().find(|scheme| here.get(..scheme.len()).is_some_and(|s| s.eq_ignore_ascii_case(scheme)));
         if let (true, Some(scheme)) = (at_a_word, scheme) {
-            let end = here.find(|c: char| c.is_whitespace() || "()<>[]\"'".contains(c)).unwrap_or(here.len());
+            let end = url_end(here);
             let link = here.get(..end)?.trim_end_matches(['.', ',', ';', ':', '!', '?']);
             if link.len() > scheme.len() {
                 return Some((text.get(..start)?, link, here.get(link.len()..)?));
@@ -1293,6 +1335,23 @@ fn autolink(text: &str) -> Option<(&str, &str, &str)> {
         }
         at = start.saturating_add(here.chars().next()?.len_utf8());
     }
+}
+
+/// Where a bare address that starts `text` ends, as Org's plain links do: at a space or a bracket,
+/// a quote, `<` or `>`; at a `)` only where it closes no `(` of the address's own, so that
+/// `…/Org-mode_(disambiguation)` keeps its parentheses and `(see https://x.org)` leaves its own.
+fn url_end(text: &str) -> usize {
+    let mut open: usize = 0;
+    for (at, c) in text.char_indices() {
+        match c {
+            '(' => open = open.saturating_add(1),
+            ')' if open == 0 => return at,
+            ')' => open = open.saturating_sub(1),
+            c if c.is_whitespace() || "<>[]\"'".contains(c) => return at,
+            _ => {}
+        }
+    }
+    text.len()
 }
 
 /// The footnotes referred to, in the order they are first: each its id and what defines it.
@@ -1719,7 +1778,7 @@ impl Writer<'_> {
         let path = unwrapped(&link.path());
         let described = link.has_description();
         if !described && let Some(src) = picture(&path) {
-            let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&src)));
+            let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&relative(&src))));
             return;
         }
         let href = escaped(&self.address(&path));
@@ -1727,7 +1786,7 @@ impl Writer<'_> {
         if described {
             match picture(unwrapped(&link.description_raw()).trim()) {
                 Some(src) => {
-                    let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&src)));
+                    let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&relative(&src))));
                 }
                 None => {
                     let description: Vec<SyntaxElement> =
@@ -1798,8 +1857,8 @@ impl Writer<'_> {
             Some(collapsed(search.strip_prefix('*').or_else(|| search.strip_prefix('#')).unwrap_or(search)))
         });
         match place.filter(|place| !place.is_empty()) {
-            Some(place) => format!("{}#{}", encoded(&file), encoded(&place)),
-            None => encoded(&file),
+            Some(place) => format!("{}#{}", encoded(&relative(&file)), encoded(&place)),
+            None => encoded(&relative(&file)),
         }
     }
 
@@ -2249,26 +2308,29 @@ mod tests {
     }
 
     /// orgize reads a table after affiliated keywords as a paragraph; the converter parses what
-    /// follows them again. This canary fails once orgize reads it as a table: then [`mended`]'s
-    /// first case can go, with this.
+    /// follows them again. This canary fails once orgize reads it as a table: then [`named`], and
+    /// its call in [`mended`], can go, with this.
     #[test]
     fn orgize_still_reads_a_table_after_keywords_as_a_paragraph() {
         let org = orgize::Org::parse("#+NAME: t\n| a | b |\n");
         let kinds: Vec<SyntaxKind> = org.document().syntax().descendants().map(|node| node.kind()).collect();
         assert!(
             kinds.contains(&SyntaxKind::PARAGRAPH) && !kinds.contains(&SyntaxKind::ORG_TABLE),
-            "orgize reads a table after keywords now: take the first case out of `mended`, and this canary"
+            "orgize reads a table after keywords now: take `named` out, and its call in `mended`, and this canary"
         );
     }
 
     /// orgize reads no bracket link whose path goes on past a line's end; the converter makes those
-    /// line ends spaces and parses the paragraph again. This canary fails once orgize reads it: then
-    /// [`mended`]'s second case and [`links_joined`] can go, with this.
+    /// line ends spaces and parses the paragraph again. This canary fails once orgize reads it,
+    /// alone or after affiliated keywords: then the rest of [`mended`], [`links_joined`] and
+    /// [`unwrapped`]'s marks can go, with this.
     #[test]
     fn orgize_still_reads_no_link_whose_path_wraps() {
-        let org = orgize::Org::parse("See [[*A heading\nthat wraps]].\n");
-        let links = org.document().syntax().descendants().filter(|node| node.kind() == SyntaxKind::LINK).count();
-        assert_eq!(links, 0, "orgize reads a link that wraps now: take the second case out of `mended`, `links_joined`, and this canary");
+        for org in ["See [[*A heading\nthat wraps]].\n", "#+NAME: p\nSee [[*A heading\nthat wraps]].\n"] {
+            let org = orgize::Org::parse(org);
+            let links = org.document().syntax().descendants().filter(|node| node.kind() == SyntaxKind::LINK).count();
+            assert_eq!(links, 0, "orgize reads a link that wraps now: take the rest of `mended` out, `links_joined`, and this canary");
+        }
     }
 
     #[test]
@@ -2288,10 +2350,14 @@ mod tests {
 
     #[test]
     fn a_line_end_in_a_links_path_is_a_space_and_nothing_else_moves() {
-        assert_eq!(links_joined("a [[b\nc]] [[d][e\nf]] [[g\r\nh"), Some("a [[b\u{b}c]] [[d][e\nf]] [[g\u{b}\u{b}h".into()));
+        assert_eq!(links_joined("a [[b\nc]] [[d][e\nf]] [[g\r\nh]]"), Some("a [[b\u{b}c]] [[d][e\nf]] [[g\u{b}\u{b}h]]".into()));
+        // A `[[` no `]` closes is no link: its line ends are the text's.
+        assert_eq!(links_joined("a [[g\nh [[i\nj"), None);
+        // Nor one a single `]` closes, which orgize reads as text: no mark is left in it.
+        assert_eq!(body("A [[a\nb] c.\n"), "<p>A [[a\nb] c.\n</p>\n");
         assert_eq!(links_joined("no link\nhere"), None);
         assert_eq!(links_joined("[[a]]\n[[b]]"), None);
-        assert_eq!(links_joined("é[[\n"), Some("é[[\u{b}".into()));
+        assert_eq!(links_joined("é[[\n]]"), Some("é[[\u{b}]]".into()));
         // And read back: a line's end and the blanks around it one space, the rest as written.
         assert_eq!(unwrapped("*A \u{b}   wrapped  heading"), "*A wrapped  heading");
         assert_eq!(unwrapped("a\u{b}\u{b}b"), "a b");
@@ -2578,6 +2644,62 @@ mod tests {
     fn an_abbreviation_is_expanded_once() {
         assert_eq!(hrefs("#+LINK: w https://w.org/?q=%s&h=%h\n[[w:%h%s]]\n"), ["https://w.org/?q=%h%s&amp;h=%25h%25s"]);
         assert_eq!(hrefs("#+LINK: w https://w.org/%x/%s\n[[w:t]]\n"), ["https://w.org/%x/t"]);
+    }
+
+    /// A file held in another is read again only to a byte past the documents' limit, where its
+    /// holder can stop early, never whole.
+    #[test]
+    fn a_held_file_is_read_again_to_the_limit_and_no_further() {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let again: Again = Arc::new(|| panic!("read whole"));
+        let bounded: Bounded = {
+            let asked = asked.clone();
+            Arc::new(move |most| {
+                asked.lock().unwrap().push(most);
+                Ok(None)
+            })
+        };
+        let kept = Kept::Held(again, Some(bounded));
+        assert_eq!(kept.bytes().unwrap_err(), "the document is more than 64 MiB");
+        assert_eq!(*asked.lock().unwrap(), [MAX_SOURCE as u64]);
+    }
+
+    /// A bare address keeps its own balanced parentheses, and leaves those and the punctuation of
+    /// the prose around it.
+    #[test]
+    fn a_bare_address_keeps_its_parentheses() {
+        assert_eq!(
+            hrefs("See https://en.wikipedia.org/wiki/Org-mode_(disambiguation). (Or https://x.org/a.) And https://y.org/(a(b)c)d), too.\n"),
+            ["https://en.wikipedia.org/wiki/Org-mode_(disambiguation)", "https://x.org/a", "https://y.org/(a(b)c)d"]
+        );
+    }
+
+    /// A named paragraph's link that wraps a line is a link, as any paragraph's.
+    #[test]
+    fn a_named_paragraphs_link_that_wraps_is_a_link() {
+        let html = body("#+NAME: p\nSee [[*A\n   heading][there]].\n* A heading\n");
+        assert!(html.contains("<p id=\"p\">See <a href=\"#A%20heading\">there</a>."), "{html}");
+    }
+
+    /// A file's relative path whose first name holds a colon is written after `./`, so that no
+    /// reader of the `href` takes it for a URI's scheme; a picture's too.
+    #[test]
+    fn a_relative_path_with_a_colon_is_no_scheme() {
+        assert_eq!(
+            hrefs("[[file:notes:2026.org]] [[file:notes:2026.org::*X]] [[file:/a:b.org]] [[file:dir/a:b.org]]\n"),
+            ["./notes:2026.org", "./notes:2026.org#X", "/a:b.org", "dir/a:b.org"]
+        );
+        assert!(body("[[file:plot:1.png]]\n").contains("<img src=\"./plot:1.png\""));
+    }
+
+    /// A heading whose custom id and id are the same name is found by either.
+    #[test]
+    fn a_custom_id_and_an_id_alike_both_lead_to_their_heading() {
+        for properties in [":CUSTOM_ID: same\n:ID: same\n", ":ID: same\n:CUSTOM_ID: same\n"] {
+            let html = body(&format!("[[#same]] [[id:same]]\n* H\n:PROPERTIES:\n{properties}:END:\n"));
+            assert_eq!(hrefs(&format!("[[#same]] [[id:same]]\n* H\n:PROPERTIES:\n{properties}:END:\n")), ["#same", "#same"], "{html}");
+            assert_eq!(html.matches("<a id=\"same\"></a>").count(), 1, "{html}");
+        }
     }
 
     /// How much larger the HTML is than the Org it is written from (ADR-0040): over the files

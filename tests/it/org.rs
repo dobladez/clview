@@ -88,6 +88,34 @@ fn a_mode_line_says_org_whatever_the_name_and_through_a_pipe() {
     assert_eq!(printed.iter().map(shows).collect::<Vec<_>>(), [[true, true, false]], "through a pipe: {}", text(&out.stderr));
 }
 
+/// Through a pipe, an Org file is read to a byte past the documents' limit and no further: the
+/// viewer refuses it and stops reading, so what writes to the pipe finds it closed.
+#[test]
+fn an_org_file_through_a_pipe_is_never_read_past_the_limit() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+        .args(["/dev/stdin", "--protocol", "kitty"])
+        .env("TERM", "dumb")
+        .env_remove("TMUX")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        stdin.write_all(b"-*- org -*-\n")?;
+        let chunk = vec![b'a'; 1 << 20];
+        for _ in 0..200 {
+            stdin.write_all(&chunk)?;
+        }
+        Ok(())
+    });
+    let out = child.wait_with_output().unwrap();
+    let wrote = writer.join().unwrap();
+    assert!(!out.status.success() && text(&out.stderr).contains("the document is more than 64 MiB"), "{}", text(&out.stderr));
+    assert!(wrote.is_err_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe), "the pipe was read to its end");
+}
+
 /// Org files in a list, each a tile; in a zip and in a tar, their pictures read from the archive.
 #[test]
 fn org_files_in_a_list_a_zip_and_a_tar() {

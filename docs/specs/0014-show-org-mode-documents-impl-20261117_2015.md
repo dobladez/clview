@@ -213,3 +213,25 @@ All eight findings taken; each test below seen failing with its fix reverted.
   `a_headings_slug_is_made_from_what_it_shows`.
 - **An abbreviation** was expanded in two passes, a `%h` that `%s` put there expanded again: one
   pass over the template now. `an_abbreviation_is_expanded_once`.
+
+## Codex review, round 2 (2026-11-18)
+
+All five findings taken; each test seen failing with its fix reverted.
+
+- **[P1] A pipe was read whole** (`Input::reopenable`'s `read_to_end`) before its size was
+  checked, in the viewer's heap. It is read through `Input::at_most`, to a byte past 64 MiB, and
+  refused there; a file held in a zip or a tar is read again through its holder's `Bounded`
+  (`Input::holder`, new, with `Input::is_a_file`), never whole. `org::an_org_file_through_a_pipe_is_never_read_past_the_limit`
+  (200 MiB written: the writer finds the pipe closed), `a_held_file_is_read_again_to_the_limit_and_no_further`.
+- **[P2] A bare address with parentheses** was cut at the `(`: it keeps the parentheses it
+  balances (`url_end`). `a_bare_address_keeps_its_parentheses`.
+- **[P2] A named paragraph's link that wraps** stayed text: the keywords' case is `named`, and a
+  paragraph it leaves is still mended for its links. Its canary checks a named paragraph too.
+  `a_named_paragraphs_link_that_wraps_is_a_link`. Writing it found that an unclosed `[[` had its
+  line ends marked and the marks left in the text: only a path a `]` closes is marked now, and a
+  reparse with a mark outside a link's path is not taken (`a_line_end_in_a_links_path_…`, seen
+  failing with either guard reverted).
+- **[P2] `file:notes:2026.org`** was read as a URI's scheme: a relative path whose first name
+  holds a colon is written after `./`, a picture's too. `a_relative_path_with_a_colon_is_no_scheme`.
+- **[P2] A custom id and an id alike**: both lead to the heading's one anchor, whichever comes
+  first. `a_custom_id_and_an_id_alike_both_lead_to_their_heading`.

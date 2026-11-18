@@ -572,6 +572,23 @@ impl Input {
         }
     }
 
+    /// How this file is read again from the file holding it, if it is held in one: whole, and to a
+    /// bound where the holder can stop early ([`Bounded`]).
+    #[cfg_attr(not(feature = "org"), expect(dead_code, reason = "only Org documents read a held file to a bound again"))]
+    pub(crate) fn holder(&self) -> Option<(Again, Option<Bounded>)> {
+        match &self.rest {
+            Rest::File(_) => None,
+            Rest::Held { again, bounded, .. } => Some((again.clone(), bounded.clone())),
+        }
+    }
+
+    /// Whether this is a regular file of its own, which can be read again from disk, as a pipe or a
+    /// device can't.
+    #[cfg_attr(not(feature = "org"), expect(dead_code, reason = "only Org documents ask"))]
+    pub(crate) fn is_a_file(&self) -> bool {
+        matches!(&self.rest, Rest::File(file) if file.metadata().is_ok_and(|m| m.is_file()))
+    }
+
     /// The whole file.
     pub(crate) fn bytes(self) -> Result<Vec<u8>, String> {
         match self.rest {
@@ -588,7 +605,7 @@ impl Input {
     /// a pipe or a device is never read whole, nor an archive's file unpacked whole where its holder
     /// can stop early ([`Bounded`]); otherwise, a file held in another is read within the holder's
     /// limits.
-    #[cfg_attr(not(any(feature = "mermaid", test)), expect(dead_code, reason = "only diagrams are read so"))]
+    #[cfg_attr(not(any(feature = "mermaid", feature = "org", test)), expect(dead_code, reason = "only diagrams and Org documents are read so"))]
     pub(crate) fn at_most(self, most: u64) -> Result<Option<Vec<u8>>, String> {
         let bytes = match self.rest {
             Rest::File(rest) => {
