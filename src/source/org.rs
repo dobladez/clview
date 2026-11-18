@@ -15,7 +15,7 @@
 //! for what [`CACHE`] keeps) each time the documents' backend reads it, for a relayout; its
 //! pictures are read beside the Org file: in its directory, or in the file holding it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Read as _;
@@ -25,12 +25,13 @@ use std::time::Duration;
 
 use orgize::rowan::ast::AstNode;
 use orgize::rowan::{GreenNode, NodeOrToken};
-use orgize::{SyntaxElement, SyntaxKind, SyntaxNode};
+use orgize::{SyntaxElement, SyntaxKind, SyntaxNode, TextSize};
 
+use super::slug::slugged;
 use super::worker::{self, Died, FAILED, Session, WALL, Worker};
 use super::{
-    Again, Auto, BACKENDS, Backend, Deferred, Effect, Format, HEAD, Input, Keys, Named, Near, Numbers, Opened, Reopenable, Room, Setting, Value,
-    opener,
+    Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounds, Deferred, Effect, Format, HEAD, Input, Job, Keys, Landmark, Links, Named, Near, Numbers,
+    Opened, Pool, Render, Reopenable, Room, Setting, Source, Target, Texts, Told, Value, Values, opener,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -378,9 +379,123 @@ fn opened(input: Input, options: &Parsed<'_>, room: Option<Room>, convert: Conve
         None => backend.open(document, options),
     };
     match shown.map_err(|e| as_html(&path, &e))? {
-        Opened::Pages(pages) => Ok(Opened::Pages(pages)),
+        Opened::Pages(pages) => Ok(Opened::Pages(Box::new(Shown(pages)))),
         Opened::Files(_) => Err(error("its HTML holds files".into())),
     }
+}
+
+/// An Org document, as the backend that opens its HTML shows it: everything is that backend's, but
+/// what the links it marks as not followed ([`NOT_FOLLOWED`]) say.
+struct Shown(Box<dyn Source + Send>);
+
+impl Source for Shown {
+    fn pages(&self) -> usize {
+        self.0.pages()
+    }
+
+    fn size(&self, page: usize) -> Option<(f32, f32)> {
+        self.0.size(page)
+    }
+
+    fn natural(&self, page: usize) -> bool {
+        self.0.natural(page)
+    }
+
+    fn settings(&self) -> Vec<&'static str> {
+        self.0.settings()
+    }
+
+    fn dark_form(&self) -> bool {
+        self.0.dark_form()
+    }
+
+    fn settle(&self, page: usize) {
+        self.0.settle(page);
+    }
+
+    fn renderer(&self) -> Result<Box<dyn Render + '_>, String> {
+        self.0.renderer()
+    }
+
+    fn pool(&self, threads: usize) -> Box<dyn Pool> {
+        self.0.pool(threads)
+    }
+
+    fn laid_at(&self) -> (Values, Option<Room>) {
+        self.0.laid_at()
+    }
+
+    /// The document laid out again is shown so again.
+    fn relayout(&self, values: Values, room: Room) -> Option<Job> {
+        let job = self.0.relayout(values, room)?;
+        Some(Box::new(move || job().map(|pages| Box::new(Shown(pages)) as Box<dyn Source + Send>)))
+    }
+
+    fn largest_scale(&self, page: usize) -> Option<f32> {
+        self.0.largest_scale(page)
+    }
+
+    fn bounds(&self, setting: &str, room: Room, values: Values) -> Option<Bounds> {
+        self.0.bounds(setting, room, values)
+    }
+
+    fn anchor(&self, page: usize, y: f32) -> Option<Anchor> {
+        self.0.anchor(page, y)
+    }
+
+    fn find(&self, anchor: &Anchor) -> Option<(usize, f32)> {
+        self.0.find(anchor)
+    }
+
+    fn texts(&self) -> Option<Box<dyn Texts>> {
+        self.0.texts()
+    }
+
+    fn links(&self) -> Option<Box<dyn Links>> {
+        Some(Box::new(Said(self.0.links()?)))
+    }
+
+    fn contents(&self) -> Option<Landmark> {
+        self.0.contents()
+    }
+}
+
+/// An Org document's links, as the backend that shows it finds them, those marked as not followed
+/// made what they are.
+struct Said(Box<dyn Links>);
+
+impl Links for Said {
+    fn set_queue(&self, wanted: Vec<Ask>) {
+        self.0.set_queue(wanted);
+    }
+
+    fn try_recv(&self) -> Option<Told> {
+        Some(match self.0.try_recv()? {
+            Told::Page { page, links, more } => Told::Page { page, links: links.map(|links| links.into_iter().map(told).collect()), more },
+            told @ Told::Name { .. } => told,
+        })
+    }
+}
+
+/// Where an Org link that clv doesn't follow is written to lead: a path, which the documents'
+/// backend's importer keeps where it drops an `href` with any scheme but the web's, and which
+/// [`told`] makes what the link is.
+const NOT_FOLLOWED: &str = "clv-org-not-followed/";
+
+/// `link`, of an Org document, with a target marked [`NOT_FOLLOWED`] made a message: what the link
+/// is (`a elisp: link, which isn't followed`, `a link to another user's home, …`), its address as
+/// the document wrote it.
+fn told(mut link: super::Link) -> super::Link {
+    let Target::File { path, .. } = &link.target else { return link };
+    let Some(written) = path.strip_prefix(NOT_FOLLOWED).map(str::to_owned) else { return link };
+    let said = match written.split_once(':') {
+        Some(("file", rest)) if rest.starts_with('~') => "a link to a file in another user's home, which isn't followed".to_owned(),
+        Some((scheme, _)) if has_scheme(&written) => format!("a {}: link, which isn't followed", cut(scheme, 32)),
+        _ => "a link that isn't followed".to_owned(),
+    };
+    link.address = Some(written).filter(|written| written.len() <= super::MAX_ADDRESS);
+    link.target = Target::Other(said);
+    link
 }
 
 /// Why the HTML an Org document at `path` is written as wasn't shown, `why`, as the backend that
@@ -607,7 +722,15 @@ fn html_of(text: &str, home: Option<&str>) -> Result<String, String> {
     };
     let org = config.clone().parse(text);
     let root = fixed(org.document().syntax(), &config);
-    let mut writer = Writer { out: start(), home, notes: Notes::default(), definitions: definitions(&root) };
+    let mut writer = Writer {
+        out: start(),
+        home,
+        notes: Notes::default(),
+        definitions: definitions(&root),
+        places: places(&root),
+        abbreviations: abbreviations(&root),
+        in_link: false,
+    };
     writer.title_block(&root);
     writer.element(&root, 0);
     writer.footnotes();
@@ -737,7 +860,7 @@ fn mended(paragraph: &SyntaxNode, config: &orgize::ParseConfig) -> Option<Vec<No
 fn links_joined(text: &str) -> Option<String> {
     let mut out = text.as_bytes().to_vec();
     let mut changed = false;
-    let mut at = 0;
+    let mut at: usize = 0;
     while let Some(found) = text.get(at..).and_then(|rest| rest.find("[[")) {
         let start = at.saturating_add(found).saturating_add(2);
         let Some(path) = text.get(start..) else { break };
@@ -777,6 +900,262 @@ fn footnote_label(node: &SyntaxNode) -> Option<String> {
     (label.kind() == SyntaxKind::TEXT && !label.text().is_empty()).then(|| label.text().to_owned())
 }
 
+/// The longest name a place is given an `id` by: what the documents' backend finds a place by.
+const MAX_ID: usize = 256;
+
+/// The places of a document ([`places`]), each written as one `id` or more where it is, and what
+/// a link finds each by.
+#[derive(Default)]
+struct Places {
+    /// Every id given, so that none is given twice.
+    used: HashSet<String>,
+    /// The ids written where each element or object starts, by its start and its kind.
+    at: HashMap<(TextSize, SyntaxKind), Vec<String>>,
+    /// The id a heading's custom id (`:CUSTOM_ID:`) and its id (`:ID:`) lead to, as written.
+    custom: HashMap<String, String>,
+    ids: HashMap<String, String>,
+    /// The id a target's (`<<target>>`), a name's (`#+NAME:`) and a heading's title lead to,
+    /// [folded](folded): the first of each.
+    targets: HashMap<String, String>,
+    names: HashMap<String, String>,
+    titles: HashMap<String, String>,
+}
+
+impl Places {
+    /// `name` as an id, if it can be one ([`MAX_ID`]) and none has it, in any case: the documents'
+    /// backend finds a place by its name in any case too.
+    fn claim(&mut self, name: &str) -> Option<String> {
+        let folded = name.to_lowercase();
+        if name.is_empty() || name.len() > MAX_ID || self.used.contains(&folded) {
+            return None;
+        }
+        self.used.insert(folded);
+        Some(name.to_owned())
+    }
+
+    /// `base`, short, as an id none has: as it is, else with `-1`, `-2`, … after it. Among as many
+    /// as are given, plus one, one is free.
+    fn unique(&mut self, base: &str) -> String {
+        let tries = self.used.len().saturating_add(1);
+        std::iter::once(base.to_owned()).chain((1..=tries).map(|n| format!("{base}-{n}"))).find_map(|name| self.claim(&name)).unwrap_or_default()
+    }
+
+    /// `id` written where `node` starts.
+    fn mark(&mut self, node: &SyntaxNode, id: String) {
+        self.at.entry((node.text_range().start(), node.kind())).or_default().push(id);
+    }
+
+    /// The ids written where `node` starts.
+    fn of(&self, node: &SyntaxNode) -> &[String] {
+        self.at.get(&(node.text_range().start(), node.kind())).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// `text` as a name is matched: its blank space collapsed, in lower case.
+fn folded(text: &str) -> String {
+    collapsed(text).to_lowercase()
+}
+
+/// The places in `root` and their ids: the names the document gives itself first, in its order, a
+/// heading's custom id and id, a target and a name, each written as it is; then each heading, by
+/// its title as Org matches `[[*Heading]]` ([`title_of`]) and by GitHub's slug of what it shows
+/// ([`slugged`]), so that a Markdown file's `notes.org#set-up` finds it, where no name has them
+/// already; a heading with neither, by an id of its own, so that a link finds it still. A name the
+/// document gives itself so wins over a heading's.
+fn places(root: &SyntaxNode) -> Places {
+    use SyntaxKind as K;
+    let mut places = Places::default();
+    for node in root.descendants() {
+        match node.kind() {
+            K::HEADLINE => {
+                for (key, value) in properties(&node) {
+                    let value = value.trim().to_owned();
+                    let custom = key.eq_ignore_ascii_case("CUSTOM_ID");
+                    if !custom && !key.eq_ignore_ascii_case("ID") {
+                        continue;
+                    }
+                    let Some(id) = places.claim(&value) else { continue };
+                    let map = if custom { &mut places.custom } else { &mut places.ids };
+                    map.entry(value).or_insert_with(|| id.clone());
+                    places.mark(&node, id);
+                }
+            }
+            K::TARGET | K::RADIO_TARGET => {
+                let name = collapsed(raw(&node).trim_start_matches('<').trim_end_matches('>'));
+                if let Some(id) = places.claim(&name) {
+                    places.targets.entry(folded(&name)).or_insert_with(|| id.clone());
+                    places.mark(&node, id);
+                }
+            }
+            K::AFFILIATED_KEYWORD => {
+                let Some(keyword) = orgize::ast::AffiliatedKeyword::cast(node.clone()) else { continue };
+                let (true, Some(name), Some(element)) = (keyword.key().eq_ignore_ascii_case("NAME"), keyword.value(), node.parent()) else {
+                    continue;
+                };
+                let name = collapsed(&name);
+                if let Some(id) = places.claim(&name) {
+                    places.names.entry(folded(&name)).or_insert_with(|| id.clone());
+                    places.mark(&element, id);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut slugs = HashMap::new();
+    for node in root.descendants().filter(|node| node.kind() == K::HEADLINE) {
+        let title = title_of(&node, false);
+        let slug = slugged(&title_of(&node, true), &mut slugs);
+        for name in [title.clone(), slug] {
+            if let Some(id) = places.claim(&name) {
+                places.mark(&node, id);
+            }
+        }
+        if places.of(&node).is_empty() {
+            let id = places.unique("heading");
+            places.mark(&node, id);
+        }
+        if let Some(anchor) = places.of(&node).first().cloned() {
+            places.titles.entry(folded(&title)).or_insert(anchor);
+        }
+    }
+    places
+}
+
+/// The properties of a headline, `node`, in its drawer: each its name and its value.
+fn properties(node: &SyntaxNode) -> Vec<(String, String)> {
+    let Some(drawer) = node.children().find_map(orgize::ast::PropertyDrawer::cast) else { return Vec::new() };
+    drawer.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+}
+
+/// A headline's title, `node`'s: as Org matches `[[*Heading]]`, as written without its statistics
+/// cookies (`[1/3]`), and without `COMMENT`, its TODO keyword, priority and tags (which orgize
+/// keeps out of it); or, `shown`, only its text as it shows, `COMMENT` and all, without its
+/// cookies and the marks of its emphasis.
+/// Its blank space collapsed.
+fn title_of(node: &SyntaxNode, shown: bool) -> String {
+    use SyntaxKind as K;
+    let Some(title) = node.children().find(|child| child.kind() == K::HEADLINE_TITLE) else { return String::new() };
+    let mut text = String::new();
+    let mut stack: Vec<SyntaxElement> = title.children_with_tokens().collect();
+    stack.reverse();
+    while let Some(element) = stack.pop() {
+        match element {
+            NodeOrToken::Node(node) if node.kind() == K::COOKIE => {}
+            NodeOrToken::Node(node) => stack.extend(node.children_with_tokens().collect::<Vec<_>>().into_iter().rev()),
+            NodeOrToken::Token(token) if !shown || matches!(token.kind(), K::TEXT | K::WHITESPACE | K::NEW_LINE) => text.push_str(token.text()),
+            NodeOrToken::Token(_) => {}
+        }
+    }
+    let text = collapsed(&text);
+    match text.strip_prefix("COMMENT") {
+        Some(rest) if !shown && (rest.is_empty() || rest.starts_with(' ')) => rest.trim().to_owned(),
+        _ => text,
+    }
+}
+
+/// The link abbreviations `root` declares (`#+LINK: word https://…/%s`): each its word and what it
+/// stands for.
+fn abbreviations(root: &SyntaxNode) -> Vec<(String, String)> {
+    root.descendants()
+        .filter_map(orgize::ast::Keyword::cast)
+        .filter(|keyword| keyword.key().eq_ignore_ascii_case("LINK"))
+        .filter_map(|keyword| {
+            let value = keyword.value().trim().to_owned();
+            let (word, url) = value.split_once(char::is_whitespace)?;
+            Some((word.to_owned(), url.trim().to_owned()))
+        })
+        .collect()
+}
+
+/// The longest address an abbreviation is expanded to: longer than the viewer follows.
+const MAX_EXPANDED: usize = 8 << 10;
+
+/// `text` with every character a URL can't hold as it is (a space, a control, `"`, `#`, `%`, `<`,
+/// `>`, and the rest RFC 3986 leaves out) percent-encoded, as its UTF-8 bytes: what is read back
+/// from an `href` as it was.
+fn encoded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() || matches!(c, ' ' | '"' | '#' | '%' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}') {
+            let mut bytes = [0; 4];
+            for byte in c.encode_utf8(&mut bytes).bytes() {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// `text` with every byte but a letter, a digit, `-`, `.`, `_` and `~` percent-encoded, as Org's
+/// `%h` writes an abbreviation's tag.
+fn hexified(text: &str) -> String {
+    text.bytes().fold(String::new(), |mut out, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+        out
+    })
+}
+
+/// `address`, a link's with a scheme: as it is, a web address the viewer follows (`http`, `https`,
+/// `mailto`), or else marked [`NOT_FOLLOWED`], for what it is to be said.
+fn web_or_not(address: String) -> String {
+    let scheme = address.split_once(':').map(|(scheme, _)| scheme.to_ascii_lowercase());
+    match scheme.as_deref() {
+        Some("http" | "https" | "mailto") => address,
+        _ => format!("{NOT_FOLLOWED}{}", encoded(&address)),
+    }
+}
+
+/// Whether `text` starts with a URI's scheme and a colon (`https:`, `elisp:`).
+fn has_scheme(text: &str) -> bool {
+    let Some((scheme, _)) = text.split_once(':') else { return false };
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// The file a link's path names, if it names one: after `file:`, `file+sys:` or `file+emacs:`, or a
+/// path that starts as one does, `./`, `../`, `/` or `~`.
+fn file_of(path: &str) -> Option<&str> {
+    for prefix in ["file:", "file+sys:", "file+emacs:"] {
+        if path.get(..prefix.len()).is_some_and(|start| start.eq_ignore_ascii_case(prefix)) {
+            return path.get(prefix.len()..);
+        }
+    }
+    ["./", "../", "/", "~"].iter().any(|start| path.starts_with(start)).then_some(path)
+}
+
+/// The first link `text` writes plainly, as Org finds one in text: an angle link, `<type:path>`, or
+/// a bare `http://`, `https://` or `mailto:` address, from a word's start to a space or a bracket,
+/// the punctuation at its end left out. What is before it, its path, and what is after it.
+fn autolink(text: &str) -> Option<(&str, &str, &str)> {
+    let mut at: usize = 0;
+    loop {
+        let start = at.saturating_add(text.get(at..)?.find(['<', 'h', 'H', 'm', 'M'])?);
+        let here = text.get(start..)?;
+        if let Some(inside) = here.strip_prefix('<').and_then(|rest| rest.split_once('>')).map(|(inside, _)| inside)
+            && has_scheme(inside)
+            && !inside.contains(['<', '\n'])
+        {
+            return Some((text.get(..start)?, inside, here.get(inside.len().saturating_add(2)..)?));
+        }
+        let at_a_word = text.get(..start)?.chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+        let scheme =
+            ["http://", "https://", "mailto:"].into_iter().find(|scheme| here.get(..scheme.len()).is_some_and(|s| s.eq_ignore_ascii_case(scheme)));
+        if let (true, Some(scheme)) = (at_a_word, scheme) {
+            let end = here.find(|c: char| c.is_whitespace() || "()<>[]\"'".contains(c)).unwrap_or(here.len());
+            let link = here.get(..end)?.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+            if link.len() > scheme.len() {
+                return Some((text.get(..start)?, link, here.get(link.len()..)?));
+            }
+        }
+        at = start.saturating_add(here.chars().next()?.len_utf8());
+    }
+}
+
 /// The footnotes referred to, in the order they are first: each its id and what defines it.
 #[derive(Default)]
 struct Notes {
@@ -793,6 +1172,10 @@ struct Writer<'a> {
     home: Option<&'a str>,
     notes: Notes,
     definitions: HashMap<String, SyntaxNode>,
+    places: Places,
+    abbreviations: Vec<(String, String)>,
+    /// Whether what is written is a link's description, where no address is a link of its own.
+    in_link: bool,
 }
 
 /// `text` with `&`, `<`, `>` and `"` written as HTML's entities.
@@ -849,22 +1232,23 @@ impl Writer<'_> {
             K::DOCUMENT | K::SECTION | K::DRAWER_CONTENT => self.elements(node, deeper),
             K::HEADLINE => self.headline(node, deeper),
             K::PARAGRAPH => {
-                self.push("<p>");
+                let id = self.id_of(node);
+                let _ = write!(self.out, "<p{id}>");
                 self.objects(node.children_with_tokens(), deeper);
                 self.push("</p>\n");
             }
             K::LIST => self.list(node, deeper),
             K::ORG_TABLE => self.table(node, deeper),
-            K::TABLE_EL => self.pre(&raw(node), None),
+            K::TABLE_EL => self.pre(&raw(node), None, node),
             K::SOURCE_BLOCK => {
                 let language = node
                     .descendants_with_tokens()
                     .filter_map(|e| e.into_token())
                     .find(|t| t.kind() == K::SRC_BLOCK_LANGUAGE)
                     .map(|t| t.text().to_owned());
-                self.pre(&unescaped(&block_content(node)), language.as_deref());
+                self.pre(&unescaped(&block_content(node)), language.as_deref(), node);
             }
-            K::EXAMPLE_BLOCK => self.pre(&unescaped(&block_content(node)), None),
+            K::EXAMPLE_BLOCK => self.pre(&unescaped(&block_content(node)), None, node),
             K::EXPORT_BLOCK => {
                 let html = node
                     .descendants_with_tokens()
@@ -899,9 +1283,9 @@ impl Writer<'_> {
                         line.strip_prefix(' ').unwrap_or(line).to_owned()
                     })
                     .collect();
-                self.pre(&lines.join("\n"), None);
+                self.pre(&lines.join("\n"), None, node);
             }
-            K::LATEX_ENVIRONMENT => self.pre(raw(node).trim_end(), None),
+            K::LATEX_ENVIRONMENT => self.pre(raw(node).trim_end(), None, node),
             K::RULE => self.push("<hr>\n"),
             K::CLOCK => {
                 let _ = writeln!(self.out, "<p style=\"font-size:9pt;color:{GREY}\">{}</p>", escaped(&collapsed(&raw(node))));
@@ -921,7 +1305,8 @@ impl Writer<'_> {
 
     /// A greater block, `node`: what it holds, between `open` and `close`.
     fn block(&mut self, node: &SyntaxNode, open: &str, close: &str, depth: usize) {
-        self.push(open);
+        let id = self.id_of(node);
+        let _ = write!(self.out, "{}{id}>", open.trim_end_matches('>'));
         if let Some(content) = node.children().find(|child| child.kind() == SyntaxKind::BLOCK_CONTENT) {
             self.elements(&content, depth);
         }
@@ -944,10 +1329,11 @@ impl Writer<'_> {
 
     /// Code, `text`, in a `<pre>`: in `language`'s class, which the documents' backend draws as a
     /// picture where a backend draws it.
-    fn pre(&mut self, text: &str, language: Option<&str>) {
+    fn pre(&mut self, text: &str, language: Option<&str>, node: &SyntaxNode) {
+        let id = self.id_of(node);
         let text = text.strip_suffix('\n').unwrap_or(text);
         let class = language.filter(|language| !language.is_empty()).map(|language| format!(" class=\"language-{}\"", escaped(language)));
-        let _ = writeln!(self.out, "<pre><code{}>{}</code></pre>", class.unwrap_or_default(), escaped(text));
+        let _ = writeln!(self.out, "<pre{id}><code{}>{}</code></pre>", class.unwrap_or_default(), escaped(text));
     }
 
     /// A headline, `node`: its heading (its TODO keyword in colour, its priority and its title, its
@@ -957,6 +1343,7 @@ impl Writer<'_> {
         let stars = node.children_with_tokens().filter_map(|e| e.into_token()).find(|t| t.kind() == K::HEADLINE_STARS);
         let level = stars.map_or(1, |stars| stars.text().len()).clamp(1, 6);
         let _ = write!(self.out, "<h{level}>");
+        self.anchors(node);
         for child in node.children_with_tokens() {
             match child {
                 NodeOrToken::Token(token) if token.kind() == K::HEADLINE_KEYWORD_TODO => {
@@ -1001,7 +1388,8 @@ impl Writer<'_> {
             (false, true) => ("<dl>", "</dl>\n"),
             (false, false) => ("<ul>", "</ul>\n"),
         };
-        self.push(open);
+        let id = self.id_of(node);
+        let _ = write!(self.out, "{}{id}>", open.trim_end_matches('>'));
         for item in node.children().filter(|child| child.kind() == K::LIST_ITEM) {
             let tag = item.children().find(|child| child.kind() == K::LIST_ITEM_TAG);
             let described = list.is_descriptive();
@@ -1056,7 +1444,8 @@ impl Writer<'_> {
             .collect();
         let first_rule = rows.iter().position(|row| row.kind() == K::ORG_TABLE_RULE_ROW);
         let header = first_rule.filter(|&rule| rule > 0 && rows.iter().skip(rule).any(|row| row.kind() == K::ORG_TABLE_STANDARD_ROW)).unwrap_or(0);
-        self.push("<table border=\"1\">");
+        let id = self.id_of(node);
+        let _ = write!(self.out, "<table border=\"1\"{id}>");
         if header > 0 {
             self.push("<thead>");
             for row in rows.iter().take(header) {
@@ -1120,9 +1509,10 @@ impl Writer<'_> {
             K::LINE_BREAK => self.push("<br>\n"),
             K::LINK => self.link(node, deeper),
             K::FN_REF => self.reference(node),
-            // A place, not shown: its `id` is written in the links' task.
-            K::TARGET => {}
+            // A place, not shown.
+            K::TARGET => self.anchors(node),
             K::RADIO_TARGET => {
+                self.anchors(node);
                 let text: String = inner().iter().map(|element| element.to_string()).collect();
                 self.push(&escaped(&text));
             }
@@ -1157,7 +1547,26 @@ impl Writer<'_> {
 
     /// Text, `text`, as it reads.
     fn text(&mut self, text: &str) {
-        self.push(&escaped(text));
+        let mut rest = text;
+        while !self.in_link
+            && let Some((before, path, after)) = autolink(rest)
+        {
+            let href = escaped(&self.address(path));
+            let _ = write!(self.out, "{}<a href=\"{href}\">{}</a>", escaped(before), escaped(path));
+            rest = after;
+        }
+        self.push(&escaped(rest));
+    }
+
+    /// The `id` attribute of the element `node`, for the place it is, if it is one: a name's.
+    fn id_of(&self, node: &SyntaxNode) -> String {
+        self.places.of(node).first().map(|id| format!(" id=\"{}\"", escaped(id))).unwrap_or_default()
+    }
+
+    /// An anchor for each place `node` is, where it starts: a heading's, a target's.
+    fn anchors(&mut self, node: &SyntaxNode) {
+        let anchors: String = self.places.of(node).iter().map(|id| format!("<a id=\"{}\"></a>", escaped(id))).collect();
+        self.push(&anchors);
     }
 
     /// A link, `node`: a picture where it is one ([`picture`]), else its description, or its path
@@ -1181,19 +1590,91 @@ impl Writer<'_> {
                 None => {
                     let description: Vec<SyntaxElement> =
                         node.children_with_tokens().skip_while(|e| e.kind() != K::L_BRACKET).skip(1).filter(|e| e.kind() != K::R_BRACKET2).collect();
+                    self.in_link = true;
                     self.objects(description.into_iter(), depth);
+                    self.in_link = false;
                 }
             }
         } else {
-            self.text(path.strip_prefix('*').unwrap_or(&path));
+            self.push(&escaped(path.strip_prefix('*').unwrap_or(&path)));
         }
         self.push("</a>");
     }
 
-    /// Where a link whose path is `path` leads, as an `href`.
+    /// Where a link whose path is `path` leads, as an `href`, the place resolved here, as Org has it:
+    /// `*Heading` to the heading of that title, `#custom-id` and `id:X` to the heading that has it;
+    /// a path with no type (`[[target]]`) to a target, else a name, else a heading's title; a file,
+    /// with what follows its `::` as the place in it; `doi:X` to `https://doi.org/X`; anything else
+    /// with a type as it is, which the viewer follows or says what it is. A place not found is an
+    /// `href` to a place of that name, which the viewer says isn't in the document. An abbreviation
+    /// is expanded first ([`Writer::expanded`]).
     fn address(&self, path: &str) -> String {
-        let _ = self.home;
-        path.to_owned()
+        let path = self.expanded(path);
+        let to = |id: Option<&String>, said: &str| format!("#{}", encoded(id.map_or(said, String::as_str)));
+        if let Some(title) = path.strip_prefix('*') {
+            return to(self.places.titles.get(&folded(title)), &path);
+        }
+        if let Some(custom) = path.strip_prefix('#') {
+            return to(self.places.custom.get(custom.trim()), custom.trim());
+        }
+        if let Some(id) = path.strip_prefix("id:") {
+            return to(self.places.ids.get(id.trim()), &path);
+        }
+        if let Some(doi) = path.strip_prefix("doi:") {
+            return format!("https://doi.org/{}", doi.trim());
+        }
+        if let Some(file) = file_of(&path) {
+            return self.file(file);
+        }
+        if has_scheme(&path) {
+            return web_or_not(path);
+        }
+        let name = folded(&path);
+        let places = &self.places;
+        to(places.targets.get(&name).or_else(|| places.names.get(&name)).or_else(|| places.titles.get(&name)), &path)
+    }
+
+    /// Where a link to the file `link` leads (`other.org::*Heading`): its path, `~` the reader's home
+    /// (another's, `~user`, refused, as a `file:` link the viewer doesn't follow), and after `::` the
+    /// place in it, a heading's title, a custom id or a target; a line's number or a `/regex/` none,
+    /// the file opened at its top.
+    fn file(&self, link: &str) -> String {
+        let (file, search) = link.split_once("::").map_or((link, None), |(file, search)| (file, Some(search.trim())));
+        let file = match file.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => match self.home {
+                Some(home) => format!("{home}{rest}"),
+                None => return web_or_not(format!("file:{link}")),
+            },
+            Some(_) => return web_or_not(format!("file:{link}")),
+            None => file.to_owned(),
+        };
+        let place = search.and_then(|search| {
+            let regex = search.len() > 1 && search.starts_with('/') && search.ends_with('/');
+            if search.is_empty() || regex || search.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some(collapsed(search.strip_prefix('*').or_else(|| search.strip_prefix('#')).unwrap_or(search)))
+        });
+        match place.filter(|place| !place.is_empty()) {
+            Some(place) => format!("{}#{}", encoded(&file), encoded(&place)),
+            None => encoded(&file),
+        }
+    }
+
+    /// `path` with an abbreviation the document declares (`#+LINK:`) expanded: `word:tag` as what
+    /// `word` stands for, its `%s` the tag and its `%h` the tag percent-encoded, or the tag after it
+    /// where it has neither; as it is where that would be longer than [`MAX_EXPANDED`].
+    fn expanded(&self, path: &str) -> String {
+        let (word, tag) = path.split_once(':').unwrap_or((path, ""));
+        let Some((_, url)) = self.abbreviations.iter().find(|(abbreviation, _)| abbreviation == word) else { return path.to_owned() };
+        let marks = url.matches("%s").count().saturating_add(url.matches("%h").count());
+        if url.len().saturating_add(marks.max(1).saturating_mul(tag.len().saturating_mul(3))) > MAX_EXPANDED {
+            return path.to_owned();
+        }
+        match marks {
+            0 => format!("{url}{tag}"),
+            _ => url.replace("%s", tag).replace("%h", &hexified(tag)),
+        }
     }
 
     /// A footnote's reference, `node`: its number, as a superscript leading to the note; or as
@@ -1216,7 +1697,8 @@ impl Writer<'_> {
                     self.push(&escaped(&raw(node)));
                     return;
                 };
-                self.notes.listed.push((format!("fn.{}", self.notes.listed.len().saturating_add(1)), defined));
+                let id = self.places.unique(&format!("fn.{}", self.notes.listed.len().saturating_add(1)));
+                self.notes.listed.push((id, defined));
                 let number = self.notes.listed.len();
                 if let Some(label) = label {
                     self.notes.numbered.insert(label, number);
@@ -1247,7 +1729,8 @@ impl Writer<'_> {
                 if self.notes.numbered.contains_key(&label) {
                     continue;
                 }
-                self.notes.listed.push((format!("fn.{}", self.notes.listed.len().saturating_add(1)), node));
+                let id = self.places.unique(&format!("fn.{}", self.notes.listed.len().saturating_add(1)));
+                self.notes.listed.push((id, node));
                 self.notes.numbered.insert(label, self.notes.listed.len());
             }
             let Some((id, node)) = self.notes.listed.get(at).cloned() else { break };
@@ -1432,10 +1915,10 @@ mod tests {
     #[test]
     fn a_headline_is_a_heading_with_its_keyword_in_colour_its_tags_in_grey_and_its_planning_small() {
         let html = body("* TODO [#A] First [1/3] :work:urgent:\nSCHEDULED: <2024-01-02 Tue>\n** DONE Second\n******* Seventh\n");
-        assert!(html.contains(&format!("<h1><span style=\"color:{NOT_DONE}\">TODO</span> [#A] First [1/3] <span style=\"color:{GREY};font-weight:normal\">:work:urgent:</span></h1>")), "{html}");
+        assert!(html.contains(&format!("<h1><a id=\"First\"></a><span style=\"color:{NOT_DONE}\">TODO</span> [#A] First [1/3] <span style=\"color:{GREY};font-weight:normal\">:work:urgent:</span></h1>")), "{html}");
         assert!(html.contains(&format!("<p style=\"font-size:9pt;color:{GREY}\">SCHEDULED: &lt;2024-01-02 Tue&gt;</p>")), "{html}");
-        assert!(html.contains(&format!("<h2><span style=\"color:{DONE}\">DONE</span> Second</h2>")), "{html}");
-        assert!(html.contains("<h6>Seventh</h6>"), "a level past 6 as 6: {html}");
+        assert!(html.contains(&format!("<h2><a id=\"Second\"></a><span style=\"color:{DONE}\">DONE</span> Second</h2>")), "{html}");
+        assert!(html.contains("<h6><a id=\"Seventh\"></a>Seventh</h6>"), "a level past 6 as 6: {html}");
     }
 
     #[test]
@@ -1444,7 +1927,10 @@ mod tests {
         assert!(html.contains(&format!("<span style=\"color:{NOT_DONE}\">WAIT</span> one")), "{html}");
         assert!(html.contains(&format!("<span style=\"color:{DONE}\">GONE</span> two")), "{html}");
         assert!(html.contains(&format!("<span style=\"color:{DONE}\">LATER</span> three")), "the last done, without a bar: {html}");
-        assert!(html.contains("<h1>TODO four</h1>"), "Org's own no longer, once a file declares its own: {html}");
+        assert!(
+            html.contains("<h1><a id=\"TODO four\"></a><a id=\"todo-four\"></a>TODO four</h1>"),
+            "Org's own no longer, once a file declares its own: {html}"
+        );
     }
 
     #[test]
@@ -1571,7 +2057,7 @@ mod tests {
             "<img src=\"a.png\" alt=\"\">",
             "<img src=\"./b.JPG\" alt=\"\">",
             "<img src=\"../c.svg\" alt=\"\">",
-            "<a href=\"file:d.png\">a description</a>",
+            "<a href=\"d.png\">a description</a>",
             "<a href=\"https://e.org/f.png\">https://e.org/f.png</a>",
             "<a href=\"https://h.org\"><img src=\"thumb.webp\" alt=\"\"></a>",
         ] {
@@ -1589,7 +2075,7 @@ mod tests {
             "Shown @@html:<i>snippet</i>@@ @@latex:\\no@@.\n",
         ));
         for hidden in
-            ["overview", "PROPERTIES", "logged", "a comment", "hidden", "INCLUDE", "other.org", "LaTeX", "run()", "named", "captioned", "\\no"]
+            ["overview", "PROPERTIES", "logged", "a comment", "hidden", "INCLUDE", "other.org", "LaTeX", "run()", "#+NAME", "captioned", "\\no"]
         {
             assert!(!html.contains(hidden), "{hidden} in {html}");
         }
@@ -1629,16 +2115,16 @@ mod tests {
     #[test]
     fn a_table_after_keywords_and_a_link_that_wraps_are_read_as_org_has_them() {
         let html = body("#+NAME: t\n#+CAPTION: c\n| a | b |\n|---+---|\n| 1 | 2 |\nAfter.\n");
-        assert!(html.starts_with("<table border=\"1\"><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>\n<p>After.\n</p>"), "{html}");
+        assert!(html.starts_with("<table border=\"1\" id=\"t\"><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>\n<p>After.\n</p>"), "{html}");
         assert!(!html.contains("<s>"), "its rule isn't strike-through: {html}");
         let html = body("  - item\n    #+ATTR_HTML: :width 10\n    | x |\n");
         assert!(html.contains("<table border=\"1\"><tbody><tr><td>x</td></tr></tbody></table>"), "in a list: {html}");
         let html = body("See [[https://a.org/b][a link\nthat wraps]] and [[*A heading\n   that wraps][here]], [[c][d]].\n");
-        assert!(html.contains("<a href=\"*A heading that wraps\">here</a>"), "{html}");
+        assert!(html.contains("<a href=\"#*A%20heading%20that%20wraps\">here</a>"), "a heading this document hasn't: {html}");
         assert!(html.contains("<a href=\"https://a.org/b\">a link\nthat wraps</a>"), "{html}");
-        assert!(html.contains("<a href=\"c\">d</a>"), "{html}");
+        assert!(html.contains("<a href=\"#c\">d</a>"), "{html}");
         let html = body("#+NAME: n\nJust a paragraph [[a\nb.\n");
-        assert_eq!(html, "<p>Just a paragraph [[a\nb.\n</p>\n", "nothing else to read: as it was");
+        assert_eq!(html, "<p id=\"n\">Just a paragraph [[a\nb.\n</p>\n", "nothing else to read: as it was, named");
     }
 
     #[test]
@@ -1700,6 +2186,145 @@ mod tests {
         let large = (Arc::new(vec![9; 60]), Arc::new(vec![9; 60]));
         cache.put(&large.0, &large.1);
         assert!(cache.get(&large.0).is_none(), "larger than the whole cache");
+    }
+
+    /// The `href`s of `org`'s links, in order, as written in its HTML.
+    fn hrefs(org: &str) -> Vec<String> {
+        let html = body(org);
+        html.split("<a href=\"").skip(1).map(|rest| rest[..rest.find('"').unwrap()].to_owned()).collect()
+    }
+
+    /// Every link form Org has, each where Org has it lead: a place in the document, resolved here,
+    /// as one `href`; a file and the place in it; an abbreviation expanded; anything with a type as
+    /// it is, for the viewer to follow or say what it is.
+    #[test]
+    fn links_lead_where_org_has_them() {
+        let org = concat!(
+            "#+LINK: gh https://github.com/%s\n#+LINK: q https://q.org/?s=%h\n#+LINK: plain https://p.org/\n",
+            "[[https://a.org/x][web]] <https://angle.org/y> https://bare.org/z. mailto:me@x.org =https://code.org= [[doi:10.1000/182]]\n",
+            "[[file:other.org]] [[file+sys:other.org::*Some   Heading]] [[file+emacs:../up.org::#custom]] [[./here.org::a target]]\n",
+            "[[/abs/x.org::42]] [[~/notes.org::/re/]] [[~someone/x.org]] [[file:my notes#1.org]]\n",
+            "[[*Some Heading]] [[*another ONE]] [[#custom]] [[id:abc-123]] [[id:elsewhere]] [[a target]] [[named]] [[Another one]] [[nowhere]]\n",
+            "[[gh:someone/repo]] [[q:a b]] [[plain:path]] [[elisp:(message \"x\")]] [[shell:ls]] [[help:org-mode]] [fn:1]\n",
+            "#+NAME: named\n| a |\n",
+            "* Some Heading [1/2] :tag:\n:PROPERTIES:\n:CUSTOM_ID: custom\n:ID: abc-123\n:END:\n",
+            "* TODO Another one\nA <<a target>> here.\n\n[fn:1] A note.\n",
+        );
+        let expected = [
+            "https://a.org/x",
+            "https://angle.org/y",
+            "https://bare.org/z",
+            "mailto:me@x.org",
+            "https://doi.org/10.1000/182",
+            "other.org",
+            "other.org#Some%20Heading",
+            "../up.org#custom",
+            "./here.org#a%20target",
+            "/abs/x.org",
+            "/home/x/notes.org",
+            "clv-org-not-followed/file:~someone/x.org",
+            "my%20notes%231.org",
+            "#custom",
+            "#Another%20one",
+            "#custom",
+            "#abc-123",
+            "#id:elsewhere",
+            "#a%20target",
+            "#named",
+            "#Another%20one",
+            "#nowhere",
+            "https://github.com/someone/repo",
+            "https://q.org/?s=a%20b",
+            "https://p.org/path",
+            "clv-org-not-followed/elisp:(message%20%22x%22)",
+            "clv-org-not-followed/shell:ls",
+            "clv-org-not-followed/help:org-mode",
+            "#fn.1",
+        ];
+        let html = html_of(org, Some("/home/x")).unwrap();
+        let start = html.find("<body>").unwrap();
+        let found: Vec<String> = html[start..].split("<a href=\"").skip(1).map(|rest| rest[..rest.find('"').unwrap()].to_owned()).collect();
+        assert_eq!(found, expected);
+        assert!(html.contains("<code>https://code.org</code>"), "no link in code: {html}");
+        assert!(html.contains("<a href=\"https://bare.org/z\">https://bare.org/z</a>."), "the full stop isn't the address's: {html}");
+        assert_eq!(hrefs("[[~/x.org]]"), ["clv-org-not-followed/file:~/x.org"], "no home to lead to");
+    }
+
+    /// A link's description is never a link of its own, an address in it as it reads.
+    #[test]
+    fn an_address_in_a_links_description_is_its_text() {
+        assert_eq!(hrefs("[[https://a.org][see https://b.org]]"), ["https://a.org"]);
+    }
+
+    /// The places a document has, each one `id` or more where it is: a heading by its custom id and
+    /// its id, its title as Org matches it and GitHub's slug of what it shows; a target; a named
+    /// element. A name the document gives itself wins over a heading's, in any case, and a heading
+    /// left without either still gets an id a link can lead to.
+    #[test]
+    fn places_are_written_as_ids_the_documents_own_names_first() {
+        let html = body(concat!(
+            "* TODO [#A] Some =Code= Heading [2/3] :tag:\n:PROPERTIES:\n:CUSTOM_ID: custom\n:ID: abc\n:END:\n",
+            "* Same\n* Same\n",
+            "* Clash\nA <<clash>> target and <<<radio>>> one.\n",
+            "#+NAME: Table\n| a |\n#+NAME: code\n#+begin_src sh\nls\n#+end_src\n",
+            "* COMMENT Drafts\n",
+        ));
+        for (anchors, what) in [
+            ("<h1><a id=\"custom\"></a><a id=\"abc\"></a><a id=\"Some =Code= Heading\"></a><a id=\"some-code-heading\"></a>", "a heading's"),
+            ("<h1><a id=\"Same\"></a>Same</h1>", "the first Same, its slug the same name in another case"),
+            ("<h1><a id=\"same-1\"></a>Same</h1>", "the second, by its slug"),
+            ("<h1><a id=\"heading\"></a>Clash</h1>", "a heading whose title and slug a target has"),
+            ("A <a id=\"clash\"></a> target and <a id=\"radio\"></a>radio one.", "targets"),
+            ("<table border=\"1\" id=\"Table\">", "a named table"),
+            ("<pre id=\"code\"><code class=\"language-sh\">", "a named block"),
+            ("<a id=\"Drafts\"></a><a id=\"comment-drafts\"></a>", "a COMMENT heading, by its title without it"),
+        ] {
+            assert!(html.contains(anchors), "{what}: {html}");
+        }
+        assert_eq!(
+            html.matches(" id=\"").count(),
+            html.match_indices(" id=\"").map(|(at, _)| &html[at..at + 20]).collect::<HashSet<_>>().len(),
+            "no id twice: {html}"
+        );
+    }
+
+    /// A link the viewer doesn't follow says what it is, its address as the document wrote it; any
+    /// other is left as it is.
+    #[test]
+    fn a_link_clv_doesnt_follow_says_what_it_is() {
+        let link = |path: &str| super::super::Link {
+            page: 0,
+            rects: Vec::new(),
+            address: None,
+            target: Target::File { path: path.into(), fragment: None, page: None },
+        };
+        let told = |path: &str| {
+            let link = told(link(path));
+            (link.target, link.address)
+        };
+        assert_eq!(
+            told("clv-org-not-followed/elisp:(beep)"),
+            (Target::Other("a elisp: link, which isn't followed".into()), Some("elisp:(beep)".into()))
+        );
+        assert_eq!(
+            told("clv-org-not-followed/file:~someone/x.org").0,
+            Target::Other("a link to a file in another user's home, which isn't followed".into())
+        );
+        assert_eq!(told("other.org").0, Target::File { path: "other.org".into(), fragment: None, page: None });
+    }
+
+    #[test]
+    fn a_url_and_an_id_are_written_as_read_back() {
+        assert_eq!(encoded("a b\"#%<>é\u{7}"), "a%20b%22%23%25%3C%3Eé%07");
+        assert_eq!(hexified("a b/é"), "a%20b%2F%C3%A9");
+        assert!(has_scheme("https://x") && has_scheme("elisp:(x)") && has_scheme("file+sys:x"));
+        assert!(!has_scheme("no scheme") && !has_scheme(":x") && !has_scheme("1x:y") && !has_scheme("a b:c"));
+    }
+
+    #[test]
+    fn an_abbreviation_too_long_once_expanded_is_left_as_it_is() {
+        let tag = "x".repeat(4000);
+        assert_eq!(hrefs(&format!("#+LINK: w https://w.org/%s%s%s\n[[w:{tag}]]\n")), [format!("clv-org-not-followed/w:{tag}")]);
     }
 
     /// How much larger the HTML is than the Org it is written from (ADR-0040): over the files

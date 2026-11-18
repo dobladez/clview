@@ -221,3 +221,110 @@ fn help_lists_org_and_credits_orgize() {
 fn nothing_but_this_backend_names_orgize() {
     crate::fixtures::named_only_in(&["src/source/org.rs", "tests/it/org.rs"], &[], &["orgize"]);
 }
+
+/// `f` and a label follows a link, here to a page past the first; the page it lands on.
+fn followed(view: &mut crate::view_pager::Session, links: usize, label: &str) -> usize {
+    use crate::view_pager::{letters, place_now};
+    let before = view.text().len();
+    view.press("f");
+    view.wait_until("the labels", |t| letters(&t[before..]).len() == links);
+    let before = view.text().len();
+    view.press(label);
+    view.wait_until("the link followed", |t| t.len() > before && place_now(&t[before..]).is_some_and(|(page, _)| page > 1));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    place_now(&view.text()).unwrap().0
+}
+
+/// Back with Backspace, to the first page.
+fn back(view: &mut crate::view_pager::Session) {
+    let before = view.text().len();
+    view.press("\x7f");
+    view.wait_until("back", |t| t.len() > before && crate::view_pager::place_now(&t[before..]).is_some_and(|(page, _)| page == 1));
+}
+
+/// Filler, a page of it and more at the window's size.
+fn filler() -> String {
+    "Filler, with words enough in it to fill a line of a page.\n\n".repeat(60)
+}
+
+/// The links of an Org document lead where Org has them: `[[*Heading]]` to the heading, without its
+/// keyword, priority, tags and cookies, a heading whose title wraps a line in the link too;
+/// `[[#custom-id]]` and `[[id:X]]` to the heading that has it; `[[target]]` to a target before a
+/// heading of the same title; a footnote's reference to its note, each on a later page, in order.
+#[test]
+fn links_in_org_go_to_headings_targets_ids_and_notes() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let filler = filler();
+    let org = format!(
+        "[[*First Heading]] [[#custom]] [[id:abc-123]] [[*Second\nheading wrapped]] [[clash]] [[*clash]] Note[fn:1]\n\n{filler}\
+         * TODO [#B] First Heading [1/2] :tag:\n{filler}\
+         * Second heading wrapped\n:PROPERTIES:\n:CUSTOM_ID: custom\n:ID: abc-123\n:END:\n{filler}\
+         * clash\n{filler}A <<clash>> target.\n{filler}\
+         [fn:1] The note.\n"
+    );
+    let path = write(tmp("org-links", "notes.org"), org.as_bytes());
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::place_now(t).is_some_and(|(page, _)| page == 1));
+    let mut pages = Vec::new();
+    for label in ["s", "a", "d", "f", "j", "k", "l"] {
+        pages.push(followed(&mut view, 7, label));
+        back(&mut view);
+    }
+    let [first, custom, id, wrapped, target, heading, note] = pages[..] else { unreachable!() };
+    assert!(first > 1 && custom > first && id == custom && wrapped == custom, "{pages:?}");
+    assert!(heading > wrapped && target > heading && note > target, "the target, not the heading of its name, then the note: {pages:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A link to another Org file goes to its heading, by the title written after `::*`, and a
+/// Markdown file's link to it by GitHub's slug of the heading; Backspace comes back.
+#[test]
+fn links_to_an_org_file_go_to_its_heading_from_org_and_from_markdown() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let filler = filler();
+    let dir = tmp("org-links-other", "dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    write(dir.join("other.org"), format!("* Start\n{filler}* Some Heading\nHere.\n").as_bytes());
+    for (name, text) in [("from.org", "See [[file:other.org::*Some Heading][there]].\n"), ("from.md", "See [there](other.org#some-heading).\n")] {
+        let path = write(dir.join(name), text.as_bytes());
+        let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+        view.wait_until("page 1", |t| crate::view_pager::drawn(t, "page 1/1"));
+        let before = view.text().len();
+        view.press("f");
+        view.wait_until("the label", |t| crate::view_pager::letters(&t[before..]).len() == 1);
+        view.press("s");
+        view.wait_until("the other file at its heading", |t| {
+            crate::view_pager::last_bar(t).contains("other.org") && crate::view_pager::place_now(t).is_some_and(|(page, _)| page > 1)
+        });
+        view.press("\x7f");
+        view.wait_until("back", |t| crate::view_pager::last_bar(t).contains(name));
+        view.press("q");
+        assert!(view.finish().success(), "{name}");
+    }
+}
+
+/// A link that would run something (`elisp:`, `shell:`) is never followed, the status line saying
+/// what it is; an `id:` this file hasn't is said not to be in it.
+#[test]
+fn links_that_run_something_or_lead_nowhere_say_so() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let path = write(tmp("org-links-said", "notes.org"), b"[[elisp:(beep)][run]] [[id:elsewhere][gone]]\n");
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::drawn(t, "page 1/1"));
+    for (label, said) in [("s", "a elisp: link, which isn't followed"), ("a", "no #id:elsewhere in this document")] {
+        let before = view.text().len();
+        view.press("f");
+        view.wait_until("the labels", |t| crate::view_pager::letters(&t[before..]).len() == 2);
+        view.press(label);
+        view.wait_until(said, |t| t.get(before..).is_some_and(|t| t.contains(said)));
+    }
+    view.press("q");
+    assert!(view.finish().success());
+}

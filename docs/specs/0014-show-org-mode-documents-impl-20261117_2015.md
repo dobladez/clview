@@ -92,3 +92,46 @@ seconds, the footnotes overflowing its stack), `help_lists_org_and_credits_orgiz
 `tests/it/view_pager.rs`, `slash_searches_an_org_documents_body_and_s_its_blocks_as_code`
 (drawers shown). The two canaries (`orgize_still_…`) test orgize, not clv: they fail when orgize
 changes, which can't be reverted here.
+
+## Task 3: links and places
+
+- **The owner confirmed the workarounds** (2026-11-17, through the team lead): no fork, no vendored
+  copy; their canaries named in `CONTRIBUTING.md`'s pinned dependencies (task 4).
+- **The slug moved to `src/source/slug.rs`**, out of `wordcraft.rs`, with its table of combining
+  marks and that table's test: Org's headings and Markdown's are found by the same GitHub slug,
+  and a backend can't name another. `wordcraft.rs` changed only by that (the spec hoped it would
+  stay untouched).
+- **An id with spaces** (the spec's 🟡): wordcraft keeps it as a bookmark as written, and the
+  `Linker` finds it, percent-decoded: `[[*Some Heading]]` and `file:other.org::*Some Heading` both
+  land (`links_in_org_go_…`, `links_to_an_org_file_…`). Nothing written otherwise.
+- **Ids are claimed in any case**: the `Linker` finds a place in any case after the exact one, so a
+  heading's slug `same` beside its title `Same`, or a heading `Clash` beside a target `clash`,
+  would be two places for one name. The second is left out; a heading left with no id gets
+  `heading`, `heading-1`, … so that `[[*Heading]]` still finds it.
+- **wordcraft's importer drops an `href` whose scheme isn't `http`, `https` or `mailto`**
+  (`wordcraft_doc::link::is_safe_href`): an `elisp:` link was plain text, with nothing to say what
+  it is. Such a link (and `file:~user/…`, and `~/` with no home) is written to a path of clv's own
+  (`clv-org-not-followed/…`), which the importer keeps, and the Org backend's `Shown` wraps the
+  document's links to say what each is (`a elisp: link, which isn't followed`), its address as
+  written, as the epub's `InTheBook` does for a book's files. Not in the spec's plan, which said
+  `Linker` would need nothing new: it doesn't, but the backend needed a wrapper.
+- **A link with a space in its path** (`elisp:(message "x")`) would be said by the viewer as an
+  address with a space, before this wrapper: the path is percent-encoded, and the wrapper decodes
+  it for what it says and copies.
+- **Verify**: `cargo test -j 2 --test it org::links` passes. The manual check (kitty: `f` on an
+  Org file, `[[*Heading]]`, `file:other.org::*Heading`, a web link; Backspace back) is left to the
+  owner, so the task's box stays open until it is confirmed.
+
+**Tests added, each seen failing with the fix it covers reverted**: in `src/source/org.rs`,
+`links_lead_where_org_has_them` (every path as written), `an_address_in_a_links_description_is_its_text`
+(autolinks inside a description), `places_are_written_as_ids_the_documents_own_names_first` (ids
+claimed in their case only), `a_url_and_an_id_are_written_as_read_back` (`#` not encoded),
+`an_abbreviation_too_long_once_expanded_is_left_as_it_is` (no bound),
+`a_link_clv_doesnt_follow_says_what_it_is` (the marker not read); in `tests/it/org.rs`,
+`links_in_org_go_to_headings_targets_ids_and_notes` (headings not found by title; and, once it
+also followed `[[*clash]]`, headings before targets for `[[clash]]`: the first form of the test,
+without that link, passed with that revert, since nothing told the target's page from the
+heading's), `links_to_an_org_file_go_to_its_heading_from_org_and_from_markdown` (the place after
+`::` dropped), `links_that_run_something_or_lead_nowhere_say_so` (every scheme written as it is,
+which the importer drops). `slug::tests::the_table_of_marks_is_in_order_and_knows_a_mark` moved
+from `wordcraft.rs` as it was.

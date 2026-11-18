@@ -24,6 +24,8 @@ mod org;
 mod pdfcraft;
 #[cfg(feature = "word")]
 mod picture;
+#[cfg(feature = "word")]
+mod slug;
 #[cfg(feature = "svg")]
 mod svg;
 #[cfg(feature = "tar")]
