@@ -163,8 +163,8 @@ All are on by default, and asked in this order, which settles only claims as sur
 | 1 | `svg.rs` (`svg/html.rs`: its HTML labels, with `svg-html`) | `svg` (`svg-html`) | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz, gzipped, by what it unpacks to; a file whose first 1024 bytes end before its root element, by its name | Before tar, which would take an svgz, gzipped, as the file it unpacks to |
 | 2 | `mermaid.rs` | `mermaid`, which brings `svg` | Its name alone: `.mermaid` and text; `.mmd` and text whose first line past a BOM, blank lines, `%%` comments and front matter, within the first 1024 bytes, starts with a kind of diagram merman draws (the first word of each label in `merman::diagram_header_facts()`, in its case, followed by a space, a `-` or the line's end), or is an `%%{init` directive, since MultiMarkdown is `.mmd` too | |
 | 3 | `tar.rs` | `tar` | A POSIX or GNU header first (`ustar`, its checksum right); gzip, bzip2 and xz by their signature: a compressed tar as an archive, anything else as the file it unpacks to | After SVG, for an svgz |
-| 4 | `org.rs` | `org`, which brings `word` | Its name, `.org` or `.org_archive` in any case, and text (no NUL, few controls; UTF-16 by its BOM); or text whose first line, or second after a `#!` line, holds an Emacs mode line naming Org (`-*- org -*-`, `mode: org` among its variables), whatever its name | Before the documents' backend, so that a `.md` that says it is Org is |
-| 5 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | Before zip, since a docx and an odt are zips |
+| 4 | `wordcraft.rs` | `word` | An RTF by its first bytes (`{\rtf`); an odt, a zip, by its first file (`mimetype`, saying OpenDocument text); a docx, a zip, by a file in `word/` among those its first 1024 bytes hold, or by a Word name; a Word 97-2003 document, a compound file, by such a name only; HTML by how it starts (a doctype or an `html` element), or by its name and that it is text; Markdown by its name only, and that it is text | Before zip, since a docx and an odt are zips |
+| 5 | `org.rs` | `org`, which brings `word` | Its name, `.org` or `.org_archive` in any case, and text (no NUL, few controls; UTF-16 by its BOM); or text whose first line, or second after a `#!` line, holds an Emacs mode line naming Org (`-*- org -*-`, `mode: org` among its variables), whatever its name | After the documents' backend, which so names its formats before Org's where the viewer names those that have a setting: a `.md` whose first line says Org is Markdown |
 | 6 | `gridcraft.rs` | `sheet`, which brings `pdf` | An ods, a zip, by its first file (`mimetype`, saying OpenDocument spreadsheet); an Excel workbook, a zip, by a file in `xl/` among those its first 1024 bytes hold, or by an Excel name; an Excel 97-2003 workbook, a compound file, by such a name only; values separated by commas or tabs by their name only, and text | Before zip, since an xlsx is a zip |
 | 7 | `epub.rs` | `epub`, which brings `word` | A zip whose first file is `mimetype`, stored, saying `application/epub+zip`, whatever its name; a zip named `.epub` whose first file isn't a stored `mimetype` | Before zip, since an epub is a zip; after the Word and spreadsheet backends, which take the zips that say they are theirs |
 | 8 | `pdfcraft.rs` | `pdf` | `%PDF-` first; loosely, `%PDF-` further in its first 1024 bytes, where ISO 32000-2 lets readers allow bytes before the header | Anywhere: a header further in loses to any backend sure of the file |
@@ -254,9 +254,9 @@ through `Format::having`, as it lists its fences), and that is all the viewer kn
 have a setting before one is shown: `view::having` gives the names of the formats that list each, in
 the backends' order, and the pager says a setting's phrases with the first two of them
 (`pager::Settings`): its line in `?`, what its keys do and then the formats (`view::shortly`: `light on
-dark, or dark on light (Mermaid, Org and others)`), and what its key says on a file without it
-(`view::some_do`: `this format doesn't go dark (Mermaid, Org and others do)`, Mermaid's backend
-and Org's coming before the documents', and the epub's after), short enough for a status line of 80 columns
+dark, or dark on light (Mermaid, Markdown and others)`), and what its key says on a file without it
+(`view::some_do`: `this format doesn't go dark (Mermaid, Markdown and others do)`, Mermaid's backend
+coming before the documents', and Org's and the epub's after), short enough for a status line of 80 columns
 however many formats come to share the setting.
 No backend writes a sentence about formats, and the viewer names none. `source::tests::a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend`
 checks that a format lists only settings its backend declares, that every setting is listed by
@@ -640,8 +640,9 @@ through its command) and that a key means one setting
   `doi:` to `https://doi.org/`; `http`, `https` and `mailto` as they are. The documents'
   backend's importer drops an `href` with any other scheme (`wordcraft_doc::link::is_safe_href`),
   so such a link (`elisp:`, `shell:`, a file in another user's home) is written to a path of its
-  own, `clv-org-not-followed/` and the address, which `Shown` makes a `Target::Other` saying what
-  it is. Bare and angle links, which orgize doesn't parse, are found in its text
+  own, `clv-org-not-followed/` and the address, which `Shown` makes the `Target::Web` it is, for
+  the viewer to say what it is (`link::web`: `an elisp: link, which isn't followed`), as of any
+  document's. Bare and angle links, which orgize doesn't parse, are found in its text
   (`autolink`).
 - **A spreadsheet** is printed to a PDF when it opens, through gridcraft's engine, and opened as that
   PDF by the backend that opens it, found the way any file's backend is, not by name; what gridcraft

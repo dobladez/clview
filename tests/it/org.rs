@@ -53,8 +53,9 @@ fn an_org_file_is_a_document_its_keywords_in_colour_and_its_picture_drawn() {
 }
 
 /// A file whose first line holds an Emacs mode line naming Org is Org, whatever its name: a `.txt`,
-/// a file with no extension, a `.md` (which Markdown would show without the keywords' colours), and
-/// a file in UTF-16; and so through a pipe, where there is nothing beside it to draw.
+/// a file with no extension, a file in UTF-16; and so through a pipe, where there is nothing beside
+/// it to draw. But a `.md` with that line is Markdown, which the documents' backend, asked first,
+/// is sure of (the owner's choice, 2026-11-18): without the keywords' colours.
 #[test]
 fn a_mode_line_says_org_whatever_the_name_and_through_a_pipe() {
     let dir = tmp("org-mode-line", "dir");
@@ -62,15 +63,15 @@ fn a_mode_line_says_org_whatever_the_name_and_through_a_pipe() {
     write(dir.join("blue.png"), &plain(80, BLUE));
     let org = format!("# -*- mode: org; coding: utf-8 -*-\n{}", notes("file:blue.png"));
     let utf16: Vec<u8> = b"\xFF\xFE".iter().copied().chain(org.encode_utf16().flat_map(u16::to_le_bytes)).collect();
-    for (name, bytes) in
-        [("notes.txt", org.as_bytes().to_vec()), ("notes", org.as_bytes().to_vec()), ("notes.md", org.as_bytes().to_vec()), ("wide.txt", utf16)]
-    {
+    for (name, bytes) in [("notes.txt", org.as_bytes().to_vec()), ("notes", org.as_bytes().to_vec()), ("wide.txt", utf16)] {
         let path = write(dir.join(name), &bytes);
         let (pages, said) = pages(&path, &[]);
         assert_eq!((pages.iter().map(shows).collect::<Vec<_>>(), said.as_str()), (vec![[true, true, true]], ""), "{name}");
     }
-    let markdown = write(dir.join("plain.md"), notes("blue.png").as_bytes());
-    assert_eq!(pages(&markdown, &[]).0.iter().map(shows).collect::<Vec<_>>(), [[false, false, false]], "Markdown without a mode line");
+    for (name, text) in [("plain.md", notes("blue.png")), ("said.md", org.clone())] {
+        let markdown = write(dir.join(name), text.as_bytes());
+        assert_eq!(pages(&markdown, &[]).0.iter().map(shows).collect::<Vec<_>>(), [[false, false, false]], "{name}: Markdown, its Org as text");
+    }
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
         .args(["/dev/stdin", "--protocol", "kitty"])
@@ -318,7 +319,7 @@ fn links_that_run_something_or_lead_nowhere_say_so() {
     let path = write(tmp("org-links-said", "notes.org"), b"[[elisp:(beep)][run]] [[id:elsewhere][gone]]\n");
     let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
     view.wait_until("page 1", |t| crate::view_pager::drawn(t, "page 1/1"));
-    for (label, said) in [("s", "a elisp: link, which isn't followed"), ("a", "no #id:elsewhere in this document")] {
+    for (label, said) in [("s", "an elisp: link, which isn't followed"), ("a", "no #id:elsewhere in this document")] {
         let before = view.text().len();
         view.press("f");
         view.wait_until("the labels", |t| crate::view_pager::letters(&t[before..]).len() == 2);

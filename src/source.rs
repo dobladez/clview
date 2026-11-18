@@ -61,8 +61,9 @@ pub(crate) use worker::{Worker, serve};
 /// settles only claims as sure ([`opener`]): a mark found anywhere, a PDF's header past its first
 /// byte, loses to any of them wherever it is asked. SVG before tar, which would take an svgz,
 /// gzipped, as the file it unpacks to; documents, spreadsheets and books before zip, since a
-/// docx, an xlsx and an epub are zips; Org before the documents' backend, so that a `.md` whose
-/// first line says it is Org is Org, as Emacs has it.
+/// docx, an xlsx and an epub are zips. Org after the documents' backend, which so names its
+/// formats first where the viewer names those that have a setting (`(Markdown, HTML and others
+/// do)`): a `.md` whose first line says it is Org is Markdown.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -70,10 +71,10 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &mermaid::Mermaid,
     #[cfg(feature = "tar")]
     &tar::Tar,
-    #[cfg(feature = "org")]
-    &org::Org,
     #[cfg(feature = "word")]
     &wordcraft::Wordcraft,
+    #[cfg(feature = "org")]
+    &org::Org,
     #[cfg(feature = "sheet")]
     &gridcraft::Gridcraft,
     #[cfg(feature = "epub")]

@@ -56,8 +56,9 @@ how its links and places become `<a href>` and `id`s.
   whatever its name: a `.txt`, a file with no extension, and **a pipe**. A sure claim
   ([ADR-0039](../adr/0039-a-backend-sure-of-a-file-wins-over-one-that-finds-a-mark-in-it.md)):
   "what a file of its kind holds", like a `.mmd`'s first line.
-- Asked before the documents' backend, so a `.md` whose first line says Org is Org, as Emacs would
-  have it. HTML that starts with a doctype or an `html` element has that on its first line, not a
+- Asked after the documents' backend (the owner's change, 2026-11-18), so that the viewer names
+  Markdown and HTML first among the formats that have a setting (`(Markdown, HTML and others do)`):
+  a `.md` whose first line says Org is Markdown, where Emacs would have it Org. HTML that starts with a doctype or an `html` element has that on its first line, not a
   mode line, so it stays HTML.
 - Read as Markdown is (`txt::decode`): UTF-8, and UTF-16 by its byte order mark.
 - From the command line, in a list (opened when its tile is wanted, as documents are), in a
@@ -172,7 +173,7 @@ checks:
   a held file whose pictures are read beside the `.org`
   ([ADR-0037](../adr/0037-what-is-beside-a-held-file-is-read-from-its-holder.md)), through
   `source::opener` over the other backends; its `Again` converts again for a relayout.
-- `src/source.rs`: Org in `BACKENDS`, before `wordcraft.rs`, behind an `org` feature that brings
+- `src/source.rs`: Org in `BACKENDS`, after `wordcraft.rs`, behind an `org` feature that brings
   `word`; and in `WORKERS` if the evaluation puts the parser in a worker.
 - `src/source/wordcraft.rs`: read, ideally untouched. A src block in a listed language is written
   as `<pre><code class="language-mermaid">`, which the HTML scanner (`blocks_drawn`) draws, `s` and
@@ -251,3 +252,6 @@ checks:
 
 - 2026-11-17 — Ready (spec-new).
 - 2026-11-17 — Implementing ([notes](0014-show-org-mode-documents-impl-20261117_2015.md)).
+- 2026-11-18 — The owner moved Org after the documents' backend: before it, the viewer named Org
+  first among the formats that have a setting (`(Org, Markdown and others do)`), and Markdown and
+  HTML are what a reader knows. The cost accepted: a `.md` whose first line says Org is Markdown.

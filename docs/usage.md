@@ -208,7 +208,7 @@ reminder of the main keys. A [search](#searching-a-documents-text) is said there
 message: what is typed and its count, then the match you are on.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
-says so on the whole status line: `this format doesn't reflow (Org, Markdown and others do)`,
+says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,
 naming two of the formats that do, and `these files don't…` in a list none of whose files does.
 It has the line for a second, then the status line comes back; any key brings it back at once,
 and does what it does.
@@ -611,7 +611,7 @@ Which files have links:
   line's number or a `/regex/` opens it at its top. On the web: `[[https://…][…]]`, `<https://…>`,
   bare `http`, `https` and `mailto` addresses in the text, and `doi:X` as `https://doi.org/X`. The
   abbreviations the file declares (`#+LINK:`, with `%s` and `%h`) are expanded. Anything else
-  (`elisp:`, `shell:`, `help:`, `info:`) is never run: the status line says what it is (`a elisp:
+  (`elisp:`, `shell:`, `help:`, `info:`) is never run: the status line says what it is (`an elisp:
   link, which isn't followed`). `F` copies the address as clv writes it: `other.org#Some%20Heading`.
 - **Places in Org documents:** a heading by its title, as `[[*Heading]]` finds it, and by the id
   GitHub would give its text, so that a Markdown file's `[see](notes.org#some-heading)` finds it;
@@ -644,7 +644,7 @@ that only another backend takes is refused, since it would do nothing for the fi
 | [SVG drawings](#svg-drawings), and svgz, gzipped | XML whose root element is `<svg>`, after whatever may come first (a declaration, comments, a doctype), and svgz by what it unpacks to; a `.svg` or `.svgz` name when the first 1024 bytes end before the root element. Other XML is not one | none |
 | [Mermaid diagrams](#mermaid-diagrams) | Their name: `.mermaid`, and that it is text; `.mmd`, and that its first line past blank lines, `%%` comments and front matter, within its first 1024 bytes, names a kind of diagram merman draws (`flowchart`, `graph`, `sequenceDiagram`, `stateDiagram-v2`…) or is an `%%{init: …}%%` directive, since MultiMarkdown names its files `.mmd` too, which clv doesn't open. Not through a pipe, as a diagram has no signature | none |
 | [Word documents, OpenDocument text, RTF, Markdown and HTML](#documents) | An RTF by how it starts (`{\rtf`), whatever its name; an odt by what the zip it is says it holds; a docx by what its zip holds, or a Word name (`.docx`, `.docm`, `.dotx`, `.dotm`, `.doc`, `.dot`); a Word 97-2003 document by such a name only, since spreadsheets and slides are compound files too; HTML by how it starts (a doctype or an `<html>` element), whatever its name, or a name (`.html`, `.htm`, `.xhtml`) and that it is text; Markdown by its name only (`.md`, `.markdown`, `.mdown`, `.mkd`), and that it is text | `--password PW`: the password of a protected Word document |
-| [Org documents](#org-documents) | Their name, `.org` or `.org_archive`, in any case, and that they are text; or, whatever their name, through a pipe too, an Emacs mode line naming Org on their first line (their second, after a `#!` line): `-*- org -*-`, or `mode: org` among its variables. Asked before Markdown and HTML, so a `.md` that says it is Org is | none |
+| [Org documents](#org-documents) | Their name, `.org` or `.org_archive`, in any case, and that they are text; or, whatever their name, through a pipe too, an Emacs mode line naming Org on their first line (their second, after a `#!` line): `-*- org -*-`, or `mode: org` among its variables; but a Markdown or HTML file, known first, stays one whatever its first line says | none |
 | [Spreadsheets](#spreadsheets) | An ods by what the zip it is says it holds; an Excel workbook by what its zip holds, or an Excel name (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`, `.xlsb`, `.xls`, `.xlt`); an Excel 97-2003 workbook by such a name only; values separated by commas or tabs by their name only (`.csv`, `.tsv`, `.tab`), and that they are text | `--password PW`: the password of a protected workbook |
 | [Ebooks (epub)](#books) | A zip whose first file, `mimetype`, says it is an epub, whatever its name; or a `.epub` name, for a zip whose first bytes don't say what it is (a `mimetype` that isn't first, or is compressed, as some tools write it) | none |
 | [PDFs](#pdfs) | `%PDF-` in their first 1024 bytes | `--password PW`: the user or the owner password of an encrypted PDF |
@@ -1108,9 +1108,9 @@ its margins, `D` for dark paper, `s` for its source blocks, each with its option
 **Which files are Org**: text named `.org` or `.org_archive`, in any case; and text, whatever its
 name, whose first line (its second, where the first starts with `#!`) holds an Emacs mode line
 naming Org, `-*- org -*-` or `-*- mode: org; … -*-` among its variables, in any case, as Emacs
-reads it. So an Org file comes through a pipe too, with its mode line, and a `.md` whose first line
-says Org is Org, as Emacs would have it. HTML starts with a doctype or an `<html>` element, so a
-mode line in an HTML comment after it isn't on its first line. It is read as UTF-8, or UTF-16 by
+reads it. So an Org file comes through a pipe too, with its mode line. A file Markdown or HTML is
+known by first stays one, though: a `.md` whose first line says Org is shown as Markdown, which
+Emacs would open as Org. It is read as UTF-8, or UTF-16 by
 its byte-order mark. A local-variables block at a file's end (`Local Variables: … mode: org`) isn't
 read: it is past what a file is told by.
 

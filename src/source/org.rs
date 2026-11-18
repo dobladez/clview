@@ -482,19 +482,14 @@ impl Links for Said {
 /// [`told`] makes what the link is.
 const NOT_FOLLOWED: &str = "clv-org-not-followed/";
 
-/// `link`, of an Org document, with a target marked [`NOT_FOLLOWED`] made a message: what the link
-/// is (`a elisp: link, which isn't followed`, `a link to another user's home, …`), its address as
-/// the document wrote it.
+/// `link`, of an Org document, with a target marked [`NOT_FOLLOWED`] made the address the document
+/// wrote, for the viewer, which follows only the web's, to say what it is (`an elisp: link, which
+/// isn't followed`), as it says of any document's.
 fn told(mut link: super::Link) -> super::Link {
     let Target::File { path, .. } = &link.target else { return link };
     let Some(written) = path.strip_prefix(NOT_FOLLOWED).map(str::to_owned) else { return link };
-    let said = match written.split_once(':') {
-        Some(("file", rest)) if rest.starts_with('~') => "a link to a file in another user's home, which isn't followed".to_owned(),
-        Some((scheme, _)) if has_scheme(&written) => format!("a {}: link, which isn't followed", cut(scheme, 32)),
-        _ => "a link that isn't followed".to_owned(),
-    };
-    link.address = Some(written).filter(|written| written.len() <= super::MAX_ADDRESS);
-    link.target = Target::Other(said);
+    link.address = Some(written.clone()).filter(|written| written.len() <= super::MAX_ADDRESS);
+    link.target = Target::Web(written);
     link
 }
 
@@ -2302,14 +2297,8 @@ mod tests {
             let link = told(link(path));
             (link.target, link.address)
         };
-        assert_eq!(
-            told("clv-org-not-followed/elisp:(beep)"),
-            (Target::Other("a elisp: link, which isn't followed".into()), Some("elisp:(beep)".into()))
-        );
-        assert_eq!(
-            told("clv-org-not-followed/file:~someone/x.org").0,
-            Target::Other("a link to a file in another user's home, which isn't followed".into())
-        );
+        assert_eq!(told("clv-org-not-followed/elisp:(beep)"), (Target::Web("elisp:(beep)".into()), Some("elisp:(beep)".into())));
+        assert_eq!(told("clv-org-not-followed/file:~someone/x.org").0, Target::Web("file:~someone/x.org".into()));
         assert_eq!(told("other.org").0, Target::File { path: "other.org".into(), fragment: None, page: None });
     }
 

@@ -98,14 +98,26 @@ pub(super) fn web(address: &str) -> Result<(), String> {
         "http" | "https" => {
             match rest.strip_prefix("//").is_some_and(|host| host.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '%' | '['))) {
                 true => Ok(()),
-                false => Err(format!("a {}: link without a host, which isn't followed", scheme.to_ascii_lowercase())),
+                false => {
+                    let scheme = scheme.to_ascii_lowercase();
+                    Err(format!("{} {scheme}: link without a host, which isn't followed", article(&scheme)))
+                }
             }
         }
         "mailto" => match reads_a_file(rest) {
             true => Err("a mailto: link that names a file for the mail app to read, which isn't followed".into()),
             false => Ok(()),
         },
-        scheme => Err(format!("a {scheme}: link, which isn't followed")),
+        scheme => Err(format!("{} {scheme}: link, which isn't followed", article(scheme))),
+    }
+}
+
+/// The article before `word`, said as it is spelled: `an` before a vowel, `a` before anything else
+/// (`an elisp:`, `a file:`).
+fn article(word: &str) -> &'static str {
+    match word.chars().next().map(|c| c.to_ascii_lowercase()) {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
     }
 }
 
@@ -338,6 +350,8 @@ mod tests {
         assert_eq!(said("FILE:///etc/passwd"), "a file: link, which isn't followed");
         assert_eq!(said("ftp://example.com/"), "a ftp: link, which isn't followed");
         assert_eq!(said("x-apple.systempreferences:com.apple"), "a x-apple.systempreferences: link, which isn't followed");
+        assert_eq!(said("elisp:(beep)"), "an elisp: link, which isn't followed", "an before a vowel");
+        assert_eq!(said("Info:org"), "an info: link, which isn't followed");
         assert_eq!(said("http:example.com"), "a http: link without a host, which isn't followed");
         assert_eq!(said("https:///etc/passwd"), "a https: link without a host, which isn't followed");
         for none in ["", "example.com", "docs/guide.md", "//example.com", ":x", "1http://x", "a_b:c", &format!("{}://x", "s".repeat(33))] {

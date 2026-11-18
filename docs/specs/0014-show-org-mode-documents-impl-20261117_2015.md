@@ -159,3 +159,19 @@ from `wordcraft.rs` as it was.
 - The tests added are named, each with what was reverted, under tasks 2 and 3 above.
 - Left open, for the owner: the manual checks in kitty (tasks 2 and 3, and the Done list's), so
   the spec stays `Implementing` until they are confirmed.
+
+## After review: Org after the documents' backend, and `an elisp:` (2026-11-18)
+
+- **The owner moved Org after the documents' backend** in `BACKENDS`, so that what a key says
+  names Markdown first again (`(Markdown, HTML and others do)`, `(Mermaid, Markdown and others)`).
+  The seven test expectations and the Unreleased changelog's examples changed in task 2 are back
+  as they were. The cost accepted: a `.md` whose first line is an Org mode line is Markdown
+  (`a_mode_line_says_org_whatever_the_name_and_through_a_pipe` pins it, a `.txt` with the line
+  still Org; seen failing with Org put back before the documents' backend). The spec's
+  Requirements and Approach say so, and its Changelog.
+- **`an elisp: link`**: the message is the core's (`view::link::web`), for any document's link with
+  a scheme it doesn't follow; it now takes `an` before a vowel (`article`). The Org backend no
+  longer writes a message of its own for a link it marks as not followed: `Shown` hands the
+  address to the viewer as the web address it is, so one place says it. A file in another user's
+  home now says `a file: link, which isn't followed`. Seen failing with the article reverted:
+  `view::link::tests::a_web_address_is_http_https_or_mailto` and `org::links_that_run_something_or_lead_nowhere_say_so`.
