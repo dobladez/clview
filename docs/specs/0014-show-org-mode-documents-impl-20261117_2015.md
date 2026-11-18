@@ -151,3 +151,11 @@ from `wordcraft.rs` as it was.
 - README's Plans and the backlog's More documents: Org out, AsciiDoc and reStructuredText left.
 - `CLAUDE.md`'s Layout: `slug.rs`.
 - Gates: `cargo test -j 2 --test docs` passes; no Rust changed since task 3's full gates.
+
+## Done checklist
+
+- The gates pass (fmt, clippy, every test: 648 unit, 13 docs, 314 integration) at task 3's commit;
+  task 4 changed no Rust.
+- The tests added are named, each with what was reverted, under tasks 2 and 3 above.
+- Left open, for the owner: the manual checks in kitty (tasks 2 and 3, and the Done list's), so
+  the spec stays `Implementing` until they are confirmed.
