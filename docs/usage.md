@@ -612,13 +612,15 @@ Which files have links:
   bare `http`, `https` and `mailto` addresses in the text, and `doi:X` as `https://doi.org/X`. The
   abbreviations the file declares (`#+LINK:`, with `%s` and `%h`) are expanded. Anything else
   (`elisp:`, `shell:`, `help:`, `info:`) is never run: the status line says what it is (`an elisp:
-  link, which isn't followed`). `F` copies the address as clv writes it: `other.org#Some%20Heading`.
+  link, which isn't followed`). `F` copies the address as clv writes it: `other.org#*Some%20Heading`.
 - **Places in Org documents:** a heading by its title, as `[[*Heading]]` finds it (as written, or
   as it shows: `[[*Greek α]]` for `* Greek \alpha`), and by the id GitHub would give the text it
   shows, so that a Markdown file's `[see](notes.org#some-heading)` finds it;
   a `:CUSTOM_ID:`, an `:ID:`, a `<<target>>` and a `#+NAME:` by their names. A name the file gives
   itself wins over a heading's: a heading whose title or id another place has is found by its
-  title through `[[*Heading]]` still. Nothing hidden is a place, nor a note: a target or a
+  title through `[[*Heading]]` still. A heading is also `*` and its title, which only a heading is:
+  another file's `::*clash` goes to its heading `clash` where it has a `<<clash>>` too, and `F`
+  copies such a link as `other.org#*clash`. Nothing hidden is a place, nor a note: a target or a
   footnote's definition in a drawer is left out with it.
 - **Places in Markdown and HTML:** in HTML, any element with an `id` (`<h2 id="usage">`,
   `<div id="usage">`), as well as `<a id>` and `<a name>`. Markdown's headings get the ids GitHub

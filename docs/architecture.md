@@ -621,7 +621,9 @@ through its command) and that a key means one setting
   link whose path wraps a line, each parsed again by orgize, each with a canary test, in rounds
   until one mends nothing, since what follows a name is parsed again whole; a line's end in a
   path is marked, `WRAPPED`, and read back as one space, `unwrapped`), its places found
-  (`places`, none under what is hidden), then written. The TODO keywords it is parsed by are
+  (`places`, none under what is hidden), then written. Each round mends every paragraph it finds
+  at once, the tree built again once (`rebuilt`, down only the nodes that hold one), so that
+  thousands of links that wrap cost a pass, not a pass each. The TODO keywords it is parsed by are
   those orgize finds among its keywords, parsed once with Org's own to find them. The HTML starts with 1,024 bytes of clv's own, a doctype first,
   so that it is HTML to the backend that opens it and nothing the file writes chooses one. It is
   handed on as a held file, which the documents' backend reads again for each relayout: `CACHE`
@@ -636,11 +638,13 @@ through its command) and that a key means one setting
   place is one `id` or more (`Places`), the names the file gives itself first (a heading's
   `:CUSTOM_ID:` and `:ID:`, `<<target>>`, `#+NAME:`), then each heading by its title as Org matches
   `[[*Heading]]` (`title_of`) and by GitHub's slug of what it shows (`slug::slugged`, which the
-  documents' backend writes Markdown's headings with too), where no name has them in any case; a
-  heading left with neither gets one of its own. Each link is written as an `href` to the place it
+  documents' backend writes Markdown's headings with too), and by `*` and its title, as written and
+  as it shows, which only a heading is, where no name has them in any case; a heading left with
+  none gets one of its own. Each link is written as an `href` to the place it
   resolves to (`Writer::address`), so the documents' backend's `Linker` follows it as any HTML's:
   `[[*Heading]]`, `[[#custom]]`, `[[id:X]]` and `[[target]]` (a target, then a name, then a
-  heading's title) to `#id`; a file, with what follows its `::` as the place in it, to `path#place`;
+  heading's title) to `#id`; a file, with what follows its `::` as the place in it, to `path#place` (`::*Heading` to
+  `path#*Heading`, the heading's own);
   `doi:` to `https://doi.org/`; `http`, `https` and `mailto` as they are. The documents'
   backend's importer drops an `href` with any other scheme (`wordcraft_doc::link::is_safe_href`),
   so such a link (`elisp:`, `shell:`, a file in another user's home) is written to a path of its

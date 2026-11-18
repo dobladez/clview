@@ -337,6 +337,43 @@ fn links_to_an_org_file_go_to_its_heading_from_org_and_from_markdown() {
     }
 }
 
+/// Across files, `::*Heading` goes to the heading and `::target` to the target of the same name,
+/// each where it is in the other file.
+#[test]
+fn links_to_an_org_files_heading_go_to_the_heading_never_a_target_of_its_name() {
+    if !crate::view_pager::pty_works() {
+        return;
+    }
+    let filler = filler();
+    let dir = tmp("org-links-clash", "dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    write(dir.join("other.org"), format!("* Start\n{filler}A <<clash>> target.\n{filler}* clash\nThe heading.\n").as_bytes());
+    let path = write(dir.join("from.org"), b"[[file:other.org::*clash][the heading]] and [[file:other.org::clash][the target]]\n");
+    let mut view = crate::view_pager::Session::start(&path, &["--protocol", "kitty", "--pager"], 100, 60);
+    view.wait_until("page 1", |t| crate::view_pager::drawn(t, "page 1/1"));
+    let mut pages = Vec::new();
+    for label in ["s", "a"] {
+        let before = view.text().len();
+        view.press("f");
+        view.wait_until("the labels", |t| crate::view_pager::letters(&t[before..]).len() == 2);
+        let before = view.text().len();
+        view.press(label);
+        view.wait_until("the other file", |t| {
+            t.len() > before
+                && crate::view_pager::last_bar(&t[before..]).contains("other.org")
+                && crate::view_pager::place_now(&t[before..]).is_some_and(|(page, _)| page > 1)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        pages.push(crate::view_pager::place_now(&view.text()).unwrap().0);
+        let before = view.text().len();
+        view.press("\x7f");
+        view.wait_until("back", |t| t.len() > before && crate::view_pager::last_bar(&t[before..]).contains("from.org"));
+    }
+    assert!(pages[0] > pages[1], "the heading after the target: {pages:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// A link that would run something (`elisp:`, `shell:`) is never followed, the status line saying
 /// what it is; an `id:` this file hasn't is said not to be in it.
 #[test]

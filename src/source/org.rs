@@ -803,38 +803,67 @@ fn collapsed(text: &str) -> String {
 ///
 /// Whatever doesn't come to something else when parsed again is left as it was.
 fn fixed(root: &SyntaxNode, config: &orgize::ParseConfig) -> SyntaxNode {
-    let mut green = root.green().into_owned();
+    fixed_counted(root, config).0
+}
+
+/// [`fixed`], and how many times the tree was built again: once a round that mends anything.
+fn fixed_counted(root: &SyntaxNode, config: &orgize::ParseConfig) -> (SyntaxNode, usize) {
+    let mut tree = root.clone();
+    let mut built: usize = 0;
     // What is parsed again keeps every offset, so a paragraph is known by its range from one round
     // to the next: those left as they were aren't parsed again.
     let mut kept: HashSet<orgize::TextRange> = HashSet::new();
     // Round after round, since what follows a name is parsed again whole, and may hold another
-    // element named, read as a paragraph again; until a round mends nothing.
+    // element named, read as a paragraph again; until a round mends nothing. Each round mends what
+    // it finds all at once: the tree built again once, never a paragraph at a time.
     loop {
-        let tree = SyntaxNode::new_root(green.clone());
+        let mut mending: HashMap<orgize::TextRange, Vec<Green>> = HashMap::new();
         let paragraphs: Vec<SyntaxNode> =
             tree.descendants().filter(|node| node.kind() == SyntaxKind::PARAGRAPH && !kept.contains(&node.text_range())).collect();
-        let mut mending = false;
-        // From the last, so that what is replaced moves nothing before it.
-        for paragraph in paragraphs.iter().rev() {
-            let Some(replacement) = mended(paragraph, config) else {
-                kept.insert(paragraph.text_range());
-                continue;
-            };
-            let tree = SyntaxNode::new_root(green.clone());
-            let Some(found) = tree.descendants().find(|node| node.kind() == SyntaxKind::PARAGRAPH && node.text_range() == paragraph.text_range())
-            else {
-                continue;
-            };
-            let Some(parent) = found.parent() else { continue };
-            let at = found.index();
-            let new_parent = parent.green().splice_children(at..at.saturating_add(1), replacement);
-            green = parent.replace_with(new_parent);
-            mending = true;
+        for paragraph in paragraphs {
+            // As deep as the tree is built again; one deeper stays as orgize read it.
+            let deep = paragraph.ancestors().count() > MAX_DEPTH;
+            match mended(&paragraph, config).filter(|_| !deep) {
+                Some(replacement) => {
+                    mending.insert(paragraph.text_range(), replacement);
+                }
+                None => {
+                    kept.insert(paragraph.text_range());
+                }
+            }
         }
-        if !mending {
-            return SyntaxNode::new_root(green);
+        if mending.is_empty() {
+            return (tree, built);
+        }
+        let mut starts: Vec<TextSize> = mending.keys().map(|range| range.start()).collect();
+        starts.sort_unstable();
+        tree = SyntaxNode::new_root(rebuilt(&tree, &mending, &starts));
+        built = built.saturating_add(1);
+    }
+}
+
+/// `node`'s tree with each paragraph `mending` has, by its range, given way to what it has: built
+/// again down the nodes that hold one (`starts`, the ranges' starts in order), the rest kept as
+/// they are.
+fn rebuilt(node: &SyntaxNode, mending: &HashMap<orgize::TextRange, Vec<Green>>, starts: &[TextSize]) -> GreenNode {
+    let holds = |node: &SyntaxNode| {
+        let range = node.text_range();
+        let at = starts.partition_point(|start| *start < range.start());
+        starts.get(at).is_some_and(|start| *start < range.end())
+    };
+    let mut children: Vec<Green> = Vec::new();
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(token) => children.push(NodeOrToken::Token(token.green().to_owned())),
+            NodeOrToken::Node(child) => match mending.get(&child.text_range()).filter(|_| child.kind() == SyntaxKind::PARAGRAPH) {
+                Some(replacement) => children.extend(replacement.iter().cloned()),
+                // No deeper than [`fixed_counted`] took a paragraph from.
+                None if holds(&child) => children.push(NodeOrToken::Node(rebuilt(&child, mending, starts))),
+                None => children.push(NodeOrToken::Node(child.green().into_owned())),
+            },
         }
     }
+    GreenNode::new(node.green().kind(), children)
 }
 
 /// What `paragraph` should have been parsed as ([`fixed`]): the elements to put in its place, or
@@ -1090,7 +1119,11 @@ fn places(root: &SyntaxNode) -> Places {
         let title = title_of(&node);
         let shown = shown_title(&node);
         let slug = slugged(&shown, &mut slugs);
-        for name in [title.clone(), slug] {
+        // And `*` before its title, as written and as it shows, which only a heading is found by:
+        // another file's `[[file:x.org::*Heading]]` leads to `x.org#*Heading`, never to a target
+        // of that name.
+        let searched = [format!("*{title}"), format!("*{shown}")];
+        for name in [title.clone(), slug].into_iter().chain(searched) {
             if let Some(id) = places.claim(&name) {
                 places.mark(&node, id);
             }
@@ -1777,14 +1810,15 @@ impl Writer<'_> {
         let Some(link) = orgize::ast::Link::cast(node.clone()) else { return };
         let path = unwrapped(&link.path());
         let described = link.has_description();
-        if !described && let Some(src) = picture(&path) {
+        // An abbreviation expanded first: `[[pic:one]]` is a picture where `pic` stands for one.
+        if !described && let Some(src) = picture(&self.expanded(&path)) {
             let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&relative(&src))));
             return;
         }
         let href = escaped(&self.address(&path));
         let _ = write!(self.out, "<a href=\"{href}\">");
         if described {
-            match picture(unwrapped(&link.description_raw()).trim()) {
+            match picture(&self.expanded(unwrapped(&link.description_raw()).trim())) {
                 Some(src) => {
                     let _ = write!(self.out, "<img src=\"{}\" alt=\"\">", escaped(&encoded(&relative(&src))));
                 }
@@ -1854,7 +1888,11 @@ impl Writer<'_> {
             if search.is_empty() || regex || search.bytes().all(|b| b.is_ascii_digit()) {
                 return None;
             }
-            Some(collapsed(search.strip_prefix('*').or_else(|| search.strip_prefix('#')).unwrap_or(search)))
+            // `*Heading` as `*` and the title, which only a heading is found by.
+            Some(match search.strip_prefix('*') {
+                Some(title) => format!("*{}", collapsed(title)),
+                None => collapsed(search.strip_prefix('#').unwrap_or(search)),
+            })
         });
         match place.filter(|place| !place.is_empty()) {
             Some(place) => format!("{}#{}", encoded(&relative(&file)), encoded(&place)),
@@ -2133,10 +2171,13 @@ mod tests {
     #[test]
     fn a_headline_is_a_heading_with_its_keyword_in_colour_its_tags_in_grey_and_its_planning_small() {
         let html = body("* TODO [#A] First [1/3] :work:urgent:\nSCHEDULED: <2024-01-02 Tue>\n** DONE Second\n******* Seventh\n");
-        assert!(html.contains(&format!("<h1><a id=\"First\"></a><span style=\"color:{NOT_DONE}\">TODO</span> [#A] First [1/3] <span style=\"color:{GREY};font-weight:normal\">:work:urgent:</span></h1>")), "{html}");
+        assert!(html.contains(&format!("<h1><a id=\"First\"></a><a id=\"*First\"></a><span style=\"color:{NOT_DONE}\">TODO</span> [#A] First [1/3] <span style=\"color:{GREY};font-weight:normal\">:work:urgent:</span></h1>")), "{html}");
         assert!(html.contains(&format!("<p style=\"font-size:9pt;color:{GREY}\">SCHEDULED: &lt;2024-01-02 Tue&gt;</p>")), "{html}");
-        assert!(html.contains(&format!("<h2><a id=\"Second\"></a><span style=\"color:{DONE}\">DONE</span> Second</h2>")), "{html}");
-        assert!(html.contains("<h6><a id=\"Seventh\"></a>Seventh</h6>"), "a level past 6 as 6: {html}");
+        assert!(
+            html.contains(&format!("<h2><a id=\"Second\"></a><a id=\"*Second\"></a><span style=\"color:{DONE}\">DONE</span> Second</h2>")),
+            "{html}"
+        );
+        assert!(html.contains("<h6><a id=\"Seventh\"></a><a id=\"*Seventh\"></a>Seventh</h6>"), "a level past 6 as 6: {html}");
     }
 
     #[test]
@@ -2146,7 +2187,7 @@ mod tests {
         assert!(html.contains(&format!("<span style=\"color:{DONE}\">GONE</span> two")), "{html}");
         assert!(html.contains(&format!("<span style=\"color:{DONE}\">LATER</span> three")), "the last done, without a bar: {html}");
         assert!(
-            html.contains("<h1><a id=\"TODO four\"></a><a id=\"todo-four\"></a>TODO four</h1>"),
+            html.contains("<h1><a id=\"TODO four\"></a><a id=\"todo-four\"></a><a id=\"*TODO four\"></a>TODO four</h1>"),
             "Org's own no longer, once a file declares its own: {html}"
         );
     }
@@ -2446,7 +2487,7 @@ mod tests {
             "mailto:me@x.org",
             "https://doi.org/10.1000/182",
             "other.org",
-            "other.org#Some%20Heading",
+            "other.org#*Some%20Heading",
             "../up.org#custom",
             "./here.org#a%20target",
             "/abs/x.org",
@@ -2494,16 +2535,19 @@ mod tests {
         let html = body(concat!(
             "* TODO [#A] Some =Code= Heading [2/3] :tag:\n:PROPERTIES:\n:CUSTOM_ID: custom\n:ID: abc\n:END:\n",
             "* Same\n* Same\n",
-            "* Clash\nA <<clash>> target and <<<radio>>> one.\n",
+            "* Clash\nA <<clash>> target, <<*clash>> and <<<radio>>> one.\n",
             "#+NAME: Table\n| a |\n#+NAME: code\n#+begin_src sh\nls\n#+end_src\n",
             "* COMMENT Drafts\n",
         ));
         for (anchors, what) in [
-            ("<h1><a id=\"custom\"></a><a id=\"abc\"></a><a id=\"Some =Code= Heading\"></a><a id=\"some-code-heading\"></a>", "a heading's"),
-            ("<h1><a id=\"Same\"></a>Same</h1>", "the first Same, its slug the same name in another case"),
+            (
+                "<h1><a id=\"custom\"></a><a id=\"abc\"></a><a id=\"Some =Code= Heading\"></a><a id=\"some-code-heading\"></a><a id=\"*Some =Code= Heading\"></a><a id=\"*Some Code Heading\"></a>",
+                "a heading's: its title as written, its slug, and `*` before its title as written and as it shows",
+            ),
+            ("<h1><a id=\"Same\"></a><a id=\"*Same\"></a>Same</h1>", "the first Same, its slug the same name in another case"),
             ("<h1><a id=\"same-1\"></a>Same</h1>", "the second, by its slug"),
-            ("<h1><a id=\"heading\"></a>Clash</h1>", "a heading whose title and slug a target has"),
-            ("A <a id=\"clash\"></a> target and <a id=\"radio\"></a>radio one.", "targets"),
+            ("<h1><a id=\"heading\"></a>Clash</h1>", "a heading whose every name a target has"),
+            ("A <a id=\"clash\"></a> target, <a id=\"*clash\"></a> and <a id=\"radio\"></a>radio one.", "targets"),
             ("<table border=\"1\" id=\"Table\">", "a named table"),
             ("<pre id=\"code\"><code class=\"language-sh\">", "a named block"),
             ("<a id=\"Drafts\"></a><a id=\"comment-drafts\"></a>", "a COMMENT heading, by its title without it"),
@@ -2621,7 +2665,7 @@ mod tests {
         let places = places(&root);
         let html = html(org);
         let ids: Vec<&String> = places.at.values().flatten().collect();
-        assert_eq!(ids.len(), 21, "every place named here: {ids:?}");
+        assert_eq!(ids.len(), 22, "every place named here: {ids:?}");
         for id in ids {
             assert!(html.contains(&format!("id=\"{}\"", escaped(id))), "{id} isn't written: {html}");
         }
@@ -2687,7 +2731,7 @@ mod tests {
     fn a_relative_path_with_a_colon_is_no_scheme() {
         assert_eq!(
             hrefs("[[file:notes:2026.org]] [[file:notes:2026.org::*X]] [[file:/a:b.org]] [[file:dir/a:b.org]]\n"),
-            ["./notes:2026.org", "./notes:2026.org#X", "/a:b.org", "dir/a:b.org"]
+            ["./notes:2026.org", "./notes:2026.org#*X", "/a:b.org", "dir/a:b.org"]
         );
         assert!(body("[[file:plot:1.png]]\n").contains("<img src=\"./plot:1.png\""));
     }
@@ -2699,6 +2743,49 @@ mod tests {
             let html = body(&format!("[[#same]] [[id:same]]\n* H\n:PROPERTIES:\n{properties}:END:\n"));
             assert_eq!(hrefs(&format!("[[#same]] [[id:same]]\n* H\n:PROPERTIES:\n{properties}:END:\n")), ["#same", "#same"], "{html}");
             assert_eq!(html.matches("<a id=\"same\"></a>").count(), 1, "{html}");
+        }
+    }
+
+    /// Each round of mending builds the tree again once, however many paragraphs it mends: a document
+    /// of many paragraphs with links that wrap costs a pass, not a pass a paragraph.
+    #[test]
+    fn the_tree_is_built_again_once_a_round() {
+        let org = "See [[*A\nheading]].\n\n".repeat(3000);
+        let config = orgize::ParseConfig { use_sub_superscript: orgize::config::UseSubSuperscript::Nil, ..Default::default() };
+        let (root, built) = fixed_counted(config.clone().parse(&org).document().syntax(), &config);
+        assert_eq!(built, 1);
+        assert_eq!(root.descendants().filter(|node| node.kind() == SyntaxKind::LINK).count(), 3000);
+        // Named ones, a round each for what follows a name: still once a round.
+        let org = "#+NAME: a\n#+NAME: b\n| x |\n\n".repeat(300);
+        let (root, built) = fixed_counted(config.clone().parse(&org).document().syntax(), &config);
+        assert_eq!(built, 1);
+        assert_eq!(root.descendants().filter(|node| node.kind() == SyntaxKind::ORG_TABLE).count(), 300);
+    }
+
+    /// `[[*Heading]]` goes to the heading of that title, in this file and in another
+    /// (`file:x.org::*Heading`, by the `*Heading` every heading is also), never to a target of the
+    /// same name, which `[[target]]` goes to.
+    #[test]
+    fn a_heading_search_finds_the_heading_never_a_target_of_its_name() {
+        let html = body("[[*clash]] [[clash]] [[file:other.org::*clash]] [[file:other.org::clash]]\nA <<clash>>.\n* clash\n");
+        assert_eq!(
+            hrefs("[[*clash]] [[clash]] [[file:other.org::*clash]] [[file:other.org::clash]]\nA <<clash>>.\n* clash\n"),
+            ["#*clash", "#clash", "other.org#*clash", "other.org#clash"]
+        );
+        assert!(html.contains("<h1><a id=\"*clash\"></a>clash</h1>"), "{html}");
+    }
+
+    /// An abbreviation is expanded before a link is told a picture: `[[pic:one]]` is the picture
+    /// `pic` stands for, as in Org; so is a description written so.
+    #[test]
+    fn an_abbreviated_link_to_a_picture_is_the_picture() {
+        let html = body("#+LINK: pic file:assets/%s.png\n[[pic:one]] [[https://x.org][pic:two]] [[pic:three][a description]]\n");
+        for shown in [
+            "<img src=\"assets/one.png\" alt=\"\">",
+            "<a href=\"https://x.org\"><img src=\"assets/two.png\" alt=\"\"></a>",
+            "<a href=\"assets/three.png\">a description</a>",
+        ] {
+            assert!(html.contains(shown), "{shown} in {html}");
         }
     }
 

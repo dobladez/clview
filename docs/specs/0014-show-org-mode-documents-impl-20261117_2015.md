@@ -235,3 +235,26 @@ All five findings taken; each test seen failing with its fix reverted.
   holds a colon is written after `./`, a picture's too. `a_relative_path_with_a_colon_is_no_scheme`.
 - **[P2] A custom id and an id alike**: both lead to the heading's one anchor, whichever comes
   first. `a_custom_id_and_an_id_alike_both_lead_to_their_heading`.
+
+## Codex review, round 3 (2026-11-18)
+
+All three findings taken; each test seen failing with its fix reverted.
+
+- **Mending was quadratic**: each paragraph mended searched the tree and built its parent again,
+  so 15,000 paragraphs with links that wrap (~500 KB) passed the worker's 2 s. A round now
+  collects every paragraph it mends, by range, and builds the tree again once (`rebuilt`, down
+  only the nodes holding one; no paragraph deeper than `MAX_DEPTH` is taken, so that recursion is
+  bounded). That file now opens to its first page in 0.67 s through clv, against 0.59 s for the
+  same text on single lines. `the_tree_is_built_again_once_a_round` counts the builds
+  (`fixed_counted`): one for 3,000 such paragraphs, and one for 300 named tables; seen failing
+  with a paragraph mended a round.
+- **`file:other.org::*clash` landed on a `<<clash>>`**: stripping the `*` lost the heading search.
+  Every heading is now also `*` and its title (as written, and as it shows), and `::*Heading`
+  writes `other.org#*Heading`, which only a heading has; same-file `[[*clash]]` goes to the
+  heading's first id, which is `*clash` where a target has `clash`. `F` copies
+  `other.org#*Some%20Heading` (the spec says `other.org#Heading`: it predates this).
+  `a_heading_search_finds_the_heading_never_a_target_of_its_name` and, across two files on a
+  pseudo-terminal, `org::links_to_an_org_files_heading_go_to_the_heading_never_a_target_of_its_name`.
+- **`#+LINK: pic file:assets/%s.png` and `[[pic:one]]`** was a link: the abbreviation is expanded
+  before a link is told a picture, its description's too.
+  `an_abbreviated_link_to_a_picture_is_the_picture`.
