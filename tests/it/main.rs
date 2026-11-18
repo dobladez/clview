@@ -6,6 +6,7 @@ mod epub;
 mod fixtures;
 mod gridcraft;
 mod mermaid;
+mod org;
 mod pdfcraft;
 mod pdfcraft_pin;
 mod resvg;

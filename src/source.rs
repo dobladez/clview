@@ -18,6 +18,8 @@ mod later;
 mod markup;
 #[cfg(feature = "mermaid")]
 mod mermaid;
+#[cfg(feature = "org")]
+mod org;
 #[cfg(feature = "pdf")]
 mod pdfcraft;
 #[cfg(feature = "word")]
@@ -57,7 +59,8 @@ pub(crate) use worker::{Worker, serve};
 /// settles only claims as sure ([`opener`]): a mark found anywhere, a PDF's header past its first
 /// byte, loses to any of them wherever it is asked. SVG before tar, which would take an svgz,
 /// gzipped, as the file it unpacks to; documents, spreadsheets and books before zip, since a
-/// docx, an xlsx and an epub are zips.
+/// docx, an xlsx and an epub are zips; Org before the documents' backend, so that a `.md` whose
+/// first line says it is Org is Org, as Emacs has it.
 pub(crate) const BACKENDS: &[&dyn Backend] = &[
     #[cfg(feature = "svg")]
     &svg::Svg,
@@ -65,6 +68,8 @@ pub(crate) const BACKENDS: &[&dyn Backend] = &[
     &mermaid::Mermaid,
     #[cfg(feature = "tar")]
     &tar::Tar,
+    #[cfg(feature = "org")]
+    &org::Org,
     #[cfg(feature = "word")]
     &wordcraft::Wordcraft,
     #[cfg(feature = "sheet")]
@@ -90,6 +95,8 @@ pub(crate) const WORKERS: &[&'static dyn Worker] = &[
     &mermaid::DIAGRAMS,
     #[cfg(feature = "epub")]
     &epub::PACKAGE,
+    #[cfg(feature = "org")]
+    &org::DOCUMENTS,
 ];
 
 /// How much of a file a backend sees to decide whether it opens it: a PDF's header may come
@@ -505,7 +512,7 @@ impl Input {
     /// The file at `path` in another, which starts with `head` (its first [`HEAD`] bytes, or all
     /// of a shorter file) and which `again` reads whole.
     #[cfg_attr(
-        not(any(feature = "mermaid", feature = "sheet", feature = "epub", test)),
+        not(any(feature = "mermaid", feature = "sheet", feature = "epub", feature = "org", test)),
         expect(dead_code, reason = "only what a backend hands another is held so")
     )]
     fn held(path: String, head: Vec<u8>, again: Again) -> Self {
@@ -533,8 +540,8 @@ impl Input {
     /// This held file, at `path` from its holder's top, where `near` reads what is beside it
     /// ([`Beside`]). A file of its own has its directory.
     #[cfg_attr(
-        not(any(feature = "zip", feature = "tar", feature = "epub", test)),
-        expect(dead_code, reason = "only archives and books say what is beside a file")
+        not(any(feature = "zip", feature = "tar", feature = "epub", feature = "org", test)),
+        expect(dead_code, reason = "only archives, books and Org documents say what is beside a file")
     )]
     fn held_near(mut self, near: Near, path: String) -> Self {
         if let Rest::Held { beside, .. } = &mut self.rest {

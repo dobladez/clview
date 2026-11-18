@@ -130,8 +130,21 @@ written (up to 64 MiB).
 
 **How much larger the HTML is**: `measure html FILE…`, through orgize's own exporter, writes the
 corpus as 0.82 times its size (drawers and keywords left out), a file at 1.06 times its size at the
-median and 1.37 at most; clv's own HTML, with its ids, styles and title block, is measured with
-the backend.
+median and 1.37 at most. clv's own, with its ids, styles and title block, measured through the
+backend (`ORG_CORPUS=<a list of the corpus's paths> cargo test -j 2 --bin clv
+org::tests::how_much_larger_the_html_is -- --ignored --nocapture`): 0.75 times the corpus's size, a
+file over 4 KiB at 1.33 times at most (worg's `contributors.org`, a list of links); and 0.34 times
+its lines and marks, as HTML counts them (each `<` and line's end). So an Org file within the
+documents' limits comes to HTML within HTML's, but for one made of little else than a table's
+cells: a row of ten cells is twelve lines and marks of Org and twenty-two of HTML, and 40,000 such
+rows are refused for their HTML (`an_org_file_is_held_to_the_documents_limits_and_its_html_to_htmls`).
+
+**Through clv** (its dev profile, the dependencies optimized; `/usr/bin/time -l clv x.org --protocol
+kitty --pages 1`): the Org manual to its first page, worker, parse, HTML and layout of the whole,
+in 0.83 s and 186 MB; the manual four times over, at the limit's marks, in 3.2 s and 655 MB, most of
+it the documents' backend's layout. Special blocks nested 10,000 deep, and footnotes nested
+90,000 deep, are refused in under 7 s each, the worker killed past its CPU time
+(`a_hostile_org_file_costs_the_document_and_never_the_viewer`).
 
 ## Alternatives considered
 

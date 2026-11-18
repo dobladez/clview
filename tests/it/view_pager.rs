@@ -1437,7 +1437,7 @@ fn s_shows_a_documents_blocks_as_code_and_draws_them_again() {
     assert!(shows_flow(&page));
     view.wait_until("said", |t| last_bar(t).contains(" blocks drawn "));
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" s fenced blocks drawn, or as code (Markdown, HTML and others)"));
+    view.wait_until("listed", |t| bar(t).contains(" s fenced blocks drawn, or as code (Org, Markdown and others)"));
     // Any key leaves the keys; the next one quits.
     view.press("qq");
     assert!(view.finish().success());
@@ -1463,7 +1463,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     let mut view = Session::start_on(KITTY, &fixture("no-fences", 1), &["--pager"], 80, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("s");
-    whole_line_for_a_moment(&view, "this format doesn't draw fenced blocks (Markdown, HTML and others do)");
+    whole_line_for_a_moment(&view, "this format doesn't draw fenced blocks (Org, Markdown and others do)");
     assert_eq!(transmitted(&view.text()), 1);
     view.press("q");
     assert!(view.finish().success());
@@ -1494,7 +1494,7 @@ fn s_on_a_pdf_says_only_markdown_and_html_draw_their_blocks_and_a_list_says_to_o
     view.press("\r");
     view.wait_until("b opened", |t| bar(last_draw(t)).contains(" b.pdf "));
     view.press("s");
-    view.wait_until("said", |t| last_bar(t).trim() == "this format doesn't draw fenced blocks (Markdown, HTML and others do)");
+    view.wait_until("said", |t| last_bar(t).trim() == "this format doesn't draw fenced blocks (Org, Markdown and others do)");
     view.press("q");
     assert!(view.finish().success());
 }
@@ -1524,6 +1524,46 @@ fn a_search_reads_a_block_shown_as_code_and_not_one_drawn() {
         view.press("q");
         assert!(view.finish().success());
     }
+}
+
+/// `/` searches an Org document's body as it is shown: not what Org hides (a drawer, a comment),
+/// nor a source block drawn as a picture, which `s` shows as its code, searched then.
+#[cfg(all(feature = "mermaid", feature = "org"))]
+#[test]
+fn slash_searches_an_org_documents_body_and_s_its_blocks_as_code() {
+    if !pty_works() {
+        return;
+    }
+    let flow = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/flow.mmd")).unwrap();
+    let path = crate::view::tmp("org-search", "notes.org");
+    std::fs::write(
+        &path,
+        format!(
+            "* TODO A heading\n:LOGBOOK:\n- a secret note\n:END:\n# a secret comment\nThe word findme, once.\n#+begin_src mermaid\n{flow}#+end_src\n"
+        ),
+    )
+    .unwrap();
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 40);
+    let (drawn, page) = next_image(&view, "the block drawn", 0);
+    assert!(shows_flow(&page), "drawn to start with");
+    view.press("/findme\r");
+    view.wait_until("found", |t| last_bar(t).contains(" /findme 1/1 ") || last_bar(t).contains(" /findme 1 "));
+    view.press("\x1b");
+    view.wait_until("the search gone", |t| !last_bar(t).contains("/findme"));
+    view.press("/secret\r");
+    view.wait_until("nothing hidden searched", |t| last_bar(t).contains(" /secret no match "));
+    view.press("\x1b");
+    view.wait_until("the search gone", |t| !last_bar(t).contains("/secret"));
+    view.press("/finish\r");
+    view.wait_until("no text of the block's", |t| last_bar(t).contains(" /finish no match "));
+    view.press("s");
+    let (_, page) = next_image(&view, "the block as code", drawn);
+    assert!(!shows_flow(&page));
+    view.wait_until("its code searched", |t| {
+        last_bar(t).contains("blocks as code") && last_bar(t).contains(" /finish ") && !last_bar(t).contains("no match")
+    });
+    view.press("q");
+    assert!(view.finish().success());
 }
 
 /// `D` on a document with a diagram draws its block again for the paper: in Mermaid's dark theme on
@@ -2677,7 +2717,7 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     let mut view = Session::start_on(Terminal { background: Some(DARK), ..KITTY }, &pdf, &["--pager"], 80, 40);
     assert_eq!(last_corner(&view, 1), [255; 3]);
     view.press("D");
-    const SAID: &str = "this format doesn't go dark (Mermaid, Markdown and others do)";
+    const SAID: &str = "this format doesn't go dark (Mermaid, Org and others do)";
     whole_line_for_a_moment(&view, SAID);
     assert_eq!(transmitted(&view.text()), 1, "sent again");
     // A key takes the line back at once, and does what it does: here, nothing to move to.
@@ -2691,9 +2731,7 @@ fn what_has_no_dark_form_isnt_asked_and_d_says_which_formats_go_dark() {
     view.press("?");
     // In `?`, what the key does, then two of the formats it does it to: over two rows at 80
     // columns, and faint, as a key that does nothing on a PDF.
-    view.wait_until("listed", |t| {
-        bar(t).contains("\x1b[2m D light on dark, or dark on light (Mermaid, Markdown and") && t.contains("others)\x1b[22m")
-    });
+    view.wait_until("listed", |t| bar(t).contains("\x1b[2m D light on dark, or dark on light (Mermaid, Org and") && t.contains("others)\x1b[22m"));
     view.press("qq");
     assert!(view.finish().success());
 }
@@ -2876,7 +2914,7 @@ fn on_a_pdf_the_width_keys_say_only_markdown_and_html_reflow() {
     let mut view = Session::start_on(KITTY, &fixture("no-reflow", 1), &["--pager"], 80, 40);
     view.wait_until("page 1", |t| drawn(t, "page 1/1"));
     view.press("]");
-    const SAID: &str = "this format doesn't reflow (Markdown, HTML and others do)";
+    const SAID: &str = "this format doesn't reflow (Org, Markdown and others do)";
     view.wait_until("said", |t| last_bar(t).trim() == SAID);
     // Said again by the next key, for a moment of its own.
     view.press("72[");
@@ -4879,10 +4917,10 @@ fn the_keys_at_80_columns_are_whole_and_those_that_do_nothing_here_are_faint() {
         assert_eq!(shown.matches("\x1b[2m").count(), shown.matches("\x1b[22m").count(), "a faint row goes back to the rest");
         // Each of its lines whole, over two rows where it takes them.
         let said = bar(&shown);
-        assert!(said.contains(" D light on dark, or dark on light (Mermaid, Markdown and") && said.contains("others)"), "{said:?}");
+        assert!(said.contains(" D light on dark, or dark on light (Mermaid, Org and") && said.contains("others)"), "{said:?}");
         assert!(
             said.contains(" [ ] 12] 4 characters a line narrower, or wider; 72] sets 72, 0] the")
-                && said.contains("window's (Markdown, HTML and others)")
+                && said.contains("window's (Org, Markdown and others)")
         );
         view.press("qq");
         assert!(view.finish().success());

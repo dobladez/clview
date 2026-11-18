@@ -407,11 +407,11 @@ fn help_and_version() {
     assert!(!help.contains("--zoom"), "the old name is not shown: {help}");
     assert!(help.contains("\n  -r, --recurse "), "{help}");
     // A backend that takes options of its own lists them under a heading of its own, what it
-    // shows: the PDF one, and the documents', the spreadsheets', Mermaid's and the books' when they
-    // are built.
+    // shows: the PDF one, and the documents', the spreadsheets', Mermaid's, the books' and Org's when
+    // they are built.
     let heading = |(line, next): &(&str, &str)| line.starts_with("   for ") && line.ends_with(':') && next.starts_with("     --");
     let headings = help.lines().zip(help.lines().skip(1)).filter(heading).count();
-    let built = [cfg!(feature = "word"), cfg!(feature = "sheet"), cfg!(feature = "mermaid"), cfg!(feature = "epub")];
+    let built = [cfg!(feature = "word"), cfg!(feature = "sheet"), cfg!(feature = "mermaid"), cfg!(feature = "epub"), cfg!(feature = "org")];
     assert_eq!(headings, 1 + built.iter().filter(|built| **built).count(), "{help}");
     assert!(help.contains("\n\n   for PDFs:\n     --password PW ") && !help.contains("no options"), "{help}");
     // A setting's option is its backends': `--theme` the documents' and Mermaid's, which share the
@@ -443,6 +443,7 @@ fn help_and_version() {
     assert_eq!(shown("Documents", "Word (.docx "), cfg!(feature = "word"), "{help}");
     assert_eq!(shown("Spreadsheets", "Excel (.xlsx "), cfg!(feature = "sheet"), "{help}");
     assert_eq!(shown("Ebooks", "EPUB (.epub)"), cfg!(feature = "epub"), "{help}");
+    assert_eq!(shown("Org documents", "Org (.org .org_archive)"), cfg!(feature = "org"), "{help}");
     let out = Command::new(BIN).arg("--version").output().unwrap();
     assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CLV_VERSION")));
     // Cargo.toml's version, alone or followed by the commit as build metadata (build.rs).
@@ -664,6 +665,7 @@ fn shows() -> String {
         ("SVG drawings", cfg!(feature = "svg")),
         ("Mermaid diagrams", cfg!(feature = "mermaid")),
         ("tar archives and compressed files", cfg!(feature = "tar")),
+        ("Org documents", cfg!(feature = "org")),
         ("documents", cfg!(feature = "word")),
         ("spreadsheets", cfg!(feature = "sheet")),
         ("ebooks", cfg!(feature = "epub")),

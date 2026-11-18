@@ -88,6 +88,12 @@ lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "x
 # reading a package costs, which the worker's caps rest on: measured again with
 # docs/adr/0038-measure/ when it moves.
 rbook = { version = "=0.7.13", default-features = false, optional = true }
+# Org-mode documents, parsed by orgize (its lossless tree, in Rust) and written as HTML for the
+# documents' backend, in a worker process of clv's own, since its time grows as the square of
+# what a file nests and it overflows a stack on what it nests deepest: `source/org.rs`, ADR-0040.
+# Pinned, for what parsing costs, which the worker's caps rest on, and for the two mistakes of
+# its that `source/org.rs` works around: measured again with docs/adr/0040-measure/ when it moves.
+orgize = { version = "=0.10.0-alpha.10", optional = true }
 # Markdown, into the HTML wordcraft's importer reads, which can be given pictures: ADR-0014.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
 # Word documents, OpenDocument text, RTF, Markdown and HTML, read, laid out and drawn in Rust by
@@ -111,7 +117,7 @@ base64 = "0.23"
 png = "0.18"
 
 [features]
-default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet", "epub"]
+default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet", "epub", "org"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
 pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
@@ -151,6 +157,9 @@ word = ["dep:wordcraft-doc", "dep:wordcraft-docx", "dep:wordcraft-docbin", "dep:
 # process and joins its chapters into one HTML document for the documents' backend to show, so it
 # brings that backend too, and the zip crate to read the book's files.
 epub = ["dep:rbook", "dep:zip", "word"]
+# Org-mode documents (`.org`): `source/org.rs`, which has orgize parse them in a worker process and
+# writes them as HTML for the documents' backend to show, so it brings that backend too.
+org = ["dep:orgize", "word"]
 # Spreadsheets (xlsx, xls, xlsb, ods, csv): `source/gridcraft.rs`, which prints them to a PDF
 # through gridcraft for the PDF backend to show, so it brings that backend too, and the zip crate
 # to see what an xlsx's sheets unpack to before gridcraft reads them.
