@@ -1,6 +1,6 @@
 # Spec-0014: Show Org-mode documents
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-17
 - **Related:** [ADR-0014](../adr/0014-markdown-through-pulldown-cmark-into-wordcrafts-html-importer.md)
   (Markdown through HTML into wordcraft's importer, the path Org takes);
@@ -128,7 +128,8 @@ checks:
 - `#+LINK:` abbreviations expanded, with `%s` and `%h`.
 - `elisp:`, `shell:`, `help:`, `info:` and the rest are never run: the status line says what each
   is.
-- `F` copies the address as clv writes it (`other.org#Heading`), which is what is followed.
+- `F` copies the address as clv writes it (`other.org#*Heading`, a heading's own id, so a target
+  of the same name never takes it), which is what is followed.
 - **Places:** `:CUSTOM_ID:`, `:ID:`, `<<target>>` and `#+NAME:` are the document's own. A heading is
   a place by its title, as Org matches `[[*Heading]]`: without its TODO keyword, priority, tags and
   counters; and by GitHub's slug of it, so a Markdown file's `notes.org#some-heading` finds it. A
@@ -227,13 +228,13 @@ checks:
   parse time and depth on large and hostile files (deep nesting, unclosed emphasis), with how much
   larger the HTML is. Time box: one session. *Files:* `docs/adr/`. *Verify:* the ADR's commands
   give its numbers again.
-- [ ] **The backend** — telling Org by name and mode line, its format and settings, the conversion
+- [x] **The backend** — telling Org by name and mode line, its format and settings, the conversion
   but for links, handed on through `opener`, both bounds, the parser isolated as the ADR says.
   *Files:* `src/source/org.rs`, `src/source.rs`, `Cargo.toml`, `tests/it/org.rs`,
   `tests/it/view_pager.rs`. *Verify:* `cargo test -j 2 --test it org::`, and
   `Manual: in kitty, open an Org file with a TODO heading, a table and a #+begin_src mermaid block:
   see them; press D, s and ]`.
-- [ ] **Links and places** — every link form and place above, the converter resolving its own.
+- [x] **Links and places** — every link form and place above, the converter resolving its own.
   *Files:* `src/source/org.rs`, `tests/it/org.rs`, `tests/it/view_pager.rs`. *Verify:*
   `cargo test -j 2 --test it org::links`, and `Manual: in kitty, press f on an Org file and follow
   [[*Heading]], file:other.org::*Heading and a web link; u comes back`.
@@ -244,7 +245,7 @@ checks:
 
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: name them.
-- [ ] Manual: in kitty, an Org file of real notes, alone and in a list, through a pipe with a mode
+- [x] Manual: in kitty, an Org file of real notes, alone and in a list, through a pipe with a mode
   line, light and dark, at a width, searched, its links followed.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
@@ -255,3 +256,4 @@ checks:
 - 2026-11-18 — The owner moved Org after the documents' backend: before it, the viewer named Org
   first among the formats that have a setting (`(Org, Markdown and others do)`), and Markdown and
   HTML are what a reader knows. The cost accepted: a `.md` whose first line says Org is Markdown.
+- 2026-11-19 — `F`'s line says `other.org#*Heading`, as Codex's round 3 made it. Done.

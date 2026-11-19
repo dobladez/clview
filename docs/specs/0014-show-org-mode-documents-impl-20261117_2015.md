@@ -258,3 +258,15 @@ All three findings taken; each test seen failing with its fix reverted.
 - **`#+LINK: pic file:assets/%s.png` and `[[pic:one]]`** was a link: the abbreviation is expanded
   before a link is told a picture, its description's too.
   `an_abbreviated_link_to_a_picture_is_the_picture`.
+
+## Done (2026-11-19)
+
+- **The manual checks.** The owner did them in kitty and they pass, as the team lead relayed, with
+  the word to tick tasks 2 and 3 and the Done list's manual item: an Org file with a TODO heading,
+  a table and Mermaid blocks, `D`, `s` and `]`; `f` through `[[*Heading]]`,
+  `file:other.org::*Heading` and a web link, Backspace back; real notes alone, in a list and
+  through a pipe with a mode line, light and dark, at a width, searched. Samples for them are in
+  the clview-samples repository's `org/`: the Org manual, worg, and a file made by hand for this.
+- **The spec's `F` line** now says `other.org#*Heading`, as round 3 made it.
+- **Left for later.** A `file:~user/…` link says only that a `file:` link isn't followed; orgize
+  keeps a list going across two blank lines (a known difference in usage).
