@@ -1093,8 +1093,11 @@ instead: one without its `META-INF/container.xml` or the package that names, wit
 lists no chapters, or one rbook refuses, in rbook's words. A package whose reading takes rbook
 past the limits of its process is refused as one that `couldn't be read`.
 
-A book in a list is opened when its tile is wanted, and its tile is its first page. One in an
-archive is read from the archive each time it is laid out or a picture of it is drawn; one through
+A book in a list is opened when its tile is wanted, and its tile is its first page. For the tile,
+clv reads the book's package and lays out only that page: the cover, or else the first chapter. So
+the tile's warnings say only what that page and the package tell, such as the chapters that are
+missing or protected. When you open the book, clv lays it out whole for the window, and says the
+rest ([ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)). One in an archive is read from the archive each time it is laid out or a picture of it is drawn; one through
 a pipe is kept whole while it is open, and refused past 256 MiB
 ([ADR-0038](adr/0038-an-epub-as-one-document-its-package-read-by-rbook-in-a-worker.md)).
 

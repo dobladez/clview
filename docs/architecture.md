@@ -192,7 +192,11 @@ so, going by the file's name and first bytes (`Backend::deferred`), with what a 
 the settings it has. Documents, PDFs, drawings, Mermaid diagrams and spreadsheets defer. Images don't, as
 their `open` reads a header, and archives don't, as a tar may turn out not to hold files. A backend that
 defers promises pages, never a container
-([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)).
+([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)). Such a file is opened
+for its tile through `Backend::open_tile`, which calls `open_at` by default. A backend may open only
+what the tile's page needs there. The source it gives then says so (`Source::tile`), and the pager
+lays it out again, whole, when the reader goes into it. Only the epub backend does this
+([ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)).
 
 A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
 messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name, the
@@ -610,6 +614,16 @@ through its command) and that a key means one setting
   The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
   `margin`, `fences`), so that a list knows a book has them before it is opened
   (`Backend::deferred`) ([Settings](#settings)).
+- **A book's tile** is its first page alone (`Backend::open_tile`,
+  [ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)). `planned` reads the package, but
+  asks no `CONTENTS`. `assembled` writes the cover's page alone, or else the first chapter shown, and
+  reads no chapter after that one. It still counts a later chapter that is missing, protected or of
+  another kind, since the plan and the zip's directory say so. A chapter that only a read shows
+  to be unreadable, too large or past the bounds goes unsaid. The `Book` keeps a `Whole`: where the
+  book is, its path, the options it was opened with, and its `Read`. `Book::tile` says so, so the
+  pager's relayout always asks for a job on going in, and `Book::relayout` gives one that opens the
+  book whole for the window. That job lays it out again only if the values wanted differ from the
+  options.
 - **An Org document** is HTML written by clv, opened by the backend that opens HTML, never named,
   as a book is ([ADR-0040](adr/0040-org-mode-through-orgize-in-a-worker-process.md)).
   `org::opened` reads the file (64 MiB at most, never further: a pipe through `Input::at_most`, kept;
@@ -818,8 +832,10 @@ values wanted and the room it shows in (`Pager::room`), for the relayout setting
 source for a job (`Source::relayout`, a `Job`: a `Send` closure owning the bytes the source keeps, the
 values and the room, which gives a new source laid out at them). So `]` then Backspace, read together,
 reflows nothing in the list, and the next document gone into is laid out at the new value, and for the
-pager's room rather than the preview's it was opened for, as it shows. A layout is asked for, and its
-result taken in, by its values and its room together.
+pager's room rather than the preview's it was opened for, as it shows. A source opened for its tile
+alone (`Source::tile`) is asked for a job whatever it is laid out at, even in a window that is the
+preview's room. Its new layout is the file opened, so `Pager::replace` keeps what the new level says
+on opening (`Contents: T`) rather than the tile's. A layout is asked for, and its result taken in, by its values and its room together.
 
 The pager's room follows the window (`Pager::watch_room`, each pass of the loop): the room the window's
 pages area makes now, from the same `area` the draw lays its grid out in (so its columns and rows, or
@@ -893,7 +909,7 @@ tiles' number and names, each file's backend (for `takes_all`), and the settings
 
 `Later` reports one page, as a tile. It opens on `source::Openers`, four threads for the whole run,
 each with a stack of 8 MiB, what the main thread has had to open files with, through
-`Backend::open_at` for the preview's room ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)). A `Later`'s pool asks for it
+`Backend::open_tile` for the preview's room ([The room a document is laid out for](#the-room-a-document-is-laid-out-for)). A `Later`'s pool asks for it
 when given requests, and forgets it when given none or dropped, if no thread has begun it; one begun
 goes on, and what it opened to is kept for when the reader comes back. The pool for the opened source
 is made once it is known. So what renders stays what `Joined` already bounds: `Pools` gives requests

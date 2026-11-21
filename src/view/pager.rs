@@ -2951,7 +2951,8 @@ impl Pager<'_> {
     /// Lay the document on screen out again when a relayout setting it has is wanted at another value
     /// than its layout is at, or it is shown in another room than it was laid out for
     /// ([`relayout::wanted`]): after its keys, or on going into it after a change, or from a list, whose
-    /// documents are laid out for a preview's room; never in a list, whose tiles keep their layout, nor
+    /// documents are laid out for a preview's room, and may hold only their first page
+    /// ([`Source::tile`]); never in a list, whose tiles keep their layout, nor
     /// with `--pages`, which picks pages as laid out. The job runs on the openers' threads, polled here
     /// on each pass, the status line saying the value wanted with `…` meanwhile and the old pages on
     /// screen until the new ones are ready. At most one job is under way: a change meanwhile waits in
@@ -2969,7 +2970,8 @@ impl Pager<'_> {
         }
         let (declared, has) = (self.settings.declared.clone(), self.level.nav.has.clone());
         let (laid, laid_room) = self.level.source.laid_at();
-        let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room_for(), laid_room);
+        let tile = self.level.source.tile();
+        let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room_for(), laid_room, tile);
         // What is being laid out that isn't the default, or that it is.
         let saying = |values: Values| Some(relayout::describe(&declared, &has, values)).filter(|said| !said.is_empty()).unwrap_or(LAYING_OUT.into());
         let mut changed = false;
@@ -3096,8 +3098,11 @@ impl Pager<'_> {
         level.depth = self.level.depth;
         level.seeking = self.level.seeking.take();
         level.leaving = self.level.leaving.take();
-        // What the status line was saying whole, it goes on saying: a layout is no file opened.
-        level.nav.notice = self.level.nav.notice.take();
+        // What the status line was saying whole, it goes on saying: a layout is no file opened. But a
+        // tile laid out whole is the file opened: what it says on opening is said now.
+        if !self.level.source.tile() {
+            level.nav.notice = self.level.nav.notice.take();
+        }
         if let Some(name) = &level.seeking {
             level.links = level.source.links();
             level.linked = true;

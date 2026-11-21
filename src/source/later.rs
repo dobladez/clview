@@ -266,7 +266,7 @@ impl Slot {
     /// The file opened, here on this thread. A backend's bug costs the file, not the viewer.
     fn open(&self) -> Outcome {
         let open = || -> Outcome {
-            match self.backend.open_at(self.file.input()?, &self.options.parsed(), self.room)? {
+            match self.backend.open_tile(self.file.input()?, &self.options.parsed(), self.room)? {
                 Opened::Pages(source) if source.pages() == 0 => Err("no pages to show".into()),
                 Opened::Pages(source) => Ok(source),
                 // A backend that defers opening says it has pages to show: this is its bug.

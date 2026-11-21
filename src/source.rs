@@ -149,6 +149,12 @@ pub(crate) trait Backend: Sync {
     fn open_at(&self, input: Input, options: &Parsed<'_>, _room: Room) -> Result<Opened, String> {
         self.open(input, options)
     }
+    /// [`Backend::open_at`], for a list's tile, which shows the first page alone: a backend may open
+    /// only what that page needs, and say so ([`Source::tile`]). The file it opens to is then opened
+    /// whole when the reader goes into it. By default, the whole file.
+    fn open_tile(&self, input: Input, options: &Parsed<'_>, room: Room) -> Result<Opened, String> {
+        self.open_at(input, options, room)
+    }
     /// What a list may know of the file at `path`, which starts with `head`, without opening it: for
     /// a backend whose [`Backend::open`] costs more than a list of hundreds should spend on files
     /// the reader may never come to, and which then opens to pages, never to a container. `None`
@@ -987,6 +993,12 @@ pub(crate) trait Source {
     /// nothing here lays out again.
     fn relayout(&self, _values: Values, _room: Room) -> Option<Job> {
         None
+    }
+    /// Whether this is a file opened for a list's tile only ([`Backend::open_tile`]): its first page,
+    /// and what follows it left out. Gone into, it is laid out again whatever its values and its room,
+    /// and its [`Source::relayout`] then gives the whole file.
+    fn tile(&self) -> bool {
+        false
     }
     /// The largest scale (pixels per unit of [`Source::size`]) page `page` is shown at, fitted to the
     /// window: for a page laid out for a room, the scale at which it is as tall as that room, so that

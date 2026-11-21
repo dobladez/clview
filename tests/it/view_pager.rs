@@ -4707,6 +4707,35 @@ fn epub_a_search_finds_a_word_in_a_later_chapter_and_the_worker_is_gone() {
     assert!(view.finish().success());
 }
 
+/// A list opens a book for its tile as far as its first page; gone into, the book is laid out whole,
+/// all its chapters and its Contents page, even in a window whose pages area is the room a list's
+/// tiles are laid out for, where nothing else would lay it out again. The status line says where
+/// its contents are, as it does when a book opens alone.
+#[cfg(all(feature = "epub", feature = "image"))]
+#[test]
+fn epub_a_tile_gone_into_is_the_whole_book_even_in_the_tiles_room() {
+    use crate::epub::{Mimetype, NAV_ITEM, THREE_ENTRIES, book_with, coloured_chapters, nav, write, zipped};
+    if !pty_works() {
+        return;
+    }
+    let dir = empty_dir("epub-tile");
+    let (chapters, mut pictures) = coloured_chapters();
+    pictures.push(("OEBPS/nav.xhtml", nav(THREE_ENTRIES)));
+    for name in ["a.epub", "b.epub"] {
+        write(dir.join(name), &zipped(&book_with(&chapters, &pictures, "", NAV_ITEM), Mimetype::Stored));
+    }
+    // The tiles' room is 60 × 40 cells, and the status line takes a row.
+    for (cols, rows) in [(60, 41), (100, 60)] {
+        let mut view = Session::start(&dir, &["--protocol", "kitty", "--pager"], cols, rows);
+        view.wait_until("the list", |t| chosen(t).as_deref() == Some("a.epub"));
+        view.press("\r");
+        whole_line_for_a_moment(&view, "Contents: T");
+        view.wait_until("the whole book", |t| bar(t).contains(" a.epub ") && drawn(t, "page 1/4"));
+        view.press("q");
+        assert!(view.finish().success(), "{cols} × {rows}");
+    }
+}
+
 /// A book's link to a file is never followed to one: one to a picture the book holds says it is a
 /// file in the book, one to a file it doesn't hold says so, and the reader stays in the book, even
 /// with files of those names where a path beside the `.epub` would lead.

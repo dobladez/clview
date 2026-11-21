@@ -35,9 +35,7 @@ hands it to the backend that opens HTML, so they have what a document has withou
 backend growing. An ebook's own stylesheets, applied a chapter
 at a time: an epub is a book now ([Spec-0012](specs/0012-show-an-epub-as-a-book.md)), in clv's
 own look, since the stylesheets of its chapters would meet in the one document they are joined
-into. A book's tile from its cover alone: a list lays each book out whole for its tile, as it does
-any document (22 real books printed as a list take 10 s, half a second a book). Other ebook
-formats: MOBI, AZW, FB2.
+into. Other ebook formats: MOBI, AZW, FB2.
 
 ### `/` as a search in lists too
 
@@ -71,6 +69,14 @@ AVIF, colour profiles, and an animation's frames as its pages. zstd and 7z; a co
   not, which the drawing's limits don't count. A cap on a `<style>`'s size before it is parsed, or
   usvg and resvg in a worker process as the labels' Blitz is
   ([ADR-0026](adr/0026-an-svgs-html-labels-in-a-worker-process-capped-on-cpu-time-and-heap.md)).
+- Quicker to open a document. clv lays a Markdown, HTML, Word, Org or epub document out twice to
+  show it: to open it, and again for its first render
+  ([ADR-0005](adr/0005-word-documents-through-wordcrafts-readers-layout-and-renderer.md)). The first
+  render could take the open's layout, which halves the wait. The layout must not stay with a
+  list's file that is opened but never rendered. A book's pictures are measured by opening the
+  `.epub` again for each picture: a book of 10,061 pictures opens it 20,000 times.
+- A list's Markdown, HTML and Org documents could have a tile of their first page alone, as books
+  do ([ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)).
 
 ### HTML through Blitz, maybe
 

@@ -33,8 +33,9 @@ pub(super) fn of(declared: &[&'static Setting], has: &[&'static str], values: Va
 
 /// What to lay the document out for: the relayout settings `has` as `values` want them, and `room`, the
 /// room it is shown in, when either differs from what it is laid out at (`laid`, in `laid_room`; a room
-/// is the same within a little, [`Room::same`]). `None` when they agree, or it has no relayout setting.
-/// A document laid out for no room is compared by its values alone.
+/// is the same within a little, [`Room::same`]), or whatever they are for a list's tile gone into
+/// (`tile`, [`crate::source::Source::tile`]), which is laid out whole. `None` when they agree, or it has
+/// no relayout setting. A document laid out for no room is compared by its values alone.
 pub(super) fn wanted(
     declared: &[&'static Setting],
     has: &[&'static str],
@@ -42,12 +43,13 @@ pub(super) fn wanted(
     laid: Values,
     room: Room,
     laid_room: Option<Room>,
+    tile: bool,
 ) -> Option<(Values, Room)> {
     // Nothing to lay out again: no room to speak of either.
     relayout(declared, has).next()?;
     let wanted = of(declared, has, values);
     let moved = laid_room.is_some_and(|laid_room| !laid_room.same(&room));
-    (wanted != of(declared, has, laid) || moved).then_some((wanted, room))
+    (wanted != of(declared, has, laid) || moved || tile).then_some((wanted, room))
 }
 
 /// What `values` are said as on the status line, the relayout settings `has` alone, those at their
@@ -211,25 +213,33 @@ mod tests {
 
     /// A layout is wanted when a relayout setting the document has differs from what it is laid out
     /// at, or the room it is shown in isn't the one it was laid out for, whatever the redraw settings
-    /// do; the values asked for are the relayout settings' alone, with the room.
+    /// do, or the document is a list's tile gone into; the values asked for are the relayout settings'
+    /// alone, with the room.
     #[test]
     fn a_layout_is_wanted_when_a_relayout_setting_or_the_room_differs_and_a_redraw_one_doesnt_count() {
         let declared: Vec<&'static Setting> = vec![&PAPER, &WIDTH];
         let has = ["paper", "width"];
         let laid = values("light", None);
         let at = |width| of(&declared, &has, values("dark", Some(width)));
-        assert_eq!(wanted(&declared, &has, values("dark", None), laid, ROOM, Some(ROOM)), None, "paper changed: a redraw");
-        assert_eq!(wanted(&declared, &has, values("light", Some(84)), laid, ROOM, Some(ROOM)), Some((at(84), ROOM)));
+        assert_eq!(wanted(&declared, &has, values("dark", None), laid, ROOM, Some(ROOM), false), None, "paper changed: a redraw");
+        assert_eq!(wanted(&declared, &has, values("light", Some(84)), laid, ROOM, Some(ROOM), false), Some((at(84), ROOM)));
         assert_eq!(at(84).get("paper"), None, "the relayout settings alone");
-        assert_eq!(wanted(&declared, &has, values("light", None), values("dark", None), ROOM, Some(ROOM)), None, "both at the default, said or not");
-        assert_eq!(wanted(&declared, &["paper"], values("light", Some(84)), laid, ROOM, Some(ROOM)), None, "a document without the setting");
+        assert_eq!(
+            wanted(&declared, &has, values("light", None), values("dark", None), ROOM, Some(ROOM), false),
+            None,
+            "both at the default, said or not"
+        );
+        assert_eq!(wanted(&declared, &["paper"], values("light", Some(84)), laid, ROOM, Some(ROOM), false), None, "a document without the setting");
         // The room: another wants one, the same within a little doesn't, and a document laid out for none
         // goes by its values alone.
         let window = of(&declared, &has, laid);
-        assert_eq!(wanted(&declared, &has, laid, laid, OTHER, Some(ROOM)), Some((window, OTHER)));
-        assert_eq!(wanted(&declared, &has, laid, laid, Room { cell_w: 10.1, ..ROOM }, Some(ROOM)), None);
-        assert_eq!(wanted(&declared, &has, laid, laid, OTHER, None), None);
-        assert_eq!(wanted(&declared, &["paper"], laid, laid, OTHER, Some(ROOM)), None, "no relayout setting: no room to speak of");
+        assert_eq!(wanted(&declared, &has, laid, laid, OTHER, Some(ROOM), false), Some((window, OTHER)));
+        assert_eq!(wanted(&declared, &has, laid, laid, Room { cell_w: 10.1, ..ROOM }, Some(ROOM), false), None);
+        assert_eq!(wanted(&declared, &has, laid, laid, OTHER, None, false), None);
+        assert_eq!(wanted(&declared, &["paper"], laid, laid, OTHER, Some(ROOM), false), None, "no relayout setting: no room to speak of");
+        // A list's tile gone into is laid out whole, even in the room and at the values it is laid out at.
+        assert_eq!(wanted(&declared, &has, laid, laid, ROOM, Some(ROOM), true), Some((window, ROOM)));
+        assert_eq!(wanted(&declared, &["paper"], laid, laid, ROOM, Some(ROOM), true), None, "nothing that lays out again");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), "width 72");
         assert_eq!(describe(&declared, &has, values("light", None)), "", "the default is left unsaid");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), describe(&declared, &has, values("dark", Some(72))));

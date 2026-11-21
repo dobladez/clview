@@ -6,6 +6,12 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+### Changed
+
+- A list of ebooks shows its tiles sooner. For a book's tile, clv lays out only the first page,
+  and it lays out the whole book when you open it. Before this release, clv laid out every book
+  whole for its tile.
+
 ## 0.6.0 (2026-11-20)
 
 ### Added
