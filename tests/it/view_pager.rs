@@ -309,6 +309,7 @@ pub(crate) fn drawn(text: &str, place: &str) -> bool {
 /// Wait until `said` is all the last status line drawn says, in a window of any width, with nothing
 /// of where the reader is beside it; and then until the status line is back without it, which
 /// takes about a second from when it was said.
+#[cfg(feature = "word")]
 fn whole_line_for_a_moment(view: &Session, said: &str) {
     view.wait_until("said, on the whole status line", |t| last_bar(t).trim() == said);
     let since = Instant::now();
@@ -2590,7 +2591,6 @@ fn a_small_picture_gets_a_column_for_each_pixel() {
 }
 
 /// One that says it is kitty, so isn't asked if it speaks the protocol, and shows images.
-#[cfg(feature = "word")]
 const KITTY: Terminal = Terminal { term: Some("xterm-kitty"), ..PLAIN };
 
 /// A dark terminal, not grey, as many are: what a page takes from it can't be mistaken.
@@ -3227,7 +3227,6 @@ fn text_cells_lay_markdown_out_in_columns_too() {
 }
 
 /// Where the reader is, by the last status line drawn: the first page on screen, of how many.
-#[cfg(feature = "word")]
 pub(crate) fn place_now(text: &str) -> Option<(usize, usize)> {
     let line = bar(last_draw(text));
     let at = line.get(line.rfind(" page")?..)?.trim_start_matches(|c: char| !c.is_ascii_digit());
@@ -4886,6 +4885,7 @@ fn epub_t_goes_to_the_books_own_contents_marked_or_guessed() {
 }
 
 /// What `?` has written since `from` bytes of output, once it is whole: its rows.
+#[cfg(feature = "word")]
 fn keys_shown(view: &mut Session, from: usize) -> String {
     view.press("?");
     view.wait_until("the keys", |t| t.len() > from && bar(&t[from..]).contains("these keys: any key goes back"));
@@ -4896,6 +4896,7 @@ fn keys_shown(view: &mut Session, from: usize) -> String {
 /// setting's line says what its keys do and then two of the formats they do it to. The keys that
 /// do nothing on what is shown are faint, by what the file says of itself: on a PDF `D`, `[ ]`,
 /// `{ }`, `s` and `T`, and on a Markdown document `T` alone. As text cells too.
+#[cfg(feature = "word")]
 #[test]
 fn the_keys_at_80_columns_are_whole_and_those_that_do_nothing_here_are_faint() {
     if !pty_works() {

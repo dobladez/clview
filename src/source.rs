@@ -523,6 +523,10 @@ impl Input {
     }
 
     /// [`Input::held`], for a holder that can stop reading the file at a bound ([`Bounded`]).
+    #[cfg_attr(
+        not(any(feature = "zip", feature = "tar", feature = "epub", feature = "word", test)),
+        expect(dead_code, reason = "only archives, books and documents' pictures are held so")
+    )]
     fn held_bounded(path: String, head: Vec<u8>, again: Again, bounded: Bounded) -> Self {
         Self { path, head, rest: Rest::Held { again, bounded: Some(bounded), start: None, beside: None } }
     }
@@ -1031,7 +1035,6 @@ pub(crate) trait Source {
 /// A place in a source that the reader goes to by a command of its own, from any page
 /// ([`Source::contents`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(not(any(feature = "epub", test)), expect(dead_code, reason = "only books declare one"))]
 pub(crate) struct Landmark {
     /// What it is, for the reader, as the status line says it before the key that goes there:
     /// `Contents`.
