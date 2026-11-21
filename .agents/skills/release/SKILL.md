@@ -47,7 +47,19 @@ fixes alone.
   workflow builds `--locked`, so a stale lock fails it after the tag.
 - `CHANGELOG.md`: `## Unreleased` becomes `## $V (<today, YYYY-MM-DD>)`, under a new empty
   `## Unreleased` and a blank line.
-- Read the notes as GitHub will show them, and show the user how they start:
+- Rewrite the section as short release notes, to `CONTRIBUTING.md`'s "Writing" rules. Each
+  commit adds its entry under `## Unreleased`, and those entries often say how a feature works.
+  That belongs in the manual. In the notes:
+  - Write four sentences or fewer for each entry.
+  - Say what changed for a user. When it helps, say what clv did before: "Before this release,
+    clv showed …".
+  - Say only what a user sees. Do not name a function, a crate or a limit's number, and do not
+    list each case.
+  - Put a fix under `### Fixed`, not under `### Changed`.
+
+  Show the rewritten notes to the user, and commit only when they agree. The 0.6.0 section is an
+  example.
+- Read the notes as GitHub will show them:
   `awk -v version=$V -f .github/release-notes.awk CHANGELOG.md`.
 - The gates, under a `timeout` (`CONTRIBUTING.md`'s "Quality gates"); `tests/docs.rs` checks the
   changelog has `$V`.
@@ -124,7 +136,8 @@ by its full path here, and say which `clv` `command -v clv` finds.
   tag: `git tag -d v$V && git push origin :refs/tags/v$V`, and steps 3 (as needed) and 4 again.
 - **Release published**: never move or delete its tag; Homebrew and anyone who downloaded it have
   it. Fix forward with the next patch version. A wrong note can be edited on GitHub
-  (`gh release edit v$V --notes-file …`), the changelog fixed in a commit.
+  (`gh release edit v$V --notes-file …`), the changelog fixed in a commit. The file replaces the
+  whole body: end it with the "Full Changelog" line the body had, after a blank line.
 - **Only `homebrew` failed**: step 7's rerun.
 
 ## 10. Report

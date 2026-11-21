@@ -10,50 +10,27 @@ works today. A version's section becomes the notes of its
 
 ### Added
 
-- An ebook (epub) is shown as a book: its chapters in its reading order, each starting a new page,
-  with its pictures, as one document laid out for the window. It has what Markdown and HTML have:
-  `[` and `]` for its width, `+` and `-` for its font size, `{` and `}` for its margins, `D` for
-  dark paper, `/` to search the whole book. It was a list of its files, each chapter opened alone
-  and without its pictures. Its cover comes first, a page of its own, and is its tile in a list.
-  Its last page is a Contents page, made by clv from the book's table of contents and saying so,
-  each entry a link to its chapter. `T` goes to the contents from any page, and Backspace comes
-  back: to the book's own page of contents where it has one among its chapters, as its package
-  says or as its links show, else to that last page; the status line says `Contents: T` for a
-  second when a book opens. Chapters it protects (DRM) are left out, and the first page says how
-  many. Its own stylesheets aren't read, and a fixed-layout book is laid out
-  flowing. Its links between chapters are places in the book, which `f` goes to and Backspace comes
-  back from; a link from it is never followed to a file. A zip that says it is an epub is one
-  whatever its name.
-- Org-mode files (`.org`, `.org_archive`, or any text whose first line is an Emacs mode line
-  naming Org, `-*- org -*-`, through a pipe too) are shown as documents, as Markdown is: their
-  TODO keywords in colour (the file's own `#+TODO:` too), tags and planning lines in grey, a title
-  block, lists with their checkboxes, tables, footnotes, pictures, `#+begin_src mermaid` blocks
-  drawn as diagrams, with `[`, `]`, `+`, `-`, `{`, `}`, `D`, `s` and `/` as for Markdown. Drawers,
-  comments and keywords are hidden, and nothing is evaluated. `f` follows its links as Org has
-  them: to a heading by its title, a custom id, an `id:`, a target or a name in the file, to a
-  heading of another file (`file:other.org::*Heading`), and to the web; `elisp:`, `shell:` and the
-  rest are never run, the status line saying what each is. A Markdown file's link finds an Org
-  file's heading by the id GitHub would give it. They were nothing clv showed.
-- A Markdown or HTML document in a zip or a tar shows the pictures beside it in the archive, by
-  their paths from it, `..` included but never above the archive's top: a README in a zip of a
-  repository shows its screenshots. They were left as their alt text. Opening the document unpacks
-  none of them whole.
+- clv shows an ebook (epub) as one book, with its chapters in reading order and their pictures.
+  The cover is the first page, and a Contents page is the last page. `T` goes to the contents,
+  and `f` follows the links between chapters. Before this release, clv showed an epub as a list of
+  its files.
+- clv shows Org-mode files (`.org`) as documents, as it shows Markdown. It shows TODO keywords in
+  color, tables, footnotes, pictures and Mermaid blocks. `f` follows Org links to headings, to
+  other Org files and to the web. clv does not run code or `elisp:` links.
+- A Markdown or HTML document in a zip or a tar shows the pictures that are next to it in the
+  archive. Before this release, clv showed only their alt text.
 
 ### Changed
 
-- A key that changes how a file looks (`D`, `[`, `{`, `s`), on a file that has no such thing, says
-  so shorter, and on the whole status line, which comes back after a second or with the next key:
-  `this format doesn't reflow (Markdown, HTML and others do)`, where it said `only Markdown and
-  HTML reflow` beside the rest, a sentence that grew with every format and was cut short in a
-  window of 80 columns.
-- `?` says what a setting's key does and then two of the formats it does it to (`D  light on
-  dark, or dark on light (Mermaid, Markdown and others)`), where it started with every format.
-  The keys that do nothing on what is shown are faint: `D`, `[`, `{` and `s` on a PDF, `T` where
-  there are no contents to go to. What a line says goes on over the next row in a narrow window,
-  where it was cut in its middle.
-- A zip whose first file is a PDF stored without compression (as zips often keep PDFs, which
-  compress no further) is shown as a zip, where it was taken for a PDF and refused as one that
-  can't be read.
+- A key that has no effect on the file, such as `D` on a PDF, gives a shorter message. The
+  message uses the full status line, so a narrow window does not cut it.
+- `?` shows the keys that have no effect on the file in faint text. In a narrow window, a long
+  line continues on the next row.
+
+### Fixed
+
+- clv shows a zip as a zip when its first file is a PDF without compression. Before this release,
+  clv tried to open it as a PDF and gave an error.
 
 ## 0.5.0 (2026-11-16)
 

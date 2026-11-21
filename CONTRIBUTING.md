@@ -178,6 +178,28 @@ Each fact has one home, and the other docs link to it. When a change needs docum
 | `docs/specs/` | Someone about to build a change | What one change set out to do and how, before its code: a record of that moment, frozen once `Done`. Never the only home of a behaviour |
 | This file | Someone working on the code | How to build, test and release, and the rules |
 
+## Writing
+
+Write the docs in clear technical English. Follow the core rules of ASD-STE100 (Simplified
+Technical English), but not its strict dictionary:
+
+- Write one idea in each sentence. Use 20 words or fewer in an instruction, and 25 words or fewer
+  in a description.
+- Keep each paragraph to one topic, and to six sentences or fewer.
+- Use the active voice, and say what does the action: "clv shows the page", not "the page is
+  shown".
+- Use the simple tenses: present, past and future.
+- Write an instruction as a command: "Run the tests", not "The tests should be run".
+- Do not leave out words to make a sentence shorter. Keep "the", "a" and "that".
+- Do not use an `-ing` word as a noun: "when clv reads the file", not "on reading the file".
+- Use one word for one thing, and use the same word each time.
+- Use a list for steps, and for three or more items of the same kind.
+- Put in backticks the names that a reader types or sees: keys, options, files, functions.
+- Use American spelling, as STE does: "color", not "colour".
+
+These rules apply to new text and to text that you change. Older text gets the rules when you
+edit it for another reason.
+
 ## Quality gates
 
 Before every commit, under a `timeout`:
