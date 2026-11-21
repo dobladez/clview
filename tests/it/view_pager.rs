@@ -1549,8 +1549,13 @@ fn slash_searches_an_org_documents_body_and_s_its_blocks_as_code() {
     assert!(shows_flow(&page), "drawn to start with");
     view.press("/findme\r");
     view.wait_until("found", |t| last_bar(t).contains(" /findme 1/1 ") || last_bar(t).contains(" /findme 1 "));
+    // The page is sent again tinted, and again as it was once the search is gone: `s` is waited
+    // past the last of them.
+    let (tinted, _) = next_image(&view, "the match tinted", drawn);
     view.press("\x1b");
     view.wait_until("the search gone", |t| !last_bar(t).contains("/findme"));
+    let (shown, page) = next_image(&view, "the tint taken off", tinted);
+    assert!(shows_flow(&page), "drawn still");
     view.press("/secret\r");
     view.wait_until("nothing hidden searched", |t| last_bar(t).contains(" /secret no match "));
     view.press("\x1b");
@@ -1558,7 +1563,7 @@ fn slash_searches_an_org_documents_body_and_s_its_blocks_as_code() {
     view.press("/finish\r");
     view.wait_until("no text of the block's", |t| last_bar(t).contains(" /finish no match "));
     view.press("s");
-    let (_, page) = next_image(&view, "the block as code", drawn);
+    let (_, page) = next_image(&view, "the block as code", shown);
     assert!(!shows_flow(&page));
     view.wait_until("its code searched", |t| {
         last_bar(t).contains("blocks as code") && last_bar(t).contains(" /finish ") && !last_bar(t).contains("no match")
