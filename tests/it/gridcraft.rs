@@ -230,7 +230,7 @@ fn every_gridcraft_crate_is_from_the_pinned_commit_and_none_it_patches_is_built(
 }
 
 /// What the spreadsheet backend reads and prints with is named only by it and its tests
-/// (`CLAUDE.md`), so it can be swapped for another.
+/// (`AGENTS.md`), so it can be swapped for another.
 #[test]
 fn nothing_but_this_backend_names_gridcraft() {
     crate::fixtures::named_only_in(

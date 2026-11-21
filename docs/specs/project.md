@@ -22,7 +22,7 @@ Keep `-j 2`: the PDF backend is a large build.
 - **Rust only**, 1.95 or later. What each dependency is for is said beside it in `Cargo.toml`,
   and why it was chosen in its ADR.
 - **Where to look** when researching a spec: `src/` (`src/view/` the viewer, `src/source/` the
-  backends; [`CLAUDE.md`](../../CLAUDE.md)'s Layout says which is which), `tests/it/`, and
+  backends; [`AGENTS.md`](../../AGENTS.md)'s Layout says which is which), `tests/it/`, and
   [`docs/architecture.md`](../architecture.md).
 - **Generated, never edited by hand:** this directory's Index.
 
@@ -38,7 +38,7 @@ Skip any a project doesn't have.
 | What changed, by release | `CHANGELOG.md` |
 | What is planned | `README.md`'s Plans, a line each; their details, and ideas not yet planned, in `docs/backlog.md` |
 | Rules, gates, tests, and where a fact goes | `CONTRIBUTING.md` |
-| For agents | `CLAUDE.md` |
+| For agents | `AGENTS.md` (`CLAUDE.md` imports it) |
 
 ## Conventions
 

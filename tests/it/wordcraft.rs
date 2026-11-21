@@ -839,7 +839,7 @@ fn every_wordcraft_crate_is_from_the_pinned_commit_and_none_it_patches_is_built(
     assert!(built.is_empty(), "wordcraft patches {built:?}, built here without the patch");
 }
 
-/// What the Word backend reads and renders with is named only by it and its tests (`CLAUDE.md`), so it can
+/// What the Word backend reads and renders with is named only by it and its tests (`AGENTS.md`), so it can
 /// be swapped for another.
 #[test]
 fn nothing_but_this_backend_names_wordcraft_or_pulldown_cmark() {

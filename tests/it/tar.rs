@@ -188,7 +188,7 @@ fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
 }
 
 /// What the tar backend decompresses bzip2 and xz with is named only by it and its tests
-/// (`CLAUDE.md`). (Gzip's flate2 is the SVG backend's too, for svgz.)
+/// (`AGENTS.md`). (Gzip's flate2 is the SVG backend's too, for svgz.)
 #[test]
 fn nothing_but_this_backend_names_its_decompressors() {
     crate::fixtures::named_only_in(&["src/source/tar.rs", "tests/it/tar.rs"], &[], &["bzip2", "lzma"]);
