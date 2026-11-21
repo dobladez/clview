@@ -6,6 +6,8 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+## 0.6.0 (2026-11-20)
+
 ### Added
 
 - An ebook (epub) is shown as a book: its chapters in its reading order, each starting a new page,
