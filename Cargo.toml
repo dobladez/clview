@@ -28,6 +28,9 @@ todo = "warn"
 [dependencies]
 pdfcraft-render = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906", optional = true }
 pdfcraft-engine = { git = "https://github.com/storytold/pdfcraft", rev = "17fc47b6927bf787aef2c56cf59c365e64574906", optional = true }
+# A PDF's page sizes for a list's tile, read as pdfcraft reads them, without its pass over every
+# page's annotations (ADR-0042): pdfcraft's own hayro-syntax, the one [patch.crates-io] pins.
+hayro-syntax = { version = "=0.7.2", default-features = false, optional = true }
 # Images, decoded in Rust: the `image` crate's decoders (no rayon: the pager has threads of its
 # own), and jxl-oxide for JPEG XL. Not AVIF: the `image` crate's AVIF decoder (`avif-native`,
 # the dav1d C library) turns most files' colours, as libavif writes them, through the wrong
@@ -120,7 +123,7 @@ png = "0.18"
 default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet", "epub", "org"]
 # PDFs: the PDF backend, `source/pdfcraft.rs`, which renders them through pdfcraft. Without it the
 # viewer builds without pdfcraft at all, and shows no PDFs.
-pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine"]
+pdf = ["dep:pdfcraft-render", "dep:pdfcraft-engine", "dep:hayro-syntax"]
 # Images: PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, JPEG XL, OpenEXR, Radiance HDR, TGA, PNM
 # and farbfeld (`source/image.rs` lists them as `DECODED`).
 image = ["dep:image", "dep:jxl-oxide"]

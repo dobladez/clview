@@ -34,8 +34,9 @@ pub(super) fn of(declared: &[&'static Setting], has: &[&'static str], values: Va
 /// What to lay the document out for: the relayout settings `has` as `values` want them, and `room`, the
 /// room it is shown in, when either differs from what it is laid out at (`laid`, in `laid_room`; a room
 /// is the same within a little, [`Room::same`]), or whatever they are for a list's tile gone into
-/// (`tile`, [`crate::source::Source::tile`]), which is laid out whole. `None` when they agree, or it has
-/// no relayout setting. A document laid out for no room is compared by its values alone.
+/// (`tile`, [`crate::source::Source::tile`]), which is opened whole, a relayout setting or none.
+/// `None` when they agree, or it has no relayout setting. A document laid out for no room is compared
+/// by its values alone.
 pub(super) fn wanted(
     declared: &[&'static Setting],
     has: &[&'static str],
@@ -46,7 +47,9 @@ pub(super) fn wanted(
     tile: bool,
 ) -> Option<(Values, Room)> {
     // Nothing to lay out again: no room to speak of either.
-    relayout(declared, has).next()?;
+    if relayout(declared, has).next().is_none() && !tile {
+        return None;
+    }
     let wanted = of(declared, has, values);
     let moved = laid_room.is_some_and(|laid_room| !laid_room.same(&room));
     (wanted != of(declared, has, laid) || moved || tile).then_some((wanted, room))
@@ -239,7 +242,7 @@ mod tests {
         assert_eq!(wanted(&declared, &["paper"], laid, laid, OTHER, Some(ROOM), false), None, "no relayout setting: no room to speak of");
         // A list's tile gone into is laid out whole, even in the room and at the values it is laid out at.
         assert_eq!(wanted(&declared, &has, laid, laid, ROOM, Some(ROOM), true), Some((window, ROOM)));
-        assert_eq!(wanted(&declared, &["paper"], laid, laid, ROOM, Some(ROOM), true), None, "nothing that lays out again");
+        assert_eq!(wanted(&declared, &["paper"], laid, laid, ROOM, None, true), Some((Values::default(), ROOM)), "nothing that lays out again");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), "width 72");
         assert_eq!(describe(&declared, &has, values("light", None)), "", "the default is left unsaid");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), describe(&declared, &has, values("dark", Some(72))));

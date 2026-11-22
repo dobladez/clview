@@ -53,6 +53,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0039 | [A backend sure of a file wins over one that finds a mark in it](0039-a-backend-sure-of-a-file-wins-over-one-that-finds-a-mark-in-it.md) | Accepted |
 | 0040 | [Org-mode documents parsed by orgize, in a worker process, into the backend that opens HTML](0040-org-mode-through-orgize-in-a-worker-process.md) | Accepted |
 | 0041 | [A book's tile is its first page alone, and the book is opened whole when gone into](0041-a-books-tile-is-its-first-page-alone.md) | Accepted |
+| 0042 | [A PDF's tile is the file itself, its pages measured by hayro-syntax](0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md) | Accepted |
 
 ## When to write one
 

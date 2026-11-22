@@ -192,10 +192,11 @@ fn a_pdf_of_more_than_a_hundred_thousand_pages_is_refused() {
 }
 
 /// Only this backend, its tests, the line that lists it among the backends and the lines that
-/// declare its modules name pdfcraft: the rest of the code would read the same with another PDF
-/// renderer.
+/// declare its modules name pdfcraft, or the hayro-syntax it measures a tile's pages with: the rest
+/// of the code would read the same with another PDF renderer.
 #[test]
 fn nothing_but_this_backend_names_pdfcraft() {
     let own = ["src/source/pdfcraft.rs", "tests/it/pdfcraft.rs", "tests/it/pdfcraft_pin.rs"];
-    crate::fixtures::named_only_in(&own, &["&pdfcraft::Pdfcraft,", "&pdfcraft::TEXT,", "mod pdfcraft;", "mod pdfcraft_pin;"], &["pdfcraft"]);
+    let allowed = ["&pdfcraft::Pdfcraft,", "&pdfcraft::TEXT,", "mod pdfcraft;", "mod pdfcraft_pin;"];
+    crate::fixtures::named_only_in(&own, &allowed, &["pdfcraft", "hayro"]);
 }

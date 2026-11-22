@@ -11,6 +11,9 @@ works today. A version's section becomes the notes of its
 - A list of ebooks shows its tiles sooner. For a book's tile, clv lays out only the first page,
   and it lays out the whole book when you open it. Before this release, clv laid out every book
   whole for its tile.
+- A list of PDFs shows its tiles sooner. For a PDF's tile, clv reads only the page sizes, and it
+  opens the whole file when you open the PDF. So a tile does not show the comments and forms that
+  clv draws for a PDF itself.
 
 ## 0.6.0 (2026-11-20)
 

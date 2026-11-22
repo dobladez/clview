@@ -195,8 +195,9 @@ defers promises pages, never a container
 ([ADR-0019](adr/0019-a-list-opens-its-files-when-their-tiles-are-wanted.md)). Such a file is opened
 for its tile through `Backend::open_tile`, which calls `open_at` by default. A backend may open only
 what the tile's page needs there. The source it gives then says so (`Source::tile`), and the pager
-lays it out again, whole, when the reader goes into it. Only the epub backend does this
-([ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)).
+lays it out again, whole, when the reader goes into it. The epub backend does this
+([ADR-0041](adr/0041-a-books-tile-is-its-first-page-alone.md)), and so does the PDF backend
+([ADR-0042](adr/0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md)).
 
 A backend says what it shows in a word or two (`Backend::shows`: "PDFs", "documents"), which
 messages and `--help` give, and which formats (`Backend::formats`): each a `Format`, its name, the
@@ -318,6 +319,14 @@ through its command) and that a key means one setting
 - **A PDF** renders through pdfcraft, the way its app draws it, a git dependency pinned in
   `Cargo.toml`. Its text, for a search, is read by pdfcraft in a worker process
   ([A PDF's text](#a-pdfs-text-pdfcraftrs)).
+- **A PDF's tile** is the file itself (`Pdf::tile`,
+  [ADR-0042](adr/0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md)). `measured` reads each
+  page's size, crop box and turn through hayro-syntax, as pdfcraft's `inspect` does, but without
+  the pass of `inspect` over every page's annotations and fields. The tile makes no display copy
+  (`display_bytes_for`) and reads no link annotations. Its `Linked` has its pages and no links, so
+  a named destination is still found. A file that hayro-syntax can't read opens whole
+  (`Pdf::open`), which says why it can't be shown. `Pdf::relayout` of a tile is a job that opens
+  it whole.
 - **A drawing** renders through resvg
   ([ADR-0002](adr/0002-render-svg-with-resvg.md)), within limits of clv's own on what it costs to
   parse and render, since resvg's are few. It parses once to open and keeps only where its bytes are; its
@@ -834,8 +843,11 @@ values and the room, which gives a new source laid out at them). So `]` then Bac
 reflows nothing in the list, and the next document gone into is laid out at the new value, and for the
 pager's room rather than the preview's it was opened for, as it shows. A source opened for its tile
 alone (`Source::tile`) is asked for a job whatever it is laid out at, even in a window that is the
-preview's room. Its new layout is the file opened, so `Pager::replace` keeps what the new level says
-on opening (`Contents: T`) rather than the tile's. A layout is asked for, and its result taken in, by its values and its room together.
+preview's room, and one with no relayout setting (a PDF) too. Its new layout is the file opened, so
+`Pager::replace` keeps the keys' reminder as the tile left it, and what the new level says on opening
+(`Contents: T`) unless a key had the status line say something else. Labels that `f` asked for
+meanwhile wait for the file opened whole (`Pager::links_on`), and `replace` asks it for the same
+pages' links (`Pager::hints_on`). The status line says `opening…` meanwhile. A layout is asked for, and its result taken in, by its values and its room together.
 
 The pager's room follows the window (`Pager::watch_room`, each pass of the loop): the room the window's
 pages area makes now, from the same `area` the draw lays its grid out in (so its columns and rows, or

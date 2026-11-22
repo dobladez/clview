@@ -666,6 +666,11 @@ it can't compute (a colour space it can't read, a tint transform it can't evalua
 fallback colour; an image whose colour table is malformed is drawn as well as it can be, or left
 out, and a Type 3 font without its widths is spaced by its glyphs' own; each with a warning. `/` [searches a PDF's text](#searching-a-documents-text).
 
+A PDF's tile in a list shows the file as it is, without those additions, because clv makes them
+for the whole file. So a tile shows no comment that has no appearance of its own, and the tile of
+a dynamic XFA form shows its placeholder page. When you open the PDF, clv adds them
+([ADR-0042](adr/0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md)).
+
 ### Images
 
 An image is one page, its size its own in pixels, turned the way its EXIF orientation says (a

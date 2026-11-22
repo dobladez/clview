@@ -4140,6 +4140,32 @@ fn links_followed_in_a_file_from_a_list_are_gone_back_through_before_the_list() 
     std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
 }
 
+/// A list opens a PDF for its tile as the file itself, with no links read; gone into, it is opened
+/// whole, and `f` at once, while it opens, labels its links when it has, saying nothing of no links
+/// meanwhile.
+#[test]
+fn a_pdf_tile_gone_into_is_opened_whole_and_f_meanwhile_waits_for_its_links() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = linked("links-tile");
+    let other = pdf.with_file_name("other.pdf");
+    std::fs::write(&other, crate::fixtures::letter("Other", 3)).unwrap();
+    let mut view = Session::start(&pdf, &[other.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    let before = view.text().len();
+    view.press("\rf");
+    view.wait_until("the labels", |t| letters(t).len() == 14);
+    let since = &view.text()[before..];
+    assert!(!since.contains("no links on screen"), "said there were none");
+    // Apart from the key after it: the labels go with Esc, and `q` is one of their letters.
+    view.press("\x1b");
+    std::thread::sleep(Duration::from_millis(200));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(pdf.parent().unwrap()).unwrap();
+}
+
 /// With `--pages`, a link to a page given goes where that page is first among them, and one to a
 /// page not given says so and goes nowhere.
 #[test]

@@ -20,8 +20,9 @@ It takes Rust 1.95 or later, the `rust-version`. All ten features are on by defa
 
 The PDF backend's pdfcraft is not on crates.io, so it comes from git, pinned to one commit of its
 `main` in [`Cargo.toml`](Cargo.toml). To move the pin, change every `rev` there together, the
-`[patch.crates-io]` ones included (they are pdfcraft's patched hayro, lopdf and vello), then run the
-tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
+`[patch.crates-io]` ones included (they are pdfcraft's patched hayro, lopdf and vello). Change the
+`=` version of `hayro-syntax` with them, to the version that pdfcraft's patch gives, since the backend
+names that crate too. Then run the tests: `tests/it/pdfcraft_pin.rs` fails if a crate pdfcraft patches would be built from crates.io
 instead. Only the backend (`src/source/pdfcraft.rs`) and its tests name pdfcraft, so another PDF
 renderer would replace that file and the dependencies, and nothing else. The caps of the worker
 that reads a PDF's text for a search rest on what pdfcraft's text costs at the pin
@@ -133,7 +134,8 @@ own test, whichever does the work.
   into the contract ([Settings](docs/architecture.md#settings),
   [ADR-0033](docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
 - **A backend's library is its own.** pdfcraft is named in code only in `src/source/pdfcraft.rs`,
-  its tests (`tests/it/pdfcraft*.rs`), `Cargo.toml` and the line listing it in `source::BACKENDS`;
+  its tests (`tests/it/pdfcraft*.rs`), `Cargo.toml` and the line listing it in `source::BACKENDS`,
+  and so is the hayro-syntax of pdfcraft's that the backend measures a tile's pages with;
   swapping the PDF renderer must touch nothing else in the code, and in the docs only what credits
   or describes it. `tests/it/pdfcraft.rs` checks the code. Likewise resvg and what it renders with
   (usvg, tiny-skia, roxmltree, fontdb): only in `src/source/svg.rs`, `tests/it/resvg.rs` (which

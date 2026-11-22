@@ -91,8 +91,9 @@ const ADDRESS_SHOWN: usize = 60;
 const REFLOW_IN_LIST: &str = "open a document to reflow it";
 const REFLOW_WITH_PAGES: &str = "--pages picks pages as laid out: no reflow";
 /// What the status line says while the document is laid out again with nothing to say of its values
-/// (a change of size at the defaults), `…` after it.
+/// (a change of size at the defaults), `…` after it; and while a list's tile gone into is opened whole.
 const LAYING_OUT: &str = "laying out";
+const OPENING: &str = "opening";
 /// Bytes kept from an escape sequence or a terminal's answer still arriving; past this many, or
 /// [`PENDING_LIMIT`], they are dropped.
 const MAX_PENDING: usize = keys::MAX_ANSWER * 2;
@@ -2338,14 +2339,19 @@ impl Pager<'_> {
     /// `f`: labels for the links of the pages on screen, asked of the source, which is asked for its
     /// links the first time. A source with none, or a screen with no page, says so.
     fn start_hints(&mut self, aim: Aim) {
+        let pages: Vec<usize> = self.level.nav.on_screen().into_iter().flatten().collect();
+        self.hints_on(aim, &pages);
+    }
+
+    /// Labels for the links of `pages`, as [`Pager::start_hints`] asks for them.
+    fn hints_on(&mut self, aim: Aim, pages: &[usize]) {
         if !self.level.linked {
             self.level.links = self.level.source.links();
             self.level.linked = true;
         }
-        let pages: Vec<usize> = self.level.nav.on_screen().into_iter().flatten().collect();
         match &self.level.links {
             Some(links) if !pages.is_empty() => {
-                let hints = Hints::new(aim, &pages, Instant::now());
+                let hints = Hints::new(aim, pages, Instant::now());
                 links.set_queue(hints.wanted());
                 self.level.nav.hints = Some(hints);
             }
@@ -2362,6 +2368,10 @@ impl Pager<'_> {
             return self.seek_on();
         }
         let Some(hints) = self.level.nav.hints.as_mut().filter(|hints| hints.waiting()) else { return false };
+        // A tile being opened whole may lack the links the file has: they are asked of the file.
+        if self.level.source.tile() && self.relayout.is_under_way() {
+            return false;
+        }
         let Some(links) = self.level.links.as_ref() else {
             self.level.nav.hints = None;
             return true;
@@ -2972,8 +2982,9 @@ impl Pager<'_> {
         let (laid, laid_room) = self.level.source.laid_at();
         let tile = self.level.source.tile();
         let mut wanted = relayout::wanted(&declared, &has, self.settings.values.get(), laid, self.room_for(), laid_room, tile);
-        // What is being laid out that isn't the default, or that it is.
-        let saying = |values: Values| Some(relayout::describe(&declared, &has, values)).filter(|said| !said.is_empty()).unwrap_or(LAYING_OUT.into());
+        // What is being laid out that isn't the default, or that it is; or that a tile is being opened whole.
+        let laying = if tile { OPENING } else { LAYING_OUT };
+        let saying = |values: Values| Some(relayout::describe(&declared, &has, values)).filter(|said| !said.is_empty()).unwrap_or(laying.into());
         let mut changed = false;
         if let Some(handle) = self.relayout.handle() {
             let Some(done) = handle.try_take() else {
@@ -3075,6 +3086,11 @@ impl Pager<'_> {
     fn replace(&mut self, source: Box<dyn Source + Send>) -> Result<(), String> {
         let place = self.place_on_screen().and_then(|anchor| source.find(&anchor));
         let search = self.level.nav.take_search();
+        // A list's tile opened whole is the file opened, not laid out again: labels asked for while
+        // it opened are asked of it, for the same pages.
+        let opened = self.level.source.tile();
+        let labels = self.level.nav.hints.as_ref().filter(|hints| opened && hints.waiting()).map(|hints| hints.aim());
+        let on_screen: Vec<usize> = self.level.nav.on_screen().into_iter().flatten().collect();
         let source: Box<dyn Source> = source;
         let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone(), self.level.on_disk.clone()), items: Vec::new() };
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone(), self.room);
@@ -3088,7 +3104,8 @@ impl Pager<'_> {
             }
             None => level.nav.at = self.level.nav.at.min(last),
         }
-        level.nav.hint = false;
+        // The keys' reminder stays as the tile left it: it shows until a key.
+        level.nav.hint = opened && self.level.nav.hint;
         level.nav.help = self.level.nav.help;
         level.nav.message.clone_from(&self.level.nav.message);
         // The places to come back to are the file's, whatever its layout: each by its paragraph.
@@ -3098,11 +3115,10 @@ impl Pager<'_> {
         level.depth = self.level.depth;
         level.seeking = self.level.seeking.take();
         level.leaving = self.level.leaving.take();
-        // What the status line was saying whole, it goes on saying: a layout is no file opened. But a
-        // tile laid out whole is the file opened: what it says on opening is said now.
-        if !self.level.source.tile() {
-            level.nav.notice = self.level.nav.notice.take();
-        }
+        // What the status line was saying whole, it goes on saying: a layout is no file opened. A tile
+        // opened whole is: what the file says on opening is said, unless a key had the line said else.
+        let notice = level.nav.notice.take().filter(|_| opened);
+        level.nav.notice = self.level.nav.notice.take().or(notice);
         if let Some(name) = &level.seeking {
             level.links = level.source.links();
             level.linked = true;
@@ -3120,6 +3136,9 @@ impl Pager<'_> {
         let gone = std::mem::replace(&mut self.level, level);
         let id = gone.id;
         drop(gone);
+        if let Some(aim) = labels {
+            self.hints_on(aim, &on_screen);
+        }
         self.let_go(id)
     }
 

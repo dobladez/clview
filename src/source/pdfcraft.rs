@@ -11,8 +11,13 @@
 //! Their links are the link annotations pdfcraft read as the file was opened, kept with what places
 //! them on their pages as shown ([`Linked`]); only a named destination, looked up when a link to
 //! another file names one here, reads the file again, on the links' own thread ([`PageLinks`]).
+//!
+//! A list's tile is the file itself, its pages measured by hayro-syntax as pdfcraft measures them:
+//! no display copy, and no annotations read. Gone into, the file is opened whole
+//! ([ADR-0042](../../docs/adr/0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md)).
 
 use std::ops::Range;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,8 +31,8 @@ use pdfcraft_render::{
 use super::texts::{Answer, Ending, Queue};
 use super::worker::{self, Died, FAILED, Link, Session, WALL, Worker};
 use super::{
-    Ask, Backend, Deferred, Format, Frame, Got, Input, Links, MAX_ADDRESS, MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Opened, Pixels, Request, Source,
-    Target, Texts, Told, Want,
+    Ask, Backend, Deferred, Format, Frame, Got, Input, Job, Links, MAX_ADDRESS, MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Opened, Pixels, Request, Room,
+    Source, Target, Texts, Told, Values, Want,
 };
 use crate::args::{OptionSpec, Parsed};
 
@@ -88,6 +93,18 @@ impl Backend for Pdfcraft {
         let path = input.path.clone();
         Ok(Opened::Pages(Box::new(Pdf::open(&path, Arc::new(input.bytes()?), options.value("--password"))?)))
     }
+
+    /// The file itself, its pages measured ([`Pdf::tile`]); one that can't be measured so is opened
+    /// whole, which says why where it can't be opened either.
+    fn open_tile(&self, input: Input, options: &Parsed<'_>, _room: Room) -> Result<Opened, String> {
+        let (path, password) = (input.path.clone(), options.value("--password"));
+        let bytes = Arc::new(input.bytes()?);
+        let pdf = match Pdf::tile(&path, bytes.clone(), password) {
+            Some(tile) => tile,
+            None => Pdf::open(&path, bytes, password)?,
+        };
+        Ok(Opened::Pages(Box::new(pdf)))
+    }
 }
 
 /// Whether a file starting with `head` is a PDF: its header (`%PDF-` and the version) within the
@@ -111,6 +128,15 @@ pub(super) struct Pdf {
     /// In points, after `/Rotate` and `/UserUnit`.
     sizes: Vec<(f32, f32)>,
     linked: Arc<Linked>,
+    /// For a list's tile, the file itself: what opens it whole.
+    whole: Option<Whole>,
+}
+
+/// What opens a PDF whole that was opened for a list's tile: its path, and the password given.
+#[derive(Clone)]
+struct Whole {
+    path: String,
+    password: Option<String>,
 }
 
 /// A PDF's links as pdfcraft read them when the file was opened, and what places them on their
@@ -249,8 +275,50 @@ impl Pdf {
             config: RenderConfig { password: display.password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
             sizes: info.pages.iter().map(|p| (p.width, p.height)).collect(),
             linked: Arc::new(Linked::new(info.pages, info.links)),
+            whole: None,
         })
     }
+
+    /// The file `bytes`, read from `path`, as a list's tile shows it, opened with `password`: the
+    /// file itself rendered, with no display copy, its pages measured by hayro-syntax as pdfcraft's
+    /// `inspect` measures them, and none of its annotations read, links among them. `None` where
+    /// hayro-syntax can't read it, or it has no pages or more than [`MAX_PAGES`].
+    fn tile(path: &str, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Option<Self> {
+        let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+        // A parser's panic costs the tile's shortcut, not the file.
+        let pages = std::panic::catch_unwind(AssertUnwindSafe(|| measured(bytes.clone(), render_password.as_deref()))).ok().flatten()?;
+        if pages.is_empty() || pages.len() > MAX_PAGES {
+            return None;
+        }
+        Some(Self {
+            bytes,
+            config: RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() },
+            sizes: pages.iter().map(|p| (p.width, p.height)).collect(),
+            linked: Arc::new(Linked::new(pages, Vec::new())),
+            whole: Some(Whole { path: path.to_owned(), password: password.map(str::to_owned) }),
+        })
+    }
+}
+
+/// The pages of the PDF in `bytes`, opened with `password`, measured as pdfcraft's `inspect` measures
+/// them: each its size as shown, its crop box and its turn, a page with no usable size as US Letter.
+/// `None` where hayro-syntax can't read the file.
+fn measured(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Option<Vec<PageInfo>> {
+    use hayro_syntax::page::Rotation;
+    let pdf = hayro_syntax::Pdf::new_with_password(bytes, password.unwrap_or("")).ok()?;
+    let pages = pdf.pages().iter().enumerate().map(|(i, page)| {
+        let (w, h) = page.render_dimensions();
+        let (w, h) = if w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 { (w, h) } else { (612.0, 792.0) };
+        let c = page.intersected_crop_box();
+        let rotation = match page.rotation() {
+            Rotation::None => 0,
+            Rotation::Horizontal => 90,
+            Rotation::Flipped => 180,
+            Rotation::FlippedHorizontal => 270,
+        };
+        PageInfo { width: w, height: h, label: (i + 1).to_string(), crop: [c.x0 as f32, c.y0 as f32, c.x1 as f32, c.y1 as f32], rotation }
+    });
+    Some(pages.collect())
 }
 
 impl Source for Pdf {
@@ -289,6 +357,16 @@ impl Source for Pdf {
     /// copy shown, with the password that opened it.
     fn links(&self) -> Option<Box<dyn Links>> {
         Some(Box::new(PageLinks::new(self.bytes.clone(), self.config.password.clone(), self.linked.clone())))
+    }
+
+    /// A tile's, the file opened whole; nothing else lays out again.
+    fn relayout(&self, _values: Values, _room: Room) -> Option<Job> {
+        let (whole, bytes) = (self.whole.clone()?, self.bytes.clone());
+        Some(Box::new(move || Pdf::open(&whole.path, bytes, whole.password.as_deref()).map(|pdf| Box::new(pdf) as Box<dyn Source + Send>)))
+    }
+
+    fn tile(&self) -> bool {
+        self.whole.is_some()
     }
 }
 
@@ -1051,6 +1129,25 @@ mod tests {
         let Some(Told::Page { page: answered, links: Ok(links), more: 0 }) = got.pop() else { panic!("no links for page {page}") };
         assert_eq!(answered, page);
         links
+    }
+
+    /// A list's tile is the file itself, its pages measured as the file opened whole measures them (a
+    /// page cropped and turned, one of 2-point units), and no link read; its relayout opens the file
+    /// whole. A file hayro-syntax can't read has no tile, and is opened whole, which says why.
+    #[test]
+    fn a_tile_measures_the_pages_as_the_whole_file_does_and_opens_it_whole() {
+        let bytes = Arc::new(fixtures::linked());
+        let whole = Pdf::open("links.pdf", bytes.clone(), None).unwrap();
+        let tile = Pdf::tile("links.pdf", bytes, None).unwrap();
+        assert!(tile.tile() && !whole.tile());
+        assert_eq!(tile.sizes, whole.sizes);
+        let crops = |pdf: &Pdf| pdf.linked.pages.iter().map(|page| (page.crop, page.rotation)).collect::<Vec<_>>();
+        assert_eq!(crops(&tile), crops(&whole));
+        assert!(tile.linked.links.is_empty() && !whole.linked.links.is_empty());
+        let room = Room { cols: 60, rows: 40, cell_w: 10.0, cell_h: 20.0, gap: 1, per_row: None };
+        let opened = tile.relayout(Values::default(), room).expect("a job")().unwrap();
+        assert!(!opened.tile() && opened.pages() == whole.pages() && opened.relayout(Values::default(), room).is_none());
+        assert!(Pdf::tile("broken.pdf", Arc::new(b"%PDF-1.7\nno more".to_vec()), None).is_none());
     }
 
     /// A PDF's links are its link annotations, each where it is active on its page as shown, in
