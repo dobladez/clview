@@ -104,3 +104,65 @@ surprises, and what a later reader would want.
   disagree`.
 - **Not in the spec's *Files:*:** `src/view/fit.rs` (`Zoom::parse` and its test go),
   `src/view/pager.rs` (a test's `OptionSpec`), `docs/architecture.md`, `CHANGELOG.md`.
+
+## Task 5: options from the config
+
+[ADR-0043](../adr/0043-a-config-in-toml-flat-keyed-by-the-names-of-the-catalogs.md) records the
+format, the layout, the names and the bindings with a number.
+
+- **`toml` without serde.** `toml::de::DeTable::parse` gives the place of every key and value
+  with the features `std` and `parse` alone. So clv's own `toml` has no serde, and no writer.
+  The three tests that read manifests use `toml::Table`, which needs serde: they ask for it in
+  `[dev-dependencies]`, the same crate with one more feature. `Cargo.lock` now holds `toml`
+  1.2.1 alone; 0.9.12, `toml_datetime` 0.7.5 and `winnow` 0.7.15 went.
+- **The order of the file comes from the places, not from a feature.** A `toml` table keeps its
+  keys by name. `Config::parse` sorts the entries by where each key is, so clv needs no
+  `preserve_order` and no `indexmap`.
+- **Values are checked when the config is read**, by `Entry::read`, so the error has its line.
+  `Parsed` then holds them as text, as the command line's, and the backends read them the same
+  way (`options.value("--font")`). The spec's "Errors from the config carry the file and the
+  line" is in `config::Wrong`, not in `Parsed`: `Parsed` only says which options go by the config
+  (`by_config`).
+- **A width from the config against a count typed.** The backend reads `--width` from the
+  options when it opens a file, so "the count wins" means that the file is opened without the
+  config's width. `view` does that for a file shown alone (`Opener::alone`,
+  `Parsed::without_config`), and starts the setting at its default if the file is a document. A
+  list's files, a file gone into from a list and a file with `--pages` are opened with all the
+  options: there the count is the tiles' or the zoom's, and the two do not disagree.
+- **`--per-row auto` typed disagrees with nothing**, as today: the config's width holds.
+- **The file is checked before it is opened, and again after.** To open a pipe that nothing
+  writes to waits for ever, so `load` asks `metadata` first. It asks again of the file it opened,
+  and reads at most 1 MiB and one byte, because a file can change in between.
+- **A message names the file from the reader's home** (`~/.config/clv/config.toml:3: …`), as the
+  spec's example has it. A file elsewhere is named by its path.
+- **`--config` with `--no-config` is refused**, as `--pager` with `--no-pager` is. The spec does
+  not say; to pick one silently would hide a mistake.
+- **A config can't set `config` or `no-config`** ("it says which config to read"). The spec's
+  list has `pages`, `password` and `zoom`; these two follow from what they are.
+- **`width = 0x48` is 72.** An integer is read in its base and given on in base ten. `width =
+  72.5`, `true`, an array and a table are refused with what was written, cut at 40 characters.
+- **`[keys]` is an unknown option until task 6.**
+- **The test of the width is in `tests/it/wordcraft.rs`** (`config_width_…`), not `view.rs`: it
+  needs a Markdown file and the helpers that measure its pages. `cargo test --test it config_`
+  runs it with the others.
+- **`tests/it/bin.rs` gets `config_home()`**, a directory with a config for a test to point
+  `XDG_CONFIG_HOME` at.
+- **The property test is one test.** A first version had a second property over any text at
+  all. With a slicing bug put in, that one still passed: random text is almost never TOML. So it
+  went, and the one that is left adds any text to a few of its cases only.
+- **Seen failing**, each with its piece of the change taken out:
+  - no option taken from the config: `config_sets_an_option_…` (36 columns, not 25)
+  - the rule for `pager` and `no-pager`: `config_pager_…` (`give --pager or --no-pager, not both`)
+  - the count typed winning over the config's width, and the warning kept for both typed:
+    `config_width_…`, on "the count typed" and on "nothing is said"
+  - the line of an error: `config_that_is_wrong_…` (`:1:` for `:3:`)
+  - the sort by place, the refusal of `pages`, the size, `XDG_CONFIG_HOME` not absolute: the four
+    unit tests of `config.rs`
+  - a slice by bytes for the one by characters: `no_text_of_a_config_panics`
+  - the count of typed options: `an_option_on_the_command_line_wins_…`
+- **The helper of task 1, seen failing.** With `per-row = 3` in `.config/clv/config.toml` of a
+  home made for it, and the helper setting nothing, three tests of `tests/it/view.rs` fail
+  (`an_image_is_one_page_…`, `several_files_are_a_list_…`, `config_sets_an_option_…`). With the
+  helper, the 34 pass under the same home.
+- **Not in the spec's *Files:*:** `Cargo.lock`, `tests/it/bin.rs`, `tests/it/wordcraft.rs`,
+  `CONTRIBUTING.md` (its Tests), `docs/adr/README.md`.

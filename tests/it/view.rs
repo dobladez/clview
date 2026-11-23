@@ -158,6 +158,135 @@ fn zoom_width_is_wider_than_a_page_to_a_row() {
     assert!(png_size(&third[0].png).0 < png_size(&page[0].png).0);
 }
 
+/// `clv` on `pdf` with `args`, its config the file `text` in a directory of `test`'s own, and no home
+/// to read another from: what it wrote, and what it said.
+fn configured(test: &str, text: &str, pdf: &Path, args: &[&str]) -> Output {
+    let home = crate::bin::config_home(test, text);
+    view_with(pdf, args, &[("XDG_CONFIG_HOME", home.to_str().unwrap()), ("HOME", "/nonexistent")])
+}
+
+/// The config sets an option, when clv prints too: `per-row` there is `--per-row`. The same option
+/// on the command line wins, `--no-config` reads no config, and `--config` reads another file.
+/// Without `XDG_CONFIG_HOME`, the config is under `.config` in the home.
+#[test]
+fn config_sets_an_option_and_the_command_line_wins() {
+    let pdf = fixture("config-option", 6);
+    let cols = |out: &Output| {
+        assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+        key(&images(&out.stdout)[0].keys, "c")
+    };
+    let typed = |args: &[&str]| cols(&view(&pdf, &[&["--protocol", "kitty"], args].concat()));
+    let (auto, three, two) = (typed(&[]), typed(&["--per-row", "3"]), typed(&["--per-row", "2"]));
+    assert!(three < two && three < auto, "{three} {two} {auto}");
+    let config = |text: &str, args: &[&str]| cols(&configured("option", text, &pdf, &[&["--protocol", "kitty"], args].concat()));
+    assert_eq!(config("# Mine.\nper-row = 3\n", &[]), three, "the config's");
+    assert_eq!(config("per-row = \"3\"\n", &[]), three, "a number as a string");
+    assert_eq!(config("per-row = 3\n", &["--per-row", "2"]), two, "the command line wins");
+    assert_eq!(config("per-row = 3\n", &["--no-config"]), auto, "no config read");
+    assert_eq!(config("", &[]), auto, "an empty config sets nothing");
+    // What it prints with is the config's too.
+    let out = configured("option", "protocol = \"kitty\"\nper-row = 3\n", &pdf, &[]);
+    assert_eq!(cols(&out), three);
+    // Another file, in place of the reader's own.
+    let other = tmp("config-option", "other.toml");
+    std::fs::write(&other, "per-row = 2\n").unwrap();
+    assert_eq!(config("per-row = 3\n", &["--config", other.to_str().unwrap()]), two);
+    // The reader's own, where `XDG_CONFIG_HOME` holds no absolute path: under `.config` in the home.
+    let home = tmp("config-option", "home");
+    std::fs::create_dir_all(home.join(".config/clv")).unwrap();
+    std::fs::write(home.join(".config/clv/config.toml"), "per-row = 3\n").unwrap();
+    for xdg in ["", "relative/config"] {
+        let out = view_with(&pdf, &["--protocol", "kitty"], &[("XDG_CONFIG_HOME", xdg), ("HOME", home.to_str().unwrap())]);
+        assert_eq!(cols(&out), three, "{xdg:?}");
+    }
+    // A flag set there holds, and one set to false is not given.
+    let dir = tmp("config-option", "dir");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("A", 1)).unwrap();
+    std::fs::write(dir.join("sub/b.pdf"), crate::fixtures::letter("B", 1)).unwrap();
+    let listed = |text: &str| names(&configured("option", text, &dir, &["--protocol", "kitty", "--no-pager"]).stdout).join(" ");
+    assert!(listed("recurse = false\n").contains("sub/") && !listed("recurse = false\n").contains("b.pdf"));
+    assert!(listed("recurse = true\n").contains("sub/b.pdf"), "{}", listed("recurse = true\n"));
+}
+
+/// `pager` and `no-pager` are one option for the command line to win over: either typed wins over
+/// both in the config. A config that sets both is refused.
+#[test]
+fn config_pager_and_no_pager_are_one_option_for_the_command_line() {
+    let pdf = fixture("config-pager", 2);
+    let needs = "clv: --pager needs a terminal to read keys from\n";
+    let always = configured("pager", "pager = true\n", &pdf, &["--protocol", "kitty"]);
+    assert!(!always.status.success() && text(&always.stderr) == needs, "{}", text(&always.stderr));
+    let typed = configured("pager", "pager = true\n", &pdf, &["--protocol", "kitty", "--no-pager"]);
+    assert!(typed.status.success() && typed.stderr.is_empty() && images(&typed.stdout).len() == 2, "{}", text(&typed.stderr));
+    let other = configured("pager", "no-pager = true\n", &pdf, &["--protocol", "kitty", "--pager"]);
+    assert!(!other.status.success() && text(&other.stderr) == needs, "{}", text(&other.stderr));
+    let both = configured("pager", "pager = true\nrecurse = true\nno-pager = true\n", &pdf, &["--protocol", "kitty"]);
+    assert!(!both.status.success() && both.stdout.is_empty());
+    assert!(text(&both.stderr).ends_with("config.toml:3: pager and no-pager are both true: set one of them\n"), "{}", text(&both.stderr));
+    // One of them false is one of them not given.
+    let one = configured("pager", "pager = false\nno-pager = true\n", &pdf, &["--protocol", "kitty"]);
+    assert!(one.status.success() && one.stderr.is_empty(), "{}", text(&one.stderr));
+}
+
+/// A config that is wrong stops clv before it shows anything, and the message names the file, the
+/// line and the problem; text from the file is made safe for the terminal. A missing file is an
+/// error only when it was asked for by name.
+#[test]
+fn config_that_is_wrong_stops_clv_and_names_the_file_and_the_line() {
+    let pdf = fixture("config-wrong", 1);
+    let file = crate::bin::config_home("wrong", "").join("clv/config.toml");
+    for (written, said) in [
+        ("theme = \"dark\"\n\nwidth = 300\n", ":3: width: expected window or 20–200, got 300"),
+        ("per-row = 9\n", ":1: per-row: expected auto, width or 1–8, got 9"),
+        ("recurse = \"yes\"\n", ":1: recurse: expected true or false, got \"yes\""),
+        ("# One.\nfrobnicate = 1\n", ":2: unknown option frobnicate"),
+        ("pages = \"1\"\n", ":1: pages: a config can't set it: it belongs to one run"),
+        ("password = \"x\"\n", ":1: password: a config can't set it: a password does not belong in a plain file"),
+        ("config = \"x.toml\"\n", ":1: config: a config can't set it: it says which config to read"),
+        ("zoom = 2\n", ":1: zoom is now per-row: write per-row"),
+        ("theme = \"\\u001b]52;c;eA==\\u0007\"\n", ":1: theme: expected auto, light or dark, got \u{fffd}]52;c;eA==\u{fffd}"),
+        ("\"na\\u001bme\" = 1\n", ":1: unknown option na\u{fffd}me"),
+    ] {
+        let out = configured("wrong", written, &pdf, &["--protocol", "kitty"]);
+        assert!(!out.status.success() && out.stdout.is_empty(), "{written:?}");
+        assert_eq!(text(&out.stderr), format!("clv: {}{said}\n", file.display()), "{written:?}");
+    }
+    // What is no TOML says its line too.
+    let out = configured("wrong", "theme = \"dark\"\nwidth = \n", &pdf, &["--protocol", "kitty"]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert!(text(&out.stderr).starts_with(&format!("clv: {}:2: ", file.display())), "{}", text(&out.stderr));
+    // Named from the reader's home, as the reader writes it.
+    let home = tmp("config-wrong", "home");
+    std::fs::create_dir_all(home.join(".config/clv")).unwrap();
+    std::fs::write(home.join(".config/clv/config.toml"), "theme = \"dark\"\n\nwidth = 300\n").unwrap();
+    let out = view_with(&pdf, &["--protocol", "kitty"], &[("XDG_CONFIG_HOME", ""), ("HOME", home.to_str().unwrap())]);
+    assert_eq!(text(&out.stderr), "clv: ~/.config/clv/config.toml:3: width: expected window or 20–200, got 300\n");
+    // `--no-config` reads none, wrong or not.
+    let out = configured("wrong", "width = 300\n", &pdf, &["--protocol", "kitty", "--no-config"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    // A file asked for by name must be there, and be a file within the size clv reads.
+    let dir = tmp("config-wrong", "dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    let large = tmp("config-wrong", "large.toml");
+    std::fs::write(&large, vec![b'\n'; (1 << 20) + 1]).unwrap();
+    let missing = tmp("config-wrong", "missing.toml");
+    for (path, why) in [(&missing, "no such file"), (&dir, "not a regular file"), (&large, "larger than 1 MiB, the most of a config that clv reads")]
+    {
+        let out = configured("wrong", "", &pdf, &["--protocol", "kitty", "--config", path.to_str().unwrap()]);
+        assert!(!out.status.success() && out.stdout.is_empty(), "{why}");
+        assert_eq!(text(&out.stderr), format!("clv: {}: {why}\n", path.display()));
+    }
+    let out = configured("wrong", "", &pdf, &["--protocol", "kitty", "--config", missing.to_str().unwrap(), "--no-config"]);
+    assert_eq!(text(&out.stderr), "clv: give --config or --no-config, not both\n");
+    // A worker process reads no config: it answers as it does without one.
+    let home = crate::bin::config_home("wrong", "width = 300\n");
+    let worker = crate::bin::clv().args(["--worker", "none"]).env("XDG_CONFIG_HOME", &home).stdin(Stdio::null()).output().unwrap();
+    assert!(!text(&worker.stderr).contains("config.toml"), "{}", text(&worker.stderr));
+    let version = crate::bin::clv().arg("--version").env("XDG_CONFIG_HOME", &home).output().unwrap();
+    assert!(version.status.success() && version.stderr.is_empty());
+}
+
 #[test]
 fn without_a_terminal_auto_points_to_the_protocol_option() {
     let pdf = fixture("auto", 1);

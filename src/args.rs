@@ -19,7 +19,6 @@ pub(crate) struct OptionSpec {
     pub(crate) help: &'static str,
     pub(crate) alias: Option<&'static str>,
     pub(crate) shape: Shape,
-    #[cfg_attr(not(test), expect(dead_code, reason = "read once clv reads a config: Spec-0015's next task"))]
     pub(crate) config: Settable,
 }
 
@@ -62,6 +61,11 @@ impl OptionSpec {
             Some(value) => format!("{name} {value}"),
             None => name,
         }
+    }
+
+    /// Its name in a config: its name without the dashes, `per-row`.
+    pub(crate) fn key(&self) -> &'static str {
+        self.name.trim_start_matches('-')
     }
 }
 
@@ -186,6 +190,12 @@ impl Catalog {
         &self.0
     }
 
+    /// Each option once, as the first to declare it does.
+    pub(crate) fn options(&self) -> impl Iterator<Item = &Entry> {
+        let first = |(at, entry): &(usize, &Entry)| !self.0.iter().take(*at).any(|before| before.spec.name == entry.spec.name);
+        self.0.iter().enumerate().filter(first).map(|(_, entry)| entry)
+    }
+
     /// The option called `name`, as the first to declare it does.
     pub(crate) fn entry(&self, name: &str) -> Option<&Entry> {
         self.0.iter().find(|entry| entry.spec.name == name)
@@ -197,15 +207,20 @@ impl Catalog {
     }
 }
 
-/// A command line read against the options it may hold, before any file is read.
-#[derive(Debug, Default)]
+/// A command line read against the options it may hold, before any file is read, and then the
+/// options a config sets ([`Parsed::configure`]): the command line's come first, so an option on
+/// the command line wins over the same option in the config.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Parsed<'a> {
     /// The arguments that are neither an option nor an option's value, in order.
     pub(crate) operands: Vec<&'a str>,
-    /// Each option given, in order, with its value if it takes one.
+    /// Each option given, in order, with its value if it takes one: the command line's, then a
+    /// config's.
     given: Vec<(&'static str, Option<&'a str>)>,
     /// The options given by their alias, by their name: `--zoom` for `--per-row`.
     aliased: Vec<&'static str>,
+    /// How many of `given` the command line gave: the first ones. The rest are a config's.
+    typed: usize,
 }
 
 impl<'a> Parsed<'a> {
@@ -239,7 +254,26 @@ impl<'a> Parsed<'a> {
             }
             parsed.given.push((spec.name, value));
         }
+        parsed.typed = parsed.given.len();
         Ok(parsed)
+    }
+
+    /// Option `name` as a config sets it, with its value if it takes one: after the command line's,
+    /// so the first value given still wins.
+    pub(crate) fn configure(&mut self, name: &'static str, value: Option<&'a str>) {
+        self.given.push((name, value));
+    }
+
+    /// Whether option `name` goes by a config: it is given, and not on the command line.
+    pub(crate) fn by_config(&self, name: &str) -> bool {
+        self.given.iter().position(|(given, _)| *given == name).is_some_and(|at| at >= self.typed)
+    }
+
+    /// These options, without what a config says of option `name`: as the reader typed it, or not
+    /// given.
+    pub(crate) fn without_config(&self, name: &str) -> Self {
+        let kept = |(at, (given, _)): &(usize, &(&'static str, Option<&'a str>))| *at < self.typed || *given != name;
+        Self { given: self.given.iter().enumerate().filter(kept).map(|(_, given)| *given).collect(), ..self.clone() }
     }
 
     /// How option `name` was given, the first time: by its name, or by its alias (`--zoom`).
@@ -283,7 +317,8 @@ pub(crate) struct OwnedOptions(Vec<(&'static str, Option<String>)>);
 impl OwnedOptions {
     /// As they were read, without the files.
     pub(crate) fn parsed(&self) -> Parsed<'_> {
-        Parsed { operands: Vec::new(), given: self.0.iter().map(|(name, value)| (*name, value.as_deref())).collect(), aliased: Vec::new() }
+        let given: Vec<_> = self.0.iter().map(|(name, value)| (*name, value.as_deref())).collect();
+        Parsed { operands: Vec::new(), typed: given.len(), given, aliased: Vec::new() }
     }
 }
 
@@ -459,6 +494,32 @@ mod tests {
         assert_eq!(parsed.operands, ["dir", "-"], "`-` alone is no option");
         assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &catalog).unwrap_err(), "unknown option -x");
         assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &catalog).unwrap().value("--password"), Some("-r"));
+    }
+
+    /// A config's options come after the command line's: the command line wins, and what goes by
+    /// the config is known, and can be left out.
+    #[test]
+    fn an_option_on_the_command_line_wins_over_the_same_option_in_a_config() {
+        let specs = [option("--width", Some("N"), Shape::Text), option("--per-row", Some("N"), Shape::Text), option("--recurse", None, Shape::Flag)];
+        let catalog = Catalog::of(&specs);
+        let given: Vec<String> = ["a.md", "--per-row", "2"].iter().map(|s| (*s).to_string()).collect();
+        let mut parsed = Parsed::parse(&given, &catalog).unwrap();
+        assert!(!parsed.by_config("--per-row") && !parsed.by_config("--width"), "not given is not from a config");
+        parsed.configure("--per-row", Some("3"));
+        parsed.configure("--width", Some("72"));
+        parsed.configure("--recurse", None);
+        assert_eq!((parsed.value("--per-row"), parsed.value("--width"), parsed.has("--recurse")), (Some("2"), Some("72"), true));
+        assert_eq!(["--per-row", "--width", "--recurse"].map(|name| parsed.by_config(name)), [false, true, true]);
+        assert_eq!(parsed.names().collect::<Vec<_>>(), ["--per-row", "--per-row", "--width", "--recurse"]);
+        // Without the config's width, and the command line's count kept whatever is asked.
+        let without = parsed.without_config("--width").without_config("--per-row");
+        assert_eq!((without.value("--width"), without.value("--per-row"), without.has("--recurse")), (None, Some("2"), true));
+        assert_eq!(without.operands, ["a.md"]);
+        // On a thread that opens files, they are all options alike.
+        let owned = parsed.owned();
+        assert_eq!((owned.parsed().value("--per-row"), owned.parsed().value("--width")), (Some("2"), Some("72")));
+        assert_eq!(specs.map(|spec| spec.key()), ["width", "per-row", "recurse"]);
+        assert_eq!(Catalog::of(&[specs[0], specs[1], specs[0]]).options().map(|entry| entry.spec.name).collect::<Vec<_>>(), ["--width", "--per-row"]);
     }
 
     /// An option is taken by its alias too, as itself, the alias remembered to warn of; given by both,

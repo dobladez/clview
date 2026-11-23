@@ -786,6 +786,43 @@ fn per_row_lays_markdown_and_html_out_in_columns() {
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
 }
 
+/// A width and a count to a row, where one or both come from the config: the one on the command
+/// line wins, and nothing is said. Both in the config, the width wins on a document, and the count
+/// holds for the other files. Only both typed are warned of.
+#[test]
+fn config_width_against_per_row_the_one_typed_wins_and_nothing_is_said() {
+    let at_40 = default_page(Some(40.0));
+    let path = write(tmp("word-config-width", "long.md"), varied(200).as_bytes());
+    let pdf = write(tmp("word-config-width", "a.pdf"), &crate::fixtures::letter("One", 6));
+    let sizes = |file: &Path, config: &str, args: &[&str]| {
+        let home = crate::bin::config_home("word-width", config);
+        let env = [("XDG_CONFIG_HOME", home.to_str().unwrap())];
+        let out = crate::view::view_with(file, &[&["--protocol", "kitty"], args].concat(), &env);
+        assert!(out.status.success(), "{config:?} {args:?}: {}", text(&out.stderr));
+        assert_eq!(text(&out.stderr), "", "{config:?} {args:?}: nothing is said");
+        images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>()
+    };
+    let (alone, columns, narrow) = (drawn(&path, &[]), drawn(&path, &["--per-row", "2"]), drawn(&path, &["--width", "40"]));
+    assert!(shaped(&narrow, at_40.w, at_40.h) && columns != narrow && columns != alone && narrow != alone);
+    // Both in the config: the width, on the document.
+    assert_eq!(sizes(&path, "width = 40\nper-row = 2\n", &[]), narrow);
+    // And the count for a file that has no width: a PDF, three to a row.
+    assert_eq!(sizes(&pdf, "width = 40\nper-row = 3\n", &[]), drawn(&pdf, &["--per-row", "3"]));
+    assert_ne!(drawn(&pdf, &["--per-row", "3"]), drawn(&pdf, &[]));
+    // One typed: it wins, whichever it is.
+    assert_eq!(sizes(&path, "width = 40\n", &["--per-row", "2"]), columns, "the count typed");
+    assert_eq!(sizes(&path, "per-row = 2\n", &["--width", "40"]), narrow, "the width typed");
+    // A count of `auto` typed disagrees with nothing: the config's width holds.
+    assert_eq!(sizes(&path, "width = 40\n", &["--per-row", "auto"]), narrow);
+    // Each alone in the config is as each typed.
+    assert_eq!((sizes(&path, "width = 40\n", &[]), sizes(&path, "per-row = 2\n", &[])), (narrow.clone(), columns));
+    // Both typed are still warned of, config or not.
+    let home = crate::bin::config_home("word-width", "per-row = 2\n");
+    let out =
+        crate::view::view_with(&path, &["--protocol", "kitty", "--width", "40", "--per-row", "3"], &[("XDG_CONFIG_HOME", home.to_str().unwrap())]);
+    assert_eq!(text(&out.stderr), "warning: --width and --per-row disagree on long.md: the width wins\n");
+}
+
 /// A protected Word document opens with its password, says it needs one without, and refuses a
 /// wrong one.
 #[test]

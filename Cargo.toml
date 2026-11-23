@@ -118,6 +118,11 @@ gridcraft-engine = { git = "https://github.com/storytold/gridcraft", rev = "1d0b
 serde_json = { version = "1", optional = true }
 base64 = "0.23"
 png = "0.18"
+# The reader's config, `~/.config/clv/config.toml`: TOML, parsed in Rust with the place of every key
+# and value, so that an error names its line (`view/config.rs`, ADR-0043). Its parser alone: not
+# serde, which it needs only to fill a struct, nor its writer. Stylo's build already builds this
+# version, so `Cargo.lock` holds one.
+toml = { version = "1", default-features = false, features = ["std", "parse"] }
 
 [features]
 default = ["pdf", "image", "svg", "svg-html", "mermaid", "zip", "tar", "word", "sheet", "epub", "org"]
@@ -200,7 +205,9 @@ wordcraft-docx = { git = "https://github.com/storytold/wordcraft", rev = "bbe354
 gridcraft-xlsx = { git = "https://github.com/storytold/gridcraft", rev = "1d0b311b4a943e19c86f1bfaf85927c3116ea92a", features = ["test-support"] }
 proptest = "1"
 serde_json = "1"
-toml = "0.9"
+# The manifests the pins' tests read (tests/it/pdfcraft_pin.rs, wordcraft.rs, gridcraft.rs), as
+# tables: serde, which clv itself builds toml without.
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 
 # The renderer's patched hayro, lopdf, vello_common and vello_cpu, from pdfcraft's `vendor/` at the
 # same commit. pdfcraft applies them with its own [patch.crates-io], which Cargo honours only in the

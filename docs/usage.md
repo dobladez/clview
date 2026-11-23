@@ -35,7 +35,7 @@ clv --password PW secret.pdf
 | `-r`, `--recurse` | in a directory, its subdirectories' files as tiles of their own, not folders |
 | `--per-row auto` | two pages side by side when the window is wide enough, otherwise one (the default) |
 | `--per-row width` | one page as wide as the window; a tall page runs past the bottom |
-| `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row. A Markdown or HTML file is laid out in that many columns ([Documents](#a-page-the-windows-size)); a `--width` of a number wins over it there, with a warning |
+| `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row. A Markdown or HTML file is laid out in that many columns ([Documents](#a-page-the-windows-size)); a `--width` of a number wins over it there, with a warning ([The config file](#the-config-file) says what happens when the config sets one of the two) |
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
@@ -54,6 +54,8 @@ clv --password PW secret.pdf
 | `--protocol kitty` | skip the check and send the escape codes anyway, even to a file or a pipe |
 | `--protocol blocks` | [text cells](#text-cells) of half-blocks and colours, even where images would show |
 | `--protocol ascii` | [text cells](#text-cells) of ASCII characters |
+| `--config FILE` | read this file as the config, not your own ([The config file](#the-config-file)). The file must be there |
+| `--no-config` | read no config. Not with `--config` |
 
 Printed without the pager, pages follow the zoom too, a row of them under another: `--per-row 3`
 prints three to a row, `--per-row width` one to a row as wide as the window, and `auto` two to a row
@@ -73,6 +75,71 @@ In kitty and Ghostty, [inside tmux](#inside-tmux) too, clv's icon sits to the ri
 first lines, smaller or not at all when the window is narrow. Everywhere else, and through a pipe
 or into a file, the help is the same text without it. `clv` asks the terminal nothing for it, so a
 terminal the environment doesn't name gets no icon, WezTerm among them, though it shows pages.
+
+## The config file
+
+clv reads a config file when it starts. The file sets options, so that you do not type them each
+time. clv reads the file when it prints pages, too.
+
+```toml
+per-row = "width"
+theme = "dark"
+width = 72
+recurse = true
+```
+
+**Where it is.** clv reads `$XDG_CONFIG_HOME/clv/config.toml` when that variable holds an absolute
+path. Otherwise clv reads `~/.config/clv/config.toml`, on macOS too. When the file is not there,
+clv says nothing and uses its defaults. `--config FILE` reads another file, and `--no-config` reads
+none. clv never writes the file.
+
+**What it holds.** The file is [TOML](https://toml.io). An option goes at the top level, under its
+name without the dashes: `--per-row` is `per-row`. The value has one of these forms:
+
+- A number is a TOML integer or a string: `width = 72`, `width = "72"`.
+- A named value is a string: `theme = "dark"`, `width = "window"`.
+- A flag is a boolean: `recurse = true`. A flag set to `false` is a flag that is not given.
+
+A config may set `per-row`, `compression`, `protocol`, `recurse`, `pager`, `no-pager`, and the
+options that `--help` lists under a kind of file: `theme`, `width`, `font`, `margin` and `fences`.
+A config may not set these:
+
+| Option | Why not |
+|---|---|
+| `pages` | it belongs to one run |
+| `password` | a password does not belong in a plain file |
+| `config`, `no-config` | they say which config to read |
+| `zoom` | it is the old name of `per-row`: write `per-row` |
+
+**The command line wins.** An option on the command line wins over the same option in the config.
+`--pager` and `--no-pager` are one option for this: `--no-pager` wins over `pager = true`. clv
+refuses a config that sets both to `true`. A flag that has no opposite stays on: with
+`recurse = true` in the config, only `--no-config` turns it off.
+
+**A width and a count to a row.** `width` and `per-row` both say how wide a page is, and they
+disagree on a document that clv lays out for the window
+([A page the window's size](#a-page-the-windows-size)). These rules hold there:
+
+- Both on the command line: the width wins, with a warning.
+- One on the command line and the other in the config: the one on the command line wins. clv
+  gives no warning.
+- Both in the config: the width wins on such a document, and `per-row` holds for the other files.
+  clv gives no warning. So a config can set the width for documents and `per-row` for PDFs.
+
+**When the config is wrong.** clv stops before it shows anything. The message names the file, the
+line and the problem:
+
+```
+clv: ~/.config/clv/config.toml:3: width: expected window or 20–200, got 300
+```
+
+These are errors: text that is not TOML, a name that clv does not know, an option that a config
+may not set, and a value that the option does not take. The message for a value is the same as
+the command line gives. clv refuses a config that is larger than 1 MiB, one that is not a regular
+file, and one that it cannot read. `--config FILE` with no such file is an error too.
+
+A config written for a full build can stop a `clv` built without some backends: `width` is a name
+that a build with images alone does not know.
 
 ## Keys
 
@@ -975,7 +1042,8 @@ the font size's most is the largest at which a column holds 20 characters a line
 of your own are both about how wide a page is, so the last you set wins: `3.` puts the width back to
 `window`, and `72]`, `[` or `]` put the count back to `auto` first, stepping from where `window` sits
 there; `0.` and `0]` change only their own. On the command line, `--width 72` and `--per-row 3` on such
-a file disagree, and the width wins, with a warning. A layout that fails puts both back to what is on
+a file disagree, and the width wins, with a warning; with one of the two in
+[the config](#the-config-file), the one on the command line wins. A layout that fails puts both back to what is on
 screen. In a list and with `--pages`, `,` and `.` are the zoom, as on a PDF; printed, `--per-row 3`
 lays the file out in three columns of the terminal's room.
 

@@ -241,9 +241,19 @@ CodeQL's default setup scans the Rust and the workflows.
 - **`tests/it/`** is one test binary, its modules sharing the fixtures. Its tests show PDFs, so it
   needs the `pdf` feature. The generic tests write their PDFs by hand (`tests/it/fixtures.rs`), so
   any PDF backend reads them.
+- **No test reads your own config.** Every test that runs `clv` runs it through
+  `tests/it/bin.rs`: `clv()`, or `script()` for a pseudo-terminal and the tmux servers. They set
+  `XDG_CONFIG_HOME` to an empty directory, and `tests/docs.rs` sets the same. Without that, a
+  `per-row = 3` of your own fails the tests. A test of the config sets the variable again, to a
+  directory that `config_home()` makes. Name the binary (`CARGO_BIN_EXE_clv`) nowhere else.
 - **`tests/it/view.rs`**: printing, through a pipe with `--protocol kitty`, and text cells, which a
   pipe takes as they are. A list's files opened as they are reached, too: at their true size, and a
-  broken one costing only its tile.
+  broken one costing only its tile. The config (`config_…`): an option that it sets, the command
+  line that wins, `--config` and `--no-config`, `pager` with `no-pager`, and a config that is
+  wrong, named with its file and its line. A width against a count to a row, with one or both
+  from the config, is `config_width_…` in `tests/it/wordcraft.rs`, which has the documents. What a
+  config's text gives is unit-tested in `src/view/config.rs`, with a property test that no text
+  of a config panics.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its
   stdin. It plays a terminal that takes temporary files (it reads each file named, checks its
   size, deletes it) or one that doesn't, and sends kitty's answers, its clipboard's too. It plays one

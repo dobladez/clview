@@ -44,3 +44,12 @@ pub(crate) fn script(line: &str) -> Command {
     own_config(&mut script);
     script
 }
+
+/// A directory to give `clv` as `XDG_CONFIG_HOME`, for a test of the config: it holds `text` as
+/// `clv/config.toml`. One for each `test`.
+pub(crate) fn config_home(test: &str, text: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("clview-config-{test}-{}", std::process::id()));
+    std::fs::create_dir_all(home.join("clv")).unwrap();
+    std::fs::write(home.join("clv/config.toml"), text).unwrap();
+    home
+}

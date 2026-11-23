@@ -54,6 +54,7 @@ Use [`template.md`](template.md) as the starting point.
 | 0040 | [Org-mode documents parsed by orgize, in a worker process, into the backend that opens HTML](0040-org-mode-through-orgize-in-a-worker-process.md) | Accepted |
 | 0041 | [A book's tile is its first page alone, and the book is opened whole when gone into](0041-a-books-tile-is-its-first-page-alone.md) | Accepted |
 | 0042 | [A PDF's tile is the file itself, its pages measured by hayro-syntax](0042-a-pdfs-tile-is-the-file-itself-measured-by-hayro.md) | Accepted |
+| 0043 | [A config in TOML, flat, keyed by the names of the catalogs](0043-a-config-in-toml-flat-keyed-by-the-names-of-the-catalogs.md) | Accepted |
 
 ## When to write one
 

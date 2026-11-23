@@ -5,6 +5,7 @@
 mod cells;
 mod clip;
 mod commands;
+mod config;
 mod detect;
 mod files;
 mod fit;
@@ -83,7 +84,20 @@ const OPTIONS: &[OptionSpec] = &[
         shape: Shape::Value { named: &[AUTO, "kitty", "blocks", "ascii"], numbers: None },
         config: Settable::Yes,
     },
+    OptionSpec {
+        name: CONFIG,
+        short: None,
+        value: Some("FILE"),
+        help: "read this config, not $XDG_CONFIG_HOME/clv/config.toml or ~/.config/clv/config.toml",
+        alias: None,
+        shape: Shape::Text,
+        config: Settable::No(WHICH_CONFIG),
+    },
+    OptionSpec { config: Settable::No(WHICH_CONFIG), ..flag(NO_CONFIG, "read no config") },
 ];
+
+/// Why a config can't set the options that say which config clv reads.
+const WHICH_CONFIG: &str = "it says which config to read";
 
 /// A flag of the viewer's called `name`, which a config may set.
 const fn flag(name: &'static str, help: &'static str) -> OptionSpec {
@@ -95,6 +109,8 @@ const PAGER: &str = "--pager";
 const NO_PAGER: &str = "--no-pager";
 const COMPRESSION: &str = "--compression";
 const PROTOCOL: &str = "--protocol";
+const CONFIG: &str = "--config";
+const NO_CONFIG: &str = "--no-config";
 /// The value of `--per-row` for a page as wide as the window.
 const WIDTH: &str = "width";
 
@@ -482,6 +498,33 @@ pub(crate) fn wrong_options(backends: &[&dyn Backend]) -> Vec<String> {
     wrong
 }
 
+/// Which config the command line asks for: its own file, none, or the reader's own.
+fn which<'a>(options: &Parsed<'a>) -> Result<config::Which<'a>, String> {
+    match (options.value(CONFIG), options.has(NO_CONFIG)) {
+        (Some(_), true) => Err(format!("give {CONFIG} or {NO_CONFIG}, not both")),
+        (Some(file), false) => Ok(config::Which::File(file)),
+        (None, true) => Ok(config::Which::None),
+        (None, false) => Ok(config::Which::Own),
+    }
+}
+
+/// `options`, the command line's, and then those `config` sets: an option on the command line
+/// wins over the same option in the config. `--pager` and `--no-pager` are one option for this,
+/// so either on the command line wins over both in the config; a config that sets both is refused.
+fn configured<'a>(mut options: Parsed<'a>, config: &'a config::Config) -> Result<Parsed<'a>, String> {
+    let paging = |name: &str| name == PAGER || name == NO_PAGER;
+    if let [_, second, ..] = config.options.iter().filter(|set| paging(set.name)).collect::<Vec<_>>().as_slice() {
+        return Err(config.wrong(second.line, "pager and no-pager are both true: set one of them"));
+    }
+    let typed_paging = options.has(PAGER) || options.has(NO_PAGER);
+    for set in &config.options {
+        if !(paging(set.name) && typed_paging) {
+            options.configure(set.name, set.value.as_deref());
+        }
+    }
+    Ok(options)
+}
+
 /// The value option `name` was given, if it was, read against `catalog` by the one parser of
 /// values ([`crate::args::Entry::read`]). A value the option doesn't take is the error, which names
 /// the option as the reader gave it.
@@ -715,10 +758,14 @@ fn capitalized(text: &str) -> String {
 fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<(), CliError> {
     let settings = settings(backends);
     let catalog = catalog(backends);
-    let options = Parsed::parse(args, &catalog)?;
-    for &name in options.aliased() {
-        note(&format!("warning: {}", renamed(options.typed(name, &catalog), name)));
+    let typed = Parsed::parse(args, &catalog)?;
+    for &name in typed.aliased() {
+        note(&format!("warning: {}", renamed(typed.typed(name, &catalog), name)));
     }
+    // The config is read before anything is shown, when clv prints too: whatever is wrong with it
+    // stops clv here.
+    let config = config::Config::read(which(&typed)?, &catalog)?;
+    let options = configured(typed, &config)?;
     let paths = file_args(&options)?;
     let zoom = zoom_given(&options, &catalog)?;
     let named = |name| given(&options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
@@ -738,24 +785,43 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     // without a question: its cell from the pixels it reports, or tmux's, or the one assumed; where
     // the cell asked later makes another room, the pager lays the document out once more.
     let told = client.as_ref().and_then(|c| c.as_ref().ok()).and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    // A typed width and a count to a row disagree on a document laid out for its room: the width wins.
-    // With `--pages`, a document is laid out as it is opened and the count is the zoom alone.
-    let width =
-        starts.iter().find(|(setting, start)| setting.sets_width && options.has(setting.option.name) && matches!(start, Start::Is(Value::Number(_))));
+    // A width and a count to a row disagree on a document laid out for its room. Both typed, the width
+    // wins, with a warning. One typed and the other from the config, the typed one wins. Both from
+    // the config, the width wins there, and the count holds for the other files. With `--pages`, a
+    // document is laid out as it is opened and the count is the zoom alone.
+    let numbered = |(setting, start): &&(&'static Setting, Start)| {
+        setting.sets_width && options.has(setting.option.name) && matches!(start, Start::Is(Value::Number(_)))
+    };
+    let width = starts.iter().find(numbered).copied();
+    let counted = zoom != Zoom::Auto && !options.by_config(PER_ROW);
+    // The config's width, which a count typed wins over: a file alone is opened without it.
+    let yields = width.filter(|(setting, _)| options.by_config(setting.option.name) && counted && given.is_none());
+    let width = width.filter(|_| yields.is_none());
+    let alone_options = yields.map_or_else(|| options.clone(), |(setting, _)| options.without_config(setting.option.name));
     let per_row = columns(zoom).filter(|_| given.is_none() && width.is_none());
     let (first, preview) = first_rooms(tty.as_ref().and_then(Tty::size), told, protocol, inside_tmux, per_row);
-    let opener = Opener::new(backends, &options, first, preview);
+    let opener = Opener::new(backends, &options, &alone_options, first, preview);
     let Given { shown, left_out, warnings } = opener.open(paths, options.has("--recurse"))?;
     warn(&warnings, &left_out);
     // Said first, what was left out may be why there are fewer than asked for.
     let shown = shown.pick(given.as_deref())?;
     let alone = !shown.is_list() && !shown.pages.picked && reflows(&settings, &*shown.pages.source);
+    // Such a document, opened without the config's width, starts at the width it was laid out at.
+    let starts: Vec<(&'static Setting, Start)> = match yields {
+        Some((yielded, _)) if alone => {
+            starts.into_iter().map(|(s, start)| if s.name == yielded.name { (s, Start::Is(s.default)) } else { (s, start) }).collect()
+        }
+        _ => starts,
+    };
     let zoom = match (zoom, width) {
         _ if !alone => zoom,
         (Zoom::Auto, _) => zoom,
         (_, Some((setting, _))) => {
-            let per_row = options.typed(PER_ROW, &catalog);
-            note(&format!("warning: {} and {per_row} disagree on {}: the width wins", setting.option.name, shown.pages.name));
+            // Said only of what the reader typed: a config may set both, each for its files.
+            if !options.by_config(setting.option.name) && !options.by_config(PER_ROW) {
+                let per_row = options.typed(PER_ROW, &catalog);
+                note(&format!("warning: {} and {per_row} disagree on {}: the width wins", setting.option.name, shown.pages.name));
+            }
             Zoom::Auto
         }
         // A reflowed page is never wider than the window: the width is one to a row.
@@ -990,6 +1056,9 @@ fn file_args<'o, 'a>(options: &'o Parsed<'a>) -> Result<&'o [&'a str], String> {
 pub(super) struct Opener<'o, 'a> {
     backends: &'o [&'static dyn Backend],
     options: &'o Parsed<'a>,
+    /// The options a file shown alone is opened with: `options`, but for the width a config sets
+    /// where a count typed wins over it ([`view`]). A list's files are opened with them all.
+    alone: &'o Parsed<'a>,
     /// The options again, for the threads that open a list's files, and those threads.
     owned: Arc<OwnedOptions>,
     openers: Rc<Openers>,
@@ -1006,8 +1075,8 @@ struct Given {
 }
 
 impl<'o, 'a> Opener<'o, 'a> {
-    fn new(backends: &'o [&'static dyn Backend], options: &'o Parsed<'a>, room: Room, preview: Room) -> Self {
-        Self { backends, options, owned: Arc::new(options.owned()), openers: Rc::default(), room, preview }
+    fn new(backends: &'o [&'static dyn Backend], options: &'o Parsed<'a>, alone: &'o Parsed<'a>, room: Room, preview: Room) -> Self {
+        Self { backends, options, alone, owned: Arc::new(options.owned()), openers: Rc::default(), room, preview }
     }
 
     /// What `paths` show: one file's pages, or a list. A file alone that can't be shown is the
@@ -1196,7 +1265,8 @@ impl<'o, 'a> Opener<'o, 'a> {
             },
             None => input,
         };
-        let item = match backend.open_at(input, self.options, room)? {
+        let options = if defer { self.options } else { self.alone };
+        let item = match backend.open_at(input, options, room)? {
             Opened::Files(container) => Item::Container { name: format!("{name}/"), container },
             Opened::Pages(source) if source.pages() == 0 => return Err(format!("{path}: no pages to show")),
             Opened::Pages(source) => {
@@ -1970,7 +2040,7 @@ mod tests {
         let given = args(&[]);
         let options = parsed(&given);
         let backends: [&'static dyn Backend; 1] = [&LATER];
-        let opener = Opener::new(&backends, &options, ROOM, ROOM);
+        let opener = Opener::new(&backends, &options, &options, ROOM, ROOM);
         let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
         let is_later = |shown: &Shown| shown.items.iter().map(|item| matches!(item, Item::Later { .. })).collect::<Vec<_>>();
         let several = opener.open(&[a, b], false).unwrap();
@@ -2034,7 +2104,7 @@ mod tests {
         let (book, c) = (book.to_str().unwrap(), c.to_str().unwrap());
         let given = args(&[]);
         let options = parsed(&given);
-        let opener = Opener::new(&[&PDF, &ARCHIVE], &options, ROOM, ROOM);
+        let opener = Opener::new(&[&PDF, &ARCHIVE], &options, &options, ROOM, ROOM);
         let names = |paths: &[&str], recurse: bool| {
             let shown = opener.open(paths, recurse).map_err(|e| e.to_string()).unwrap().shown;
             shown.items.iter().map(|item| item.name().to_owned()).collect::<Vec<_>>()
@@ -2087,7 +2157,7 @@ mod tests {
         }
         let given = args(&[]);
         let options = parsed(&given);
-        let opener = Opener::new(&[&PDF], &options, ROOM, ROOM);
+        let opener = Opener::new(&[&PDF], &options, &options, ROOM, ROOM);
         for (quickest, opened) in [(vec![2, 0, 1], ["c.pdf", "a.pdf", "b.pdf"]), (vec![0, 0, 1], ["a.pdf", "b.pdf", "c.pdf"])] {
             let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: RefCell::default() });
             let mut found = Found::default();
@@ -2195,7 +2265,19 @@ mod tests {
         wrapped(&mut out, "Long:", &["x".repeat(HELP_WIDTH), "y".into()]);
         assert_eq!(out, format!("  Long: {},\n        y\n", "x".repeat(HELP_WIDTH)));
         let nothing = usage(&[]);
-        assert!(nothing.contains(" text cells\n\nThis build has no backends, so it shows nothing.\n\n") && !nothing.contains(SHOWN), "{nothing}");
+        let last = OPTIONS.last().map_or("", |option| option.help);
+        assert!(
+            nothing.contains(&format!(" {last}\n\nThis build has no backends, so it shows nothing.\n\n")) && !nothing.contains(SHOWN),
+            "{nothing}"
+        );
+        // The options that say which config clv reads, and where it reads one when neither is given.
+        assert!(
+            help.contains(
+                "\n  --config FILE                       read this config, not $XDG_CONFIG_HOME/clv/config.toml or ~/.config/clv/config.toml\n"
+            ),
+            "{help}"
+        );
+        assert!(help.contains("\n  --no-config                         read no config\n"), "{help}");
     }
 
     #[test]

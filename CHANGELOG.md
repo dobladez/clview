@@ -6,6 +6,14 @@ works today. A version's section becomes the notes of its
 
 ## Unreleased
 
+### Added
+
+- clv reads a config file when it starts: `$XDG_CONFIG_HOME/clv/config.toml`, or
+  `~/.config/clv/config.toml`, on macOS too. The file is TOML, and it sets options by their names
+  without the dashes: `per-row = "width"`, `theme = "dark"`, `width = 72`. An option on the command
+  line wins over the config. `--config FILE` reads another file, and `--no-config` reads none.
+  When the config is wrong, clv stops and names the file, the line and the problem.
+
 ### Changed
 
 - A list of ebooks shows its tiles sooner. For a book's tile, clv lays out only the first page,

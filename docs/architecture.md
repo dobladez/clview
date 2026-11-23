@@ -97,6 +97,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `cells.rs` | Rendered pixels into lines of text cells, for a terminal without the protocol ([Text cells](#text-cells-cellsrs)). Pure |
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
+| `config.rs` | The reader's config: which file, read within its size, its TOML turned into options by the names of the options catalog, and every error with its line ([The config](#the-config-configrs)). It writes nothing |
 | `commands.rs` | What the pager can do, by name (the catalog), and the keymaps that bind keys to it, for a file's pages and for a list; `?`'s lines and the status line's reminders, read from them ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)). Pure |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), which looks each key up and runs its command, rendering and sending ahead, what is kept in the terminal, redraws |
 | `search.rs` | A file's search (`/`): what is typed, the text read so far, folded, the matches in it and the one the reader is on ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). No IO of its own |
@@ -139,6 +140,48 @@ A value that the option does not take gets one form of message, `expected auto, 
 (`view::usage`): the viewer's entries, then each backend's under what that backend shows.
 `source::tests::every_option_says_what_its_value_is` holds every option of the build to a shape
 that the catalog can read (`view::wrong_options`).
+
+### The config (`config.rs`)
+
+`view` reads the config after the command line and before any file
+([ADR-0043](adr/0043-a-config-in-toml-flat-keyed-by-the-names-of-the-catalogs.md)). `--help`,
+`--version` and `--worker` never get there: `main` handles them first, so a worker process reads
+no config.
+
+- **Which file.** `view::which` reads `--config` and `--no-config` (`config::Which`). For the
+  reader's own file, `config::own` takes `XDG_CONFIG_HOME` when it holds an absolute path, and
+  `.config` in `HOME` otherwise.
+- **Reading it.** `config::load` refuses what is not a regular file before it opens it, since
+  to open a pipe that nothing writes to would wait for ever. It asks the size of the file it
+  opened, and reads at most `MAX_SIZE` (1 MiB) and one byte, because a file can grow. A file that
+  is not there is no config, unless `--config` named it.
+- **Parsing it.** `Config::parse` reads the text with `toml::de::DeTable`, which gives the place
+  of every key and value. A table of `toml` keeps its keys by name, so `parse` sorts them by
+  where each is: the options come out in the order of the file. `config::option` finds the entry
+  of the catalog whose name without the dashes is the key (`OptionSpec::key`). It refuses an
+  unknown name, an option that a config may not set (`Settable::No`, with why), and an old name
+  (`zoom`).
+- **A value.** `config::given` turns a TOML value into the text that the command line would
+  give: a string as it is, an integer in base ten. It then reads that text with `Entry::read`,
+  the parser of the command line, so the two give the same message for the same bad value. A
+  flag is a boolean, and `false` sets nothing.
+- **An error** is a `Wrong`: the line and why. `Config::read` puts the file before it, written
+  from the reader's home (`~/.config/clv/config.toml:3: …`). The message goes out through
+  `printable` like every other, in `view::run`.
+
+`view::configured` then adds what the config sets to the `Parsed` options, after the command
+line's (`Parsed::configure`): `Parsed::value` gives the first, so the command line wins, and
+`takes_all` stays one check. `--pager` and `--no-pager` are one option there: either on the
+command line keeps both of the config's out. `Parsed::by_config` says which options go by the
+config.
+
+`view` uses that for a width against a count to a row. Both typed, the width wins, with a
+warning. With one typed, the typed one wins, with none. The hard case is a width from the config
+against a count typed: the backend reads `--width` from the options when it opens a file, so
+`view` opens a file shown alone with the options less the config's width (`Parsed::without_config`,
+`Opener::alone`), and starts the setting at its default if that file is a document. A list's
+files are opened with all the options, and so is a file with `--pages`, where the count is the
+zoom alone.
 
 ## Sources (`src/source.rs`)
 
