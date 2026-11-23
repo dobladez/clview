@@ -377,3 +377,22 @@ top level. The owner also saw `q = "quit"` twice, once for each keymap, and read
   nothing put under `[keys]`, `the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys`;
   with the rule of the order off, `a_key_goes_under_keys_only_where_that_keeps_the_order_…` and
   the property test `the_keys_written_read_back_to_the_same_keymaps`.
+
+## The words of the template
+
+The owner found the top of the generated file confusing: it said that a line starting with `# `
+"sets something", of a line that is a comment. The lead wrote new words, and they are in as
+given: a line with `##` is an explanation, a line with one `#` is an example that shows the
+default, and to change a setting the reader removes the `# ` and edits the value.
+
+- **An empty line of explanation is `##` alone**, with no space after it, so no line of the file
+  ends with a space. The checks that tell the lines apart now take a line that starts with `##`.
+  The test that takes `# ` from the lines is as it was: `##` and `## …` do not start with `# `.
+- **Each sentence holds for what `--print-config` prints too**, where a line that something set
+  has no `#`: a line with one `#` there still shows the default, and still changes nothing.
+- **One line says less than the code does**, left as given: "`[keys]` binds a key in the pages
+  of a file and in a list". A command for one keymap alone, bound under `[keys]`, is bound in
+  that keymap alone. The manual says so.
+- **Seen failing on the old words:** `the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys`
+  and `generate_config_writes_the_template_once_and_print_config_prints_it`, both changed first
+  to ask for the new ones.

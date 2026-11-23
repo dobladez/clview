@@ -170,35 +170,42 @@ fn bindings(keys: &DeTable<'_>, mode: Option<Mode>, text: &str, catalog: &Catalo
     Ok(())
 }
 
-/// What a config's template starts with: how to read it.
+/// What a config's template starts with: how to read it. True of the config in effect as
+/// `--print-config` writes it too, where a line that something set has no `#`.
 const ABOUT: &str = "\
-The config of clv. clv reads it when it starts, and never writes over it.
-A line that starts with \"# \" sets something: take the \"# \" away to use it.
-A line that starts with \"## \" is help.
-As written, every line that sets something has its \"# \", so this file sets nothing.";
+The config of clv. clv reads this file when it starts, and never changes it.
+
+A line that starts with \"##\" is an explanation.
+A line that starts with one \"#\" is an example: it shows the default.
+To change a setting, remove the \"# \" from its line and edit the value.
+A line that keeps its \"#\" changes nothing.";
 
 /// What the template says before the options.
 const ABOUT_OPTIONS: &str = "Options. An option on the command line wins over the same option here.";
 
 /// What the template says before the keys.
 const ABOUT_KEYS: &str = "\
-Keys. A key is bound to a command by the name of the command, or to \"none\".
-The three lines in brackets start the tables of the keys: leave them as they are.
-[keys] binds a key in the pages of a file and in a list, where its command applies.
-[keys.pages] binds a key in the pages of a file alone, and [keys.list] in a list alone.
-A key that both bind alike is written once, under [keys].
-A key that you bind comes first among the keys of its command.
+Keys. Each line binds a key to a command: key = \"command\".
+Write \"none\" in place of the command to unbind the key.
+A key that you bind comes first among the keys of its command. The other keys stay.
 A punctuation key needs quotes: \"/\" = \"search\".
-Two bindings stay as they are, and a config cannot write them:
-ctrl-c always quits, and a number before enter goes to that page or tile.";
+
+The three lines in brackets start the tables of the keys. Leave them as they are.
+  [keys]        binds a key in the pages of a file and in a list
+  [keys.pages]  binds a key in the pages of a file only
+  [keys.list]   binds a key in a list only
+
+A config cannot change two bindings: ctrl-c always quits, and a number
+before enter goes to that page or tile.";
 
 /// The config in effect, as a config: the template that `--generate-config` writes, with what
 /// `options` give and what `keymaps` bind in place of the defaults. Made from the two catalogs of
 /// this build: every option that a config may set, under its help lines, and every key that a
 /// config can write, under what its command does.
 ///
-/// A line that sets something is `# name = value` when it is the default, and has no `# ` when
-/// the config or the command line set it. A line of help starts with `## `. The three lines that
+/// A line that sets something is `# name = value` when it is the default, an example for the
+/// reader to take the `# ` from and edit, and has no `# ` when the config or the command line set
+/// it. A line of explanation starts with `##`. The three lines that
 /// start the tables of the keys are as they are, since an empty table sets nothing. So with
 /// nothing set, the file sets nothing, and one `# ` taken away sets one thing.
 pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'static Setting], keymaps: &Keymaps) -> String {
@@ -233,10 +240,11 @@ pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'sta
     out
 }
 
-/// Into `out`, `text` as lines of help: each after `## `.
+/// Into `out`, `text` as lines of explanation: each after `## `, and an empty one as `##` alone,
+/// so that no line ends with a space.
 fn help(out: &mut String, text: &str) {
     for line in text.lines() {
-        out.push_str("## ");
+        out.push_str(if line.is_empty() { "##" } else { "## " });
         out.push_str(line);
         out.push('\n');
     }
@@ -728,8 +736,26 @@ mod tests {
         let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
         let template = written(&catalog, &Parsed::default(), &settings, &Keymaps::new(&settings));
         let headers = ["[keys]", "[keys.pages]", "[keys.list]"];
-        let sets_nothing = |line: &str| line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || headers.contains(&line);
+        let sets_nothing = |line: &str| line.is_empty() || line.starts_with("##") || line.starts_with("# ") || headers.contains(&line);
         assert!(template.lines().all(sets_nothing), "{template}");
+        // It starts by saying how to read it: an explanation after `##`, an example after one `#`.
+        let top = "## The config of clv. clv reads this file when it starts, and never changes it.\n##\n\
+                   ## A line that starts with \"##\" is an explanation.\n\
+                   ## A line that starts with one \"#\" is an example: it shows the default.\n\
+                   ## To change a setting, remove the \"# \" from its line and edit the value.\n\
+                   ## A line that keeps its \"#\" changes nothing.\n\n";
+        assert!(template.starts_with(top), "{template}");
+        // An explanation's empty line is `##` alone, and no line ends with a space.
+        assert!(template.lines().any(|line| line == "##") && !template.lines().any(|line| line.ends_with(' ')), "{template}");
+        let intro = "## Keys. Each line binds a key to a command: key = \"command\".\n\
+                    ## Write \"none\" in place of the command to unbind the key.\n";
+        let brackets = "##\n## The three lines in brackets start the tables of the keys. Leave them as they are.\n\
+                      ##   [keys]        binds a key in the pages of a file and in a list\n\
+                      ##   [keys.pages]  binds a key in the pages of a file only\n\
+                      ##   [keys.list]   binds a key in a list only\n##\n\
+                      ## A config cannot change two bindings: ctrl-c always quits, and a number\n\
+                      ## before enter goes to that page or tile.\n\n[keys]\n";
+        assert!(template.contains(intro) && template.contains(brackets), "{template}");
         let once = |line: &str| template.lines().filter(|other| *other == line).count() == 1;
         for line in ["# per-row = \"auto\"", "# recurse = false", "# theme = \"auto\"", "# width = \"window\"", "## Takes window or 20–200."] {
             assert!(once(line), "{line}\n{template}");
@@ -778,7 +804,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert!(keys(&both).iter().all(|key| !keys(&pages).contains(key) && !keys(&list).contains(key)), "{template}");
-        assert!(!template.contains("ctrl-c =") && template.contains("## ctrl-c always quits"), "{template}");
+        assert!(!template.contains("ctrl-c =") && template.contains("ctrl-c always quits"), "{template}");
         assert!(!template.contains("enter = \"go-to\""), "a number and Enter is no config's");
     }
 

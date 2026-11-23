@@ -189,7 +189,7 @@ no config.
 
 A line gets `# ` before it unless something set it: an option that is given (`Parsed::has`), a
 key bound otherwise than by default, and a key unbound (written `none` under the command that
-had it). Help is `## `. The three lines that start the tables are never commented out: an empty
+had it). An explanation is `## `, or `##` alone for an empty line of one. The three lines that start the tables are never commented out: an empty
 table sets nothing, and a reader who takes the `# ` from one key has bound it. With every table
 commented out, a key uncommented under one was read as an option of the top level. So with
 nothing given and the default keymaps, the file sets nothing: that is the template, and

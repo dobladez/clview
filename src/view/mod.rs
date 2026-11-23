@@ -636,10 +636,10 @@ pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
     let defaults = commands::Keymaps::new(&settings);
     let template = config::written(&catalog, &Parsed::default(), &settings, &defaults);
     let mut wrong: Vec<String> = Vec::new();
-    // A line is help, or commented out, or empty, or one of the three that start the tables of the
-    // keys, which set nothing by themselves.
+    // A line is an explanation (`##`), or an example commented out (`# `), or empty, or one of the
+    // three that start the tables of the keys, which set nothing by themselves.
     let tables = ["[keys]", "[keys.pages]", "[keys.list]"];
-    let plain = |line: &&str| !(line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || tables.contains(line));
+    let plain = |line: &&str| !(line.is_empty() || line.starts_with("##") || line.starts_with("# ") || tables.contains(line));
     wrong.extend(template.lines().filter(plain).map(|line| format!("neither help nor commented out: {line}")));
     for table in tables {
         if template.lines().filter(|line| *line == table).count() != 1 {

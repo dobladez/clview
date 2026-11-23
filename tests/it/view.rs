@@ -337,7 +337,7 @@ fn clv_with_config_home(home: &Path, args: &[&str]) -> Output {
 }
 
 /// `--generate-config` writes the template of a config where clv reads one, makes the directory,
-/// and prints the path. Every line is help or commented out, so the file sets nothing. A second
+/// and prints the path. Every line that sets something is commented out, so the file sets nothing. A second
 /// time it refuses, names the file, and leaves it as it was. `--no-config --print-config` prints
 /// what it wrote. With `--config FILE`, it writes that file.
 #[test]
@@ -352,7 +352,10 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
     let written = std::fs::read_to_string(&file).unwrap();
     // Every line that sets something is commented out; the three tables of the keys are as they are.
     let tables = ["[keys]", "[keys.pages]", "[keys.list]"];
-    assert!(written.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || tables.contains(&line)), "{written}");
+    assert!(written.lines().all(|line| line.is_empty() || line.starts_with("##") || line.starts_with("# ") || tables.contains(&line)), "{written}");
+    // It starts by saying how to read it.
+    assert!(written.starts_with("## The config of clv. clv reads this file when it starts, and never changes it.\n##\n"), "{written}");
+    assert!(written.contains("\n## A line that starts with one \"#\" is an example: it shows the default.\n"), "{written}");
     assert!(tables.iter().all(|table| written.lines().filter(|line| line == table).count() == 1), "{written}");
     // A key that both keymaps bind alike is there once.
     assert_eq!(written.lines().filter(|line| *line == "# q = \"quit\"").count(), 1, "{written}");
@@ -368,7 +371,10 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
     ] {
         assert!(written.lines().any(|other| other == line), "{line}:\n{written}");
     }
-    assert!(written.contains("## ctrl-c always quits, and a number before enter goes to that page or tile."), "{written}");
+    assert!(
+        written.contains("## A config cannot change two bindings: ctrl-c always quits, and a number\n## before enter goes to that page or tile.\n"),
+        "{written}"
+    );
     assert!(!written.contains("password") && !written.contains("pages ="), "{written}");
     // clv reads it, and it sets nothing.
     let pdf = fixture("generate-config", 2);
