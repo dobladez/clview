@@ -50,7 +50,7 @@ fails while it disagrees with them.
 | 0012 | [Show an epub as a book](0012-show-an-epub-as-a-book.md) | Done |
 | 0013 | [Bind keys to named commands, and rebind them](0013-bind-keys-to-named-commands.md) | Done |
 | 0014 | [Show Org-mode documents](0014-show-org-mode-documents.md) | Done |
-| 0015 | [Read options and keys from a config file](0015-read-options-and-keys-from-a-config-file.md) | Ready |
+| 0015 | [Read options and keys from a config file](0015-read-options-and-keys-from-a-config-file.md) | Implementing |
 
 ## Lifecycle
 

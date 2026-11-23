@@ -1,6 +1,6 @@
 # Spec-0015: Read options and keys from a config file
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-21
 - **Related:** [ADR-0021](../adr/0021-a-backend-declares-its-settings-and-their-options-hold-for-any-file.md)
   (a backend declares its settings); [ADR-0033](../adr/0033-backends-share-a-setting-by-declaring-its-name.md)
@@ -347,3 +347,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-21 — Ready (spec-new).
 - 2026-11-22 — Back to Draft after a review against the code. `[open-with]` goes to the backlog: the viewer does not know the format of a file, and a program has no session of its own on macOS. `ctrl-c` and a number before Enter stay outside the config. New rules: `width` against `per-row`, the order of a command's keys, the comments of the template. Corrected: `toml` is 0.9 in the tests today, Tab is no key, and the function keys are among the keys that clv does not read. Tasks and Done written (spec-update).
 - 2026-11-22 — Ready: the owner read the review and lifted it (spec-update).
+- 2026-11-22 — Implementing ([notes](0015-read-options-and-keys-from-a-config-file-impl-20261122_2331.md)).
