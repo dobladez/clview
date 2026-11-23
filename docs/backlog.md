@@ -45,8 +45,9 @@ by name on a key of its own, so `/` means one thing everywhere.
 ### A config file
 
 [Spec-0015](specs/0015-read-options-and-keys-from-a-config-file.md) gives clv a config file. The
-file holds the defaults of options, an app for `o` to open each format with, and keys bound to
-commands by name.
+file holds the defaults of options, and keys bound to commands by name. An app for `o` to open
+each format with is left for later:
+[`[open-with]`](#open-with-a-program-of-the-readers-choosing-for-each-format).
 
 The positions of files opened before are left. clv would write them as state of its own, apart from
 the config, which clv writes only when the reader asks (`--generate-config`). Open questions for
@@ -160,6 +161,49 @@ bytes hold it to minutes. Pictures by path cost the same, but they take as many 
   a reading: the rest comes after it, its SVG of 9.7 MB opened by the SVG backend, and all of it
   twice, since eight such SVGs don't fit Mermaid's cache of 64 MiB. Where the time goes isn't
   measured further yet.
+
+### `[open-with]`: a program of the reader's choosing for each format
+
+`o` opens a file in the desktop's default app ([Spec-0010](specs/0010-open-file-in-default-app.md)).
+A reader who wants zathura for PDFs could say so in the config
+([Spec-0015](specs/0015-read-options-and-keys-from-a-config-file.md)):
+
+```toml
+[open-with]
+pdf = ["zathura"]
+```
+
+Spec-0015 first had this design, and left it out after a review on 2026-11-22:
+
+- An entry maps the name of a format, as `--help` lists it, to a program and its arguments. clv
+  matches the name without regard to case, so most names need no quotes.
+- `o` runs that program with the path of the file as its last argument, for files of that format
+  only. The other formats still go to the desktop's opener, and a folder goes to the file manager.
+- clv starts the program as it starts the desktop's opener
+  ([ADR-0034](adr/0034-open-a-file-through-the-platforms-opener-by-its-real-path.md)): with its
+  output hidden, at most four at a time. The status line says how it went.
+- The refusals of the desktop's opener stay: a file with no file of its own (a pipe, a file in an
+  archive), a session over SSH, no desktop session on Linux, a program not on `PATH`.
+- The name check goes. That check exists because the desktop chooses the app by the name. Here,
+  clv chooses the app by the format that it found in the file.
+- An unknown format is an error when clv reads the config. `--generate-config` writes an example
+  for each format that the build shows.
+- Terminal programs (`vim`, `less`) stay out: clv hides their output and does not give them the
+  terminal.
+
+Two things stand in the way:
+
+- The viewer knows which backend opened a file, not which format the file is. `Backend::opens`
+  answers yes or no, and one backend shows many formats: 14 for images, 5 for documents. The
+  contract needs a way for a source to say its format, and each such backend must answer.
+- A program needs a session of its own, or it can write to clv's screen through `/dev/tty`
+  (ADR-0034). `xdg-open` gets a session from `setsid`. macOS has no `setsid` program, and clv
+  forbids `unsafe`. `open` needs no session, because launchd starts the app. One way: clv runs
+  itself again as a launcher, which calls `setsid` through rustix and then runs the program. Check
+  first that rustix has it as a safe function.
+
+The change brings an ADR, because it changes ADR-0034's decision on the name check. A reader with
+X forwarding could want `[open-with]` over SSH too.
 
 ### `O`: open a file in an app of the reader's choosing
 
