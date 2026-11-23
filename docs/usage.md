@@ -56,7 +56,7 @@ clv --password PW secret.pdf
 | `--protocol ascii` | [text cells](#text-cells) of ASCII characters |
 | `--config FILE` | read this file as the config, not your own ([The config file](#the-config-file)). The file must be there |
 | `--no-config` | read no config. Not with `--config` |
-| `--generate-config` | write a config with every line commented out, where clv reads one, print its path, and exit ([The config file](#the-config-file)). It takes no file |
+| `--generate-config` | write a config that sets nothing, each setting commented out, where clv reads one; print its path, whole; and exit ([The config file](#the-config-file)). It takes no file |
 | `--print-config` | print the config in effect, from the file and the command line, and exit. It takes no file |
 
 Printed without the pager, pages follow the zoom too, a row of them under another: `--per-row 3`
@@ -105,18 +105,24 @@ none.
 
 **A config to start from.** `clv --generate-config` writes a template where clv reads its config:
 your own place, or the file that `--config FILE` names. It makes the directory when there is
-none, and prints the path that it wrote. clv never writes over a config: when a file is there,
-clv refuses and names it. This is the only time that clv writes a config.
+none, and prints the path that it wrote, whole. clv never writes over a config: when a file is
+there, clv refuses and names it. This is the only time that clv writes a config.
 
-Every line of the template is commented out, so the file sets nothing as written, and a default
-that a later release changes still reaches you. A line that sets something starts with `# `: take
-the `# ` away to use it. A line of help starts with `## `. The template is made for your build of
-clv, and holds these:
+Every line of the template that sets something is commented out, so the file sets nothing as
+written, and a default that a later release changes still reaches you. A line that sets
+something starts with `# `: take the `# ` away to use it. A line of help starts with `## `. The
+template is made for your build of clv, and holds these:
 
 - each option that a config may set, with its help lines, what it takes and its default
   (`# width = "window"`)
-- `[keys.pages]` and `[keys.list]`, with every key that a config can write
-  (`# ctrl-v = "screen-down"`), under what its command does
+- the three tables of the keys, `[keys]`, `[keys.pages]` and `[keys.list]`, with every key that
+  a config can write (`# ctrl-v = "screen-down"`), under what its command does
+
+The three lines that start the tables are not commented out: leave them as they are. An empty
+table sets nothing, and a key works as soon as you take its `# ` away. A key that a file's pages
+and a list bind alike is in the template once, under `[keys]`: change `# q = "quit"` to
+`x = "quit"`, and `x` quits in both. A key that the two bind to different commands is under each
+table: `j` is `scroll-down` under `[keys.pages]` and `list-tile-down` under `[keys.list]`.
 
 **The config in effect.** `clv --print-config` prints the config that clv would use, from the file
 and the command line. A line that either sets has its value and no `# `. The other lines keep
@@ -125,9 +131,9 @@ prints is a config: you can save it and read it back with `--config`. So clv che
 first, as it does before it shows a file: `clv --print-config --protocol sixel` prints nothing
 and says what `--protocol` takes. clv writes a number as it read it: `--per-row 03` prints
 `per-row = 3`. A `width` of the config that a count on the command line wins over is not in
-effect, so clv prints it as not set (`# width = "window"`). It prints the keys in
-`[keys.pages]` and `[keys.list]`, each key where it is bound; a key that you unbound is `"none"`
-under the command that had it.
+effect, so clv prints it as not set (`# width = "window"`). It prints the keys as the template
+has them: a key that both keymaps bind alike under `[keys]`, once, and any other key under the
+table of its keymap. A key that you unbound is `"none"` under the command that had it.
 
 **What it holds.** The file is [TOML](https://toml.io). An option goes at the top level, under its
 name without the dashes: `--per-row` is `per-row`. The value has one of these forms:
@@ -208,6 +214,12 @@ value `"none"` unbinds a key.
 
 clv also refuses a command that does not exist, and a command that does not apply in the keymap
 of its table: `[keys.list] s = "search"`.
+
+A line in the wrong part of the file says where it goes. TOML puts every line under the last
+table above it. So a key that you bind above `[keys]` is read as an option, and clv says `unknown
+option x: x is a key, and a key is bound under [keys]`. An option that you add at the end of the
+file is under a table of keys, and clv says `width is an option, not a key: write it above
+[keys], before the first table`.
 
 **The commands.** `clv --generate-config` writes every command with its keys. A command for the
 list alone starts with `list-`. The others are for the pages

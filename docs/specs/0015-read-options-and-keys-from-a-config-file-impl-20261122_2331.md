@@ -331,3 +331,49 @@ A review of the branch found two ways for `--print-config` to print what clv doe
   status line. Alone it passed six times of six, and the next full run passed. The test reads the
   status line after a fixed sleep; nothing here touches the pager. It was not seen in the eleven
   full runs before.
+
+## The template's keys in three tables
+
+The owner generated a config, changed `# q = "quit"` to `x = "quit"`, and got `unknown option
+x`: the line of its table was still `# [keys.pages]`, 90 lines above, so the key was read at the
+top level. The owner also saw `q = "quit"` twice, once for each keymap, and read it as a mistake.
+
+- **The three lines of the tables are never commented out**, in the template and in what
+  `--print-config` prints. An empty table sets nothing, so the template still sets nothing.
+- **A key that both keymaps bind alike is written once, under `[keys]`**: the same key, the same
+  command or `none`, set or not in both. The template went from 251 lines to 206.
+- **The help under `[keys]` is what `?` says in each keymap.** Where the two say the same, it is
+  said once. Where they differ, there are two lines: `## In the pages of a file: the first or
+  the last page`, `## In a list: the first or the last`. No new text to keep alike with `?`.
+- **One hole in the rule as asked, and how it is closed.** clv reads a command's keys in the
+  order of the file, and `[keys]` is first. Take `[keys] a = "quit"`, `b = "quit"` and
+  `[keys.list] a = "list-open"`. In a file's pages the keys that quit are `a`, then `b`. `b` is
+  bound alike in both keymaps, but under `[keys]` it would come before `a`, and `?` would list
+  `b` first after a round trip. So of the keys that the config binds to a command, only those
+  that come first in both keymaps, in the same order, go under `[keys]`. `b` stays under both
+  tables there. A key commented out (a default) and a key unbound have no order to keep, and
+  go under `[keys]` whenever both keymaps write the same line. The owner's case is not touched
+  by this: `x` is the first key that quits in both.
+- **A key is never both under `[keys]` and under a keymap's table.** A keymap has one line for a
+  key, and a line goes under `[keys]` only when the other keymap has the same line.
+- **Two messages for a line in the wrong part of the file.** `x = "quit"` above the tables:
+  `unknown option x: x is a key, and a key is bound under [keys]` (when the name reads as a key
+  and the value is a string). An option under a table of keys: `width is an option, not a key:
+  write it above [keys], before the first table`. No key is called as an option is, so the
+  second cannot take a key's line. `pages` under `[keys]` is the one name that is both a table
+  and an option: a table there is the keymap's, and a string there goes on to the keymaps, which
+  say that clv reads no key of that name.
+- **`--generate-config` prints the path whole**: a path that is not, joined to the directory
+  that clv runs in, with no `.` on the way (`config::whole`). The refusal of a second run still
+  names the file as it was given. The lead asked for no more until the owner answers.
+- **`--help` and the manual** no longer say "every line commented out": `write a config that
+  sets nothing, each setting commented out, where clv reads one, and exit`.
+- **The check over the build** (`view::wrong_template`) now takes the three lines of the tables,
+  and wants each binding that a config can write there once for its keymap, under `[keys]` or
+  under its own table, and no key in both.
+- **Seen failing before the change:** `config_keys_one_line_of_the_generated_config_changed_…`
+  (the line `# q = "quit"` was there twice), `config_keys_that_cant_be_bound_…` (`unknown option
+  x` alone), `generate_config_…` (it printed `mine.toml`). **And with a piece taken out:** with
+  nothing put under `[keys]`, `the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys`;
+  with the rule of the order off, `a_key_goes_under_keys_only_where_that_keeps_the_order_…` and
+  the property test `the_keys_written_read_back_to_the_same_keymaps`.

@@ -308,6 +308,14 @@ fn config_keys_that_cant_be_bound_are_refused_with_their_line() {
         ("[keys]\nctrl-i = \"next\"\n", ":2: ctrl-i: a terminal sends the same byte for ctrl-i and Tab, and clv does not read Tab as a key"),
         ("[keys]\nEnter = \"next\"\n", ":2: Enter: write enter: the names of keys are in lower case"),
         ("[keys]\nx = 3\n", ":2: x: expected the name of a command or \"none\", got 3"),
+        // A key above the tables, and an option below one: each says where its line goes.
+        ("per-row = 3\nx = \"quit\"\n\n[keys]\n", ":2: unknown option x: x is a key, and a key is bound under [keys]"),
+        ("ctrl-d = \"screen-down\"\n", ":1: unknown option ctrl-d: ctrl-d is a key, and a key is bound under [keys]"),
+        (
+            "[keys]\n\n[keys.list]\nJ = \"list-tile-down\"\nper-row = 3\n",
+            ":5: per-row is an option, not a key: write it above [keys], before the first table",
+        ),
+        ("[keys]\nrecurse = true\n", ":2: recurse is an option, not a key: write it above [keys], before the first table"),
         ("keys = \"x\"\n", ":1: keys: expected a table of keys"),
         ("[keys]\n\"\\u001b]0;t\\u0007\" = \"quit\"\n", ":2: \u{fffd}]0;t\u{fffd}: clv reads no key of that name"),
         ("[keys]\nx = \"qu\\u001bit\"\n", ":2: x: no command is called qu\u{fffd}it"),
@@ -342,12 +350,18 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), format!("{}\n", file.display()), "the path it wrote");
     let written = std::fs::read_to_string(&file).unwrap();
-    assert!(written.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ")), "{written}");
+    // Every line that sets something is commented out; the three tables of the keys are as they are.
+    let tables = ["[keys]", "[keys.pages]", "[keys.list]"];
+    assert!(written.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || tables.contains(&line)), "{written}");
+    assert!(tables.iter().all(|table| written.lines().filter(|line| line == table).count() == 1), "{written}");
+    // A key that both keymaps bind alike is there once.
+    assert_eq!(written.lines().filter(|line| *line == "# q = \"quit\"").count(), 1, "{written}");
     for line in [
         "# per-row = \"auto\"",
         "# recurse = false",
-        "# [keys.pages]",
-        "# [keys.list]",
+        "[keys]",
+        "[keys.pages]",
+        "[keys.list]",
         "# q = \"quit\"",
         "# enter = \"list-open\"",
         "# \"/\" = \"search\"",
@@ -378,6 +392,18 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
     let out = run(&["--generate-config", "--config", other.to_str().unwrap()]);
     assert!(out.status.success() && text(&out.stdout) == format!("{}\n", other.display()), "{}", text(&out.stderr));
     assert_eq!(std::fs::read_to_string(&other).unwrap(), written);
+    // The path it prints is whole, for a file named from where clv runs too.
+    let here = tmp("generate-config", "here");
+    let _ = std::fs::remove_dir_all(&here);
+    std::fs::create_dir_all(&here).unwrap();
+    for named in ["mine.toml", "./sub/mine.toml"] {
+        let out = crate::bin::clv().args(["--generate-config", "--config", named]).current_dir(&here).output().unwrap();
+        assert!(out.status.success(), "{named}: {}", text(&out.stderr));
+        let printed = PathBuf::from(text(&out.stdout).trim_end_matches('\n'));
+        assert!(printed.is_absolute() && !printed.components().any(|part| part.as_os_str() == "."), "{named}: {}", printed.display());
+        assert_eq!(printed.canonicalize().unwrap(), here.join(named).canonicalize().unwrap(), "{named}");
+        assert_eq!(std::fs::read_to_string(&printed).unwrap(), written);
+    }
     // Each is the whole of a run.
     for (args, said) in [
         (&["--generate-config", "a.pdf"][..], "clv: --generate-config takes no file\n"),
@@ -414,7 +440,9 @@ fn print_config_prints_what_the_file_and_the_command_line_set() {
     ] {
         assert!(once(&file, line), "{line}:\n{file}");
     }
-    assert_eq!(file.matches("\nx = \"quit\"\nq = \"none\"\n").count(), 2, "in both keymaps:\n{file}");
+    // Bound alike in both keymaps: written once, under `[keys]`.
+    assert_eq!(file.matches("\nx = \"quit\"\nq = \"none\"\n").count(), 1, "once, for both keymaps:\n{file}");
+    assert!(file.find("\nx = \"quit\"\n") < file.find("\n[keys.pages]\n") && file.find("\n[keys]\n") < file.find("\nx = \"quit\"\n"), "{file}");
     assert!(!file.contains("# q = \"quit\""), "{file}");
     // The command line's, and the command line wins.
     let typed = printed(&["--print-config", "--per-row", "2", "--recurse", "--protocol", "kitty", "--no-pager"]);

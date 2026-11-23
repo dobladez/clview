@@ -43,7 +43,7 @@ x = "none"
 J = "list-tile-down"
 ```
 
-`clv --generate-config` writes a template with every line commented out, and `clv --print-config`
+`clv --generate-config` writes a template with every setting commented out, and `clv --print-config`
 prints the config in effect. Before the names become a contract, some commands get new names:
 `paper` becomes `cycle-theme`, `width-up` becomes `increase-width`, and the list's commands start
 with `list-`.
@@ -173,13 +173,18 @@ its option.
   file of `--config FILE`. It makes the directory when there is none, and prints the path that it
   wrote. It never writes over a file: when one is there, clv refuses and names it. This is the
   only time that clv writes a config.
-- Every line of the template is commented out. As written, it sets nothing, so the defaults of a
-  later release still reach the reader. A line that sets something starts with `# `. A line of
-  help starts with `## `, so a reader, and the test below, can tell the two apart.
+- Every line of the template that sets something is commented out. As written, it sets nothing,
+  so the defaults of a later release still reach the reader. A line that sets something starts
+  with `# `. A line of help starts with `## `, so a reader, and the test below, can tell the two
+  apart. The three lines that start the tables of the keys (`[keys]`, `[keys.pages]`,
+  `[keys.list]`) are not commented out: an empty table sets nothing, and a reader takes the `# `
+  from one line to bind a key.
 - clv makes the template from the catalogs of this build:
   - each option that a config may set, with its help line and its default (`# width = "window"`)
-  - `[keys.pages]` and `[keys.list]`, with every default binding that a config can write
-    (`# ctrl-v = "screen-down"`), under the help line of each command
+  - `[keys]`, `[keys.pages]` and `[keys.list]`, with every default binding that a config can
+    write (`# ctrl-v = "screen-down"`), under the help line of each command. A binding that both
+    keymaps have alike is written once, under `[keys]`. `--print-config` writes by the same rule,
+    as far as the order of a command's keys allows
   - a line of help for the two bindings that a config cannot write: `ctrl-c`, which always quits,
     and a number before Enter, which goes to that page or tile
 - `clv --print-config` prints the config in effect to stdout, from the file and the command line.
@@ -319,6 +324,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - [x] **Keys from the config** — `[keys]`, `[keys.pages]` and `[keys.list]` go into `Keymaps::build`, with the refusals of Keys: a digit, `ctrl-c`, a command that does not exist, and a command that does not apply. `?`, the reminders and the messages show the keys as bound. *Files:* `src/view/config.rs`, `src/view/commands.rs`, `src/view/pager.rs`, `tests/it/view_pager.rs`, `docs/usage.md`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv commands::`; `cargo test -j 2 --test it config_keys`.
 - [x] **`--generate-config` and `--print-config`** — the template, made from the two catalogs. clv writes it once and never over a file, and prints it with what the file and the command line set. *Files:* `src/view/config.rs`, `src/view/mod.rs`, `tests/it/view.rs`, `docs/usage.md`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv the_template_uncommented_is_no_config`; `cargo test -j 2 --test it generate_config`; `Manual: run clv --generate-config twice, see the path, then a refusal that names the file`.
 - [x] **Review fixes: `--print-config` prints a config that clv takes** — it checks the options as a run does before it writes them, and writes a number as clv read it, never as typed. *Files:* `src/view/mod.rs`, `src/view/config.rs`, `tests/it/view.rs`, `tests/it/wordcraft.rs`, `docs/usage.md`, `docs/architecture.md`. *Verify:* `cargo test -j 2 --test it print_config`; `cargo test -j 2 --bin clv a_value_is_written`.
+- [x] **The template's keys in three tables** — the lines `[keys]`, `[keys.pages]` and `[keys.list]` are not commented out, and a key that both keymaps bind alike is written once, under `[keys]`. A line in the wrong part of the file says where it goes. `--generate-config` prints the path whole. *Files:* `src/view/config.rs`, `src/view/mod.rs`, `src/view/commands.rs`, `tests/it/view.rs`, `tests/it/view_pager.rs`, `docs/usage.md`, `docs/architecture.md`, `CHANGELOG.md`. *Verify:* `cargo test -j 2 --bin clv config::`; `cargo test -j 2 --test it config_keys_one_line`.
 
 ## Done
 
@@ -350,3 +356,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-22 — Ready: the owner read the review and lifted it (spec-update).
 - 2026-11-22 — Implementing ([notes](0015-read-options-and-keys-from-a-config-file-impl-20261122_2331.md)).
 - 2026-11-23 — A task added after a review of the branch: `--print-config` printed options that a run refuses, and a number as it was typed.
+- 2026-11-23 — The template's requirement changed after the owner tried it: its tables of keys are not commented out, and a key that both keymaps bind alike is written once, under `[keys]`. With the tables commented out, a key uncommented under one was read as an option (`unknown option x`), and `q = "quit"` was in the file twice.

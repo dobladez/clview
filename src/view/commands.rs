@@ -713,12 +713,15 @@ fn suggested(setting: &'static Setting) -> Vec<(char, Turn)> {
     }
 }
 
-/// How many bindings of `keymaps` a config can write, for a build's own tests: every key bound by
-/// itself in either keymap, but `ctrl-c`.
+/// The bindings of `keymaps` that a config can write, for a build's own tests: every key bound by
+/// itself in either keymap, but `ctrl-c`, each with its keymap, its name and its command's.
 #[cfg(test)]
-pub(super) fn writable(keymaps: &Keymaps) -> usize {
-    let writable = |keymap: &Keymap| keymap.bindings.iter().filter(|(chord, _)| !chord.counted && chord.key != Key::Interrupt).count();
-    writable(&keymaps.pages).saturating_add(writable(&keymaps.list))
+pub(super) fn writable(keymaps: &Keymaps) -> Vec<(Mode, String, String)> {
+    let of = |mode: Mode| {
+        let bound = keymaps.of(mode).bindings.iter().filter(|(chord, _)| !chord.counted && chord.key != Key::Interrupt);
+        bound.map(move |(chord, command)| (mode, keys::name(chord.key), command.name()))
+    };
+    of(Mode::Pages).chain(of(Mode::List)).collect()
 }
 
 /// The names of the commands made for `setting`, for a build's own tests: a config binds keys to

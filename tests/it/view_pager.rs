@@ -4985,6 +4985,45 @@ fn config_keys_bound_again_do_their_command_and_are_first_in_the_keys_listed() {
     assert!(view.finish().success());
 }
 
+/// A reader's first config: the generated file, with the line of the key that quits changed to
+/// another key. The line is there once, under `[keys]`, and binds the key in a file's pages and
+/// in a list alike: `x` quits in both, `q` still does, and `?` lists `x` first.
+#[test]
+fn config_keys_one_line_of_the_generated_config_changed_binds_the_key_in_both_keymaps() {
+    if !pty_works() {
+        return;
+    }
+    let file = crate::view::tmp("config-keys-generated", "generated.toml");
+    let _ = std::fs::remove_file(&file);
+    let config = file.to_str().unwrap();
+    let out = crate::bin::clv().args(["--generate-config", "--config", config]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let template = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(template.lines().filter(|line| *line == "# q = \"quit\"").count(), 1, "the line is there once:\n{template}");
+    std::fs::write(&file, template.replace("# q = \"quit\"\n", "x = \"quit\"\n")).unwrap();
+    let pdf = fixture("config-keys-generated", 2);
+    let other = pdf.with_file_name("other.pdf");
+    std::fs::write(&other, crate::fixtures::letter("Other", 1)).unwrap();
+    let alone = ["--pager", "--per-row", "1", "--config", config];
+    let listed = [other.to_str().unwrap(), "--config", config];
+    for (args, shows) in [(&alone[..], "page 1/2"), (&listed[..], "1/2 ·")] {
+        // `?` lists `x` first among the keys that quit, and `x` quits.
+        let mut view = Session::start_on(KITTY, &pdf, args, 100, 40);
+        view.wait_until("shown", |t| bar(t).contains(shows));
+        assert!(bar(&view.text()).contains(" · x quit"), "{shows}: {}", last_bar(&view.text()));
+        let from = view.text().len();
+        let shown = bar(&keys_shown(&mut view, from));
+        assert!(shown.contains(" x esc q ctrl-c quit"), "{shows}: {shown:?}");
+        view.press(" x");
+        assert!(view.finish().success(), "{shows}");
+        // And `q` still does.
+        let mut view = Session::start_on(KITTY, &pdf, args, 100, 40);
+        view.wait_until("shown", |t| bar(t).contains(shows));
+        view.press("q");
+        assert!(view.finish().success(), "{shows}");
+    }
+}
+
 /// With every key that quits or leaves unbound, `ctrl-c` still quits: a config can't leave the
 /// reader without a way out.
 #[test]

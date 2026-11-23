@@ -181,18 +181,42 @@ no config.
   from each backend that declares the setting), what it takes (`Entry::takes`), and a line
   `name = value`. The value is what the options give, or else the default (`Entry::default`: a
   setting's `auto` or its default, another option's first named value).
-- The tables `[keys.pages]` and `[keys.list]`: the commands in the groups that `?` lists them in
-  (`commands::groups`), each group under what its line says, and for each command every key
-  bound to it without a number (`Keymap::all`, the keys that `?` doesn't list too). `ctrl-c` and
-  the bindings with a number are left out, and two lines of help say so.
+- The three tables of the keys, `[keys]`, `[keys.pages]` and `[keys.list]`
+  (`config::keys_written`). `config::lines` makes the lines of each keymap: the commands in the
+  groups that `?` lists them in (`commands::groups`), each under what its line says, and for
+  each command every key bound to it without a number (`Keymap::all`, the keys that `?` doesn't
+  list too). `ctrl-c` and the bindings with a number are left out, and two lines of help say so.
 
 A line gets `# ` before it unless something set it: an option that is given (`Parsed::has`), a
-key bound otherwise than by default, a key unbound (written `none` under the command that had
-it), and the line of a table with such a key in it. Help is `## `. So with nothing given and the
-default keymaps, every line is commented out: that is the template, and `view::generate` writes
-it (`config::generate`, with `create_new`, so never over a file, a directory or a link). `view`
-handles `--generate-config` before it reads any config, and `--print-config` right after, both
-before `file_args`, since neither takes a file.
+key bound otherwise than by default, and a key unbound (written `none` under the command that
+had it). Help is `## `. The three lines that start the tables are never commented out: an empty
+table sets nothing, and a reader who takes the `# ` from one key has bound it. With every table
+commented out, a key uncommented under one was read as an option of the top level. So with
+nothing given and the default keymaps, the file sets nothing: that is the template, and
+`view::generate` writes it (`config::generate`, with `create_new`, so never over a file, a
+directory or a link) and prints its path whole (`config::whole`). `view` handles
+`--generate-config` before it reads any config, and `--print-config` right after, both before
+`file_args`, since neither takes a file.
+
+**A key that both keymaps bind alike is written once, under `[keys]`.** Two lines are alike
+when they are the same `Said`: the same key, the same command or `none`, set or not in both. So
+`q = "quit"` is in the file once, and `j` is under each keymap's table, with its command there. A
+line under `[keys]` has what `?` says of it in each keymap, where the two differ (`In the pages
+of a file: …`, `In a list: …`). A key is never both under `[keys]` and under a keymap's table,
+since a keymap has one line for a key.
+
+One rule keeps some keys out of `[keys]`: the order of a command's keys. `Keymaps::bound` reads
+the keys in the order of the file, and `[keys]` comes first. So of the keys that the config
+binds to a command, `keys_written` puts under `[keys]` only those that come first in both
+keymaps, in the same order. A key behind one that is bound in one keymap alone stays under the
+two tables. `the_keys_written_read_back_to_the_same_keymaps` is the property test: whatever a
+config binds and unbinds, in one keymap and in both, the file written reads back to the same
+keys for each command, in the same order, and no key is written twice.
+
+A line in the wrong part of the file says where it goes, since TOML puts a line under the last
+table above it. `Config::parse` adds to `unknown option x` that `x` is a key, when the name
+reads as one (`keys::named`) and its value is a string. `config::bindings` refuses a name of
+the options catalog under a table of keys, and says to write it above `[keys]`.
 
 What `--print-config` prints must be a config that clv takes, and that shows a file as the run
 that printed it does. Three things keep that so:

@@ -121,10 +121,14 @@ impl Config {
             let (name, at) = (key.get_ref().as_ref(), line(text, key.span().start));
             if name == KEYS {
                 let DeValue::Table(keys) = value.get_ref() else { return Err(Wrong::at(at, format!("{KEYS}: expected a table of keys"))) };
-                bindings(keys, None, text, &mut config.keys)?;
+                bindings(keys, None, text, catalog, &mut config.keys)?;
                 continue;
             }
-            let entry = option(catalog, name).map_err(|why| Wrong::at(at, why))?;
+            // A line that binds a key, written above the tables: said, with where it goes.
+            let binds = matches!(value.get_ref(), DeValue::String(_)) && keys::named(name).is_ok();
+            let misplaced =
+                |why: String| if binds && why == unknown(name) { format!("{why}: {name} is a key, and a key is bound under [{KEYS}]") } else { why };
+            let entry = option(catalog, name).map_err(|why| Wrong::at(at, misplaced(why)))?;
             let wrong = |why: String| Wrong::at(at, format!("{name}: {why}"));
             if let Some(value) = given(entry, value.get_ref(), text.get(value.span()).unwrap_or_default()).map_err(wrong)? {
                 config.options.push(Set { name: entry.spec.name, value, line: at });
@@ -139,12 +143,17 @@ impl Config {
 /// Into `into`, what the table `keys` binds in `mode` (`None`, in every keymap where the command
 /// applies): each key and the name of its command, or [`NONE`], as written. The tables of the
 /// keymaps, in the table of them all, are read in turn.
-fn bindings(keys: &DeTable<'_>, mode: Option<Mode>, text: &str, into: &mut Vec<Binding>) -> Result<(), Wrong> {
+fn bindings(keys: &DeTable<'_>, mode: Option<Mode>, text: &str, catalog: &Catalog, into: &mut Vec<Binding>) -> Result<(), Wrong> {
     for (key, value) in keys.iter() {
         let (name, at) = (key.get_ref().as_ref(), key.span().start);
         let keymap = KEYMAPS.iter().find(|(keymap, _)| mode.is_none() && *keymap == name);
+        // An option written under a table of keys, as a line added at the file's end is: said, with
+        // where it goes. No key is called as an option is.
+        if keymap.is_none() && catalog.options().any(|entry| entry.spec.key() == name) {
+            return Err(Wrong::at(line(text, at), format!("{name} is an option, not a key: write it above [{KEYS}], before the first table")));
+        }
         match (value.get_ref(), keymap) {
-            (DeValue::Table(keys), Some((_, mode))) => bindings(keys, Some(*mode), text, into)?,
+            (DeValue::Table(keys), Some((_, mode))) => bindings(keys, Some(*mode), text, catalog, into)?,
             (DeValue::String(command), _) => {
                 into.push(Binding { mode, key: name.to_owned(), command: command.to_string(), line: line(text, at), at })
             }
@@ -166,7 +175,7 @@ const ABOUT: &str = "\
 The config of clv. clv reads it when it starts, and never writes over it.
 A line that starts with \"# \" sets something: take the \"# \" away to use it.
 A line that starts with \"## \" is help.
-As written, every line is commented out, so this file sets nothing.";
+As written, every line that sets something has its \"# \", so this file sets nothing.";
 
 /// What the template says before the options.
 const ABOUT_OPTIONS: &str = "Options. An option on the command line wins over the same option here.";
@@ -174,8 +183,10 @@ const ABOUT_OPTIONS: &str = "Options. An option on the command line wins over th
 /// What the template says before the keys.
 const ABOUT_KEYS: &str = "\
 Keys. A key is bound to a command by the name of the command, or to \"none\".
-[keys.pages] is for the pages of a file, and [keys.list] is for a list.
-[keys] binds a key in both, where its command applies.
+The three lines in brackets start the tables of the keys: leave them as they are.
+[keys] binds a key in the pages of a file and in a list, where its command applies.
+[keys.pages] binds a key in the pages of a file alone, and [keys.list] in a list alone.
+A key that both bind alike is written once, under [keys].
 A key that you bind comes first among the keys of its command.
 A punctuation key needs quotes: \"/\" = \"search\".
 Two bindings stay as they are, and a config cannot write them:
@@ -187,8 +198,9 @@ ctrl-c always quits, and a number before enter goes to that page or tile.";
 /// config can write, under what its command does.
 ///
 /// A line that sets something is `# name = value` when it is the default, and has no `# ` when
-/// the config or the command line set it. A line of help starts with `## `. So with nothing set,
-/// every line is commented out, and the file sets nothing.
+/// the config or the command line set it. A line of help starts with `## `. The three lines that
+/// start the tables of the keys are as they are, since an empty table sets nothing. So with
+/// nothing set, the file sets nothing, and one `# ` taken away sets one thing.
 pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'static Setting], keymaps: &Keymaps) -> String {
     let mut out = String::new();
     help(&mut out, ABOUT);
@@ -216,11 +228,8 @@ pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'sta
     }
     out.push('\n');
     help(&mut out, ABOUT_KEYS);
-    let defaults = Keymaps::new(settings);
-    for (name, mode) in KEYMAPS {
-        out.push('\n');
-        out.push_str(&keys_written(name, mode, settings, keymaps, &defaults));
-    }
+    out.push('\n');
+    out.push_str(&keys_written(settings, keymaps, &Keymaps::new(settings)));
     out
 }
 
@@ -233,39 +242,120 @@ fn help(out: &mut String, text: &str) {
     }
 }
 
-/// The table of the keys of `mode`, called `name`, as [`written`] writes it: every key that a
-/// config can write, under what its command does, in the groups that `?` lists the commands in.
-/// A key bound as it is by default is commented out. A key that the config binds is not, and
-/// neither is a key that it unbinds, written `none` under the command that had it. The table's
-/// own line is commented out unless one of its keys is set.
-fn keys_written(name: &str, mode: Mode, settings: &[&'static Setting], keymaps: &Keymaps, defaults: &Keymaps) -> String {
+/// What the tables of the keys say of a command in a keymap: a key bound to it (or to `none`,
+/// under the command that had the key), and whether the config set that; or that no key is bound
+/// to it, by its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Said {
+    Bound { key: Key, to: String, set: bool },
+    NoKey(String),
+}
+
+/// A [`Said`], with what `?` says of its command in its keymap.
+struct Line {
+    says: String,
+    said: Said,
+}
+
+/// What the tables of the keys say of `mode`, in order: every key that a config can write, under
+/// what its command does, in the groups that `?` lists the commands in. A key bound as it is by
+/// default is not set. A key that the config binds is, and so is a key that it unbinds, written
+/// `none` under the command that had it.
+fn lines(mode: Mode, settings: &[&'static Setting], keymaps: &Keymaps, defaults: &Keymaps) -> Vec<Line> {
     let (now, default) = (keymaps.of(mode), defaults.of(mode));
     // `ctrl-c` always quits: no config writes it.
     let writable = |key: &Key| *key != Key::Interrupt;
-    let (mut lines, mut any) = (String::new(), false);
+    let mut lines = Vec::new();
     for (says, commands) in commands::groups(mode, settings, now) {
-        lines.push('\n');
-        help(&mut lines, &says);
         for command in commands {
-            let mut bound: Vec<(Key, String, bool)> = Vec::new();
+            let before = lines.len();
             for key in now.all(command).into_iter().filter(writable) {
-                bound.push((key, command.name(), default.alone(key) != Some(command)));
+                let said = Said::Bound { key, to: command.name(), set: default.alone(key) != Some(command) };
+                lines.push(Line { says: says.clone(), said });
             }
             for key in default.all(command).into_iter().filter(writable) {
                 if now.alone(key).is_none() {
-                    bound.push((key, NONE.to_owned(), true));
+                    lines.push(Line { says: says.clone(), said: Said::Bound { key, to: NONE.to_owned(), set: true } });
                 }
             }
-            if bound.is_empty() {
-                help(&mut lines, &format!("No key is bound to {}.", command.name()));
-            }
-            for (key, command, set) in bound {
-                any |= set;
-                lines.push_str(&format!("{}{} = \"{command}\"\n", if set { "" } else { "# " }, key_written(&keys::name(key))));
+            if lines.len() == before {
+                lines.push(Line { says: says.clone(), said: Said::NoKey(command.name()) });
             }
         }
     }
-    format!("{}[{KEYS}.{name}]\n{lines}", if any { "" } else { "# " })
+    lines
+}
+
+/// The three tables of the keys, as [`written`] writes them: `[keys]`, then one for each keymap.
+///
+/// A key that both keymaps bind alike is written once, under `[keys]`: the same key, the same
+/// command or `none`, set or not in both. Every other key is under the table of its keymap. So a
+/// key is in the file once where one line can say it (`q = "quit"`), and never both under `[keys]`
+/// and under a keymap's table.
+///
+/// One thing keeps a key that both bind alike under the tables of the keymaps: the order of a
+/// command's keys. clv reads the keys in the order of the file, and `[keys]` comes first. So of
+/// the keys that the config binds to a command, only those that come first in both keymaps, in
+/// the same order, go under `[keys]`. Then what is written reads back to the same keymaps.
+///
+/// The lines of the tables are never commented out: an empty table sets nothing, and a reader
+/// who takes the `# ` from one key has bound that key.
+fn keys_written(settings: &[&'static Setting], keymaps: &Keymaps, defaults: &Keymaps) -> String {
+    let [pages, list] = [Mode::Pages, Mode::List].map(|mode| lines(mode, settings, keymaps, defaults));
+    // The keys that the config binds to the command called `name`, in a keymap, in their order.
+    let bound_again = |lines: &[Line], name: &str| -> Vec<Key> {
+        let key = |line: &Line| match &line.said {
+            Said::Bound { key, to, set: true } if to == name => Some(*key),
+            _ => None,
+        };
+        lines.iter().filter_map(key).collect()
+    };
+    let alike = |said: &Said| match said {
+        Said::Bound { key, to, set: true } if to != NONE => {
+            let (ours, theirs) = (bound_again(&pages, to), bound_again(&list, to));
+            let first = ours.iter().zip(&theirs).take_while(|(ours, theirs)| ours == theirs).count();
+            ours.iter().take(first).any(|ours| ours == key)
+        }
+        said => pages.iter().any(|line| line.said == *said) && list.iter().any(|line| line.said == *said),
+    };
+    // Under `[keys]`, in the order of a file's pages, each under what `?` says in both keymaps.
+    let both = pages.iter().filter(|line| alike(&line.said)).map(|line| {
+        let other = list.iter().find(|other| other.said == line.said).map_or(line.says.as_str(), |other| other.says.as_str());
+        let says = match other == line.says {
+            true => vec![line.says.clone()],
+            false => vec![format!("In the pages of a file: {}", line.says), format!("In a list: {other}")],
+        };
+        (says, &line.said)
+    });
+    // Under the table of a keymap, what is left, each under what `?` says there.
+    fn only<'l>(lines: &'l [Line], alike: &dyn Fn(&Said) -> bool) -> Vec<(Vec<String>, &'l Said)> {
+        lines.iter().filter(|line| !alike(&line.said)).map(|line| (vec![line.says.clone()], &line.said)).collect()
+    }
+    let mut out = table(KEYS.to_owned(), both.collect());
+    for ((name, _), lines) in KEYMAPS.iter().zip([&pages, &list]) {
+        out.push('\n');
+        out.push_str(&table(format!("{KEYS}.{name}"), only(lines, &alike)));
+    }
+    out
+}
+
+/// The table called `name` with `lines` in it, each under its lines of help, said once for the
+/// lines that share them.
+fn table(name: String, lines: Vec<(Vec<String>, &Said)>) -> String {
+    let mut out = format!("[{name}]\n");
+    let mut last: Option<&Vec<String>> = None;
+    for (says, said) in &lines {
+        if last != Some(says) {
+            out.push('\n');
+            says.iter().for_each(|says| help(&mut out, says));
+            last = Some(says);
+        }
+        match said {
+            Said::Bound { key, to, set } => out.push_str(&format!("{}{} = \"{to}\"\n", if *set { "" } else { "# " }, key_written(&keys::name(*key)))),
+            Said::NoKey(command) => help(&mut out, &format!("No key is bound to {command}.")),
+        }
+    }
+    out
 }
 
 /// `value` of the option `entry` as a config writes it: a number as an integer, a named value as
@@ -309,6 +399,17 @@ pub(super) fn place(which: Which<'_>) -> Option<PathBuf> {
     match which {
         Which::File(path) => Some(PathBuf::from(path)),
         Which::Own | Which::None => own(std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from), std::env::var_os("HOME").map(PathBuf::from)),
+    }
+}
+
+/// `path` whole, from the directory clv runs in where it is not: what `--generate-config` prints of
+/// the file it wrote, so that the reader sees where the file is. The path as it is, where there is
+/// no such directory to say.
+pub(super) fn whole(path: &Path) -> PathBuf {
+    match std::env::current_dir() {
+        // Joined part by part, which leaves out a `.` on the way.
+        Ok(here) if path.is_relative() => here.join(path).components().collect(),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -409,8 +510,13 @@ fn option<'c>(catalog: &'c Catalog, name: &str) -> Result<&'c Entry, String> {
     }
     match catalog.options().find(|entry| entry.spec.alias.is_some_and(|alias| alias.trim_start_matches('-') == name)) {
         Some(entry) => Err(format!("{name} is now {new}: write {new}", new = entry.spec.key())),
-        None => Err(format!("unknown option {name}")),
+        None => Err(unknown(name)),
     }
+}
+
+/// What a name that is no option's is told.
+fn unknown(name: &str) -> String {
+    format!("unknown option {name}")
 }
 
 /// What `value`, written `written` in the file, gives the option `entry`: `None` for a flag set
@@ -450,6 +556,7 @@ mod tests {
     use crate::args::{OptionSpec, Shape};
     use crate::source::tests::cycled;
     use crate::source::{Named, Numbers, Setting};
+    use crate::view::commands::Command;
 
     const fn option(name: &'static str, value: Option<&'static str>, shape: Shape) -> OptionSpec {
         OptionSpec { name, short: None, value, help: "", alias: None, shape, config: Settable::Yes }
@@ -582,7 +689,7 @@ mod tests {
             ("[keys]\n\nx = [\"quit\"]", 3, "x: expected the name of a command or \"none\", got an array"),
             ("[keys.other]\nx = \"quit\"", 1, "other: expected the name of a command or \"none\", got a table"),
             ("[keys.pages.more]\nx = \"quit\"", 1, "more: expected the name of a command or \"none\", got a table"),
-            ("[keys.list]\npages = { x = \"quit\" }", 2, "pages: expected the name of a command or \"none\", got a table"),
+            ("[keys.list]\nJ = { x = \"quit\" }", 2, "J: expected the name of a command or \"none\", got a table"),
         ] {
             assert_eq!(Config::parse(text, &catalog()).unwrap_err(), Wrong::at(line, why), "{text:?}");
         }
@@ -595,77 +702,187 @@ mod tests {
         options
     }
 
+    /// The three tables of the keys in `text`, a config as written: `[keys]`, then the two keymaps'.
+    fn tables(text: &str) -> [String; 3] {
+        let after = |header: &str| text.split_once(&format!("\n{header}\n")).map_or("", |(_, after)| after);
+        let until = |text: &str, header: &str| text.split_once(&format!("\n{header}\n")).map_or(text, |(before, _)| before).to_owned();
+        [until(after("[keys]"), "[keys.pages]"), until(after("[keys.pages]"), "[keys.list]"), after("[keys.list]").to_owned()]
+    }
+
+    /// The keys of each command in each keymap, in their order, and those of them that `?` lists:
+    /// what two keymaps must share to be the same to a reader. A file groups its keys by command, so
+    /// only the order of the bindings among the commands may differ, which nothing shows.
+    fn keys_of(keymaps: &Keymaps, settings: &[&'static Setting]) -> [Vec<(String, Vec<Key>, String)>; 2] {
+        [Mode::Pages, Mode::List].map(|mode| {
+            let commands = commands::groups(mode, settings, keymaps.of(mode)).into_iter().flat_map(|(_, commands)| commands);
+            commands.map(|command| (command.name(), keymaps.of(mode).all(command), keymaps.of(mode).each(&[command]))).collect()
+        })
+    }
+
+    /// The template sets nothing: every line that sets something is commented out, under its help,
+    /// and the lines of the three tables of the keys are as they are. A key that both keymaps bind
+    /// alike is written once, under `[keys]`, with what `?` says of it in each; any other key is
+    /// under the table of its keymap.
+    #[test]
+    fn the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys() {
+        let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
+        let template = written(&catalog, &Parsed::default(), &settings, &Keymaps::new(&settings));
+        let headers = ["[keys]", "[keys.pages]", "[keys.list]"];
+        let sets_nothing = |line: &str| line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || headers.contains(&line);
+        assert!(template.lines().all(sets_nothing), "{template}");
+        let once = |line: &str| template.lines().filter(|other| *other == line).count() == 1;
+        for line in ["# per-row = \"auto\"", "# recurse = false", "# theme = \"auto\"", "# width = \"window\"", "## Takes window or 20–200."] {
+            assert!(once(line), "{line}\n{template}");
+        }
+        // The three tables, in that order, each once, and never commented out.
+        assert!(headers.iter().all(|header| once(header)) && !template.lines().any(|line| line.starts_with("# [")), "{template}");
+        // What a config may not set isn't in it.
+        assert!(!template.contains("pages =") && !template.contains("password"), "{template}");
+        let [both, pages, list] = tables(&template);
+        // Alike in both keymaps: once, under `[keys]`, one that `?` doesn't list and a setting's too.
+        for line in [
+            "# q = \"quit\"",
+            "# space = \"screen-down\"",
+            "# \"=\" = \"zoom-in\"",
+            "# D = \"cycle-theme\"",
+            "# \"[\" = \"decrease-width\"",
+            "# esc = \"leave\"",
+        ] {
+            assert!(once(line) && both.lines().any(|other| other == line), "{line}\n{template}");
+        }
+        // Bound otherwise in the two, or in one alone: under the table of each.
+        for (line, other) in [
+            ("# j = \"scroll-down\"", "# j = \"list-tile-down\""),
+            ("# enter = \"scroll-down\"", "# enter = \"list-open\""),
+            ("# \"/\" = \"search\"", "# \"/\" = \"list-filter\""),
+            ("# n = \"next\"", "# n = \"screen-down\""),
+        ] {
+            assert!(once(line) && once(other) && pages.lines().any(|l| l == line) && list.lines().any(|l| l == other), "{line}\n{template}");
+        }
+        assert!(
+            pages.contains("# f = \"follow\"") && list.contains("# h = \"list-tile-left\"") && !both.contains("list-") && !both.contains("search")
+        );
+        // Under `[keys]`, what `?` says in each keymap, where the two differ.
+        assert!(
+            both.contains("\n## In the pages of a file: the first or the last page\n## In a list: the first or the last\n# g = \"go-to\"\n"),
+            "{both}"
+        );
+        assert!(both.contains("\n## quit\n# q = \"quit\"\n") && pages.contains("\n## a few rows down or up, or a row of pages\n# j = "), "{both}");
+        // No key twice: under `[keys]`, or under the keymaps' tables.
+        let keys = |table: &str| {
+            table
+                .lines()
+                .filter(|line| line.starts_with("# "))
+                .filter_map(|line| line.split_once(" = "))
+                .map(|(key, _)| key.to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(keys(&both).iter().all(|key| !keys(&pages).contains(key) && !keys(&list).contains(key)), "{template}");
+        assert!(!template.contains("ctrl-c =") && template.contains("## ctrl-c always quits"), "{template}");
+        assert!(!template.contains("enter = \"go-to\""), "a number and Enter is no config's");
+    }
+
     /// The config in effect is written as a config: the template, with what the options give and
-    /// what the keymaps bind in place of the defaults, not commented out. Read back, it gives the
-    /// same options and the same keymaps.
+    /// what the keymaps bind in place of the defaults, not commented out. A key that the config
+    /// binds or unbinds in both keymaps alike is under `[keys]`, once. Read back, the file gives
+    /// the same options and the same keymaps.
     #[test]
     fn the_config_in_effect_is_written_as_a_config_that_reads_back_as_itself() {
         let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
         let defaults = Keymaps::new(&settings);
-        let template = written(&catalog, &Parsed::default(), &settings, &defaults);
-        // As written, it sets nothing: help, a line commented out, or an empty line.
-        assert!(template.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ")), "{template}");
-        for line in [
-            "# per-row = \"auto\"",
-            "# recurse = false",
-            "# theme = \"auto\"",
-            "# width = \"window\"",
-            "## Takes window or 20–200.",
-            "# [keys.pages]",
-            "# [keys.list]",
-        ] {
-            assert_eq!(template.lines().filter(|other| *other == line).count(), 1, "{line}\n{template}");
-        }
-        // What a config may not set isn't in it.
-        assert!(!template.contains("pages =") && !template.contains("password"), "{template}");
-        // Every key that a config can write, under its table: a quoted one, one `?` doesn't list.
-        for line in [
-            "# space = \"screen-down\"",
-            "# \"/\" = \"search\"",
-            "# \"=\" = \"zoom-in\"",
-            "# \"[\" = \"decrease-width\"",
-            "# D = \"cycle-theme\"",
-            "# \"/\" = \"list-filter\"",
-        ] {
-            assert!(template.lines().any(|other| other == line), "{line}\n{template}");
-        }
-        assert!(!template.contains("ctrl-c =") && template.contains("## ctrl-c always quits"), "{template}");
-        assert_eq!(template.lines().filter(|line| *line == "# enter = \"scroll-down\"" || *line == "# enter = \"list-open\"").count(), 2);
-        assert!(!template.contains("enter = \"go-to\""), "a number and Enter is no config's");
-        // With options given and keys bound: those lines are not commented out, and have their value.
         let text = "width = 72\ntheme = \"dark\"\nrecurse = true\n[keys]\nx = \"quit\"\nq = \"none\"\nD = \"quit\"\n[keys.list]\nJ = \"list-tile-down\"\n[keys.pages]\nenter = \"next\"\n";
         let config = Config::parse(text, &catalog).unwrap();
         let keymaps = Keymaps::bound(&settings, &config.keys).unwrap();
         let effective = written(&catalog, &options(&config), &settings, &keymaps);
-        for line in ["width = 72", "theme = \"dark\"", "recurse = true", "# per-row = \"auto\"", "[keys.pages]", "[keys.list]"] {
+        for line in ["width = 72", "theme = \"dark\"", "recurse = true", "# per-row = \"auto\"", "[keys]", "[keys.pages]", "[keys.list]"] {
             assert_eq!(effective.lines().filter(|other| *other == line).count(), 1, "{line}\n{effective}");
         }
-        let section = |name: &str| {
-            effective.split(&format!("\n[keys.{name}]\n")).nth(1).unwrap_or_default().split("\n[keys.").next().unwrap_or_default().to_owned()
-        };
-        let (pages, list) = (section("pages"), section("list"));
-        // The keys of the config first under their command, an unbound one under the command it had.
-        assert!(pages.contains("\n## quit\nx = \"quit\"\nD = \"quit\"\nq = \"none\"\n"), "{pages}");
+        let [both, pages, list] = tables(&effective);
+        // Bound alike in both: under `[keys]`, first under their command, an unbound key under the
+        // command that had it, and a command left with no key said.
+        assert!(both.contains("\n## quit\nx = \"quit\"\nD = \"quit\"\nq = \"none\"\n"), "{both}");
+        assert!(both.contains("## No key is bound to cycle-theme.") && !pages.contains("quit") && !list.contains("quit"), "{effective}");
+        // Bound in one keymap: under its table, and gone from under the command that had it there.
         assert!(pages.contains("\nenter = \"next\"\n# n = \"next\"\n") && !pages.contains("enter = \"scroll-down\""), "{pages}");
-        assert!(pages.contains("## No key is bound to cycle-theme.") && !pages.contains("J ="), "{pages}");
         assert!(list.contains("\nJ = \"list-tile-down\"\n# down = \"list-tile-down\"\n") && list.contains("# enter = \"list-open\""), "{list}");
-        assert!(list.contains("\nx = \"quit\"\nD = \"quit\"\nq = \"none\"\n"), "{list}");
+        assert!(!pages.contains("J =") && !both.contains("J =") && !both.contains("enter ="), "{effective}");
         // Read back, it is the config it was written from.
         let again = Config::parse(&effective, &catalog).unwrap();
         let said = |config: &Config| config.options.iter().map(|set| (set.name, set.value.clone())).collect::<Vec<_>>();
         assert_eq!(said(&again), [("--recurse", None), ("--theme", Some("dark".into())), ("--width", Some("72".into()))]);
-        // The keys of each command, in their order: the file groups them by command, so only the
-        // order among the commands may differ.
-        let keys_of = |keymaps: &Keymaps| {
-            [Mode::Pages, Mode::List].map(|mode| {
-                let commands = commands::groups(mode, &settings, keymaps.of(mode)).into_iter().flat_map(|(_, commands)| commands);
-                commands.map(|command| (command.name(), keymaps.of(mode).all(command))).collect::<Vec<_>>()
-            })
-        };
         let read = Keymaps::bound(&settings, &again.keys).unwrap();
-        assert_eq!(keys_of(&read), keys_of(&keymaps));
-        assert_ne!(keys_of(&read), keys_of(&defaults));
+        assert_eq!(keys_of(&read, &settings), keys_of(&keymaps, &settings));
+        assert_ne!(keys_of(&read, &settings), keys_of(&defaults, &settings));
         assert_eq!(written(&catalog, &options(&again), &settings, &read), effective, "written again, it is the same file");
+    }
+
+    /// A command's keys keep their order through the file. `[keys]` comes first, so of the keys
+    /// that the config binds to a command, only those that come first in both keymaps go there:
+    /// one that is behind a key of one keymap alone stays under the two tables.
+    #[test]
+    fn a_key_goes_under_keys_only_where_that_keeps_the_order_of_its_commands_keys() {
+        let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
+        // `a` quits in a file's pages and opens a tile in a list; `b` quits in both, after `a`.
+        let text = "[keys]\na = \"quit\"\nb = \"quit\"\nz = \"copy\"\n[keys.list]\na = \"list-open\"\n";
+        let keymaps = Keymaps::bound(&settings, &Config::parse(text, &catalog).unwrap().keys).unwrap();
+        assert_eq!(
+            (keymaps.of(Mode::Pages).each(&[Command::Quit]), keymaps.of(Mode::List).each(&[Command::Quit])),
+            ("a  b  q  ctrl-c".to_owned(), "b  q  ctrl-c".to_owned())
+        );
+        let effective = written(&catalog, &Parsed::default(), &settings, &keymaps);
+        let [both, pages, list] = tables(&effective);
+        // `b` is behind `a` in a file's pages: under `[keys]` it would come before it.
+        let has = |table: &str, line: &str| table.lines().any(|other| other == line);
+        assert!(!has(&both, "b = \"quit\"") && !has(&both, "a = \"quit\""), "{both}");
+        assert!(pages.contains("\n## quit\na = \"quit\"\nb = \"quit\"\n"), "{pages}");
+        assert!(list.contains("\n## quit\nb = \"quit\"\n") && has(&list, "a = \"list-open\""), "{list}");
+        // The default's key, which both still have, is under `[keys]`: its place tells no order.
+        assert!(both.contains("\n## quit\n# q = \"quit\"\n"), "{both}");
+        // A key that comes first in both goes under `[keys]`, before the default's.
+        assert!(both.contains("\nz = \"copy\"\n# c = \"copy\"\n") && !has(&pages, "z = \"copy\""), "{both}");
+        let read = Keymaps::bound(&settings, &Config::parse(&effective, &catalog).unwrap().keys).unwrap();
+        assert_eq!(keys_of(&read, &settings), keys_of(&keymaps, &settings));
+    }
+
+    /// A line that is in the wrong part of the file says where it goes: a key bound above the
+    /// tables, and an option under a table of keys.
+    #[test]
+    fn a_line_in_the_wrong_part_of_the_file_says_where_it_goes() {
+        let wrong = |text: &str| Config::parse(text, &catalog()).unwrap_err();
+        for (text, line, why) in [
+            ("x = \"quit\"\n[keys]\n", 1, "unknown option x: x is a key, and a key is bound under [keys]"),
+            ("width = 72\nctrl-d = \"screen-down\"\n", 2, "unknown option ctrl-d: ctrl-d is a key, and a key is bound under [keys]"),
+            ("\"/\" = \"none\"\n", 1, "unknown option /: / is a key, and a key is bound under [keys]"),
+            // No key, or no binding: an unknown option, as before.
+            ("frobnicate = \"quit\"\n", 1, "unknown option frobnicate"),
+            ("x = 3\n", 1, "unknown option x"),
+            ("Enter = \"next\"\n", 1, "unknown option Enter"),
+            // An option's line below a table of keys, whatever its value.
+            ("[keys]\nwidth = 72\n", 2, "width is an option, not a key: write it above [keys], before the first table"),
+            (
+                "[keys.list]\nJ = \"list-tile-down\"\n\ntheme = \"dark\"\n",
+                4,
+                "theme is an option, not a key: write it above [keys], before the first table",
+            ),
+            ("[keys.pages]\nrecurse = true\n", 2, "recurse is an option, not a key: write it above [keys], before the first table"),
+        ] {
+            assert_eq!(wrong(text), Wrong::at(line, why), "{text:?}");
+        }
+        // The tables of the keymaps are tables still, though `pages` is an option's name too; and
+        // `pages` bound as a key under `[keys]` is left for the keymaps to refuse, as no key's name.
+        assert_eq!(Config::parse("[keys.pages]\nx = \"quit\"\n", &catalog()).map(|config| config.keys.len()), Ok(1));
+        assert_eq!(Config::parse("[keys]\npages = \"quit\"\n", &catalog()).map(|config| config.keys[0].key.clone()), Ok("pages".to_owned()));
+    }
+
+    /// The path of a file is said whole, from the directory clv runs in where it is not, with no
+    /// `.` on the way; a whole path is said as it is.
+    #[test]
+    fn a_path_is_said_whole_from_the_directory_clv_runs_in() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(whole(Path::new("mine.toml")), here.join("mine.toml"));
+        assert_eq!(whole(Path::new("./sub/./mine.toml")), here.join("sub/mine.toml"));
+        assert_eq!(whole(Path::new("/x/./mine.toml")), PathBuf::from("/x/./mine.toml"));
+        assert!(whole(Path::new("../mine.toml")).is_absolute());
     }
 
     /// A number is written as clv read it, in base ten, never as it was typed: a leading zero or a
@@ -788,6 +1005,50 @@ mod tests {
     }
 
     proptest::proptest! {
+        /// Whatever keys a config binds and unbinds, in one keymap and in both, what clv writes of
+        /// the keymaps reads back to the same keymaps: the same keys for each command, in the same
+        /// order, the same of them listed. No key is written both under `[keys]` and under the
+        /// table of a keymap, and written again the file is the same file.
+        #[test]
+        fn the_keys_written_read_back_to_the_same_keymaps(
+            bindings in proptest::collection::vec(
+                (
+                    proptest::option::of(proptest::bool::ANY),
+                    "(a|b|c|x|q|j|J|n|g|/|=|D|\\[|\\]|enter|esc|space|up|ctrl-d|alt-v|backspace)",
+                    "(quit|none|none|search|next|go-to|zoom-in|copy|back|leave|list-open|list-tile-down|list-filter|cycle-theme|increase-width|screen-down|rerender)",
+                ),
+                0..14,
+            ),
+        ) {
+            let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
+            let mode = |list: Option<bool>| list.map(|list| if list { Mode::List } else { Mode::Pages });
+            // A key once in each table, as TOML has it: the first of each.
+            let mut given: Vec<Binding> = Vec::new();
+            for (at, (list, key, command)) in bindings.iter().enumerate() {
+                if !given.iter().any(|other| other.mode == mode(*list) && other.key == *key) {
+                    given.push(Binding { mode: mode(*list), key: key.clone(), command: command.clone(), line: at, at });
+                }
+            }
+            if let Ok(keymaps) = Keymaps::bound(&settings, &given) {
+                let text = written(&catalog, &Parsed::default(), &settings, &keymaps);
+                let config = Config::parse(&text, &catalog);
+                proptest::prop_assert!(config.is_ok(), "{:?}\n{}", config, text);
+                let read = Keymaps::bound(&settings, &config.map(|config| config.keys).unwrap_or_default());
+                proptest::prop_assert!(read.is_ok(), "{:?}\n{}", read, text);
+                let read = read.unwrap_or_default();
+                proptest::prop_assert_eq!(keys_of(&read, &settings), keys_of(&keymaps, &settings), "{}", text);
+                proptest::prop_assert_eq!(&written(&catalog, &Parsed::default(), &settings, &read), &text);
+                let [both, pages, list] = tables(&text);
+                let keys = |table: &str| {
+                    let bound = table.lines().filter(|line| !line.starts_with("##") && !line.is_empty());
+                    bound.filter_map(|line| line.trim_start_matches("# ").split_once(" = ")).map(|(key, _)| key.to_owned()).collect::<Vec<_>>()
+                };
+                for key in keys(&both) {
+                    proptest::prop_assert!(!keys(&pages).contains(&key) && !keys(&list).contains(&key), "{} twice\n{}", key, text);
+                }
+            }
+        }
+
         /// No text of a config makes clv panic: it sets options, or it says what is wrong. The
         /// text is nearly a config: names of the catalog and others, values of every kind, tables,
         /// any text at all somewhere in it, and all of that cut anywhere.

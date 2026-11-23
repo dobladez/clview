@@ -94,7 +94,10 @@ const OPTIONS: &[OptionSpec] = &[
         config: Settable::No(WHICH_CONFIG),
     },
     OptionSpec { config: Settable::No(WHICH_CONFIG), ..flag(NO_CONFIG, "read no config") },
-    OptionSpec { config: Settable::No(ASKS), ..flag(GENERATE_CONFIG, "write a config with every line commented out, where clv reads one, and exit") },
+    OptionSpec {
+        config: Settable::No(ASKS),
+        ..flag(GENERATE_CONFIG, "write a config that sets nothing, each setting commented out, where clv reads one, and exit")
+    },
     OptionSpec { config: Settable::No(ASKS), ..flag(PRINT_CONFIG, "print the config in effect, and exit") },
 ];
 
@@ -584,14 +587,14 @@ fn print_config(options: &Parsed<'_>, catalog: &Catalog, settings: &[&'static Se
 }
 
 /// `--generate-config`: writes the template of a config where clv reads one (the file `--config`
-/// names, or the reader's own), and prints the path it wrote. It takes no file, and never writes
+/// names, or the reader's own), and prints the path it wrote, whole. It takes no file, and never writes
 /// over a config.
 fn generate(options: &Parsed<'_>, catalog: &Catalog, settings: &[&'static Setting]) -> Result<(), CliError> {
     asks_alone(options, GENERATE_CONFIG)?;
     let path = config::place(which(options)?).ok_or("no place for a config: HOME is not set (--config FILE names one)")?;
     let template = config::written(catalog, &Parsed::default(), settings, &commands::Keymaps::new(settings));
     config::generate(&path, &template)?;
-    crate::stdout_line(format_args!("{}", printable(&path.display().to_string())))
+    crate::stdout_line(format_args!("{}", printable(&config::whole(&path).display().to_string())))
 }
 
 /// Refuses a file, or the other of `--generate-config` and `--print-config`, given with `asked`:
@@ -633,8 +636,16 @@ pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
     let defaults = commands::Keymaps::new(&settings);
     let template = config::written(&catalog, &Parsed::default(), &settings, &defaults);
     let mut wrong: Vec<String> = Vec::new();
-    let plain = |line: &&str| !(line.is_empty() || line.starts_with("## ") || line.starts_with("# "));
+    // A line is help, or commented out, or empty, or one of the three that start the tables of the
+    // keys, which set nothing by themselves.
+    let tables = ["[keys]", "[keys.pages]", "[keys.list]"];
+    let plain = |line: &&str| !(line.is_empty() || line.starts_with("## ") || line.starts_with("# ") || tables.contains(line));
     wrong.extend(template.lines().filter(plain).map(|line| format!("neither help nor commented out: {line}")));
+    for table in tables {
+        if template.lines().filter(|line| *line == table).count() != 1 {
+            wrong.push(format!("{table} is not there once"));
+        }
+    }
     // Each option that a config may set, once, and nothing else of the catalog.
     for entry in catalog.options() {
         let lines = template.lines().filter(|line| line.starts_with(&format!("# {} = ", entry.spec.key()))).count();
@@ -665,9 +676,19 @@ pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
         Ok(_) => wrong.push("the keymaps differ".into()),
         Err(why) => wrong.push(format!("the keys are refused: {why:?}")),
     }
-    let written = commands::writable(&defaults);
-    if config.keys.len() != written {
-        wrong.push(format!("{} keys written, of the {written} that a config can write", config.keys.len()));
+    // Each of them once: under `[keys]` where both keymaps bind the key alike, or under its keymap's.
+    for (mode, key, command) in commands::writable(&defaults) {
+        let written = |binding: &&commands::Binding| binding.key == key && binding.command == command && binding.mode.is_none_or(|only| only == mode);
+        let lines = config.keys.iter().filter(written).count();
+        if lines != 1 {
+            wrong.push(format!("{key} = {command} is written {lines} times for {mode:?}"));
+        }
+    }
+    for binding in &config.keys {
+        let twice = config.keys.iter().filter(|other| other.key == binding.key && (other.mode.is_none() != binding.mode.is_none())).count();
+        if twice > 0 {
+            wrong.push(format!("{} is under [keys] and under a keymap's table", binding.key));
+        }
     }
     wrong
 }
@@ -2420,9 +2441,9 @@ mod tests {
             "{help}"
         );
         assert!(help.contains("\n  --no-config                         read no config\n"), "{help}");
-        assert!(
-            help.contains("\n  --generate-config                   write a config with every line commented out, where clv reads one, and exit\n")
-        );
+        assert!(help.contains(
+            "\n  --generate-config                   write a config that sets nothing, each setting commented out, where clv reads one, and exit\n"
+        ));
         assert!(help.contains("\n  --print-config                      print the config in effect, and exit\n"), "{help}");
     }
 
