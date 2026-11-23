@@ -14,6 +14,9 @@ works today. A version's section becomes the notes of its
 - A list of PDFs shows its tiles sooner. For a PDF's tile, clv reads only the page sizes, and it
   opens the whole file when you open the PDF. So a tile does not show the comments and forms that
   clv draws for a PDF itself.
+- `?` and the status line write a key in lower case: `ctrl-v`, `alt-v`, `enter`, `esc`,
+  `backspace`, `pageup`, `pagedown`, `home` and `end`. Before this release, they wrote `Ctrl-V`,
+  `Enter` and `PageDown`. The arrows stay `↑ ↓ ← →`.
 
 ## 0.6.0 (2026-11-20)
 

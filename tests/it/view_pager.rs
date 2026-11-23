@@ -4631,7 +4631,7 @@ fn links_into_files_go_sixteen_levels_deep_and_no_deeper() {
         view.wait_until("the next file", |t| t.len() > before && settled(t, name) && last_bar(t).contains(" page 1/1 "));
     }
     let before = follow(&mut view, 1, "s");
-    said_since(&view, before, "b.md: not followed, 16 files deep in links already; Backspace goes back");
+    said_since(&view, before, "b.md: not followed, 16 files deep in links already; backspace goes back");
     assert!(last_bar(&view.text()).contains(" a.md "));
     let before = view.text().len();
     view.press("\x7f");
@@ -4883,7 +4883,7 @@ fn epub_t_goes_to_the_contents_page_at_the_books_end_and_backspace_comes_back() 
     assert!(!view.text()[before..].contains("Contents: T"), "said again for a layout");
     // `?` lists the key.
     view.press("?");
-    view.wait_until("listed", |t| bar(t).contains(" T to the contents: Backspace comes back"));
+    view.wait_until("listed", |t| bar(t).contains(" T to the contents: backspace comes back"));
     assert!(!bar(&view.text()).contains("\x1b[2m T "), "faint in a book that has contents");
     view.press("qq");
     assert!(view.finish().success());
@@ -4965,7 +4965,7 @@ fn the_keys_at_80_columns_are_whole_and_those_that_do_nothing_here_are_faint() {
         for keys in SETTINGS.iter().chain(&["T"]) {
             assert!(bar(&shown).contains(&faint(keys)), "{keys} isn't faint on a PDF: {shown:?}");
         }
-        for keys in ["q", "?", "f", "/", "c", "+ -", "Backspace"] {
+        for keys in ["q", "?", "f", "/", "c", "+ -", "backspace"] {
             assert!(listed(&shown, keys) && !bar(&shown).contains(&faint(keys)), "{keys} is faint, or isn't listed: {shown:?}");
         }
         assert_eq!(shown.matches("\x1b[2m").count(), shown.matches("\x1b[22m").count(), "a faint row goes back to the rest");
@@ -5008,7 +5008,7 @@ fn t_is_offered_only_where_contents_are_declared_never_on_a_pdf() {
     assert!(place_now(&view.text()).is_some_and(|(page, _)| page == 1));
     view.press("?");
     view.wait_until("the keys", |t| bar(t).contains("these keys"));
-    assert!(bar(&view.text()).contains("\x1b[2m T to the contents: Backspace comes back\x1b[22m"), "not listed faint for a PDF");
+    assert!(bar(&view.text()).contains("\x1b[2m T to the contents: backspace comes back\x1b[22m"), "not listed faint for a PDF");
     view.press("qq");
     assert!(view.finish().success());
 }

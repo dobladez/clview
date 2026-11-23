@@ -4545,7 +4545,7 @@ mod tests {
             let lines = nav.help_lines();
             let at = |what: &str| lines.iter().position(|(_, said)| *said == what).unwrap();
             assert_eq!(lines.get(at(SAID)).map(|(keys, _)| keys.as_str()), Some("D"));
-            assert!(at(SAID) > lines.iter().position(|(keys, _)| keys.starts_with("r  Ctrl-L")).unwrap());
+            assert!(at(SAID) > lines.iter().position(|(keys, _)| keys.starts_with("r  ctrl-l")).unwrap());
             assert!(at(SAID) < at("quit"));
         }
         assert!(!reader(0, 3, 40, 40).help_lines().iter().any(|(_, said)| said.contains("pale or deep")));
@@ -5068,14 +5068,14 @@ mod tests {
         press(&mut nav, &[Key::End]);
         assert!(nav.status("z.png", 100, false).ends_with("  10/10 · 3 per row · ? help "));
         press(&mut nav, &[Key::Char('4')]);
-        assert_eq!(nav.status("z.png", 100, false), format!("{:<100}", " 4: Enter tile · . per row"));
+        assert_eq!(nav.status("z.png", 100, false), format!("{:<100}", " 4: enter tile · . per row"));
         // Opened from a list, a file's pages remind of the way back, and its keys list it.
         let opened = Nav { nested: true, ..reader(0, 3, 40, 40) };
         assert!(opened.status("a.pdf", 120, false).contains(&format!("  {}  ", OPENED_KEYS[0])));
         // Without the pages to a row where there isn't room for them.
         assert!(opened.status("a.pdf", 100, false).contains(&format!("  {}  ", OPENED_KEYS[1])));
-        assert!(opened.help_lines().contains(&("Esc  Backspace".into(), "back to the list, or to the file a link led from".into())));
-        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  Esc  Ctrl-C".into(), "quit".into())));
+        assert!(opened.help_lines().contains(&("esc  backspace".into(), "back to the list, or to the file a link led from".into())));
+        assert!(reader(0, 3, 40, 40).help_lines().contains(&("q  esc  ctrl-c".into(), "quit".into())));
         assert!(nav.help_lines().iter().any(|(_, what)| what.starts_with("open it")));
     }
 
@@ -5283,15 +5283,15 @@ mod tests {
         let mut nav = Nav { contents: place(), ..reader(4, 12, 40, 40) };
         assert_eq!(nav.offer().as_deref(), Some("Contents: T"));
         assert_eq!(press(&mut nav, &[Key::Char('T')]), Step::Contents);
-        assert!(nav.help_lines().contains(&("T".into(), "to the contents: Backspace comes back".into())), "{:?}", nav.help_lines());
+        assert!(nav.help_lines().contains(&("T".into(), "to the contents: backspace comes back".into())), "{:?}", nav.help_lines());
         // A number typed before it means nothing to it, and is dropped.
         assert_eq!(press(&mut nav, &[Key::Char('3'), Key::Char('T')]), Step::Contents);
         assert!(nav.typed.is_empty() && nav.message.is_none());
         let mut without = reader(4, 12, 40, 40);
         assert_eq!((press(&mut without, &[Key::Char('T')]), without.message.as_deref()), (Step::Continue, Some(NO_CONTENTS)));
         // Listed all the same, as a key that does nothing here.
-        assert!(without.offer().is_none() && without.help_rows().contains(&("T".into(), "to the contents: Backspace comes back".into(), true)));
-        assert!(nav.help_rows().contains(&("T".into(), "to the contents: Backspace comes back".into(), false)));
+        assert!(without.offer().is_none() && without.help_rows().contains(&("T".into(), "to the contents: backspace comes back".into(), true)));
+        assert!(nav.help_rows().contains(&("T".into(), "to the contents: backspace comes back".into(), false)));
         let mut tiles = Nav { contents: place(), ..list(9) };
         assert_eq!((press(&mut tiles, &[Key::Char('T')]), tiles.message.clone(), tiles.offer()), (Step::Continue, None, None));
         assert!(!tiles.help_lines().iter().any(|(keys, _)| keys == "T"));
@@ -5463,7 +5463,7 @@ mod tests {
         let picked = typed(Nav { picked: true, ..declaring_font(reader(0, 12, 40, 40), &["font", "width"], Some(170)) }, "3");
         assert_eq!(picked.status("a.md", 80, false).trim_end(), " 3: g page · . per row");
         let list = typed(declaring_font(Nav { list: true, ..reader(0, 12, 40, 40) }, &["font", "width"], Some(170)), "4");
-        assert_eq!(list.status("", 80, false).trim_end(), " 4: Enter tile · . per row");
+        assert_eq!(list.status("", 80, false).trim_end(), " 4: enter tile · . per row");
         let long = typed(doc, "9999999");
         for cols in 0..=120 {
             assert_eq!(chars(&long.status("a.md", cols, false)), usize::from(cols));
@@ -5927,7 +5927,7 @@ mod tests {
         press(&mut nav, &[Key::Enter]);
         assert!(squeezed(&nav.status("Beach.jpg", 100, false)).contains(" Beach.jpg /beach 1/8 · 1 of 3 · "));
         press(&mut nav, &[Key::Char('4')]);
-        assert_eq!(nav.status("Beach.jpg", 100, false).trim_end(), " 4: Enter tile · . per row");
+        assert_eq!(nav.status("Beach.jpg", 100, false).trim_end(), " 4: enter tile · . per row");
         // Whatever is typed, the line is exactly as wide as the window.
         type_in(&mut nav, "/ünïcödé, 写真 and more");
         for cols in 0..=200 {

@@ -986,8 +986,8 @@ What the pager can do is apart from the keys that do it, as in Emacs
   holds the defaults. A key may be bound only with a number typed before it (`counted`): Enter is
   `scroll-down` in a file's pages and `list-open` in a list, and `go-to` in both after a number (`12⏎`).
   A key may also be bound and not listed (`also`): `=` and `_`, which are `+` and `-` with Shift or
-  without. The defaults are `less`'s and `vi`'s keys with some of Emacs's beside them (`Ctrl-N`,
-  `Ctrl-P`, `Ctrl-F`, `Ctrl-B`, `Ctrl-V`, `Alt-V`), and `back` is Backspace alone: `u` is a screen
+  without. The defaults are `less`'s and `vi`'s keys with some of Emacs's beside them (`ctrl-n`,
+  `ctrl-p`, `ctrl-f`, `ctrl-b`, `ctrl-v`, `alt-v`), and `back` is Backspace alone: `u` is a screen
   up, as `d` is a screen down, and a setting's key is never one of them, so the theme's is `D`
   ([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)).
 
@@ -1002,10 +1002,20 @@ is still being read, the run loop looks the key up the same way and takes only `
 `leave`, which stop the reading. A command that asks to be run again once the bounds are asked again
 (`Step::Again`, a width set on a document in columns) is run by itself, no key pressed twice.
 
-Nothing else writes a key. `?` lists each `Line`'s commands with the keys bound to them here
-(`Keymap::shown`: `each` key, or two commands' keys `beside` each other, `j k  ↓ ↑  Enter`, a
+Nothing else writes a key, and a key has one spelling. `keys::name` writes it, in lower case
+(`ctrl-v`, `alt-v`, `enter`, `esc`, `pagedown`, a character as itself), and `keys::named` reads
+it back, so the two cannot differ. `named` refuses a name that a terminal sends as another key,
+and says which to write: `ctrl-D` is `ctrl-d`, `ctrl-m` and `ctrl-j` are `enter`, `ctrl-h` is
+`backspace`. It refuses `tab` and `ctrl-i` too, because clv reads no Tab, and Alt with `[`, `O`,
+`\`, `_` or `]`, which the decoder never reads as a key. The property test
+`the_name_of_every_key_reads_back_as_that_key` holds the two together over every key that the
+decoder gives. `?` writes a key through `commands::long`: `keys::name`, but for the four arrows,
+which it draws.
+
+`?` lists each `Line`'s commands with the keys bound to them here
+(`Keymap::shown`: `each` key, or two commands' keys `beside` each other, `j k  ↓ ↑  enter`, a
 number before the first key of one that takes it, `3.`, and the keys bound with a number, `12
-Enter`), and leaves out a line whose commands have no key. The keys are a column of their own, as
+enter`), and leaves out a line whose commands have no key. The keys are a column of their own, as
 wide as the longest of 17 characters or fewer (`KEYS_COLUMN`, `keys_listed`): a command with more
 keys than that, as a screen down has, has what it does further right on its own line, so that one
 long list of keys doesn't take 14 columns from every line's text. What a line says goes on over

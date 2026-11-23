@@ -85,12 +85,18 @@ go to. Faint is the terminal's own (SGR 2), made of its colours, so it reads on 
 and on a dark one, and in [text cells](#text-cells) too; a terminal without it shows those keys
 as the rest. What a line says goes on over the next row where the window is too narrow for it, so
 that none is cut; in a window too short for that (80 × 24), each line keeps to one row, cut in
-its middle where it is too long, so that every key is still listed. Each key does what the command it is bound to does, and
-several keys may be bound to one: the keys of `less` and `vi`, and some of Emacs's, written here
-as `Ctrl-V` and `Alt-V`. For the Alt keys the terminal has to send Alt, or on a Mac Option, as
+its middle where it is too long, so that every key is still listed. Each key does what the
+command it is bound to does, and several keys may be bound to one: the keys of `less` and `vi`,
+and some of Emacs's.
+
+A key has one spelling, in lower case, and this manual writes a key as `?` does: `ctrl-v`, `alt-v`,
+`enter`, `esc`, `backspace`, `space`, `pageup`, `pagedown`, `home` and `end`. `?` draws the four
+arrows (`↑ ↓ ← →`). The case of a character counts: `j` is not `J`, and `alt-v` is not `alt-V`.
+
+For the Alt keys the terminal has to send Alt, or on a Mac Option, as
 `ESC` and the key: in kitty on macOS, `macos_option_as_alt yes`. Alt with a character that is
-bound to nothing does nothing. Alt with `Enter` or with a `Ctrl` key is no Alt key to `clv`: it
-reads them as `Esc` and then that key, so they leave as `Esc` does. `Alt-]` and `Alt-_` do nothing:
+bound to nothing does nothing. Alt with `enter` or with a `Ctrl` key is no Alt key to `clv`: it
+reads them as `esc` and then that key, so they leave as `esc` does. `alt-]` and `alt-_` do nothing:
 an `ESC` and `]` or `_` is how a terminal's own answers start, so `clv` waits a second for the rest
 and then drops them. `+` and `-` are listed once, as what they do where you are:
 the font size on a Markdown or HTML file, the zoom elsewhere, and the first status line's reminder
@@ -101,17 +107,17 @@ In a file's pages:
 
 | Keys | Action |
 |---|---|
-| `space`, `PgDn`, `d`, `Ctrl-V` | down a screen; at the bottom of a page, on to the next page (or pages) |
-| `b`, `PgUp`, `u`, `Alt-V` | up a screen; at the top of a page, back to the previous page (or pages) |
-| `j`, `↓`, `Ctrl-N`, `Enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
-| `k`, `↑`, `Ctrl-P` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
+| `space`, `pagedown`, `d`, `ctrl-v` | down a screen; at the bottom of a page, on to the next page (or pages) |
+| `b`, `pageup`, `u`, `alt-v` | up a screen; at the top of a page, back to the previous page (or pages) |
+| `j`, `↓`, `ctrl-n`, `enter` | down a few rows (then on to the next page); with pages side by side, down a row of pages |
+| `k`, `↑`, `ctrl-p` | up a few rows (then back to the previous page); with pages side by side, up a row of pages |
 | `n`, `→` | next page (or screen of pages); with a search kept, `n` goes to the next match, and `→` still turns the page |
 | `p`, `←` | previous page (or screen of pages); with a search kept, `p` goes to the match before, and `←` still turns the page |
-| `/` | search the file's text ([Searching a document's text](#searching-a-documents-text)): type, then `Enter` |
+| `/` | search the file's text ([Searching a document's text](#searching-a-documents-text)): type, then `enter` |
 | `N` | with a search kept, the match before, as `p`; a number, then `n`, `N` or `p`, goes that many matches on or back |
-| `g`, `Home` | first page |
-| `G`, `End` | last page |
-| a number, then `Enter`, `g` or `Home` | that page |
+| `g`, `home` | first page |
+| `G`, `end` | last page |
+| a number, then `enter`, `g` or `home` | that page |
 | `-`, `_` | zoom out: one more page to a row. On a Markdown or HTML file, its text 10% smaller ([Documents](#documents)) |
 | `+`, `=` | zoom in: one page fewer to a row, then the page as wide as the window. On a Markdown or HTML file, its text 10% larger; a number, then `+` or `-`, to that percentage, and `0+` back to 100% |
 | `,` | one more page to a row, as `-` zooms out, on any file; a number, then `,` or `.`, sets that many (as many as the window takes), and `0.` goes back to `auto`. On a Markdown or HTML file, columns: the document laid out again on that many pages to a row ([Documents](#a-page-the-windows-size)) |
@@ -119,7 +125,7 @@ In a file's pages:
 | `f` | label the links on screen; type a label to follow its link ([Following links](#following-links)) |
 | `F` | label them, and copy the address of the link whose label you type |
 | `T` | to the contents, in a file that has a place for them: a [book](#books). Backspace comes back |
-| `r`, `Ctrl-L` | render the pages again |
+| `r`, `ctrl-l` | render the pages again |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML, [books](#books), [Org documents](#org-documents) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
@@ -127,22 +133,22 @@ In a file's pages:
 | `{`, `}` | Markdown, HTML, books and Org documents laid out again with side margins a character narrower or wider, 0 to 20; a number, then `}` or `{`, to that many, and `0}` back to 3 ([Documents](#a-page-the-windows-size)); with documents |
 | `s` | Markdown and HTML's fenced blocks (` ```mermaid `), and Org's source blocks, as the code they are, laid out again, or drawn again ([Documents](#documents)); with documents |
 | `?` | these keys, in place of the pages; any key goes back |
-| `Esc`, `Backspace` | clear the search, if one is kept; then `Backspace` goes back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
-| `q`, `Esc`, `Ctrl-C` | quit; with a search kept, `Esc` clears it first |
+| `esc`, `backspace` | clear the search, if one is kept; then `backspace` goes back through the links followed, the last first ([Following links](#following-links)); otherwise back to the list, for a file opened from one, or to the document a link led from |
+| `q`, `esc`, `ctrl-c` | quit; with a search kept, `esc` clears it first |
 
 A Markdown or HTML page is as tall as the window ([Documents](#documents)), so it has nothing to
-scroll: `j`, `k` and `Enter` turn its pages as `n` and `p` do.
+scroll: `j`, `k` and `enter` turn its pages as `n` and `p` do.
 
 In a list:
 
 | Keys | Action |
 |---|---|
-| `←` `→`, `h` `l`, `Ctrl-B` `Ctrl-F` | the tile before or after |
-| `↑` `↓`, `k` `j`, `Ctrl-P` `Ctrl-N` | the tile above or below; below the last row's tiles, the last |
-| `space` `b`, `n` `p`, `d` `u`, `Ctrl-V` `Alt-V`, `PgDn` `PgUp` | a screen on or back |
-| `g`, `G`, `Home`, `End` | the first or the last tile |
-| a number, then `Enter`, `g` or `Home` | that tile |
-| `Enter` | open it: a file to its pages, a folder to its own list |
+| `←` `→`, `h` `l`, `ctrl-b` `ctrl-f` | the tile before or after |
+| `↑` `↓`, `k` `j`, `ctrl-p` `ctrl-n` | the tile above or below; below the last row's tiles, the last |
+| `space` `b`, `n` `p`, `d` `u`, `ctrl-v` `alt-v`, `pagedown` `pageup` | a screen on or back |
+| `g`, `G`, `home`, `end` | the first or the last tile |
+| a number, then `enter`, `g` or `home` | that tile |
+| `enter` | open it: a file to its pages, a folder to its own list |
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
@@ -150,8 +156,8 @@ In a list:
 | `o` | open the tile's file in the app the desktop opens it with, or its folder in the file manager ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
 | `[`, `]`, `{`, `}`, `s` | nothing: only a document opened from the list is laid out again, and they say so |
-| `Esc`, `Backspace` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `Esc` quits, and `Backspace` does nothing |
-| `q`, `Ctrl-C` | quit |
+| `esc`, `backspace` | clear the filter, if one is kept; otherwise back (up), in a folder gone into, or stop opening one; at the first list, `esc` quits, and `backspace` does nothing |
+| `q`, `ctrl-c` | quit |
 
 ## Paging through a document
 
@@ -219,7 +225,7 @@ way when it opens: `Contents: T`, on the whole status line, for a second.
 While you type a number, the status line says only the number and the keys that take it on this
 file: `7: g page · . per row` on a PDF, and `· n p match` after them with a search kept; on a Markdown
 or HTML file the settings with numbers too, by
-name, `7: g page · . per row · + font · ] width · } margin`; in a list `7: Enter tile · . per row`.
+name, `7: g page · . per row · + font · ] width · } margin`; in a list `7: enter tile · . per row`.
 The name, where you are, the zoom and `? help` give it the room, and come back with the next key; a
 narrow window drops the last keys first.
 
@@ -393,17 +399,17 @@ their order, upper and lower case alike. The name is the one under the tile: `be
 status line shows `/beach` as you type, and where you are among the tiles that match:
 `7/40 · 2 of 3`, the tile's number in the list, then its place among the matches; or
 `no match`. Every key that types a character is part of the filter, `q`, `j` and digits too
-(`Ctrl-C` still quits). `Backspace` takes the last one back, and the keys that type nothing still
-move among the matches: the arrows, `PgUp`, `PgDn`, `Home` and `End`, and `Ctrl-N`, `Ctrl-P`,
-`Ctrl-F`, `Ctrl-B`, `Ctrl-V` and `Alt-V`.
+(`ctrl-c` still quits). `backspace` takes the last one back, and the keys that type nothing still
+move among the matches: the arrows, `pageup`, `pagedown`, `home` and `end`, and `ctrl-n`, `ctrl-p`,
+`ctrl-f`, `ctrl-b`, `ctrl-v` and `alt-v`.
 
-`Enter` keeps the filter, and the list's keys move among the matches as they do among all the
-tiles: `Enter` again opens the tile chosen, and `/` edits the filter. `Esc` while typing puts the
-list back as it was before `/`. With a filter kept, `Esc` or `Backspace` clears it before
-they go back or quit. With nothing typed, `Enter` or `Backspace` leaves no filter. The tile chosen
+`enter` keeps the filter, and the list's keys move among the matches as they do among all the
+tiles: `enter` again opens the tile chosen, and `/` edits the filter. `esc` while typing puts the
+list back as it was before `/`. With a filter kept, `esc` or `backspace` clears it before
+they go back or quit. With nothing typed, `enter` or `backspace` leaves no filter. The tile chosen
 stays chosen while it matches, and otherwise the first after it that matches is chosen; when the
 filter changes or is cleared, it stays in its row of the screen where the list allows. A number
-is still the list's: `12 Enter` chooses the 12th tile if it matches, and says it doesn't
+is still the list's: `12 enter` chooses the 12th tile if it matches, and says it doesn't
 otherwise, as it says of a tile `--pages` left out.
 
 The tiles keep the size the whole list gives them, so the ones that match come together at once,
@@ -423,19 +429,19 @@ In a file's pages, `/` opens a prompt in the status line, as a list's filter doe
 the file's text: a PDF's, a spreadsheet's, which is shown as the PDF it prints to, and a
 [document's](#documents): a Word document's, an OpenDocument text's, an RTF's, Markdown's and
 HTML's, a [book's](#books) and an [Org document's](#org-documents), as it is shown. Type what
-to find, at most 256 characters; `Backspace` takes one back, and every key that types a character
-is part of it, `q` and `n` too (`Ctrl-C` still quits; the arrows and the other keys do nothing
+to find, at most 256 characters; `backspace` takes one back, and every key that types a character
+is part of it, `q` and `n` too (`ctrl-c` still quits; the arrows and the other keys do nothing
 meanwhile). A number typed before `/` is dropped. A picture or a drawing has no text to search,
 and `/` says so.
 
 While you type, the status line counts the matches in the text read so far (`/word 17…`, and
-`/word 17` once all of it is read and matched), and the view stays where it is. `Enter` searches,
+`/word 17` once all of it is read and matched), and the view stays where it is. `enter` searches,
 as in `less`: the view goes to the first match at or after the top of the screen, or
 past the end, to the first in the file, and the search is kept. If no text has been read yet, it
-goes there as soon as a match is. `Esc` while typing leaves no search, as `Enter` or `Backspace` do
+goes there as soon as a match is. `esc` while typing leaves no search, as `enter` or `backspace` do
 with nothing typed.
 
-The matches on screen are tinted once `Enter` keeps the search, a yellow under them and the one
+The matches on screen are tinted once `enter` keeps the search, a yellow under them and the one
 you are on an orange, on white paper as on dark: the paper takes the colour and the ink stays
 ink. A page is sent to the terminal again with its tint, so for a moment after a key it shows
 as it was; `n`, `N` and `p` move the orange, and clearing the search sends the pages as they were.
@@ -456,7 +462,7 @@ and `←` still turn pages. A match on a page not shown brings that page on
 screen, and zoomed in to a page that scrolls, the match is scrolled into view, a third of the way
 down the window. The status line says which match you are on and how many there are (`/word
 3/17`, with `…` after while text is still being read), or `no match`; at most 10,000 are kept and
-counted, the first in the file, and more say `10000+`. `Esc` or `Backspace` clear the search
+counted, the first in the file, and more say `10000+`. `esc` or `backspace` clear the search
 before they go back to the list or quit, after which `n` and `p` turn pages again; a number being typed
 is cleared first, as ever. `/` again edits what was searched for. A search belongs to its file: it
 ends on going back to the list. It outlives Markdown or HTML laid out again (`[` `]`, `{` `}`, `+`
@@ -469,7 +475,7 @@ doesn't). A run of spaces, tabs or line ends matches a run of them, in what you 
 text; whitespace alone matches nothing. Matches don't overlap. In a PDF none runs from one page
 onto the next: a phrase split by a page break isn't found. In a document none runs from one
 paragraph into the next, but a paragraph that runs onto the next page is searched whole, and is
-on both pages: with only the second on screen, `Enter` goes to a match in the part on it.
+on both pages: with only the second on screen, `enter` goes to a match in the part on it.
 
 The text is read from `/` on, once, outward from the page on screen, so the keys never wait on it. A
 PDF's is read in a process of its own: a book of 600 pages is read in about a second. That process
@@ -519,8 +525,8 @@ followed. The letters are Vimium's, the home row first (`sadfjklewcmpgh`), and e
 same length, the shortest that gives each link its own: one letter for up to 14 links, two for up
 to 196, three past that. Each letter typed hides the labels it rules out and pales in the others,
 and the link is followed as soon as one label is left, which may be before its last letter.
-`Backspace` takes a letter back. `Esc`, or any key that is in no label, drops the labels and does
-nothing else (`Ctrl-C` still quits), and so does anything that changes the screen: the window
+`backspace` takes a letter back. `esc`, or any key that is in no label, drops the labels and does
+nothing else (`ctrl-c` still quits), and so does anything that changes the screen: the window
 resized, the document laid out again.
 
 The labels are in reading order: page by page, down each, then across. At most 1,000 links are
@@ -540,9 +546,9 @@ kept within its page; the cells come back as they were when the labels go.
 **A place in the document** (a PDF's link to a page, its table of contents, a named destination;
 a Word cross-reference; Markdown's `[see](#usage)`, HTML's `<a href="#usage">`) is gone to: its
 page, and on a page taller than the window, scrolled so that the place is a third of the way down
-the screen. `Backspace` goes back to where you were before the last link followed, the
+the screen. `backspace` goes back to where you were before the last link followed, the
 newest first, for the last 100 of them; with none left it goes back to the list, or
-to the document a link led from. A search kept is cleared first, and `Esc` never steps back: it
+to the document a link led from. A search kept is cleared first, and `esc` never steps back: it
 clears the search, or leaves. The places belong to the file: going back to the list forgets them. Nothing goes forward
 again. With `--pages`, a link to a page that isn't among those given says so (`page 12 isn't
 among --pages`) and goes nowhere, and one to a page given twice goes where it is first. A place the
@@ -551,8 +557,8 @@ laid out again (`]`, the window resized) keeps the places to go back to: each is
 were at, found again in the new pages.
 
 **Another file** (`[the guide](docs/guide.md)`, `../README.md#install`, a PDF's link to another
-PDF) opens in `clv`, as a level of its own, the way a list's tile is gone into: `Backspace`
-and `Esc` come back to the document, where you left it. Its path is looked for beside the
+PDF) opens in `clv`, as a level of its own, the way a list's tile is gone into: `backspace`
+and `esc` come back to the document, where you left it. Its path is looked for beside the
 document, made real (every symbolic link followed), and opened only if it is a regular file or a
 directory, a directory as a list: a pipe, a socket or a device is refused before anything opens
 it, as is a path that leads nowhere, or to `/dev` or `/proc`. Then the place the link names is
@@ -934,7 +940,7 @@ runs in; with no terminal at all, on the preview's page below. Inside tmux, the 
 ([Inside tmux](#inside-tmux)).
 
 The pages are laid out when the file opens, so a large file takes its time before anything shows
-(`Ctrl-C` stops it, the terminal as it was). When the window changes size, the document is laid out
+(`ctrl-c` stops it, the terminal as it was). When the window changes size, the document is laid out
 again for it once the size has held for half a second: until then the old pages are fitted to the
 new window, and while it is laid out the status line says `laying out…` (or the width to come, when
 it isn't the window's), the old pages staying until the new ones are ready. A window still being
@@ -1396,8 +1402,8 @@ limit, it does as the last column says. How large a page is drawn is under
 | A page's [links](#following-links) | 1,024, each active over 64 rectangles at most; an address or a path of 4 KiB, a place's name of 256 bytes | past 1,024, the rest have no label, and the status line says how many; past 64, the rest of a link's rectangles are left out; a link whose address, path or name is longer isn't followed, and says so |
 | The links labelled at once | 1,000, in reading order | the rest have no label, and the status line says how many |
 | The wait for the links of the pages on screen | 2 s | a page that hasn't answered has no labels, and the status line names it |
-| The places `Backspace` goes back to | the last 100 links followed in a file | an older one is forgotten |
-| Files followed into through links, each from the one before | 16 | the next link to a file isn't followed, and the status line says so; `Backspace` goes back |
+| The places `backspace` goes back to | the last 100 links followed in a file | an older one is forgotten |
+| Files followed into through links, each from the one before | 16 | the next link to a file isn't followed, and the status line says so; `backspace` goes back |
 | A web address followed, or an address copied | 4 KiB | not followed, saying so; not copied |
 
 ## Known issues

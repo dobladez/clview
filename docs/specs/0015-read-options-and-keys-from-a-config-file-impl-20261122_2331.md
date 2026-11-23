@@ -44,3 +44,29 @@ surprises, and what a later reader would want.
   the option --theme`.
 - Nothing here is for `CHANGELOG.md` or the manual: a reader sees the names only once a config
   can write them (task 6).
+
+## Task 3: one spelling for a key
+
+- **Two functions, one table.** `keys::name` writes a key and `keys::named` reads one. `named`
+  finds a key with a name of its own (`enter`, `pagedown`) by calling `name`, so the two cannot
+  differ. The cost: the property test alone cannot see a named key spelled wrong, because the
+  round trip still holds. The unit test `a_key_has_one_name_in_lower_case_which_reads_back_as_the_key`
+  pins each spelling.
+- **More refusals than the spec lists**, each a key that the decoder never gives: Alt with `[`,
+  `O`, `\`, `_` or `]` (after an ESC, each starts a sequence of the terminal's own), Ctrl with
+  anything but a letter, and a control character. A name that is right but for its case says how
+  to write it: `Enter` says `write enter`, and `Alt-V` says `write alt-V`.
+- **`ctrl-c` reads as a key** (`Key::Interrupt`), so that `?` can write it. Task 6 refuses to
+  bind it.
+- **`named` has no caller yet**, outside the tests: it carries an `expect(dead_code)` that task 6
+  takes out.
+- **The text of three lines of `?`** said `⏎` and `Esc` for keys outside the keymaps (a search or
+  a filter being typed, the links' labels). They now say `enter` and `esc`, as the keys column
+  does. The reminders of the status line keep `⏎`.
+- **The manual.** Every backticked key in `docs/usage.md` takes the spelling, not the two tables
+  alone (86 places): one word for one thing. A key named in running text without backticks
+  (Enter opens it) is English, and stays.
+- **Seen failing:** with `Key::Ctrl` written `Ctrl-D` again, `the_name_of_every_key_reads_back_as_that_key`
+  fails on `"Ctrl-D"`. With `pagedown` written `PageDown` again, the two unit tests fail.
+- **Not in the spec's *Files:*:** `src/view/pager.rs` (its tests' expected text) and
+  `docs/architecture.md`.

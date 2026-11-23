@@ -18,7 +18,7 @@
 //! typed Esc and Backspace, which drop it and its last digit; the links' labels; and the text of
 //! a search or a filter being typed.
 
-use super::keys::Key;
+use super::keys::{self, Key};
 use crate::source::{Keys, Setting};
 
 /// Where the reader is, each with a keymap of its own: among a file's pages, or among a list's
@@ -466,27 +466,15 @@ fn after(number: u32, name: &str) -> String {
     if name.chars().count() == 1 { format!("{number}{name}") } else { format!("{number} {name}") }
 }
 
-/// What `key` is called in `?`. A key that is none typed (a terminal's answer) has no name.
+/// What `key` is called in `?`: as a config writes it ([`keys::name`]), but for the arrows, which
+/// `?` draws. A key that is none typed (a terminal's answer) has no name.
 fn long(key: Key) -> String {
     match key {
-        Key::Char(' ') => "space".to_owned(),
-        Key::Char(c) => c.to_string(),
-        Key::Ctrl(c) => format!("Ctrl-{}", c.to_ascii_uppercase()),
-        Key::Alt(' ') => "Alt-space".to_owned(),
-        Key::Alt(c) => format!("Alt-{c}"),
-        Key::Enter => "Enter".to_owned(),
-        Key::Escape => "Esc".to_owned(),
-        Key::Backspace => "Backspace".to_owned(),
-        Key::Interrupt => "Ctrl-C".to_owned(),
         Key::Up => "↑".to_owned(),
         Key::Down => "↓".to_owned(),
         Key::Left => "←".to_owned(),
         Key::Right => "→".to_owned(),
-        Key::PageUp => "PageUp".to_owned(),
-        Key::PageDown => "PageDown".to_owned(),
-        Key::Home => "Home".to_owned(),
-        Key::End => "End".to_owned(),
-        Key::Missing(_) | Key::Clipboard(_) | Key::Copied(..) => String::new(),
+        key => keys::name(key),
     }
 }
 
@@ -494,7 +482,6 @@ fn long(key: Key) -> String {
 fn short(key: Key) -> String {
     match key {
         Key::Enter => "⏎".to_owned(),
-        Key::Escape => "esc".to_owned(),
         key => long(key),
     }
 }
@@ -662,14 +649,14 @@ pub(super) const PAGE_LINES: &[Line] = &[
     line(&[Command::GoTo], "page 12").counted(12),
     ZOOM_LINE,
     PER_ROW_LINE,
-    line(&[Command::Search], "search the text as typed: ⏎ goes to the first match, Esc clears the search"),
+    line(&[Command::Search], "search the text as typed: enter goes to the first match, esc clears the search"),
     line(
         &[Command::Next, Command::PreviousMatch, Command::Previous],
         "with a search: the next match, or with {previous-match} or {previous} the one before; 3{next} the third on",
     )
     .beside(1)
     .with(3, 0),
-    line(&[Command::Follow], "label the links on screen: type a label to follow its link, Esc drops the labels"),
+    line(&[Command::Follow], "label the links on screen: type a label to follow its link, esc drops the labels"),
     line(&[Command::CopyLink], "label them, and copy the address of the one whose label is typed"),
     CONTENTS_LINE,
     line(&[Command::Back], "back to where the last link followed was"),
@@ -704,7 +691,7 @@ pub(super) const LIST_LINES: &[Line] = &[
     pair(&[Command::GoTo, Command::Last], "the first or the last"),
     line(&[Command::GoTo], "the 12th").counted(12),
     line(&[Command::Open], "open it: a file's pages, or a directory's files"),
-    line(&[Command::Filter], "filter by name as you type: ⏎ keeps it, Esc clears it"),
+    line(&[Command::Filter], "filter by name as you type: enter keeps it, esc clears it"),
     pair(&ZOOM, "bigger, fewer to a row; smaller, more to a row"),
     pair(&PER_ROW, "one more tile to a row, or one fewer; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1),
     line(&[Command::Rerender], "render again"),
@@ -941,12 +928,12 @@ mod tests {
         assert_eq!(
             shown(pages, PAGE_LINES),
             [
-                "space  PageDown  d  Ctrl-V",
-                "b  PageUp  u  Alt-v",
-                "j k  ↓ ↑  Ctrl-N Ctrl-P  Enter",
+                "space  pagedown  d  ctrl-v",
+                "b  pageup  u  alt-v",
+                "j k  ↓ ↑  ctrl-n ctrl-p  enter",
                 "n p  → ←",
-                "g G  Home End",
-                "12 Enter  12g",
+                "g G  home end",
+                "12 enter  12g",
                 "+ -",
                 ", .  3.",
                 "/",
@@ -954,8 +941,8 @@ mod tests {
                 "f",
                 "F",
                 "T",
-                "Backspace",
-                "r  Ctrl-L",
+                "backspace",
+                "r  ctrl-l",
                 "c",
                 "o"
             ]
@@ -963,16 +950,16 @@ mod tests {
         assert_eq!(
             shown(list, LIST_LINES),
             [
-                "← →  h l  Ctrl-B Ctrl-F",
-                "↑ ↓  k j  Ctrl-P Ctrl-N",
-                "space b  n p  d u  Ctrl-V Alt-v  PageDown PageUp",
-                "g G  Home End",
-                "12 Enter  12g",
-                "Enter",
+                "← →  h l  ctrl-b ctrl-f",
+                "↑ ↓  k j  ctrl-p ctrl-n",
+                "space b  n p  d u  ctrl-v alt-v  pagedown pageup",
+                "g G  home end",
+                "12 enter  12g",
+                "enter",
                 "/",
                 "+ -",
                 ", .  3.",
-                "r  Ctrl-L",
+                "r  ctrl-l",
                 "c",
                 "o"
             ]
@@ -980,7 +967,7 @@ mod tests {
         assert_eq!(shown(pages, &[COLUMNS_LINE, HELP_LINE]), [", .  3.", "?"]);
         assert_eq!(
             (shown(pages, BACK_LINES), shown(list, QUIT_LINES)),
-            (vec!["Esc  Backspace".to_owned(), "q  Ctrl-C".to_owned()], vec!["q  Esc  Ctrl-C".to_owned()])
+            (vec!["esc  backspace".to_owned(), "q  ctrl-c".to_owned()], vec!["q  esc  ctrl-c".to_owned()])
         );
         // What a line says names keys through the keymap too.
         assert_eq!(pages.fill(PER_ROW_LINE.says), "one more page to a row, or one fewer, then the width; 3. sets 3, 0. auto");
@@ -1035,8 +1022,8 @@ mod tests {
             (Command::GoTo, &[counted(Key::Char(' ')), ch('t')]),
         ];
         let other = Keymap::defaults(Mode::List, table, &mut Vec::new());
-        assert_eq!(other.reminder(LIST_HINTS[0], "zoom"), "h → ↑ Alt-n move · Ctrl-X quit");
-        assert_eq!(shown(&other, &[LIST_LINES[4], QUIT_LINES[0], LIST_LINES[5]]), ["12 space  12t", "Ctrl-X  q", ""]);
+        assert_eq!(other.reminder(LIST_HINTS[0], "zoom"), "h → ↑ alt-n move · ctrl-x quit");
+        assert_eq!(shown(&other, &[LIST_LINES[4], QUIT_LINES[0], LIST_LINES[5]]), ["12 space  12t", "ctrl-x  q", ""]);
         assert_eq!(other.fill(QUIT_LINES[0].says), "quit");
     }
 }

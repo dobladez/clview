@@ -257,9 +257,214 @@ fn copied(answer: &str) -> Option<Key> {
     Some(Key::Copied(id, status))
 }
 
+/// What `key` is called, in a config and in `?`: in lower case, and a character by itself (`j`,
+/// `J`, `/`). The one spelling of a key: [`named`] reads it back. A key that is none typed (a
+/// terminal's answer) has no name.
+pub(crate) fn name(key: Key) -> String {
+    let name = match key {
+        Key::Char(' ') => "space",
+        Key::Char(c) => return c.to_string(),
+        Key::Ctrl(c) => return format!("ctrl-{c}"),
+        Key::Alt(' ') => "alt-space",
+        Key::Alt(c) => return format!("alt-{c}"),
+        Key::Enter => "enter",
+        Key::Escape => "esc",
+        Key::Backspace => "backspace",
+        Key::Interrupt => "ctrl-c",
+        Key::Up => "up",
+        Key::Down => "down",
+        Key::Left => "left",
+        Key::Right => "right",
+        Key::PageUp => "pageup",
+        Key::PageDown => "pagedown",
+        Key::Home => "home",
+        Key::End => "end",
+        Key::Missing(_) | Key::Clipboard(_) | Key::Copied(..) => "",
+    };
+    name.to_owned()
+}
+
+/// The keys with a name of their own, as [`name`] writes them.
+const NAMED: [Key; 12] = [
+    Key::Char(' '),
+    Key::Enter,
+    Key::Escape,
+    Key::Backspace,
+    Key::Up,
+    Key::Down,
+    Key::Left,
+    Key::Right,
+    Key::Home,
+    Key::End,
+    Key::PageUp,
+    Key::PageDown,
+];
+
+/// The characters that are no Alt key: after an ESC, each starts a sequence of the terminal's own
+/// (CSI, SS3, a string's end, a graphics answer, an OSC), so [`decode`] never reads Alt with one.
+const NEVER_ALT: [char; 5] = ['[', 'O', '\\', '_', ']'];
+
+/// The key called `text`, as [`name`] writes it, or why `text` is no key that can be bound. The
+/// case of a character counts (`j` is not `J`, `alt-v` is not `alt-V`), and the names are in lower
+/// case. A key that a terminal sends as another is refused, with the name to write: `ctrl-D` is
+/// `ctrl-d`, `ctrl-m` and `ctrl-j` are `enter`, `ctrl-h` is `backspace`. So is Tab, and `ctrl-i`,
+/// which is Tab's byte: clv reads no Tab.
+#[cfg_attr(not(test), expect(dead_code, reason = "a config binds keys by these names, once clv reads one: Spec-0015"))]
+pub(crate) fn named(text: &str) -> Result<Key, String> {
+    if let Some(read) = spelled(text) {
+        return read;
+    }
+    // A name that is right but for its case says how to write it: the modifier and the names are
+    // in lower case, and the character after `alt-` keeps its own.
+    let lower = match text.split_once('-') {
+        Some((modifier, character)) if modifier.eq_ignore_ascii_case("alt") => format!("alt-{character}"),
+        _ => text.to_lowercase(),
+    };
+    match spelled(&lower) {
+        Some(Ok(_)) if lower != text => Err(format!("write {lower}: the names of keys are in lower case")),
+        _ => Err(NO_KEY.to_owned()),
+    }
+}
+
+/// What a name that is no key's is told.
+const NO_KEY: &str = "clv reads no key of that name";
+
+/// The key `text` spells, or why it spells none that can be bound; `None` for a text that is not
+/// the name of a key at all.
+fn spelled(text: &str) -> Option<Result<Key, String>> {
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (None, _) => return Some(Err("a key has a name".to_owned())),
+        (Some(' '), None) => return Some(Err("write space".to_owned())),
+        (Some(c), None) if c.is_control() => return Some(Err("a control character is no key".to_owned())),
+        (Some(c), None) => return Some(Ok(Key::Char(c))),
+        _ => {}
+    }
+    if let Some(key) = NAMED.iter().find(|key| name(**key) == text) {
+        return Some(Ok(*key));
+    }
+    if text == "tab" {
+        return Some(Err("clv does not read Tab as a key".to_owned()));
+    }
+    if let Some(letter) = text.strip_prefix("ctrl-") {
+        return Some(ctrl(letter));
+    }
+    text.strip_prefix("alt-").map(alt)
+}
+
+/// Ctrl and `letter`, what follows `ctrl-` in a key's name.
+fn ctrl(letter: &str) -> Result<Key, String> {
+    let mut chars = letter.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return Err(NO_KEY.to_owned()) };
+    let same = |key: &str| format!("write {key}: a terminal sends the same byte for both");
+    match c {
+        'c' => Ok(Key::Interrupt),
+        'm' | 'j' => Err(same("enter")),
+        'h' => Err(same("backspace")),
+        'i' => Err("a terminal sends the same byte for ctrl-i and Tab, and clv does not read Tab as a key".to_owned()),
+        'a'..='z' => Ok(Key::Ctrl(c)),
+        'A'..='Z' => Err(same(&format!("ctrl-{}", c.to_ascii_lowercase()))),
+        _ => Err("clv reads Ctrl with a letter only".to_owned()),
+    }
+}
+
+/// Alt and `character`, what follows `alt-` in a key's name.
+fn alt(character: &str) -> Result<Key, String> {
+    if character == "space" {
+        return Ok(Key::Alt(' '));
+    }
+    let mut chars = character.chars();
+    match (chars.next(), chars.next()) {
+        (Some(' '), None) => Err("write alt-space".to_owned()),
+        (Some(c), None) if c.is_control() => Err("a control character is no key".to_owned()),
+        (Some(c), None) if NEVER_ALT.contains(&c) => Err("a terminal's own answers start as this key does, so clv does not read it".to_owned()),
+        (Some(c), None) => Ok(Key::Alt(c)),
+        (None, _) => Err(NO_KEY.to_owned()),
+        _ => Err("clv reads Alt with one character only".to_owned()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key has one spelling, in lower case, which a config writes and `?` shows: its name reads
+    /// back as the key, and the case of a character counts.
+    #[test]
+    fn a_key_has_one_name_in_lower_case_which_reads_back_as_the_key() {
+        for (key, called) in [
+            (Key::Char(' '), "space"),
+            (Key::Char('j'), "j"),
+            (Key::Char('J'), "J"),
+            (Key::Char('/'), "/"),
+            (Key::Char('-'), "-"),
+            (Key::Char('5'), "5"),
+            (Key::Char('é'), "é"),
+            (Key::Ctrl('v'), "ctrl-v"),
+            (Key::Ctrl('a'), "ctrl-a"),
+            (Key::Ctrl('z'), "ctrl-z"),
+            (Key::Alt('v'), "alt-v"),
+            (Key::Alt('V'), "alt-V"),
+            (Key::Alt(' '), "alt-space"),
+            (Key::Alt('é'), "alt-é"),
+            (Key::Alt('-'), "alt--"),
+            (Key::Enter, "enter"),
+            (Key::Escape, "esc"),
+            (Key::Backspace, "backspace"),
+            (Key::Interrupt, "ctrl-c"),
+            (Key::Up, "up"),
+            (Key::Down, "down"),
+            (Key::Left, "left"),
+            (Key::Right, "right"),
+            (Key::PageUp, "pageup"),
+            (Key::PageDown, "pagedown"),
+            (Key::Home, "home"),
+            (Key::End, "end"),
+        ] {
+            assert_eq!((name(key), named(called)), (called.to_owned(), Ok(key)), "{called}");
+        }
+        // A terminal's answer is no key, and has no name.
+        assert_eq!([name(Key::Missing(3)), name(Key::Clipboard(true)), name(Key::Copied(1, Ok(())))], ["", "", ""]);
+        assert_ne!(named("j"), named("J"));
+        assert_ne!(named("alt-v"), named("alt-V"));
+    }
+
+    /// A name that is no key's is refused, with why, and with the name to write where there is one:
+    /// a key that a terminal sends as another, a name not in lower case, and what clv reads no key
+    /// for.
+    #[test]
+    fn a_name_that_is_no_keys_is_refused_with_the_name_to_write() {
+        let same = "a terminal sends the same byte for both";
+        for (text, why) in [
+            ("ctrl-D", format!("write ctrl-d: {same}")),
+            ("ctrl-V", format!("write ctrl-v: {same}")),
+            ("ctrl-m", format!("write enter: {same}")),
+            ("ctrl-j", format!("write enter: {same}")),
+            ("ctrl-h", format!("write backspace: {same}")),
+            ("ctrl-i", "a terminal sends the same byte for ctrl-i and Tab, and clv does not read Tab as a key".to_owned()),
+            ("tab", "clv does not read Tab as a key".to_owned()),
+            ("Enter", "write enter: the names of keys are in lower case".to_owned()),
+            ("PageDown", "write pagedown: the names of keys are in lower case".to_owned()),
+            ("Ctrl-D", "write ctrl-d: the names of keys are in lower case".to_owned()),
+            ("Alt-V", "write alt-V: the names of keys are in lower case".to_owned()),
+            ("ALT-space", "write alt-space: the names of keys are in lower case".to_owned()),
+            (" ", "write space".to_owned()),
+            ("alt- ", "write alt-space".to_owned()),
+            ("ctrl-1", "clv reads Ctrl with a letter only".to_owned()),
+            ("ctrl-é", "clv reads Ctrl with a letter only".to_owned()),
+            ("alt-[", "a terminal's own answers start as this key does, so clv does not read it".to_owned()),
+            ("alt-_", "a terminal's own answers start as this key does, so clv does not read it".to_owned()),
+            ("alt-xy", "clv reads Alt with one character only".to_owned()),
+            ("\x1b", "a control character is no key".to_owned()),
+            ("alt-\x07", "a control character is no key".to_owned()),
+            ("", "a key has a name".to_owned()),
+        ] {
+            assert_eq!(named(text), Err(why), "{text:?}");
+        }
+        for text in ["f5", "delete", "insert", "ctrl-", "alt-", "ctrl-shift-d", "jj", "CTRL-M", "Tab", "ctrl-enter", "escape", "return"] {
+            assert_eq!(named(text), Err(NO_KEY.to_owned()), "{text:?}");
+        }
+    }
 
     fn keys(bytes: &[u8]) -> Vec<Key> {
         let (keys, used) = decode(bytes, true);
@@ -607,6 +812,48 @@ mod tests {
             }
             proptest::prop_assert_eq!(got, expected);
             proptest::prop_assert!(pending.is_empty());
+        }
+
+        /// The name of every key that can be typed reads back as that key, whatever bytes it came
+        /// from: a config can write every key that clv reads.
+        #[test]
+        fn the_name_of_every_key_reads_back_as_that_key(
+            parts in proptest::collection::vec((0usize..6, proptest::prelude::any::<char>(), proptest::prelude::any::<u8>()), 0..40),
+            flush in proptest::prelude::any::<bool>(),
+        ) {
+            const SEQUENCES: [&[u8]; 10] = [b"\x1b[A", b"\x1b[B", b"\x1b[C", b"\x1b[D", b"\x1b[5~", b"\x1b[6~", b"\x1b[H", b"\x1b[F", b"\r", b"\x7f"];
+            let mut bytes = Vec::new();
+            for (kind, character, byte) in parts {
+                let mut utf8 = [0u8; 4];
+                match kind {
+                    // A character, Alt and a character, a control byte, a key's sequence, an Esc,
+                    // and any byte at all.
+                    0 => bytes.extend_from_slice(character.encode_utf8(&mut utf8).as_bytes()),
+                    1 => {
+                        bytes.push(0x1b);
+                        bytes.extend_from_slice(character.encode_utf8(&mut utf8).as_bytes());
+                    }
+                    2 => bytes.push(byte % 0x20),
+                    3 => bytes.extend_from_slice(SEQUENCES[usize::from(byte) % SEQUENCES.len()]),
+                    4 => bytes.push(0x1b),
+                    _ => bytes.push(byte),
+                }
+            }
+            for key in decode(&bytes, flush).0 {
+                let called = name(key);
+                match key {
+                    Key::Missing(_) | Key::Clipboard(_) | Key::Copied(..) => proptest::prop_assert!(called.is_empty()),
+                    key => proptest::prop_assert_eq!(named(&called), Ok(key), "{:?}", called),
+                }
+            }
+        }
+
+        /// A name that reads as a key is that key's own: a key has one spelling.
+        #[test]
+        fn a_name_that_reads_as_a_key_is_the_keys_own(text in "((ctrl|alt|Alt|CTRL)-)?([^\\p{C}]{0,2}|[a-zA-Z]{2,9})") {
+            if let Ok(key) = named(&text) {
+                proptest::prop_assert_eq!(name(key), text);
+            }
         }
     }
 }
