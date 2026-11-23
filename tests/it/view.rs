@@ -237,15 +237,15 @@ fn config_that_is_wrong_stops_clv_and_names_the_file_and_the_line() {
     let pdf = fixture("config-wrong", 1);
     let file = crate::bin::config_home("wrong", "").join("clv/config.toml");
     for (written, said) in [
-        ("theme = \"dark\"\n\nwidth = 300\n", ":3: width: expected window or 20–200, got 300"),
-        ("per-row = 9\n", ":1: per-row: expected auto, width or 1–8, got 9"),
+        ("compression = \"small\"\n\nper-row = 9\n", ":3: per-row: expected auto, width or 1–8, got 9"),
+        ("protocol = \"sixel\"\n", ":1: protocol: expected auto, kitty, blocks or ascii, got sixel"),
         ("recurse = \"yes\"\n", ":1: recurse: expected true or false, got \"yes\""),
         ("# One.\nfrobnicate = 1\n", ":2: unknown option frobnicate"),
         ("pages = \"1\"\n", ":1: pages: a config can't set it: it belongs to one run"),
         ("password = \"x\"\n", ":1: password: a config can't set it: a password does not belong in a plain file"),
         ("config = \"x.toml\"\n", ":1: config: a config can't set it: it says which config to read"),
         ("zoom = 2\n", ":1: zoom is now per-row: write per-row"),
-        ("theme = \"\\u001b]52;c;eA==\\u0007\"\n", ":1: theme: expected auto, light or dark, got \u{fffd}]52;c;eA==\u{fffd}"),
+        ("compression = \"\\u001b]52;c;eA==\\u0007\"\n", ":1: compression: expected auto, fast or small, got \u{fffd}]52;c;eA==\u{fffd}"),
         ("\"na\\u001bme\" = 1\n", ":1: unknown option na\u{fffd}me"),
     ] {
         let out = configured("wrong", written, &pdf, &["--protocol", "kitty"]);
@@ -253,17 +253,17 @@ fn config_that_is_wrong_stops_clv_and_names_the_file_and_the_line() {
         assert_eq!(text(&out.stderr), format!("clv: {}{said}\n", file.display()), "{written:?}");
     }
     // What is no TOML says its line too.
-    let out = configured("wrong", "theme = \"dark\"\nwidth = \n", &pdf, &["--protocol", "kitty"]);
+    let out = configured("wrong", "compression = \"small\"\nper-row = \n", &pdf, &["--protocol", "kitty"]);
     assert!(!out.status.success() && out.stdout.is_empty());
     assert!(text(&out.stderr).starts_with(&format!("clv: {}:2: ", file.display())), "{}", text(&out.stderr));
     // Named from the reader's home, as the reader writes it.
     let home = tmp("config-wrong", "home");
     std::fs::create_dir_all(home.join(".config/clv")).unwrap();
-    std::fs::write(home.join(".config/clv/config.toml"), "theme = \"dark\"\n\nwidth = 300\n").unwrap();
+    std::fs::write(home.join(".config/clv/config.toml"), "compression = \"small\"\n\nper-row = 9\n").unwrap();
     let out = view_with(&pdf, &["--protocol", "kitty"], &[("XDG_CONFIG_HOME", ""), ("HOME", home.to_str().unwrap())]);
-    assert_eq!(text(&out.stderr), "clv: ~/.config/clv/config.toml:3: width: expected window or 20–200, got 300\n");
+    assert_eq!(text(&out.stderr), "clv: ~/.config/clv/config.toml:3: per-row: expected auto, width or 1–8, got 9\n");
     // `--no-config` reads none, wrong or not.
-    let out = configured("wrong", "width = 300\n", &pdf, &["--protocol", "kitty", "--no-config"]);
+    let out = configured("wrong", "per-row = 9\n", &pdf, &["--protocol", "kitty", "--no-config"]);
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     // A file asked for by name must be there, and be a file within the size clv reads.
     let dir = tmp("config-wrong", "dir");
@@ -280,7 +280,7 @@ fn config_that_is_wrong_stops_clv_and_names_the_file_and_the_line() {
     let out = configured("wrong", "", &pdf, &["--protocol", "kitty", "--config", missing.to_str().unwrap(), "--no-config"]);
     assert_eq!(text(&out.stderr), "clv: give --config or --no-config, not both\n");
     // A worker process reads no config: it answers as it does without one.
-    let home = crate::bin::config_home("wrong", "width = 300\n");
+    let home = crate::bin::config_home("wrong", "per-row = 9\n");
     let worker = crate::bin::clv().args(["--worker", "none"]).env("XDG_CONFIG_HOME", &home).stdin(Stdio::null()).output().unwrap();
     assert!(!text(&worker.stderr).contains("config.toml"), "{}", text(&worker.stderr));
     let version = crate::bin::clv().arg("--version").env("XDG_CONFIG_HOME", &home).output().unwrap();
@@ -394,7 +394,7 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
 /// line wins. What it prints is a config that clv takes, and that prints the same.
 #[test]
 fn print_config_prints_what_the_file_and_the_command_line_set() {
-    let home = crate::bin::config_home("print", "theme = \"dark\"\nper-row = 3\npager = true\n\n[keys]\nx = \"quit\"\nq = \"none\"\n");
+    let home = crate::bin::config_home("print", "compression = \"small\"\nper-row = 3\npager = true\n\n[keys]\nx = \"quit\"\nq = \"none\"\n");
     let printed = |args: &[&str]| {
         let out = clv_with_config_home(&home, args);
         assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
@@ -403,12 +403,12 @@ fn print_config_prints_what_the_file_and_the_command_line_set() {
     let once = |printed: &str, line: &str| printed.lines().filter(|other| *other == line).count() == 1;
     let file = printed(&["--print-config"]);
     for line in [
-        "theme = \"dark\"",
+        "compression = \"small\"",
         "per-row = 3",
         "pager = true",
         "# no-pager = false",
         "# recurse = false",
-        "# compression = \"auto\"",
+        "# protocol = \"auto\"",
         "[keys.pages]",
         "[keys.list]",
     ] {
@@ -417,8 +417,8 @@ fn print_config_prints_what_the_file_and_the_command_line_set() {
     assert_eq!(file.matches("\nx = \"quit\"\nq = \"none\"\n").count(), 2, "in both keymaps:\n{file}");
     assert!(!file.contains("# q = \"quit\""), "{file}");
     // The command line's, and the command line wins.
-    let typed = printed(&["--print-config", "--per-row", "2", "--recurse", "--compression", "small", "--no-pager"]);
-    for line in ["theme = \"dark\"", "per-row = 2", "recurse = true", "compression = \"small\"", "no-pager = true", "# pager = false"] {
+    let typed = printed(&["--print-config", "--per-row", "2", "--recurse", "--protocol", "kitty", "--no-pager"]);
+    for line in ["compression = \"small\"", "per-row = 2", "recurse = true", "protocol = \"kitty\"", "no-pager = true", "# pager = false"] {
         assert!(once(&typed, line), "{line}:\n{typed}");
     }
     assert!(!typed.contains("per-row = 3"), "{typed}");
@@ -427,9 +427,11 @@ fn print_config_prints_what_the_file_and_the_command_line_set() {
     std::fs::write(&again, &file).unwrap();
     assert_eq!(printed(&["--print-config", "--config", again.to_str().unwrap()]), file);
     // A config that is wrong is said, not printed.
-    let wrong = crate::bin::config_home("print-wrong", "width = 300\n");
+    let wrong = crate::bin::config_home("print-wrong", "per-row = 9\n");
     let out = clv_with_config_home(&wrong, &["--print-config"]);
-    assert!(!out.status.success() && out.stdout.is_empty() && text(&out.stderr).contains("config.toml:1: width: expected window or 20–200, got 300"));
+    assert!(
+        !out.status.success() && out.stdout.is_empty() && text(&out.stderr).contains("config.toml:1: per-row: expected auto, width or 1–8, got 9")
+    );
 }
 
 #[test]
@@ -485,8 +487,6 @@ fn bad_arguments_say_what_is_allowed() {
         (&["--per-row", "9"], "clv: --per-row: expected auto, width or 1–8, got 9\n"),
         (&["--protocol", "sixel"], "clv: --protocol: expected auto, kitty, blocks or ascii, got sixel\n"),
         (&["--compression", "best"], "clv: --compression: expected auto, fast or small, got best\n"),
-        (&["--theme", "sepia"], "clv: --theme: expected auto, light or dark, got sepia\n"),
-        (&["--width", "300"], "clv: --width: expected window or 20–200, got 300\n"),
         (&["--per-row", "\x1b[2J"], "clv: --per-row: expected auto, width or 1–8, got \u{fffd}[2J\n"),
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),

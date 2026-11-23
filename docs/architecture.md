@@ -62,7 +62,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 
 | Where | What it does |
 |---|---|
-| `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer, and `source::WORKERS` to `source::serve` when clv is run again as a worker; command-line options and page lists |
+| `src/main.rs`, `src/args.rs` | The entry point, which hands `source::BACKENDS` to the viewer, and `source::WORKERS` to `source::serve` when clv is run again as a worker; command-line options, the catalog that lists them ([The options catalog](#the-options-catalog-argsrs)), and page lists |
 | `src/encode.rs` | Rendered pixels into a PNG, fast or small, with straight alpha. Pure. For the viewer, and for a document to hold a picture |
 | `src/view/` | The viewer, below |
 | `src/source.rs` | The traits (`Source`, `Render`, `Pool`, `Frame`, `Texts`, `Backend`, `Container`, `Worker`), `BACKENDS` and `WORKERS` |

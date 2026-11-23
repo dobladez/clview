@@ -34,6 +34,8 @@ After you open a file, you can do these things:
   `Backspace` to go back. Use `F` to copy the link's address.
 - **Dark and light.** On a dark terminal, Markdown, HTML and Mermaid diagrams show light text on a
   dark background. Use `D` to change between dark and light.
+- **Your own defaults and keys.** A config file sets options and binds keys to commands. Use
+  `clv --generate-config` to write one to start from.
 
 Options such as `--no-pager`, `--per-row` and `--protocol ascii`, and every key, are in
 [`docs/usage.md`](docs/usage.md).
@@ -83,7 +85,7 @@ follow [their feed](https://github.com/dobladez/clview/releases.atom). What each
 
 High level, not in order, no promises; more details and other idesa in the [backlog](docs/backlog.md).
 
-- A config file: customization, settings and positions remembered.
+- Positions remembered for files opened before.
 - Plain text files (yes, not yet: ironic).
 - More diagram languages: Graphviz, D2, math.
 - Markdown's code blocks highlighted by their language.

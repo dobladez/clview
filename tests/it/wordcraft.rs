@@ -823,6 +823,37 @@ fn config_width_against_per_row_the_one_typed_wins_and_nothing_is_said() {
     assert_eq!(text(&out.stderr), "warning: --width and --per-row disagree on long.md: the width wins\n");
 }
 
+/// A setting's option in the config is the setting's start, as on the command line: `theme =
+/// "dark"` is dark paper, and `font = 150` larger text. A value that the setting doesn't take is
+/// refused with the message that the command line gives, after the file and the line.
+#[test]
+fn config_sets_a_setting_as_its_option_does() {
+    let path = write(tmp("word-config-setting", "a.md"), b"# One\n\nSome words.\n");
+    let printed = |config: &str, args: &[&str]| {
+        let home = crate::bin::config_home("word-setting", config);
+        let env = [("XDG_CONFIG_HOME", home.to_str().unwrap()), ("HOME", "/nonexistent")];
+        crate::view::view_with(&path, &[&["--protocol", "kitty"], args].concat(), &env)
+    };
+    let typed = |args: &[&str]| view(&path, &[&["--protocol", "kitty"], args].concat());
+    let (plain, dark, large) = (typed(&[]), typed(&["--theme", "dark"]), typed(&["--font", "150"]));
+    assert!(plain.stdout != dark.stdout && plain.stdout != large.stdout && dark.status.success() && large.status.success());
+    for (config, as_typed) in [("theme = \"dark\"\n", &dark), ("font = 150\n", &large), ("font = \"150\"\n", &large), ("", &plain)] {
+        let out = printed(config, &[]);
+        assert!(out.status.success() && out.stderr.is_empty(), "{config:?}: {}", text(&out.stderr));
+        assert!(out.stdout == as_typed.stdout, "{config:?} is not as its option");
+    }
+    // The command line wins.
+    assert!(printed("theme = \"dark\"\n", &["--theme", "light"]).stdout == plain.stdout);
+    // One message for a value it doesn't take, wherever it came from.
+    assert_eq!(text(&typed(&["--width", "300"]).stderr), "clv: --width: expected window or 20–200, got 300\n");
+    let file = crate::bin::config_home("word-setting", "").join("clv/config.toml");
+    let out = printed("theme = \"dark\"\n\nwidth = 300\n", &[]);
+    assert!(!out.status.success() && out.stdout.is_empty());
+    assert_eq!(text(&out.stderr), format!("clv: {}:3: width: expected window or 20–200, got 300\n", file.display()));
+    let out = printed("theme = \"sepia\"\n", &[]);
+    assert_eq!(text(&out.stderr), format!("clv: {}:1: theme: expected auto, light or dark, got sepia\n", file.display()));
+}
+
 /// A protected Word document opens with its password, says it needs one without, and refuses a
 /// wrong one.
 #[test]

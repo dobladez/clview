@@ -321,8 +321,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change:
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change:
   - the helper: without it, a config with `per-row = 3` in the developer's place breaks a test
     of `tests/it/view.rs`
   - the commands of each setting have the name of its option
@@ -336,8 +336,8 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - [ ] Manual: in kitty, with `theme = "dark"` and `[keys] x = "quit"` in the config, open a
   Markdown file. See dark paper. Press `?`: see `x` first among the keys that quit. Press `x`:
   clv quits. Do the same inside tmux.
-- [ ] Manual: `clv --no-config --print-config` prints what `clv --generate-config` wrote.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)): the ADR
+- [x] Manual: `clv --no-config --print-config` prints what `clv --generate-config` wrote.
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)): the ADR
   for TOML, the layout, the names and the bindings with a count; README's Plans bullet as
   "Positions remembered for files opened before"; the backlog's
   [A config file](../backlog.md#a-config-file) with what is left.

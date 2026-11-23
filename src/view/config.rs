@@ -6,6 +6,10 @@
 //! `$HOME/.config/clv/config.toml` otherwise, on macOS too. `--config FILE` reads another file, and
 //! `--no-config` none ([`Which`]). The file is untrusted input, as every file is: clv reads at most
 //! [`MAX_SIZE`] of it, and whatever is wrong with it is an error that names the file and the line.
+//!
+//! The config is also written here, as text ([`written`]): the config in effect, for
+//! `--print-config`, and with nothing set the template that `--generate-config` puts where there
+//! is no config yet ([`generate`]). clv writes a config at no other time.
 //! Why TOML, and why the file is flat:
 //! [ADR-0043](../../docs/adr/0043-a-config-in-toml-flat-keyed-by-the-names-of-the-catalogs.md).
 

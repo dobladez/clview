@@ -44,20 +44,40 @@ by name on a key of its own, so `/` means one thing everywhere.
 
 ### A config file
 
-[Spec-0015](specs/0015-read-options-and-keys-from-a-config-file.md) gives clv a config file. The
-file holds the defaults of options, and keys bound to commands by name. An app for `o` to open
-each format with is left for later:
-[`[open-with]`](#open-with-a-program-of-the-readers-choosing-for-each-format).
+clv has a config file ([The config file](usage.md#the-config-file),
+[ADR-0043](adr/0043-a-config-in-toml-flat-keyed-by-the-names-of-the-catalogs.md)). The file holds
+the defaults of options, and keys bound to commands by name
+([Spec-0015](specs/0015-read-options-and-keys-from-a-config-file.md)). These things are left.
 
-The positions of files opened before are left. clv would write them as state of its own, apart from
-the config, which clv writes only when the reader asks (`--generate-config`). Open questions for
-that change:
+**Positions remembered** for files opened before. clv would write them as state of its own, apart
+from the config, which clv writes only when the reader asks (`--generate-config`). Open questions
+for that change:
 
 - How clv knows a file again: by its path, or by its size and the time it changed, after a move or
   an edit.
 - Where clv keeps the state (`$XDG_STATE_HOME`), how many files it remembers, and how a reader
   turns it off.
 - What a reader may not want written down: the names of the files that the reader opened.
+
+**An app for `o`** to open each format with:
+[`[open-with]`](#open-with-a-program-of-the-readers-choosing-for-each-format).
+
+**Smaller things**, none planned:
+
+- An opposite for each flag (`--no-recurse`). Today a flag that the config sets stays on, and
+  only `--no-config` turns it off.
+- A config written for a full build stops a `clv` built without some backends, on a name that the
+  build does not have (`width`). To skip such names, clv would have to know the names of the
+  backends that it lacks.
+- Settings saved from the pager: a width set with `]`, or a theme turned with `D`, written to the
+  config.
+- A value of a setting for one backend alone, and a keymap for one format alone. Today a setting
+  is one value for the run, and a key is one command in each keymap.
+- A command that sets a value in a binding (`W = "set-width window"`). Today the number typed
+  before a key does that: `72]`.
+- Key sequences (`g g`), and the keys that clv does not read: Tab, Delete, Insert and the function
+  keys.
+- The config read again while clv runs, a config for each directory, and includes.
 
 ### More pictures and archives
 

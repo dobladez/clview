@@ -260,3 +260,33 @@ format, the layout, the names and the bindings with a number.
 - **Not in the spec's *Files:*:** `src/args.rs` (`Entry::default`), `src/view/commands.rs`
   (`groups`, `Keymap::all`), `src/source.rs` (the test), `docs/architecture.md`,
   `CONTRIBUTING.md`.
+
+## The Done checklist
+
+- **The gates** pass on the last commit: `cargo fmt --check`, `cargo clippy --all-targets -j 2
+  -- -D warnings`, `cargo test -j 2`.
+- **The tests of `tests/it/view.rs` name no setting.** That file runs in a build with PDFs and
+  SVG alone (CI's nightly `pdf,svg`), where `theme` and `width` are unknown names. So the
+  `config_…` and `print_config_…` tests there use the viewer's own options (`per-row`,
+  `compression`, `protocol`), and two cases of `bad_arguments_say_what_is_allowed` that named
+  `--theme` and `--width` came out. A setting from the config has its own test with the
+  documents, `config_sets_a_setting_as_its_option_does` in `tests/it/wordcraft.rs`: `theme =
+  "dark"` prints what `--theme dark` prints, the command line wins, and a bad value has the
+  command line's message after the file and the line. Seen failing with the config's options
+  ignored (`"theme = \"dark\"\n" is not as its option`).
+- **Other feature sets were not built**, as `docs/specs/project.md` says. What was checked by
+  reading, for a build with no backend: every new enum variant is constructed in the core
+  (`Shape::Setting` in `Catalog::declare`, `Shape::Text` by `--config`), and no new item is used
+  by a backend alone. CI's nightly run is the check: run it after the merge (`gh workflow run
+  CI`).
+- **Manual, `clv --no-config --print-config` against `--generate-config`:** checked in a shell
+  (`diff` says the same), and `generate_config_…` checks it on every run.
+- **Manual, in kitty and inside tmux:** not done here, and left open. It needs a real terminal:
+  with `theme = "dark"` and `[keys] x = "quit"` in the config, open a Markdown file, see dark
+  paper, press `?` and see `x` first among the keys that quit, press `x` and see clv quit. The
+  tests cover each part on a pseudo-terminal or through a pipe (`config_sets_a_setting_…`,
+  `config_keys_bound_again_…`), but none looks at a screen, and none runs the config inside tmux.
+- **README's Plans**: the bullet is now "Positions remembered for files opened before". The
+  README also has a line for the config, under what you can do. The backlog's "A config file"
+  says what is left, with the spec's two open questions and its Out of scope as ideas not planned.
+- **The spec stays `Implementing`** until the owner does the manual check in kitty and tmux.
