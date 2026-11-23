@@ -2,6 +2,7 @@
 //! so needs the PDF backend (the `pdf` feature).
 #![cfg(feature = "pdf")]
 
+mod bin;
 mod epub;
 mod fixtures;
 mod gridcraft;

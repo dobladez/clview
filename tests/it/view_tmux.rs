@@ -18,19 +18,11 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_clv");
+use crate::bin::script;
 
-/// `line` run by a shell on a new pseudo-terminal: BSD script (macOS, FreeBSD) takes the command
-/// after the output file; util-linux script (Linux) takes it as one shell line.
-fn script(line: &str) -> Command {
-    let mut script = Command::new("script");
-    if cfg!(target_os = "linux") {
-        script.args(["-q", "-e", "-c", line, "/dev/null"]);
-    } else {
-        script.args(["-q", "/dev/null", "sh", "-c", line]);
-    }
-    script
-}
+/// `clv`, for a shell line that a pane of the private server runs. The server starts under
+/// [`script`], which keeps `clv` away from the developer's config.
+const BIN: &str = crate::bin::CLV;
 
 /// What this machine lacks for the test, if anything: tmux, or a pseudo-terminal of the size
 /// asked for from script(1).
@@ -86,10 +78,12 @@ impl Server {
         Server { socket: format!("clview-test-{test}-{}", std::process::id()), config, path: None, clients: Vec::new(), kitty_terminfo: None }
     }
 
-    /// A tmux command, outside any tmux the tests run in: its output when it succeeds.
+    /// A tmux command, outside any tmux the tests run in: its output when it succeeds. One that
+    /// starts the server hands its environment on to the panes, so it has the tests' own config too.
     fn run(&self, args: &[&str]) -> Option<Vec<u8>> {
         let mut command = Command::new("tmux");
         command.arg("-L").arg(&self.socket).args(args);
+        crate::bin::own_config(&mut command);
         for name in NOT_INHERITED {
             command.env_remove(name);
         }
@@ -660,7 +654,7 @@ fn make_kitty_terminfo(dir: &std::path::Path) -> bool {
 #[test]
 fn inside_tmux_help_shows_the_icon_beside_its_first_lines_and_keeps_one_image() {
     let Some(Shell { server, pane, output, pdf }) = shell_on("help", true) else { return };
-    let plain = String::from_utf8(Command::new(BIN).arg("--help").output().unwrap().stdout).unwrap();
+    let plain = String::from_utf8(crate::bin::clv().arg("--help").output().unwrap().stdout).unwrap();
     let plain: Vec<&str> = plain.lines().collect();
     // What the terminal got from this run, once its image is in: the ids it was sent as.
     let help = |done: &str| {

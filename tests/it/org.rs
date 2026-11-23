@@ -8,7 +8,7 @@
 
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::epub::{BLUE, Mimetype, of, plain, write, zipped};
 use crate::view::{images, text, tmp, view};
@@ -73,7 +73,7 @@ fn a_mode_line_says_org_whatever_the_name_and_through_a_pipe() {
         assert_eq!(pages(&markdown, &[]).0.iter().map(shows).collect::<Vec<_>>(), [[false, false, false]], "{name}: Markdown, its Org as text");
     }
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
@@ -92,7 +92,7 @@ fn a_mode_line_says_org_whatever_the_name_and_through_a_pipe() {
 /// viewer refuses it and stops reading, so what writes to the pipe finds it closed.
 #[test]
 fn an_org_file_through_a_pipe_is_never_read_past_the_limit() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
@@ -242,7 +242,7 @@ fn a_hostile_org_file_costs_the_document_and_never_the_viewer() {
 /// `--help` lists Org with its extensions, crediting orgize.
 #[test]
 fn help_lists_org_and_credits_orgize() {
-    let out = Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").env("TERM", "dumb").output().unwrap();
+    let out = crate::bin::clv().arg("--help").env("TERM", "dumb").output().unwrap();
     assert!(text(&out.stdout).contains("Org documents, by orgize: Org (.org .org_archive)"), "{}", text(&out.stdout));
 }
 

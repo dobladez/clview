@@ -7,8 +7,6 @@ use std::process::{Command, Output, Stdio};
 
 use base64::Engine as _;
 
-const BIN: &str = env!("CARGO_BIN_EXE_clv");
-
 pub(crate) fn tmp(test: &str, name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("clview-{test}-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
@@ -36,7 +34,7 @@ pub(crate) fn view_with(pdf: &Path, args: &[&str], env: &[(&str, &str)]) -> Outp
 
 /// `clv`, kept away as [`view`] says.
 fn kept_away() -> Command {
-    let mut command = Command::new(BIN);
+    let mut command = crate::bin::clv();
     command.env("TERM", "dumb");
     for name in ["TMUX", "TMUX_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "COLORTERM", "NO_COLOR"] {
         command.env_remove(name);
@@ -191,7 +189,7 @@ fn zoom_is_still_taken_for_per_row_and_warns() {
     assert_eq!(text(&old.stderr), "warning: --zoom is now --per-row; --zoom will go in a later release\n");
     assert_eq!(text(&new.stderr), "", "no warning by its own name");
     // Before anything else: an error after it, the warning still first.
-    let out = Command::new(BIN).args(["--zoom", "2"]).output().unwrap();
+    let out = crate::bin::clv().args(["--zoom", "2"]).output().unwrap();
     assert_eq!(text(&out.stderr), "warning: --zoom is now --per-row; --zoom will go in a later release\nclv: missing file\n");
     // Both: refused, before anything is drawn.
     let both = view(&pdf, &["--protocol", "kitty", "--zoom", "2", "--per-row", "3"]);
@@ -233,8 +231,8 @@ fn without_documents_there_is_no_theme() {
 /// Nothing given at all is a call for help: what `--help` prints, and no error.
 #[test]
 fn no_arguments_print_the_help() {
-    let help = Command::new(BIN).arg("--help").output().unwrap();
-    let out = Command::new(BIN).output().unwrap();
+    let help = crate::bin::clv().arg("--help").output().unwrap();
+    let out = crate::bin::clv().output().unwrap();
     assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
     assert_eq!(text(&out.stdout), text(&help.stdout));
 }
@@ -243,7 +241,7 @@ fn no_arguments_print_the_help() {
 fn view_in_tmux(test: &str, pdf: &Path, args: &[&str]) -> Output {
     let empty = tmp(test, "empty-bin");
     std::fs::create_dir_all(&empty).unwrap();
-    Command::new(BIN)
+    crate::bin::clv()
         .arg(pdf)
         .args(args)
         .env("TMUX", "/nonexistent/tmux-socket,1,0")
@@ -366,7 +364,7 @@ fn a_hostile_file_name_cant_send_escape_sequences_to_the_terminal() {
     let dir = tmp("escape", "");
     let name = dir.join("x\x1b]52;c;cHduZWQ=\x07y\x1b]0;owned\x07.pdf");
     for args in [&[][..], &["--protocol", "kitty"], &["--pages", "x\x1b[2J"]] {
-        let out = Command::new(BIN).arg(&name).args(args).env_remove("TMUX").output().unwrap();
+        let out = crate::bin::clv().arg(&name).args(args).env_remove("TMUX").output().unwrap();
         assert!(!out.status.success());
         let stderr = text(&out.stderr);
         // A bad page list is said, quoted with its escapes spelled out, before any file is read.
@@ -398,7 +396,7 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
 
 #[test]
 fn help_and_version() {
-    let out = Command::new(BIN).arg("--help").output().unwrap();
+    let out = crate::bin::clv().arg("--help").output().unwrap();
     let help = text(&out.stdout);
     let is = "Command-line Viewer: view graphic files without leaving your terminal";
     let start = format!("clview {}\n{is}\n\nclv [options] <file>…\nclv --help | --version\n", env!("CLV_VERSION"));
@@ -444,7 +442,7 @@ fn help_and_version() {
     assert_eq!(shown("Spreadsheets", "Excel (.xlsx "), cfg!(feature = "sheet"), "{help}");
     assert_eq!(shown("Ebooks", "EPUB (.epub)"), cfg!(feature = "epub"), "{help}");
     assert_eq!(shown("Org documents", "Org (.org .org_archive)"), cfg!(feature = "org"), "{help}");
-    let out = Command::new(BIN).arg("--version").output().unwrap();
+    let out = crate::bin::clv().arg("--version").output().unwrap();
     assert_eq!(text(&out.stdout), format!("clv {}\n", env!("CLV_VERSION")));
     // Cargo.toml's version, alone or followed by the commit as build metadata (build.rs).
     let commit = env!("CLV_VERSION").strip_prefix(env!("CARGO_PKG_VERSION"));
@@ -471,7 +469,7 @@ fn a_file_no_backend_opens_is_refused_and_a_pdf_is_known_by_its_header() {
 #[test]
 fn a_pdf_through_a_pipe_is_shown() {
     use std::io::Write as _;
-    let mut child = Command::new(BIN)
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
@@ -492,7 +490,7 @@ fn a_pdf_through_a_pipe_is_shown() {
 fn a_picture_through_a_pipe_is_shown() {
     use std::io::Write as _;
     let png = std::fs::read(picture("piped", "photo.png", 30, 20)).unwrap();
-    let mut child = Command::new(BIN)
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
@@ -684,9 +682,9 @@ fn shows() -> String {
 /// Errors are said once, under the command's name.
 #[test]
 fn errors_name_the_command() {
-    let out = Command::new(BIN).arg("--per-row").arg("2").output().unwrap();
+    let out = crate::bin::clv().arg("--per-row").arg("2").output().unwrap();
     assert_eq!(text(&out.stderr), "clv: missing file\n");
-    let out = Command::new(BIN).arg("--frobnicate").output().unwrap();
+    let out = crate::bin::clv().arg("--frobnicate").output().unwrap();
     assert_eq!(text(&out.stderr), "clv: unknown option --frobnicate\n");
 }
 
@@ -848,7 +846,7 @@ fn nothing_but_the_worker_names_cap() {
 /// repeating it, so an escape sequence in it stays out of stderr.
 #[test]
 fn a_bad_worker_name_is_refused_without_repeating_it() {
-    let out = Command::new(BIN).args(["--worker", "bad\x1b]2;injected\x07"]).stdin(Stdio::null()).output().unwrap();
+    let out = crate::bin::clv().args(["--worker", "bad\x1b]2;injected\x07"]).stdin(Stdio::null()).output().unwrap();
     assert!(!out.status.success());
     assert!(!out.stderr.contains(&b'\x1b'), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(text(&out.stderr).contains("no such worker"), "{}", text(&out.stderr));

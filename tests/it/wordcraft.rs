@@ -360,13 +360,8 @@ fn a_picture_is_found_from_the_document() {
     for reference in ["../above.png", "./assets/my%20picture.png", "assets/my picture.png?raw=true", "assets/my%20picture.png#top"] {
         let document = format!("<p><img src=\"{reference}\" alt=\"two\"></p>");
         write(dir.join("docs/a.html"), document.as_bytes());
-        let out = Command::new(env!("CARGO_BIN_EXE_clv"))
-            .args(["docs/a.html", "--protocol", "kitty"])
-            .current_dir(&dir)
-            .env("TERM", "dumb")
-            .env_remove("TMUX")
-            .output()
-            .unwrap();
+        let out =
+            crate::bin::clv().args(["docs/a.html", "--protocol", "kitty"]).current_dir(&dir).env("TERM", "dumb").env_remove("TMUX").output().unwrap();
         assert!(out.status.success() && out.stderr.is_empty(), "{reference}: {}", text(&out.stderr));
         assert!(found(&images(&out.stdout)[0].png, RED).1.is_some(), "{reference}");
     }
@@ -471,7 +466,7 @@ fn a_document_says_how_many_pictures_it_left_out() {
 
 /// `clv` with `args` where it can be seen to finish: a test of a pipe or a device mustn't hang.
 fn finishes(args: &[&str], dir: &Path) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+    let mut child = crate::bin::clv()
         .args(args)
         .current_dir(dir)
         .env("TERM", "dumb")
@@ -549,7 +544,7 @@ fn what_has_no_directory_has_no_pictures() {
     let dir = directory("word-no-directory");
     write(dir.join("pic.png"), &picture(60, 60, RED));
     let piped = |reference: &str| {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+        let mut child = crate::bin::clv()
             .args(["/dev/stdin", "--protocol", "kitty"])
             .current_dir(&dir)
             .env("TERM", "dumb")
@@ -661,7 +656,7 @@ fn in_a_list_markdown_and_html_are_tiles() {
 #[test]
 fn through_a_pipe_html_says_what_it_is_and_markdown_cant() {
     let piped = |document: &str| {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+        let mut child = crate::bin::clv()
             .args(["/dev/stdin", "--protocol", "kitty"])
             .env("TERM", "dumb")
             .env_remove("TMUX")

@@ -137,7 +137,11 @@ fn every_relative_link_in_the_docs_leads_somewhere() {
 /// build is made, and the file must be there on the branch it names.
 #[test]
 fn help_links_to_the_manual_where_it_is() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").output().unwrap();
+    // Kept away from the developer's own config, as `tests/it/fixtures.rs` keeps its tests: a
+    // directory that holds none.
+    let empty = std::env::temp_dir().join(format!("clview-docs-no-config-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").env("XDG_CONFIG_HOME", &empty).output().unwrap();
     let help = String::from_utf8(out.stdout).unwrap();
     let start = concat!("Manual: ", env!("CARGO_PKG_REPOSITORY"), "/blob/main/");
     let path = help.lines().find_map(|line| line.strip_prefix(start)).unwrap_or_else(|| panic!("no link to the manual in:\n{help}"));

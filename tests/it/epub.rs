@@ -8,7 +8,7 @@
 
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use ::zip::write::SimpleFileOptions;
 use ::zip::{CompressionMethod, ZipWriter};
@@ -181,7 +181,7 @@ fn an_epub_is_a_book_its_chapters_in_order_each_on_a_new_page() {
 #[test]
 fn an_epub_is_read_through_a_pipe_and_from_an_archive() {
     let book = zipped(&three_chapters(), Mimetype::Stored);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_clv"))
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
@@ -449,7 +449,7 @@ fn a_path_written_with_an_entity_is_the_file_it_names() {
 /// `--help` lists the format, by its extension, and credits what reads it.
 #[test]
 fn help_lists_books_and_credits_rbook() {
-    let out = Command::new(env!("CARGO_BIN_EXE_clv")).arg("--help").env("TERM", "dumb").env_remove("TMUX").output().unwrap();
+    let out = crate::bin::clv().arg("--help").env("TERM", "dumb").env_remove("TMUX").output().unwrap();
     let help = text(&out.stdout);
     assert!(help.contains("EPUB") && help.contains("rbook"), "{help}");
 }

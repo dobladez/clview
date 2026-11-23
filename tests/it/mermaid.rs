@@ -9,8 +9,6 @@ use std::process::{Command, Stdio};
 
 use crate::view::{images, names, text, tmp, view};
 
-const BIN: &str = env!("CARGO_BIN_EXE_clv");
-
 /// A fixture of `tests/data/`.
 fn data(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(name)
@@ -113,7 +111,7 @@ fn a_mmd_is_opened_when_it_starts_as_a_diagram() {
 #[test]
 fn a_diagram_through_a_pipe_is_refused() {
     for name in ["-", "/dev/stdin"] {
-        let mut child = Command::new(BIN)
+        let mut child = crate::bin::clv()
             .args([name, "--protocol", "kitty"])
             .env("TERM", "dumb")
             .stdin(Stdio::piped())
@@ -517,7 +515,7 @@ fn a_mermaid_block_in_html_is_drawn_as_its_diagram() {
 #[test]
 fn a_mermaid_block_in_html_is_drawn_through_a_pipe_and_in_an_epub() {
     let block = format!("<pre><code class=\"language-mermaid\">{}</code></pre>", escaped(&flow()));
-    let mut child = Command::new(BIN)
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")

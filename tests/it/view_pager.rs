@@ -11,7 +11,10 @@ use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_clv");
+use crate::bin::script;
+
+/// `clv`, for a shell line that [`script`] runs: `script` keeps it away from the developer's config.
+const BIN: &str = crate::bin::CLV;
 
 /// How long anything may take: generous, for a slow CI machine.
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -23,18 +26,6 @@ fn fixture(test: &str, pages: usize) -> PathBuf {
     let pdf = dir.join(if pages == 1 { "one.pdf" } else { "many.pdf" });
     std::fs::write(&pdf, crate::fixtures::letter("Pager test", pages)).unwrap();
     pdf
-}
-
-/// `line` run by a shell on a new pseudo-terminal: BSD script (macOS, FreeBSD) takes the command
-/// after the output file; util-linux script (Linux) takes it as one shell line.
-fn script(line: &str) -> Command {
-    let mut script = Command::new("script");
-    if cfg!(target_os = "linux") {
-        script.args(["-q", "-e", "-c", line, "/dev/null"]);
-    } else {
-        script.args(["-q", "/dev/null", "sh", "-c", line]);
-    }
-    script
 }
 
 /// Whether script(1) gives a command a pseudo-terminal of the size asked for, which every test
@@ -2338,7 +2329,7 @@ fn newlines(text: &str) -> String {
 
 /// `clv --help` through a pipe: the text alone.
 fn help_text() -> String {
-    String::from_utf8(Command::new(BIN).arg("--help").output().unwrap().stdout).unwrap()
+    String::from_utf8(crate::bin::clv().arg("--help").output().unwrap().stdout).unwrap()
 }
 
 /// Where the icon can show, it goes up beside the first lines, nothing is asked of the terminal,

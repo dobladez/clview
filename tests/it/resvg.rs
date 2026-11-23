@@ -6,11 +6,9 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::view::{images, names, png_size, text, tmp, view};
-
-const BIN: &str = env!("CARGO_BIN_EXE_clv");
 
 /// A drawing `width` × `height` px of `body`.
 fn svg(width: u32, height: u32, body: &str) -> String {
@@ -88,7 +86,7 @@ fn a_drawing_that_mentions_a_pdf_header_is_still_a_drawing() {
 /// A drawing through a pipe can't be read again when it renders, so it is kept as it came.
 #[test]
 fn a_drawing_through_a_pipe_is_shown() {
-    let mut child = Command::new(BIN)
+    let mut child = crate::bin::clv()
         .args(["/dev/stdin", "--protocol", "kitty"])
         .env("TERM", "dumb")
         .env_remove("TMUX")
