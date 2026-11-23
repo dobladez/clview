@@ -47,8 +47,8 @@ const FORMAT: Format = Format::of("Org", &["org", "org_archive"]).having(SETTING
 /// of ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)). The
 /// document is laid out and drawn by the backend that opens its HTML, which reads the values
 /// itself: these say only that an Org document has them, before it is opened.
-const PAPER: Setting = Setting {
-    name: "paper",
+const THEME: Setting = Setting {
+    name: "theme",
     named: &[Named { name: "light", says: "dark on light" }, Named { name: "dark", says: "light on dark" }],
     numbers: None,
     default: Value::Named("light"),
@@ -68,7 +68,7 @@ const PAPER: Setting = Setting {
     sets_width: false,
 };
 
-/// How wide an Org document's line is: as [`PAPER`], the documents' own setting.
+/// How wide an Org document's line is: as [`THEME`], the documents' own setting.
 const WIDTH: Setting = Setting {
     name: "width",
     named: &[Named { name: "window", says: "width window" }],
@@ -84,13 +84,13 @@ const WIDTH: Setting = Setting {
         help: "an Org document laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
     },
-    help: "4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
+    help: "4 characters a line narrower, or wider; 72{increase-width} sets 72, 0{increase-width} the window's",
     does: "reflow",
     effect: Effect::Relayout,
     sets_width: true,
 };
 
-/// How large an Org document's text is: as [`PAPER`], the documents' own setting.
+/// How large an Org document's text is: as [`THEME`], the documents' own setting.
 const FONT: Setting = Setting {
     name: "font",
     named: &[],
@@ -100,13 +100,13 @@ const FONT: Setting = Setting {
     auto: None,
     keys: Keys::Zoom,
     option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "an Org document's text at N% of its size (50-400)", alias: None },
-    help: "text larger, or smaller; 150+ sets 150%, 0+ 100%",
+    help: "text larger, or smaller; 150{zoom-in} sets 150%, 0{zoom-in} 100%",
     does: "have a font size",
     effect: Effect::Relayout,
     sets_width: false,
 };
 
-/// How wide an Org document's side margins are: as [`PAPER`], the documents' own setting.
+/// How wide an Org document's side margins are: as [`THEME`], the documents' own setting.
 const MARGIN: Setting = Setting {
     name: "margin",
     named: &[],
@@ -122,13 +122,13 @@ const MARGIN: Setting = Setting {
         help: "an Org document's side margins of N characters of code (0-20)",
         alias: None,
     },
-    help: "margins a character narrower, or wider; 5} sets 5, 0} back to 3",
+    help: "margins a character narrower, or wider; 5{increase-margin} sets 5, 0{increase-margin} back to 3",
     does: "have margins",
     effect: Effect::Relayout,
     sets_width: false,
 };
 
-/// Whether an Org document's source blocks are drawn: as [`PAPER`], the documents' own setting.
+/// Whether an Org document's source blocks are drawn: as [`THEME`], the documents' own setting.
 const FENCES: Setting = Setting {
     name: "fences",
     named: &[Named { name: "drawn", says: "blocks drawn" }, Named { name: "code", says: "blocks as code" }],
@@ -151,7 +151,7 @@ const FENCES: Setting = Setting {
 };
 
 /// The settings an Org document has: a document's, laid out for the window.
-const SETTINGS: &[&str] = &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name];
+const SETTINGS: &[&str] = &[THEME.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name];
 
 impl Backend for Org {
     fn name(&self) -> &'static str {
@@ -175,7 +175,7 @@ impl Backend for Org {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER, WIDTH, FONT, MARGIN, FENCES]
+        &[THEME, WIDTH, FONT, MARGIN, FENCES]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {

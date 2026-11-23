@@ -1,9 +1,11 @@
 //! What the pager can do, by name, and the keys that do it.
 //!
-//! A [`Command`] is one thing the reader can ask of the pager: `screen-down`, `tile-left`, `quit`.
-//! The catalog is the viewer's own ([`VIEWER`]) and, for each setting a backend declares, one or two
-//! named from it: `paper`, or `width-down` and `width-up`. Each has its name, what it makes of a
-//! number typed before it ([`Count`]), where it applies ([`Mode`]) and its line in `?` ([`Line`]).
+//! A [`Command`] is one thing the reader can ask of the pager: `screen-down`, `list-tile-left`,
+//! `quit`. The catalog is the viewer's own ([`VIEWER`]) and, for each setting a backend declares, one
+//! or two named from it: `cycle-theme`, or `decrease-width` and `increase-width`. Each has its name,
+//! what it makes of a number typed before it ([`Count`]), where it applies ([`Mode`]) and its line in
+//! `?` ([`Line`]). The names are a contract with the reader's config, and keep to three rules
+//! ([`Command::name`]).
 //!
 //! A [`Keymap`] binds keys to commands: one for a file's pages and one for a list ([`Keymaps`]),
 //! built once a run from the viewer's defaults ([`PAGES`], [`LIST`]) and the keys the settings
@@ -155,7 +157,13 @@ impl PartialEq for Command {
 impl Eq for Command {}
 
 impl Command {
-    /// What it is called: kebab-case, and for a setting's, built from the setting's own name.
+    /// What it is called, in kebab-case. The names keep to three rules:
+    ///
+    /// - A command that steps an option is `increase-` or `decrease-` and the name of the option. A
+    ///   command that goes to the next named value of an option is `cycle-` and that name. A setting's
+    ///   commands are built so from the setting's name, which is its option's.
+    /// - A command for the list alone is `list-` and what it does. The others have no prefix.
+    /// - No name has the prefix of a format or a backend: a name two backends declare is one setting.
     pub(super) fn name(self) -> String {
         let name = match self {
             Self::ScreenDown => "screen-down",
@@ -171,8 +179,8 @@ impl Command {
             Self::Last => "last",
             Self::ZoomIn => "zoom-in",
             Self::ZoomOut => "zoom-out",
-            Self::MorePerRow => "more-per-row",
-            Self::FewerPerRow => "fewer-per-row",
+            Self::MorePerRow => "increase-per-row",
+            Self::FewerPerRow => "decrease-per-row",
             Self::Search => "search",
             Self::Follow => "follow",
             Self::CopyLink => "copy-link",
@@ -184,15 +192,15 @@ impl Command {
             Self::Leave => "leave",
             Self::Quit => "quit",
             Self::Help => "help",
-            Self::TileLeft => "tile-left",
-            Self::TileRight => "tile-right",
-            Self::TileUp => "tile-up",
-            Self::TileDown => "tile-down",
-            Self::Open => "open",
-            Self::Filter => "filter",
-            Self::Setting(setting, Turn::Next) => return setting.name.to_owned(),
-            Self::Setting(setting, Turn::Down) => return format!("{}-down", setting.name),
-            Self::Setting(setting, Turn::Up) => return format!("{}-up", setting.name),
+            Self::TileLeft => "list-tile-left",
+            Self::TileRight => "list-tile-right",
+            Self::TileUp => "list-tile-up",
+            Self::TileDown => "list-tile-down",
+            Self::Open => "list-open",
+            Self::Filter => "list-filter",
+            Self::Setting(setting, Turn::Next) => return format!("cycle-{}", setting.name),
+            Self::Setting(setting, Turn::Down) => return format!("decrease-{}", setting.name),
+            Self::Setting(setting, Turn::Up) => return format!("increase-{}", setting.name),
         };
         name.to_owned()
     }
@@ -253,7 +261,7 @@ const fn also(c: char) -> Chord {
 
 /// The viewer's keys in a file's pages: each command's, in the order `?` lists them, `less`'s and
 /// `vi`'s with Emacs's beside them. A setting's keys are the setting's to suggest ([`Keys`]), and
-/// come after these: none may be one of them, which is why the paper's is `D`, not `d`.
+/// come after these: none may be one of them, which is why the theme's is `D`, not `d`.
 const PAGES: &[(Command, &[Chord])] = &[
     (Command::ScreenDown, &[ch(' '), key(Key::PageDown), ch('d'), key(Key::Ctrl('v'))]),
     (Command::ScreenUp, &[ch('b'), key(Key::PageUp), ch('u'), key(Key::Alt('v'))]),
@@ -529,13 +537,7 @@ impl Keymaps {
         let mut wrong = Vec::new();
         let mut keymaps = Self { pages: Keymap::defaults(Mode::Pages, PAGES, &mut wrong), list: Keymap::defaults(Mode::List, LIST, &mut wrong) };
         for setting in settings {
-            let suggested = match setting.keys {
-                Keys::Cycle(key) => vec![(key, Turn::Next)],
-                Keys::Step(down, up) => vec![(down, Turn::Down), (up, Turn::Up)],
-                // Reached through `zoom-in` and `zoom-out`, where it takes them: no command of its own.
-                Keys::Zoom => Vec::new(),
-            };
-            for (char, turn) in suggested {
+            for (char, turn) in suggested(setting) {
                 let command = Command::Setting(setting, turn);
                 if VIEWER.iter().any(|viewer| viewer.name() == command.name()) {
                     wrong.push(format!("{}: its command {} is called as the viewer's is", setting.name, command.name()));
@@ -563,6 +565,38 @@ impl Keymaps {
     fn taken(&self, key: Key) -> Option<Command> {
         [&self.pages, &self.list].into_iter().find_map(|keymap| keymap.command(key, true))
     }
+}
+
+/// The keys `setting` suggests, each with the way its command turns the setting: one command for a
+/// key that cycles, two for keys that step. A setting on the zoom keys has no command of its own:
+/// it is reached through `zoom-in` and `zoom-out`, where it takes them.
+fn suggested(setting: &'static Setting) -> Vec<(char, Turn)> {
+    match setting.keys {
+        Keys::Cycle(key) => vec![(key, Turn::Next)],
+        Keys::Step(down, up) => vec![(down, Turn::Down), (up, Turn::Up)],
+        Keys::Zoom => Vec::new(),
+    }
+}
+
+/// The names of the commands made for `setting`, for a build's own tests: a config binds keys to
+/// them, so they keep to the rules of [`Command::name`].
+#[cfg(test)]
+pub(crate) fn setting_commands(setting: &'static Setting) -> Vec<String> {
+    suggested(setting).into_iter().map(|(_, turn)| Command::Setting(setting, turn).name()).collect()
+}
+
+/// The commands that the phrases of `settings` name between braces ([`Setting::help`]) and that no
+/// key is bound to by default, for a build's own tests: nothing, in a build whose phrases name the
+/// commands of its settings or the viewer's.
+#[cfg(test)]
+pub(crate) fn unbound_in_phrases(settings: &[&'static Setting]) -> Vec<String> {
+    let keymaps = Keymaps::new(settings);
+    let names = |setting: &&'static Setting| {
+        let named = setting.help.split('{').skip(1).filter_map(|rest| rest.split_once('}')).map(|(name, _)| name.to_owned());
+        named.collect::<Vec<_>>()
+    };
+    let bound = |name: &String| [Mode::Pages, Mode::List].iter().all(|mode| keymaps.of(*mode).fill(&format!("{{{name}}}")).is_empty());
+    settings.iter().flat_map(names).filter(bound).collect()
 }
 
 /// What is wrong with the keys `settings` suggest, for a build's own tests ([`Keymaps::build`]):
@@ -657,10 +691,10 @@ pub(super) const ZOOM: [Command; 2] = [Command::ZoomIn, Command::ZoomOut];
 pub(super) const PER_ROW: [Command; 2] = [Command::MorePerRow, Command::FewerPerRow];
 /// Their line in a file's pages.
 const PER_ROW_LINE: Line =
-    pair(&PER_ROW, "one more page to a row, or one fewer, then the width; 3{fewer-per-row} sets 3, 0{fewer-per-row} auto").with(3, 1);
+    pair(&PER_ROW, "one more page to a row, or one fewer, then the width; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1);
 /// And on a document laid out for its room, where they are columns.
 pub(super) const COLUMNS_LINE: Line =
-    pair(&PER_ROW, "one more column, or one fewer, down to one; 3{fewer-per-row} sets 3, 0{fewer-per-row} auto").with(3, 1);
+    pair(&PER_ROW, "one more column, or one fewer, down to one; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1);
 
 /// `?` in a list.
 pub(super) const LIST_LINES: &[Line] = &[
@@ -672,7 +706,7 @@ pub(super) const LIST_LINES: &[Line] = &[
     line(&[Command::Open], "open it: a file's pages, or a directory's files"),
     line(&[Command::Filter], "filter by name as you type: ⏎ keeps it, Esc clears it"),
     pair(&ZOOM, "bigger, fewer to a row; smaller, more to a row"),
-    pair(&PER_ROW, "one more tile to a row, or one fewer; 3{fewer-per-row} sets 3, 0{fewer-per-row} auto").with(3, 1),
+    pair(&PER_ROW, "one more tile to a row, or one fewer; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1),
     line(&[Command::Rerender], "render again"),
     line(&[Command::Copy], "copy its picture to the clipboard"),
     line(&[Command::OpenInApp], "open it in the desktop's app: a file in its app, a folder in the file manager"),
@@ -742,7 +776,7 @@ mod tests {
     use crate::source::Numbers;
     use crate::source::tests::cycled;
 
-    static PAPER: Setting = cycled("paper", 'D', "--theme");
+    static THEME: Setting = cycled("theme", 'D', "--theme");
     static WIDTH: Setting =
         Setting { keys: Keys::Step('[', ']'), numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }), ..cycled("width", '[', "--width") };
     static FONT: Setting = Setting { keys: Keys::Zoom, ..cycled("font", '+', "--font") };
@@ -760,8 +794,8 @@ mod tests {
     /// own, and a setting's built from the setting's.
     #[test]
     fn every_command_has_a_name_of_its_own_in_kebab_case() {
-        let settings = [Command::Setting(&PAPER, Turn::Next), Command::Setting(&WIDTH, Turn::Down), Command::Setting(&WIDTH, Turn::Up)];
-        assert_eq!(settings.map(Command::name), ["paper", "width-down", "width-up"]);
+        let settings = [Command::Setting(&THEME, Turn::Next), Command::Setting(&WIDTH, Turn::Down), Command::Setting(&WIDTH, Turn::Up)];
+        assert_eq!(settings.map(Command::name), ["cycle-theme", "decrease-width", "increase-width"]);
         let names: Vec<String> = VIEWER.iter().chain(&settings).map(|command| command.name()).collect();
         for name in &names {
             let words: Vec<&str> = name.split('-').collect();
@@ -769,10 +803,10 @@ mod tests {
             assert_eq!(names.iter().filter(|other| *other == name).count(), 1, "{name}");
         }
         // A setting's commands are the same command whichever backend's declaration they came from.
-        static AGAIN: Setting = cycled("paper", 'D', "--theme");
-        assert_eq!(Command::Setting(&PAPER, Turn::Next), Command::Setting(&AGAIN, Turn::Next));
+        static AGAIN: Setting = cycled("theme", 'D', "--theme");
+        assert_eq!(Command::Setting(&THEME, Turn::Next), Command::Setting(&AGAIN, Turn::Next));
         assert_ne!(Command::Setting(&WIDTH, Turn::Down), Command::Setting(&WIDTH, Turn::Up));
-        assert_ne!(Command::Setting(&PAPER, Turn::Next), Command::Setting(&WIDTH, Turn::Next));
+        assert_ne!(Command::Setting(&THEME, Turn::Next), Command::Setting(&WIDTH, Turn::Next));
         assert_ne!(Command::Quit, Command::Leave);
     }
 
@@ -851,21 +885,21 @@ mod tests {
     /// the first's, and each is said. A setting on the zoom keys has no command of its own.
     #[test]
     fn a_settings_keys_are_suggestions_the_keymaps_take_after_the_viewers() {
-        let (keymaps, wrong) = Keymaps::build(&[&PAPER, &WIDTH, &FONT]);
+        let (keymaps, wrong) = Keymaps::build(&[&THEME, &WIDTH, &FONT]);
         assert_eq!(wrong, Vec::<String>::new());
         for mode in [Mode::Pages, Mode::List] {
             let keymap = keymaps.of(mode);
-            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&PAPER, Turn::Next)), "{mode:?}");
+            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&THEME, Turn::Next)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char('['), true), Some(Command::Setting(&WIDTH, Turn::Down)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char(']'), false), Some(Command::Setting(&WIDTH, Turn::Up)), "{mode:?}");
             assert_eq!(keymap.command(Key::Char('+'), false), Some(Command::ZoomIn), "{mode:?}");
             assert!(!keymap.bindings.iter().any(|(_, command)| matches!(command, Command::Setting(setting, _) if setting.name == "font")));
             assert_eq!(
-                (keymap.each(&[Command::Setting(&PAPER, Turn::Next)]), keymap.numbered(12, Command::Setting(&WIDTH, Turn::Up))),
+                (keymap.each(&[Command::Setting(&THEME, Turn::Next)]), keymap.numbered(12, Command::Setting(&WIDTH, Turn::Up))),
                 ("D".into(), "12]".into())
             );
         }
-        assert_eq!((Command::Setting(&PAPER, Turn::Next).count(), Command::Setting(&WIDTH, Turn::Up).count()), (Count::Left, Count::Taken));
+        assert_eq!((Command::Setting(&THEME, Turn::Next).count(), Command::Setting(&WIDTH, Turn::Up).count()), (Count::Left, Count::Taken));
         // What it would say.
         static QUITS: Setting = cycled("tint", 'q', "--tint");
         static LEFT: Setting = cycled("tint", 'h', "--tint");
@@ -873,28 +907,27 @@ mod tests {
         static EQUALS: Setting = cycled("tint", '=', "--tint");
         static OTHER: Setting = cycled("tint", 'D', "--tint");
         static PLUS: Setting = Setting { keys: Keys::Step('-', '+'), ..cycled("font", '+', "--font") };
-        static QUIT: Setting = cycled("quit", 'x', "--quit");
-        static SCREEN: Setting = Setting { keys: Keys::Step('<', '>'), ..cycled("screen", '<', "--screen") };
-        assert!(wrong_keys(&[&PAPER, &PAPER]).is_empty(), "one setting in two backends");
+        // The one name whose commands are called as the viewer's are: `increase-per-row`.
+        static ROW: Setting = Setting { keys: Keys::Step('<', '>'), ..cycled("per-row", '<', "--per-row") };
+        assert!(wrong_keys(&[&THEME, &THEME]).is_empty(), "one setting in two backends");
         for (settings, said) in [
             (&[&QUITS][..], 1),
             // Free in a file's pages, and a tile's key in a list: the viewer's.
             (&[&LEFT], 1),
             (&[&DIGIT], 1),
             (&[&EQUALS], 1),
-            (&[&PAPER, &OTHER], 1),
+            (&[&THEME, &OTHER], 1),
             (&[&PLUS], 2),
-            (&[&QUIT], 1),
-            (&[&SCREEN], 2),
+            (&[&ROW], 2),
         ] {
             assert_eq!(wrong_keys(settings).len(), said, "{:?}", wrong_keys(settings));
         }
-        let keymaps = Keymaps::new(&[&QUITS, &LEFT, &PAPER, &OTHER]);
+        let keymaps = Keymaps::new(&[&QUITS, &LEFT, &THEME, &OTHER]);
         for mode in [Mode::Pages, Mode::List] {
             let keymap = keymaps.of(mode);
             assert_eq!(keymap.command(Key::Char('q'), false), Some(Command::Quit));
             assert_eq!(keymap.command(Key::Char('h'), false), (mode == Mode::List).then_some(Command::TileLeft));
-            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&PAPER, Turn::Next)));
+            assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&THEME, Turn::Next)));
         }
     }
 

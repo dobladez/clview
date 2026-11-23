@@ -12,7 +12,7 @@
 //! however often it is opened: a document's picture is opened to size it and again to draw it.
 //!
 //! A diagram follows its paper: on dark paper it is drawn again in Mermaid's dark theme ([`Theme`]),
-//! and the cache keeps each theme's SVG. Shown by itself, its paper is a setting it has ([`PAPER`]),
+//! and the cache keeps each theme's SVG. Shown by itself, its paper is a setting it has ([`THEME`]),
 //! declared here under the name other backends declare theirs by, so that one key and one option
 //! turn whatever follows its paper
 //! ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)): its dark
@@ -42,7 +42,7 @@ use crate::args::{OptionSpec, Parsed};
 pub(super) struct Mermaid;
 
 /// What it shows, by name alone: a `.mermaid` that is text, and a `.mmd` that starts as a diagram
-/// ([`opens`]); a document's ` ```mermaid ` blocks; and its files follow their paper ([`PAPER`]).
+/// ([`opens`]); a document's ` ```mermaid ` blocks; and its files follow their paper ([`THEME`]).
 const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["mermaid"]).having(SETTINGS);
 
 /// The paper a diagram shown by itself is drawn for: light, as Mermaid draws it by default, dark on
@@ -51,8 +51,8 @@ const FORMAT: Format = Format::of("Mermaid", &["mmd", "mermaid"]).fenced(&["merm
 /// by, so that it is one setting with theirs, which the viewer holds one value of: `D` and `--theme`
 /// turn whatever follows its paper, and no backend names another
 /// ([ADR-0033](../../docs/adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
-const PAPER: Setting = Setting {
-    name: "paper",
+const THEME: Setting = Setting {
+    name: "theme",
     named: &[Named { name: LIGHT, says: "dark on light" }, Named { name: DARK, says: "light on dark" }],
     numbers: None,
     default: Value::Named(LIGHT),
@@ -75,7 +75,7 @@ const LIGHT: &str = "light";
 const DARK: &str = "dark";
 
 /// The settings a diagram has: its paper.
-const SETTINGS: &[&str] = &[PAPER.name];
+const SETTINGS: &[&str] = &[THEME.name];
 
 impl Backend for Mermaid {
     fn name(&self) -> &'static str {
@@ -99,7 +99,7 @@ impl Backend for Mermaid {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER]
+        &[THEME]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
@@ -170,12 +170,12 @@ enum Behind {
 
 /// What `request` wants the diagram's dark drawing put on, if it wants that drawing: nothing, for a
 /// document's picture on dark paper ([`Request::on_dark`]); the paper's colour ([`Request::dark`]),
-/// for a diagram shown by itself with its paper at dark ([`PAPER`]). `None` wants the light one.
+/// for a diagram shown by itself with its paper at dark ([`THEME`]). `None` wants the light one.
 fn for_dark(request: &Request) -> Option<Behind> {
     if request.on_dark {
         return Some(Behind::Nothing);
     }
-    (request.values.get(PAPER.name) == Some(Value::Named(DARK))).then_some(Behind::Paper(request.dark))
+    (request.values.get(THEME.name) == Some(Value::Named(DARK))).then_some(Behind::Paper(request.dark))
 }
 
 /// A diagram, open: its SVG in Mermaid's default theme, opened by the backend that shows it; and its
@@ -1260,7 +1260,7 @@ mod tests {
             let again: Again = Arc::new(move || Ok(diagram.as_bytes().to_vec()));
             let input = Input::held("a.mermaid".into(), Vec::new(), again);
             let Ok(Opened::Pages(diagram)) = Mermaid.open(input, &Parsed::default()) else { panic!("not pages") };
-            assert_eq!((diagram.pages(), diagram.settings()), (1, vec![PAPER.name]));
+            assert_eq!((diagram.pages(), diagram.settings()), (1, vec![THEME.name]));
             let mut renderer = diagram.renderer().unwrap();
             let light = renderer.render(Request { scale: 2.0, tag: 7, ..Request::default() });
             let dark = renderer.render(Request { scale: 2.0, tag: 8, on_dark: true, dark: [30, 30, 30], ..Request::default() });
@@ -1273,7 +1273,7 @@ mod tests {
             // where the document's has nothing behind it; and at light, the light one.
             let at = |paper: &'static str, tag: u64| {
                 let mut values = Values::default();
-                assert!(values.set(PAPER.name, Value::Named(paper)));
+                assert!(values.set(THEME.name, Value::Named(paper)));
                 Request { scale: 2.0, tag, values, dark: [30, 40, 50], ..Request::default() }
             };
             let alone = renderer.render(at(DARK, 9));
@@ -1331,7 +1331,7 @@ mod tests {
     fn a_request_says_whether_it_wants_the_dark_drawing_and_on_what() {
         let at = |value: Value| {
             let mut values = Values::default();
-            assert!(values.set(PAPER.name, value));
+            assert!(values.set(THEME.name, value));
             Request { values, dark: [30, 40, 50], ..Request::default() }
         };
         assert_eq!(for_dark(&Request::default()), None, "a paper nobody set is light");
@@ -1375,7 +1375,7 @@ mod tests {
         let pool = Papers { light: Box::new(Light(told.clone())), dark: OnceCell::new(), render };
         let dark = |tag| {
             let mut values = Values::default();
-            assert!(values.set(PAPER.name, Value::Named(DARK)));
+            assert!(values.set(THEME.name, Value::Named(DARK)));
             Request { tag, values, ..Request::default() }
         };
         let light = |tag| Request { tag, ..Request::default() };

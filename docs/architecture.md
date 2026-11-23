@@ -228,20 +228,22 @@ declare, never the viewer's to know:
   `Setting` (`Backend::settings`) with its values, the keys it suggests, its option and two phrases,
   and each `Format` lists the settings its files have (`Format::settings`). The viewer makes each
   setting's commands from its name and binds the keys suggested to them in its keymaps
-  ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)).
+  ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)). A setting has the name of
+  its option (`theme`, `--theme`), so its commands have that name too: `cycle-theme`.
+  `source::tests::the_commands_of_each_setting_have_the_name_of_its_option` checks it.
 - **The viewer merges settings by name** (`view::settings`): one value of each for the whole run,
   whichever backend's file is shown, sent with every render (`Request::values`, and dark paper's
   colour in `Request::dark`). A source says which it has (`Source::settings`) and draws by a value
   as it likes, or not at all.
 - **Two backends share a setting by declaring the same name.** The documents' backend and
-  Mermaid's each declare `paper`, alike but for their option's help: `D` and `--theme` then turn
+  Mermaid's each declare `theme`, alike but for their option's help: `D` and `--theme` then turn
   Markdown, HTML and a diagram shown by itself together, and neither backend names the other. The
   name is the contract's convention, as a fence's language is.
 - **Everything the viewer says of a setting comes from those declarations**: its keys in `?`, its
   option in `--help` under each backend that declares it, and which formats have it, on a key
   pressed on a file that hasn't. The viewer knows no format.
 - **Adding a setting to a backend never needs a change to the contract** (`src/source.rs`) or to
-  the viewer: not a new one, and not one another backend already has. A plan to move `paper` into
+  the viewer: not a new one, and not one another backend already has. A plan to move `theme` into
   the contract so that Mermaid's backend could read it was a misreading of this
   ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
 
@@ -251,7 +253,8 @@ a backend's files are shown, a `Setting` with its named values and what each say
 where a count of 0 sends it (`zero`: `0]` is `window`, `0+` 100%), `auto` by the terminal's
 background, its keys (`Keys::Cycle`, `Keys::Step`, or `Keys::Zoom`, the viewer's own zoom keys, below),
 its option, two phrases to be said of formats, what its keys do (`help`: `light on dark, or
-dark on light`, said after their names) and what the files that have it do (`does`: `go dark`, said of a
+dark on light`, said after their names; a phrase writes no key, and names a command between braces
+where it means one, `72{increase-width} sets 72`) and what the files that have it do (`does`: `go dark`, said of a
 file that doesn't, and of those that do), and its `Effect`: `Redraw`, the
 pages drawn again with the value, or `Relayout`, the document laid out again at it
 ([Relayout](#relayout)). A format lists the settings its files have, by name (`Format::settings`,
@@ -268,9 +271,9 @@ checks that a format lists only settings its backend declares, that every settin
 one, and that a setting two backends declare is declared alike, their option's help apart, since
 `view::settings` takes it from the first; the documents' backend, which decides a document's settings by its kind when it opens
 (`settings_of`), holds its formats' lists to that (`a_format_lists_the_settings_its_documents_have`).
-The documents' backend declares five, `paper` (`D`, `--theme`, a redraw),
+The documents' backend declares five, `theme` (`D`, `--theme`, a redraw),
 `width` (`[` and `]`, `--width`), `font` (`+` and `-`, `--font`), `margin` (`{` and `}`, `--margin`)
-and `fences` (`s`, `--fences`), those four relayouts; Mermaid's declares `paper` too
+and `fences` (`s`, `--fences`), those four relayouts; Mermaid's declares `theme` too
 ([How each opens](#how-each-opens-and-what-it-keeps)). Which a file has is its source's
 (`Source::settings`; a list's, `Joined`'s, those of any of its files). Where a setting's values sit
 for a file depends on the room it is shown in, so the source says (`Source::bounds`, a `Bounds`): where
@@ -481,12 +484,12 @@ through its command) and that a key means one setting
   `in_the_room_of` renders the dark drawing at the scale that fits the light one's size and
   `placed` puts it in a frame that size: the document, laid out around the light drawing, never
   moves ([ADR-0032](adr/0032-a-fenced-block-is-drawn-by-the-backend-that-lists-its-language.md)).
-  A diagram shown by itself follows its paper through a setting of Mermaid's own, `paper`
-  (`mermaid::PAPER`), declared under the documents' name, values, key and option, so that the two
+  A diagram shown by itself follows its paper through a setting of Mermaid's own, `theme`
+  (`mermaid::THEME`), declared under the documents' name, values, key and option, so that the two
   are one setting to the viewer ([Settings](#settings)): `Diagram::settings` says it has it, so the
   terminal is asked its background for a `.mmd`, and `Backend::deferred` says so for a list's tile.
   `for_dark` reads a request: `on_dark` wants the dark drawing with nothing behind it
-  (`Behind::Nothing`, a document's picture), a `paper` of `dark` wants it on the request's dark
+  (`Behind::Nothing`, a document's picture), a `theme` of `dark` wants it on the request's dark
   colour (`Behind::Paper`), which `placed` paints around it and under it (`over`, the drawing's
   premultiplied pixels over the opaque paper), in the light drawing's room as before, since the
   viewer fits the page by the light drawing's size. A frame of more than 64 million pixels
@@ -499,7 +502,7 @@ through its command) and that a key means one setting
   there isn't kept by the pool: the next render asks again, and `Cache` answers where the failure is
   one that would come again
   ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)).
-  Markdown and HTML have the `paper` setting: asked for `dark` in a request's values, they render
+  Markdown and HTML have the `theme` setting: asked for `dark` in a request's values, they render
   through wordcraft's dark page, on the grey as bright as the request's dark colour, then stretched to
   it (`on_paper`). The viewer holds the value and puts it in each request, so `D` needs only what `r`
   does ([ADR-0015](adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)). They have
@@ -620,7 +623,7 @@ through its command) and that a key means one setting
   warnings, with a table of contents unread or cut, and that a fixed-layout book is laid out
   flowing (`Left::notes`); and answers every link the document reads as one to a file (`in_the_book`: a
   `Target::Other` saying which it is), so the viewer never looks for a file beside the `.epub`.
-  The backend declares the Word backend's settings under their names (`paper`, `width`, `font`,
+  The backend declares the Word backend's settings under their names (`theme`, `width`, `font`,
   `margin`, `fences`), so that a list knows a book has them before it is opened
   (`Backend::deferred`) ([Settings](#settings)).
 - **A book's tile** is its first page alone (`Backend::open_tile`,
@@ -957,10 +960,15 @@ What the pager can do is apart from the keys that do it, as in Emacs
 ([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)). `commands.rs` holds both halves:
 
 - **The catalog.** A `Command` is one thing the reader can ask for, known by its name
-  (`Command::name`, kebab-case): the viewer's own (`VIEWER`: `screen-down`, `tile-left`, `go-to`,
+  (`Command::name`, kebab-case): the viewer's own (`VIEWER`: `screen-down`, `list-tile-left`, `go-to`,
   `contents`, `back`, `quit`…) and, for each setting a build declares, one or two built from the setting's name,
-  `Command::Setting(&Setting, Turn)`: `paper` for a `Keys::Cycle`, `width-down` and `width-up` for a
-  `Keys::Step`. The viewer names none of a backend's commands. A setting on the zoom keys
+  `Command::Setting(&Setting, Turn)`: `cycle-theme` for a `Keys::Cycle`, `decrease-width` and
+  `increase-width` for a `Keys::Step`. The viewer names none of a backend's commands. The names
+  keep to three rules, since a config binds keys to them. A command that steps an option is
+  `increase-` or `decrease-` and the name of the option, and one that goes to the next named value
+  is `cycle-` and that name (`increase-per-row`, `cycle-fences`). A command for the list alone is
+  `list-` and what it does (`list-open`, `list-filter`). No name has the prefix of a format or a
+  backend, because a name that two backends declare is one setting. A setting on the zoom keys
   (`Keys::Zoom`) has none of its own: `zoom-in` and `zoom-out` hand over to it where it applies
   (`Nav::zoom_setting`, [Settings](#settings)). Each command says what it makes of the number typed
   before it (`Command::count`: `Taken`, `Dropped`, or `Left` typed for the key that takes it), where
@@ -976,11 +984,11 @@ What the pager can do is apart from the keys that do it, as in Emacs
   `source::tests::a_settings_keys_are_its_own_in_every_backend` holds the build's settings to none
   (through `view::wrong_keys`), as `the_default_keymaps_bind_each_key_once_and_every_command_where_it_applies`
   holds the defaults. A key may be bound only with a number typed before it (`counted`): Enter is
-  `scroll-down` in a file's pages and `open` in a list, and `go-to` in both after a number (`12⏎`).
+  `scroll-down` in a file's pages and `list-open` in a list, and `go-to` in both after a number (`12⏎`).
   A key may also be bound and not listed (`also`): `=` and `_`, which are `+` and `-` with Shift or
   without. The defaults are `less`'s and `vi`'s keys with some of Emacs's beside them (`Ctrl-N`,
   `Ctrl-P`, `Ctrl-F`, `Ctrl-B`, `Ctrl-V`, `Alt-V`), and `back` is Backspace alone: `u` is a screen
-  up, as `d` is a screen down, and a setting's key is never one of them, so the paper's is `D`
+  up, as `d` is a screen down, and a setting's key is never one of them, so the theme's is `D`
   ([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)).
 
 `Nav::key` takes what is typed outside the keymaps first: any key while `?` shows, the links' labels,
@@ -1010,12 +1018,13 @@ hasn't, or one a document is laid out again for in a list or among pages picked 
 (`FAINT`, SGR 2 and 22 around the row): the terminal makes faint of its own colours, so nothing
 is chosen for a light background or a dark one, and the keys are text in every output, text cells
 and a pane of tmux too. What a line says names keys through the
-keymap too: `{fewer-per-row}` in its text is the first key bound to the command so named
+keymap too: `{decrease-per-row}` in its text is the first key bound to the command so named
 (`Keymap::fill`), and so is the `/` in `no search: / starts one`. The status line's first reminder
 is put together from `Hint`s, the first keys of a few commands and a word (`Keymap::reminder`,
 `PAGE_HINTS`, `OPENED_HINTS`, `LIST_HINTS`, shorter and shorter for a narrow window), and the keys a
-number typed goes to (`Nav::takes_a_number`) are read the same way. Only a setting's own phrase
-still writes its keys (`72] sets 72`), as its backend declared them.
+number typed goes to (`Nav::takes_a_number`) are read the same way. A setting's own phrase names
+its keys the same way: its backend writes `72{increase-width} sets 72` (`Setting::help`), and
+`Settings::help` fills it through the keymap.
 
 ## Getting pages to the terminal
 

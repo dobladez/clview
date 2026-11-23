@@ -607,11 +607,13 @@ impl Settings {
         self.formats(setting).map_or_else(|| NOT_HERE.to_owned(), |formats| format!("{these} {} ({})", setting.does, super::some_do(formats)))
     }
 
-    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), then the formats they do it
-    /// to, the first two of them ([`super::shortly`]): `light on dark, or dark on light (Markdown,
-    /// HTML and others)`.
-    fn help(&self, setting: &Setting) -> String {
-        self.formats(setting).map_or_else(|| setting.help.to_owned(), |formats| format!("{} ({})", setting.help, super::shortly(formats)))
+    /// `setting`'s line in `?`: what its keys do ([`Setting::help`]), the commands it names turned
+    /// into the keys `keymap` binds to them ([`Keymap::fill`]), then the formats they do it to, the
+    /// first two of them ([`super::shortly`]): `light on dark, or dark on light (Markdown, HTML and
+    /// others)`.
+    fn help(&self, setting: &Setting, keymap: &Keymap) -> String {
+        let says = keymap.fill(setting.help);
+        self.formats(setting).map_or_else(|| says.clone(), |formats| format!("{says} ({})", super::shortly(formats)))
     }
 }
 
@@ -900,14 +902,14 @@ impl Nav {
         let said = |line: &Line| (keymap.shown(line), keymap.fill(line.says), false);
         let own = lines.iter().map(|line| match zoomed {
             Some(setting) if line.commands == commands::ZOOM => {
-                (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting), false)
+                (format!("{}  {}", keymap.beside(&commands::ZOOM), keymap.numbered(150, Command::ZoomIn)), self.settings.help(setting, keymap), false)
             }
             _ if reflows && line.commands == commands::PER_ROW => said(&commands::COLUMNS_LINE),
             _ if line.commands == commands::CONTENTS_LINE.commands => (keymap.shown(line), keymap.fill(line.says), self.contents.is_none()),
             _ => said(line),
         });
         let settings = self.settings.declared.iter().copied();
-        let settings = settings.filter_map(|setting| Some((setting_keys(keymap, setting)?, self.settings.help(setting), self.idle(setting))));
+        let settings = settings.filter_map(|setting| Some((setting_keys(keymap, setting)?, self.settings.help(setting, keymap), self.idle(setting))));
         let all = own.chain(settings).chain(leave.iter().map(said)).chain([said(&commands::HELP_LINE)]);
         all.filter(|(keys, ..)| !keys.is_empty()).collect()
     }

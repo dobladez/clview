@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use crate::encode::{self, PngEffort};
 use cells::{Colours, Glyphs, Ground, Style};
 #[cfg(test)]
-pub(crate) use commands::wrong_keys;
+pub(crate) use commands::{setting_commands, unbound_in_phrases, wrong_keys};
 
 use crate::CliError;
 use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};
@@ -1705,7 +1705,7 @@ mod tests {
     use super::*;
 
     /// A setting declared as the documents' paper is: `auto` by the background.
-    static PAPER: Setting = crate::source::tests::cycled("paper", 'D', "--theme");
+    static THEME: Setting = crate::source::tests::cycled("theme", 'D', "--theme");
     /// One with numbers, and no `auto`.
     static WIDTH: Setting = Setting {
         numbers: Some(crate::source::Numbers { least: 20, most: 200, step: 4, unit: "" }),
@@ -1722,8 +1722,8 @@ mod tests {
         const OWN: [u8; 3] = [0x1E, 0x2E, 0x3E];
         const LIGHT: [u8; 3] = [0xFD, 0xF6, 0xE3];
         let start = |start, background| {
-            let (values, dark) = starting(&[(&PAPER, start)], background);
-            (values.get("paper"), dark)
+            let (values, dark) = starting(&[(&THEME, start)], background);
+            (values.get("theme"), dark)
         };
         let (light, dark) = (Some(Value::Named("light")), Some(Value::Named("dark")));
         assert_eq!(start(Start::Auto, Some(OWN)), (dark, OWN), "a dark terminal: its own colour");
@@ -1739,21 +1739,21 @@ mod tests {
     /// numbers, and refuses anything else saying what it takes, made printable.
     #[test]
     fn a_settings_option_takes_what_it_declares() {
-        assert_eq!(started(&PAPER, "auto"), Ok(Start::Auto));
-        assert_eq!(started(&PAPER, "light"), Ok(Start::Is(Value::Named("light"))));
-        assert_eq!(started(&PAPER, "dark"), Ok(Start::Is(Value::Named("dark"))));
-        assert_eq!(started(&PAPER, "sepia"), Err("--theme: expected auto, light or dark, got sepia".into()));
-        assert_eq!(started(&PAPER, "72"), Err("--theme: expected auto, light or dark, got 72".into()));
-        assert!(started(&PAPER, "\x1b[2J").is_err_and(|e| !e.contains('\x1b')));
+        assert_eq!(started(&THEME, "auto"), Ok(Start::Auto));
+        assert_eq!(started(&THEME, "light"), Ok(Start::Is(Value::Named("light"))));
+        assert_eq!(started(&THEME, "dark"), Ok(Start::Is(Value::Named("dark"))));
+        assert_eq!(started(&THEME, "sepia"), Err("--theme: expected auto, light or dark, got sepia".into()));
+        assert_eq!(started(&THEME, "72"), Err("--theme: expected auto, light or dark, got 72".into()));
+        assert!(started(&THEME, "\x1b[2J").is_err_and(|e| !e.contains('\x1b')));
         assert_eq!(started(&WIDTH, "72"), Ok(Start::Is(Value::Number(72))));
         assert_eq!(started(&WIDTH, "20"), Ok(Start::Is(Value::Number(20))));
         assert_eq!(started(&WIDTH, "page"), Ok(Start::Is(Value::Named("page"))));
         assert_eq!(started(&WIDTH, "300"), Err("--width: expected page or 20–200, got 300".into()));
         assert!(started(&WIDTH, "19").is_err() && started(&WIDTH, "auto").is_err() && started(&WIDTH, "-4").is_err());
         let given = args(&["a.md", "--width", "72"]);
-        let options = Parsed::parse(&given, &[PAPER.option, WIDTH.option]).unwrap();
-        let started: Vec<(&str, Start)> = starts(&[&PAPER, &WIDTH], &options).unwrap().into_iter().map(|(s, start)| (s.name, start)).collect();
-        assert_eq!(started, [("paper", Start::Auto), ("width", Start::Is(Value::Number(72)))]);
+        let options = Parsed::parse(&given, &[THEME.option, WIDTH.option]).unwrap();
+        let started: Vec<(&str, Start)> = starts(&[&THEME, &WIDTH], &options).unwrap().into_iter().map(|(s, start)| (s.name, start)).collect();
+        assert_eq!(started, [("theme", Start::Auto), ("width", Start::Is(Value::Number(72)))]);
     }
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -1794,15 +1794,15 @@ mod tests {
     #[test]
     fn a_settings_option_is_taken_for_a_file_that_hasnt_the_setting() {
         use crate::source::tests::{Declaring, PDF};
-        static DOCUMENTS: Declaring = Declaring(std::slice::from_ref(&PAPER));
+        static DOCUMENTS: Declaring = Declaring(std::slice::from_ref(&THEME));
         let given = args(&["a.pdf", "--theme", "dark"]);
-        let options = Parsed::parse(&given, &[OPTIONS, &[PAPER.option]].concat()).unwrap();
+        let options = Parsed::parse(&given, &[OPTIONS, &[THEME.option]].concat()).unwrap();
         assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF], &options, "a.pdf"), Ok(()));
         assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF, &PDF], &options, "any of these files"), Ok(()));
         assert!(takes_all(&[&PDF], &[&PDF], &options, "a.pdf").is_err(), "not this build's");
         let built: [&dyn Backend; 2] = [&PDF, &DOCUMENTS];
         assert!(usage(&built).contains("   for PDFs:\n     --theme auto|light|dark"), "listed with its backend's options");
-        assert_eq!(settings(&[&DOCUMENTS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper"], "once");
+        assert_eq!(settings(&[&DOCUMENTS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["theme"], "once");
     }
 
     /// Which formats have a setting is what their backends list, said together in the backends' order,
@@ -1812,15 +1812,15 @@ mod tests {
     fn the_formats_that_have_a_setting_are_those_their_backends_list() {
         use crate::source::tests::{Having, PDF};
         const TINT: Setting = crate::source::tests::cycled("tint", 't', "--tint");
-        static DIAGRAMS: Having = Having(std::slice::from_ref(&PAPER), &[("Diagram", &["paper"])]);
+        static DIAGRAMS: Having = Having(std::slice::from_ref(&THEME), &[("Diagram", &["theme"])]);
         static DOCUMENTS: Having =
-            Having(&[PAPER, TINT], &[("Print", &[]), ("Marked", &["paper", "tint"]), ("Hyper", &["paper"]), ("Marked", &["paper"])]);
+            Having(&[THEME, TINT], &[("Print", &[]), ("Marked", &["theme", "tint"]), ("Hyper", &["theme"]), ("Marked", &["theme"])]);
         static UNLISTED: Having = Having(std::slice::from_ref(&TINT), &[("Plain", &[])]);
         let said = |backends: &[&dyn Backend]| having(backends);
-        assert_eq!(said(&[&PDF, &DOCUMENTS]), [("paper", vec!["Marked", "Hyper"]), ("tint", vec!["Marked"])]);
-        assert_eq!(said(&[&DIAGRAMS, &PDF, &DOCUMENTS]), [("paper", vec!["Diagram", "Marked", "Hyper"]), ("tint", vec!["Marked"])]);
-        assert_eq!(said(&[&DOCUMENTS, &DIAGRAMS]).first(), Some(&("paper", vec!["Marked", "Hyper", "Diagram"])), "in the backends' order");
-        assert_eq!(said(&[&DIAGRAMS]), [("paper", vec!["Diagram"])]);
+        assert_eq!(said(&[&PDF, &DOCUMENTS]), [("theme", vec!["Marked", "Hyper"]), ("tint", vec!["Marked"])]);
+        assert_eq!(said(&[&DIAGRAMS, &PDF, &DOCUMENTS]), [("theme", vec!["Diagram", "Marked", "Hyper"]), ("tint", vec!["Marked"])]);
+        assert_eq!(said(&[&DOCUMENTS, &DIAGRAMS]).first(), Some(&("theme", vec!["Marked", "Hyper", "Diagram"])), "in the backends' order");
+        assert_eq!(said(&[&DIAGRAMS]), [("theme", vec!["Diagram"])]);
         assert!(said(&[&PDF, &UNLISTED]).is_empty() && said(&[]).is_empty());
         // Said shortly: the first two, and that there are others; and as those that do what another
         // doesn't.
@@ -1832,7 +1832,7 @@ mod tests {
             Some(("Diagram, Marked and others".to_owned(), "Diagram, Marked and others do".to_owned()))
         );
         assert_eq!((shortly(&[]), some_do(&[])), (String::new(), String::new()));
-        assert_eq!(settings(&[&DIAGRAMS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["paper", "tint"], "one setting, shared");
+        assert_eq!(settings(&[&DIAGRAMS, &DOCUMENTS]).iter().map(|s| s.name).collect::<Vec<_>>(), ["theme", "tint"], "one setting, shared");
     }
 
     /// Among others or in a container, a backend's file may wait until its tile is wanted, its
@@ -1864,7 +1864,7 @@ mod tests {
                 self.0.open(input, options)
             }
             fn deferred(&self, path: &str, _head: &[u8]) -> Option<crate::source::Deferred> {
-                Some(crate::source::Deferred { settings: if path.ends_with("dark.pdf") { &["paper"] } else { &[] } })
+                Some(crate::source::Deferred { settings: if path.ends_with("dark.pdf") { &["theme"] } else { &[] } })
             }
         }
         static LATER: Deferring = Deferring(Fake { name: "later", shows: "PDFs", magic: b"%PDF-", options: &[], holds: false });
@@ -1881,7 +1881,7 @@ mod tests {
         let is_later = |shown: &Shown| shown.items.iter().map(|item| matches!(item, Item::Later { .. })).collect::<Vec<_>>();
         let several = opener.open(&[a, b], false).unwrap();
         assert_eq!(is_later(&several.shown), [true, true]);
-        assert_eq!(several.shown.pages.source.settings(), ["paper"], "said unopened");
+        assert_eq!(several.shown.pages.source.settings(), ["theme"], "said unopened");
         assert_eq!(is_later(&opener.open(&[dir.to_str().unwrap()], false).unwrap().shown), [true, true]);
         let alone = opener.open(&[a], false).unwrap();
         assert!(!alone.shown.is_list());

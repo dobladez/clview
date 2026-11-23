@@ -188,7 +188,7 @@ mod tests {
     use crate::source::{Keys, Named, Numbers, Value};
 
     /// A redraw setting and a relayout one, as the documents' backend declares them.
-    static PAPER: Setting = crate::source::tests::cycled("paper", 'D', "--theme");
+    static THEME: Setting = crate::source::tests::cycled("theme", 'D', "--theme");
     static WIDTH: Setting = Setting {
         name: "width",
         named: &[Named { name: "window", says: "width window" }],
@@ -207,7 +207,7 @@ mod tests {
 
     fn values(paper: &'static str, width: Option<u32>) -> Values {
         let mut values = Values::default();
-        assert!(values.set("paper", Value::Named(paper)));
+        assert!(values.set("theme", Value::Named(paper)));
         if let Some(width) = width {
             assert!(values.set("width", Value::Number(width)));
         }
@@ -220,29 +220,29 @@ mod tests {
     /// alone, with the room.
     #[test]
     fn a_layout_is_wanted_when_a_relayout_setting_or_the_room_differs_and_a_redraw_one_doesnt_count() {
-        let declared: Vec<&'static Setting> = vec![&PAPER, &WIDTH];
-        let has = ["paper", "width"];
+        let declared: Vec<&'static Setting> = vec![&THEME, &WIDTH];
+        let has = ["theme", "width"];
         let laid = values("light", None);
         let at = |width| of(&declared, &has, values("dark", Some(width)));
         assert_eq!(wanted(&declared, &has, values("dark", None), laid, ROOM, Some(ROOM), false), None, "paper changed: a redraw");
         assert_eq!(wanted(&declared, &has, values("light", Some(84)), laid, ROOM, Some(ROOM), false), Some((at(84), ROOM)));
-        assert_eq!(at(84).get("paper"), None, "the relayout settings alone");
+        assert_eq!(at(84).get("theme"), None, "the relayout settings alone");
         assert_eq!(
             wanted(&declared, &has, values("light", None), values("dark", None), ROOM, Some(ROOM), false),
             None,
             "both at the default, said or not"
         );
-        assert_eq!(wanted(&declared, &["paper"], values("light", Some(84)), laid, ROOM, Some(ROOM), false), None, "a document without the setting");
+        assert_eq!(wanted(&declared, &["theme"], values("light", Some(84)), laid, ROOM, Some(ROOM), false), None, "a document without the setting");
         // The room: another wants one, the same within a little doesn't, and a document laid out for none
         // goes by its values alone.
         let window = of(&declared, &has, laid);
         assert_eq!(wanted(&declared, &has, laid, laid, OTHER, Some(ROOM), false), Some((window, OTHER)));
         assert_eq!(wanted(&declared, &has, laid, laid, Room { cell_w: 10.1, ..ROOM }, Some(ROOM), false), None);
         assert_eq!(wanted(&declared, &has, laid, laid, OTHER, None, false), None);
-        assert_eq!(wanted(&declared, &["paper"], laid, laid, OTHER, Some(ROOM), false), None, "no relayout setting: no room to speak of");
+        assert_eq!(wanted(&declared, &["theme"], laid, laid, OTHER, Some(ROOM), false), None, "no relayout setting: no room to speak of");
         // A list's tile gone into is laid out whole, even in the room and at the values it is laid out at.
         assert_eq!(wanted(&declared, &has, laid, laid, ROOM, Some(ROOM), true), Some((window, ROOM)));
-        assert_eq!(wanted(&declared, &["paper"], laid, laid, ROOM, None, true), Some((Values::default(), ROOM)), "nothing that lays out again");
+        assert_eq!(wanted(&declared, &["theme"], laid, laid, ROOM, None, true), Some((Values::default(), ROOM)), "nothing that lays out again");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), "width 72");
         assert_eq!(describe(&declared, &has, values("light", None)), "", "the default is left unsaid");
         assert_eq!(describe(&declared, &has, values("light", Some(72))), describe(&declared, &has, values("dark", Some(72))));
@@ -255,8 +255,8 @@ mod tests {
     /// values and the room still wanted is taken in; leaving the level forgets it.
     #[test]
     fn a_result_is_taken_for_the_values_and_room_still_wanted_and_dropped_otherwise() {
-        let declared: Vec<&'static Setting> = vec![&PAPER, &WIDTH];
-        let has = ["paper", "width"];
+        let declared: Vec<&'static Setting> = vec![&THEME, &WIDTH];
+        let has = ["theme", "width"];
         let at = |width| of(&declared, &has, values("light", Some(width)));
         let mut relayout: Relayout<u8> = Relayout::new();
         assert!(!relayout.is_under_way() && relayout.handle().is_none());
@@ -287,8 +287,8 @@ mod tests {
     /// the level forgets it too, as what failed was that level's.
     #[test]
     fn a_pair_that_failed_is_not_asked_for_again_until_either_changes_or_r() {
-        let declared: Vec<&'static Setting> = vec![&PAPER, &WIDTH];
-        let has = ["paper", "width"];
+        let declared: Vec<&'static Setting> = vec![&THEME, &WIDTH];
+        let has = ["theme", "width"];
         let at = |width| of(&declared, &has, values("light", Some(width)));
         let mut relayout: Relayout<u8> = Relayout::new();
         assert!(!relayout.refused(&(at(84), ROOM)));

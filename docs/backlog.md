@@ -11,7 +11,7 @@ ends not yet planned: not promised, and not in the Plans until they are. What `c
 An SVG shown alone following the paper: on white, or transparent on the terminal's colour. Markdown,
 HTML and Mermaid diagrams already do, a diagram shown alone and one a document shows alike. Nothing
 of the contract (`src/source.rs`) or of the viewer needs to change for it: the SVG backend would
-declare its own setting named `paper`, as Mermaid's does beside the documents', and the viewer
+declare its own setting named `theme`, as Mermaid's does beside the documents', and the viewer
 would hold one value for all three, ask the terminal's background for an SVG too, and name SVG
 among the formats that go dark
 ([ADR-0033](adr/0033-backends-share-a-setting-by-declaring-its-name.md)). What is still to decide is

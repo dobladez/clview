@@ -58,8 +58,8 @@ const OPTIONS: &[OptionSpec] =
 
 /// Markdown and HTML on dark paper, light on dark, or as printed, dark on light: they have no paper
 /// of their own ([ADR-0015](../../docs/adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
-const PAPER: Setting = Setting {
-    name: "paper",
+const THEME: Setting = Setting {
+    name: "theme",
     named: &[Named { name: LIGHT, says: "dark on light" }, Named { name: DARK, says: "light on dark" }],
     numbers: None,
     default: Value::Named(LIGHT),
@@ -100,7 +100,7 @@ const WIDTH: Setting = Setting {
         help: "Markdown and HTML laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
     },
-    help: "4 characters a line narrower, or wider; 72] sets 72, 0] the window's",
+    help: "4 characters a line narrower, or wider; 72{increase-width} sets 72, 0{increase-width} the window's",
     does: "reflow",
     effect: Effect::Relayout,
     sets_width: true,
@@ -119,7 +119,7 @@ const FONT: Setting = Setting {
     auto: None,
     keys: Keys::Zoom,
     option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "Markdown and HTML text at N% of its size (50-400)", alias: None },
-    help: "text larger, or smaller; 150+ sets 150%, 0+ 100%",
+    help: "text larger, or smaller; 150{zoom-in} sets 150%, 0{zoom-in} 100%",
     does: "have a font size",
     effect: Effect::Relayout,
     sets_width: false,
@@ -144,7 +144,7 @@ const MARGIN: Setting = Setting {
         help: "Markdown and HTML side margins of N characters of code (0-20)",
         alias: None,
     },
-    help: "margins a character narrower, or wider; 5} sets 5, 0} back to 3",
+    help: "margins a character narrower, or wider; 5{increase-margin} sets 5, 0{increase-margin} back to 3",
     does: "have margins",
     effect: Effect::Relayout,
     sets_width: false,
@@ -222,7 +222,7 @@ fn font_within(percent: u32) -> u32 {
 
 /// The settings Markdown and HTML have: paper, width, font size, margins and fenced blocks. Their
 /// formats list them ([`MARKDOWN`], [`HTML`]), for the viewer to say which formats have a setting.
-const MARKED_UP: &[&str] = &[PAPER.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name];
+const MARKED_UP: &[&str] = &[THEME.name, WIDTH.name, FONT.name, MARGIN.name, FENCES.name];
 
 /// The settings a document of `kind` has: those of Markdown and HTML ([`MARKED_UP`]), for them.
 fn settings_of(kind: Kind) -> &'static [&'static str] {
@@ -436,7 +436,7 @@ impl Backend for Wordcraft {
     }
 
     fn settings(&self) -> &'static [Setting] {
-        &[PAPER, WIDTH, FONT, MARGIN, FENCES]
+        &[THEME, WIDTH, FONT, MARGIN, FENCES]
     }
 
     fn opens(&self, path: &str, head: &[u8]) -> bool {
@@ -1545,7 +1545,7 @@ impl Document {
         if w > side || h > side || w.saturating_mul(h) > MAX_PIXELS {
             return Err(format!("{w} × {h} pixels is too large to render"));
         }
-        let dark = settings_of(self.kind).contains(&PAPER.name) && request.values.get(PAPER.name) == Some(Value::Named(DARK));
+        let dark = settings_of(self.kind).contains(&THEME.name) && request.values.get(THEME.name) == Some(Value::Named(DARK));
         let dark = dark.then_some(request.dark);
         // With the page's paper: a fenced block is drawn for it.
         let (warnings, document) = laid.drawn_pictures(page, request.page == 0, request.tile, dark);
@@ -2514,7 +2514,7 @@ mod tests {
                 Self::Printed => (LIGHT, [0x1E; 3]),
                 Self::Dark(dark) => (DARK, dark),
             };
-            assert!(values.set(PAPER.name, Value::Named(value)));
+            assert!(values.set(THEME.name, Value::Named(value)));
             Request { page, scale, tag: 0, values, dark, tile: false, on_dark: false }
         }
     }
@@ -2529,7 +2529,7 @@ mod tests {
         let Ok(Opened::Pages(source)) = Wordcraft.open(input, &Parsed::default()) else { panic!("not pages: {name}") };
         let frame = source.renderer().unwrap().render(paper.asked(0, 1.0));
         assert_eq!(frame.error, None);
-        (source.settings().contains(&PAPER.name), [frame.rgba[0], frame.rgba[1], frame.rgba[2]])
+        (source.settings().contains(&THEME.name), [frame.rgba[0], frame.rgba[1], frame.rgba[2]])
     }
 
     /// Markdown and HTML go on the paper asked for; what is laid out to be printed stays as printed.
@@ -2839,7 +2839,7 @@ mod tests {
         assert!(wide_margin.set(MARGIN.name, Value::Number(20)));
         assert_eq!(md.bounds(FONT.name, room(80, 23, 10.0, 20.0), wide_margin).and_then(|bounds| bounds.most), Some(170));
         assert_eq!(md.bounds(FONT.name, room(80, 23, 10.0, 20.0), Values::default()), Some(Bounds { named_at: None, most: Some(170) }));
-        assert_eq!(md.bounds(PAPER.name, room(80, 23, 10.0, 20.0), Values::default()), None);
+        assert_eq!(md.bounds(THEME.name, room(80, 23, 10.0, 20.0), Values::default()), None);
         let rtf = open("a.rtf", "{\\rtf1\\ansi One}");
         assert_eq!(
             (rtf.bounds(WIDTH.name, room(80, 23, 10.0, 20.0), Values::default()), rtf.bounds(FONT.name, room(80, 23, 10.0, 20.0), Values::default())),

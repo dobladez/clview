@@ -261,7 +261,9 @@ pub(crate) struct Setting {
     pub(crate) option: OptionSpec,
     /// What its keys do to the files that have it, as `?` lists them before the names of formats
     /// that do ([`Format::settings`]): `light on dark, or dark on light`, listed as `light on dark,
-    /// or dark on light (Markdown, HTML and others)`.
+    /// or dark on light (Markdown, HTML and others)`. It writes no key: where it names one, it
+    /// writes the command between braces, `72{increase-width} sets 72`, and the viewer puts the key
+    /// bound to that command there, which a reader's config may have changed.
     pub(crate) help: &'static str,
     /// What the files that have it do, as said of one that doesn't and of those that do: `go dark`.
     /// Its keys say so on a file that hasn't it, with the names of formats that have
@@ -313,7 +315,7 @@ pub(crate) struct Auto {
 }
 
 /// The keys a [`Setting`] suggests for its commands in the pager. The viewer names the commands from
-/// the setting (`paper`; `width-down` and `width-up`) and binds these keys to them in its keymaps,
+/// the setting (`cycle-theme`; `decrease-width` and `increase-width`) and binds these keys to them in its keymaps,
 /// after its own: a suggestion never takes a key the viewer binds, nor another setting's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Keys {
@@ -1808,14 +1810,14 @@ pub(crate) mod tests {
     fn a_setting_is_listed_by_its_backends_formats_and_alike_in_every_backend() {
         assert_eq!(wrong_settings(BACKENDS), Vec::<String>::new());
         // What it would say.
-        const PAPER: Setting = cycled("paper", 'D', "--theme");
-        const HELPED: Setting = Setting { option: OptionSpec { help: "its own", ..PAPER.option }, ..PAPER };
-        static INKS: Having = Having(&[PAPER], &[("Ink", &["paper"]), ("Plain", &[])]);
-        static WASHES: Having = Having(&[HELPED], &[("Wash", &["paper"])]);
-        static UNLISTED: Having = Having(&[PAPER], &[("Ink", &[])]);
-        static UNDECLARED: Having = Having(&[], &[("Ink", &["paper"])]);
-        static OTHERWISE: Having = Having(&[Setting { does: "do that", ..PAPER }], &[("Wash", &["paper"])]);
-        static SAYS: Having = Having(&[Setting { help: "another line", ..PAPER }], &[("Wash", &["paper"])]);
+        const THEME: Setting = cycled("theme", 'D', "--theme");
+        const HELPED: Setting = Setting { option: OptionSpec { help: "its own", ..THEME.option }, ..THEME };
+        static INKS: Having = Having(&[THEME], &[("Ink", &["theme"]), ("Plain", &[])]);
+        static WASHES: Having = Having(&[HELPED], &[("Wash", &["theme"])]);
+        static UNLISTED: Having = Having(&[THEME], &[("Ink", &[])]);
+        static UNDECLARED: Having = Having(&[], &[("Ink", &["theme"])]);
+        static OTHERWISE: Having = Having(&[Setting { does: "do that", ..THEME }], &[("Wash", &["theme"])]);
+        static SAYS: Having = Having(&[Setting { help: "another line", ..THEME }], &[("Wash", &["theme"])]);
         assert!(wrong_settings(&[&INKS, &WASHES, &PDF]).is_empty(), "one setting in two backends, each with its option's help");
         assert_eq!(wrong_settings(&[&UNLISTED]).len(), 1, "no format lists it");
         assert_eq!(wrong_settings(&[&UNDECLARED]).len(), 1, "listed, and not declared");
@@ -1853,27 +1855,75 @@ pub(crate) mod tests {
         names.dedup();
         assert!(names.len() <= MAX_SETTINGS, "{names:?}");
         // What it would say.
-        static PAPER: Declaring = Declaring(&[cycled("paper", 'D', "--theme")]);
-        static QUITS: Declaring = Declaring(&[cycled("paper", 'q', "--theme")]);
+        static THEME: Declaring = Declaring(&[cycled("theme", 'D', "--theme")]);
+        static QUITS: Declaring = Declaring(&[cycled("theme", 'q', "--theme")]);
         static OTHER: Declaring = Declaring(&[cycled("tint", 'D', "--tint")]);
-        static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("paper", 'D', "--theme") }]);
+        static STEPS: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("theme", 'D', "--theme") }]);
         static ZOOMS: Declaring = Declaring(&[Setting { keys: Keys::Zoom, ..cycled("font", '+', "--font") }]);
         static PLUS: Declaring = Declaring(&[Setting { keys: Keys::Step('-', '+'), ..cycled("font", '+', "--font") }]);
-        assert!(wrong_keys(&[&PAPER, &PAPER]).is_empty(), "one setting in two backends");
+        assert!(wrong_keys(&[&THEME, &THEME]).is_empty(), "one setting in two backends");
         assert_eq!(wrong_keys(&[&QUITS]).len(), 1, "the viewer's");
-        assert!(wrong_keys(&[&PAPER, &ZOOMS]).is_empty(), "the zoom keys, as Keys::Zoom alone");
+        assert!(wrong_keys(&[&THEME, &ZOOMS]).is_empty(), "the zoom keys, as Keys::Zoom alone");
         assert_eq!(wrong_keys(&[&PLUS]).len(), 2, "the zoom keys as a Step are the viewer's");
-        assert_eq!(wrong_keys(&[&PAPER, &OTHER]).len(), 1, "two settings");
-        assert_eq!(wrong_keys(&[&PAPER, &STEPS]).len(), 1, "two sets of keys");
+        assert_eq!(wrong_keys(&[&THEME, &OTHER]).len(), 1, "two settings");
+        assert_eq!(wrong_keys(&[&THEME, &STEPS]).len(), 1, "two sets of keys");
+    }
+
+    /// What is wrong with the names of the settings `backends` declare: a setting that is not called
+    /// as its option is, so that its commands are not `cycle-`, `decrease-` or `increase-` and the
+    /// name of the option, which a config sets it by; and a phrase that names a command no key is
+    /// bound to.
+    fn wrong_names(backends: &[&dyn Backend]) -> Vec<String> {
+        let mut wrong = Vec::new();
+        let mut settings: Vec<&'static Setting> = Vec::new();
+        for backend in backends {
+            for setting in backend.settings() {
+                let option = setting.option.name.strip_prefix("--").unwrap_or(setting.option.name);
+                if setting.name != option {
+                    wrong.push(format!("{}: the setting {} has the option {}", backend.name(), setting.name, setting.option.name));
+                }
+                for command in crate::view::setting_commands(setting) {
+                    if !["cycle-", "decrease-", "increase-"].iter().any(|turn| command.strip_prefix(turn) == Some(option)) {
+                        wrong.push(format!("{}: the command {command} is not named from the option {}", backend.name(), setting.option.name));
+                    }
+                }
+                if !settings.iter().any(|known| known.name == setting.name) {
+                    settings.push(setting);
+                }
+            }
+        }
+        wrong.extend(crate::view::unbound_in_phrases(&settings).into_iter().map(|name| format!("a phrase names {name}, which no key is bound to")));
+        wrong
+    }
+
+    /// The commands of each setting have the name of its option: a config sets the option by that
+    /// name and binds keys to the commands by theirs. And a setting's phrase names its keys by the
+    /// commands they are bound to.
+    #[test]
+    fn the_commands_of_each_setting_have_the_name_of_its_option() {
+        assert_eq!(wrong_names(BACKENDS), Vec::<String>::new());
+        // What it would say.
+        static PAPER: Declaring = Declaring(&[cycled("paper", 'D', "--theme")]);
+        static WIDTH: Declaring = Declaring(&[Setting { keys: Keys::Step('[', ']'), ..cycled("columns", '[', "--width") }]);
+        static THEME: Declaring = Declaring(&[cycled("theme", 'D', "--theme")]);
+        static PHRASE: Declaring =
+            Declaring(&[Setting { help: "72{increase-width} sets 72; {cycle-theme} turns it", ..cycled("theme", 'D', "--theme") }]);
+        assert_eq!(
+            wrong_names(&[&PAPER]),
+            ["declaring: the setting paper has the option --theme", "declaring: the command cycle-paper is not named from the option --theme"]
+        );
+        assert_eq!(wrong_names(&[&WIDTH]).len(), 3, "{:?}", wrong_names(&[&WIDTH]));
+        assert_eq!(wrong_names(&[&THEME, &THEME]), Vec::<String>::new());
+        assert_eq!(wrong_names(&[&PHRASE]), ["a phrase names increase-width, which no key is bound to"]);
     }
 
     #[test]
     fn a_value_is_held_by_its_settings_name_and_values_hold_so_many() {
         let mut values = Values::default();
-        assert_eq!(values.get("paper"), None);
-        assert!(values.set("paper", Value::Named("dark")) && values.set("width", Value::Number(72)));
-        assert!(values.set("paper", Value::Named("light")));
-        assert_eq!((values.get("paper"), values.get("width")), (Some(Value::Named("light")), Some(Value::Number(72))));
+        assert_eq!(values.get("theme"), None);
+        assert!(values.set("theme", Value::Named("dark")) && values.set("width", Value::Number(72)));
+        assert!(values.set("theme", Value::Named("light")));
+        assert_eq!((values.get("theme"), values.get("width")), (Some(Value::Named("light")), Some(Value::Number(72))));
         let names = ["a", "b", "c", "d", "e", "f"];
         assert!(names.iter().all(|name| values.set(name, Value::Number(1))));
         assert!(!values.set("g", Value::Number(1)), "past {MAX_SETTINGS}");
