@@ -56,6 +56,8 @@ clv --password PW secret.pdf
 | `--protocol ascii` | [text cells](#text-cells) of ASCII characters |
 | `--config FILE` | read this file as the config, not your own ([The config file](#the-config-file)). The file must be there |
 | `--no-config` | read no config. Not with `--config` |
+| `--generate-config` | write a config with every line commented out, where clv reads one, print its path, and exit ([The config file](#the-config-file)). It takes no file |
+| `--print-config` | print the config in effect, from the file and the command line, and exit. It takes no file |
 
 Printed without the pager, pages follow the zoom too, a row of them under another: `--per-row 3`
 prints three to a row, `--per-row width` one to a row as wide as the window, and `auto` two to a row
@@ -99,7 +101,29 @@ J = "list-tile-down"
 **Where it is.** clv reads `$XDG_CONFIG_HOME/clv/config.toml` when that variable holds an absolute
 path. Otherwise clv reads `~/.config/clv/config.toml`, on macOS too. When the file is not there,
 clv says nothing and uses its defaults. `--config FILE` reads another file, and `--no-config` reads
-none. clv never writes the file.
+none.
+
+**A config to start from.** `clv --generate-config` writes a template where clv reads its config:
+your own place, or the file that `--config FILE` names. It makes the directory when there is
+none, and prints the path that it wrote. clv never writes over a config: when a file is there,
+clv refuses and names it. This is the only time that clv writes a config.
+
+Every line of the template is commented out, so the file sets nothing as written, and a default
+that a later release changes still reaches you. A line that sets something starts with `# `: take
+the `# ` away to use it. A line of help starts with `## `. The template is made for your build of
+clv, and holds these:
+
+- each option that a config may set, with its help lines, what it takes and its default
+  (`# width = "window"`)
+- `[keys.pages]` and `[keys.list]`, with every key that a config can write
+  (`# ctrl-v = "screen-down"`), under what its command does
+
+**The config in effect.** `clv --print-config` prints the config that clv would use, from the file
+and the command line. A line that either sets has its value and no `# `. The other lines keep
+their `# ` and their defaults. So `clv --no-config --print-config` prints the template. What clv
+prints is a config: you can save it and read it back with `--config`. It prints the keys in
+`[keys.pages]` and `[keys.list]`, each key where it is bound; a key that you unbound is `"none"`
+under the command that had it.
 
 **What it holds.** The file is [TOML](https://toml.io). An option goes at the top level, under its
 name without the dashes: `--per-row` is `per-row`. The value has one of these forms:
@@ -181,7 +205,8 @@ value `"none"` unbinds a key.
 clv also refuses a command that does not exist, and a command that does not apply in the keymap
 of its table: `[keys.list] s = "search"`.
 
-**The commands.** A command for the list alone starts with `list-`. The others are for the pages
+**The commands.** `clv --generate-config` writes every command with its keys. A command for the
+list alone starts with `list-`. The others are for the pages
 of a file, or for both.
 
 | Command | Where | What it does |

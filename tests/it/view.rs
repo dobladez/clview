@@ -323,6 +323,115 @@ fn config_keys_that_cant_be_bound_are_refused_with_their_line() {
     assert_eq!(out.stdout, view(&pdf, &["--protocol", "kitty"]).stdout);
 }
 
+/// `clv` with `args` and no file, its config under `home`, and no home to read another from.
+fn clv_with_config_home(home: &Path, args: &[&str]) -> Output {
+    crate::bin::clv().args(args).env("XDG_CONFIG_HOME", home).env("HOME", "/nonexistent").env("TERM", "dumb").output().unwrap()
+}
+
+/// `--generate-config` writes the template of a config where clv reads one, makes the directory,
+/// and prints the path. Every line is help or commented out, so the file sets nothing. A second
+/// time it refuses, names the file, and leaves it as it was. `--no-config --print-config` prints
+/// what it wrote. With `--config FILE`, it writes that file.
+#[test]
+fn generate_config_writes_the_template_once_and_print_config_prints_it() {
+    let home = tmp("generate-config", "xdg");
+    let _ = std::fs::remove_dir_all(&home);
+    let file = home.join("clv/config.toml");
+    let run = |args: &[&str]| clv_with_config_home(&home, args);
+    let out = run(&["--generate-config"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), format!("{}\n", file.display()), "the path it wrote");
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(written.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ")), "{written}");
+    for line in [
+        "# per-row = \"auto\"",
+        "# recurse = false",
+        "# [keys.pages]",
+        "# [keys.list]",
+        "# q = \"quit\"",
+        "# enter = \"list-open\"",
+        "# \"/\" = \"search\"",
+    ] {
+        assert!(written.lines().any(|other| other == line), "{line}:\n{written}");
+    }
+    assert!(written.contains("## ctrl-c always quits, and a number before enter goes to that page or tile."), "{written}");
+    assert!(!written.contains("password") && !written.contains("pages ="), "{written}");
+    // clv reads it, and it sets nothing.
+    let pdf = fixture("generate-config", 2);
+    let env = [("XDG_CONFIG_HOME", home.to_str().unwrap())];
+    let read = view_with(&pdf, &["--protocol", "kitty"], &env);
+    assert!(read.status.success() && read.stderr.is_empty(), "{}", text(&read.stderr));
+    assert_eq!(read.stdout, view(&pdf, &["--protocol", "kitty"]).stdout);
+    // The second time: refused, and the file is as it was.
+    std::fs::write(&file, "# Mine.\nper-row = 3\n").unwrap();
+    let again = run(&["--generate-config"]);
+    assert!(!again.status.success() && again.stdout.is_empty());
+    assert_eq!(text(&again.stderr), format!("clv: {} is there already: clv never writes over a config\n", file.display()));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Mine.\nper-row = 3\n");
+    // What it wrote is the config in effect with no config.
+    let printed = run(&["--no-config", "--print-config"]);
+    assert!(printed.status.success() && printed.stderr.is_empty(), "{}", text(&printed.stderr));
+    assert_eq!(text(&printed.stdout), written);
+    // Another file, its directories made.
+    let other = tmp("generate-config", "other/deep/mine.toml");
+    let _ = std::fs::remove_dir_all(other.parent().unwrap());
+    let out = run(&["--generate-config", "--config", other.to_str().unwrap()]);
+    assert!(out.status.success() && text(&out.stdout) == format!("{}\n", other.display()), "{}", text(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), written);
+    // Each is the whole of a run.
+    for (args, said) in [
+        (&["--generate-config", "a.pdf"][..], "clv: --generate-config takes no file\n"),
+        (&["--print-config", "a.pdf"], "clv: --print-config takes no file\n"),
+        (&["--generate-config", "--print-config"], "clv: give --generate-config or --print-config, not both\n"),
+    ] {
+        let out = run(args);
+        assert!(!out.status.success() && out.stdout.is_empty() && text(&out.stderr) == said, "{args:?}: {}", text(&out.stderr));
+    }
+}
+
+/// `--print-config` prints the config in effect, from the file and the command line: a line that
+/// either sets has its value and no `# `, the others their defaults, commented out. The command
+/// line wins. What it prints is a config that clv takes, and that prints the same.
+#[test]
+fn print_config_prints_what_the_file_and_the_command_line_set() {
+    let home = crate::bin::config_home("print", "theme = \"dark\"\nper-row = 3\npager = true\n\n[keys]\nx = \"quit\"\nq = \"none\"\n");
+    let printed = |args: &[&str]| {
+        let out = clv_with_config_home(&home, args);
+        assert!(out.status.success() && out.stderr.is_empty(), "{args:?}: {}", text(&out.stderr));
+        text(&out.stdout)
+    };
+    let once = |printed: &str, line: &str| printed.lines().filter(|other| *other == line).count() == 1;
+    let file = printed(&["--print-config"]);
+    for line in [
+        "theme = \"dark\"",
+        "per-row = 3",
+        "pager = true",
+        "# no-pager = false",
+        "# recurse = false",
+        "# compression = \"auto\"",
+        "[keys.pages]",
+        "[keys.list]",
+    ] {
+        assert!(once(&file, line), "{line}:\n{file}");
+    }
+    assert_eq!(file.matches("\nx = \"quit\"\nq = \"none\"\n").count(), 2, "in both keymaps:\n{file}");
+    assert!(!file.contains("# q = \"quit\""), "{file}");
+    // The command line's, and the command line wins.
+    let typed = printed(&["--print-config", "--per-row", "2", "--recurse", "--compression", "small", "--no-pager"]);
+    for line in ["theme = \"dark\"", "per-row = 2", "recurse = true", "compression = \"small\"", "no-pager = true", "# pager = false"] {
+        assert!(once(&typed, line), "{line}:\n{typed}");
+    }
+    assert!(!typed.contains("per-row = 3"), "{typed}");
+    // What it prints is a config: read as one, it prints the same.
+    let again = tmp("print-config", "again.toml");
+    std::fs::write(&again, &file).unwrap();
+    assert_eq!(printed(&["--print-config", "--config", again.to_str().unwrap()]), file);
+    // A config that is wrong is said, not printed.
+    let wrong = crate::bin::config_home("print-wrong", "width = 300\n");
+    let out = clv_with_config_home(&wrong, &["--print-config"]);
+    assert!(!out.status.success() && out.stdout.is_empty() && text(&out.stderr).contains("config.toml:1: width: expected window or 20–200, got 300"));
+}
+
 #[test]
 fn without_a_terminal_auto_points_to_the_protocol_option() {
     let pdf = fixture("auto", 1);

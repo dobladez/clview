@@ -17,6 +17,9 @@ works today. A version's section becomes the notes of its
   `[keys.list]` for one keymap: `ctrl-d = "screen-down"`, `x = "none"`. `?`, the status line and
   the messages show the keys as you bound them. A number before `enter` and `ctrl-c` stay as
   they are. The manual lists the commands.
+- `clv --generate-config` writes a config to start from, with every line commented out: each
+  option with its default, and every key with its command. It never writes over a file.
+  `clv --print-config` prints the config in effect, from the file and the command line.
 
 ### Changed
 

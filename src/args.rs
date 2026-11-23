@@ -5,7 +5,7 @@
 //! whether a config may set it, and one parser reads a value against it ([`Entry::read`]),
 //! wherever the value came from.
 
-use crate::source::{Numbers, Setting};
+use crate::source::{Numbers, Setting, Value};
 
 /// An option: its `name` (`--per-row`), the `short` one it has too (`-r`), what its value looks like
 /// (`None` for one that takes none) and what it does, as `--help` shows them; the `alias` it is
@@ -125,6 +125,23 @@ impl Entry {
     /// Whether it takes no value.
     pub(crate) fn is_flag(&self) -> bool {
         self.spec.shape == Shape::Flag
+    }
+
+    /// The value it has when it is not given, as it would be given: a setting's `auto` where it goes
+    /// by the terminal's background, or else its default; the first named value of another option,
+    /// or else its least number. None for a flag, a page list and free text.
+    pub(crate) fn default(&self) -> Option<String> {
+        match (self.spec.shape, self.by) {
+            (Shape::Setting, By::Setting(setting, _)) => Some(match (setting.auto, setting.default) {
+                (Some(_), _) => AUTO.to_owned(),
+                (None, Value::Named(named)) => named.to_owned(),
+                (None, Value::Number(number)) => number.to_string(),
+            }),
+            (Shape::Value { named, numbers }, _) => {
+                named.first().map(|named| (*named).to_owned()).or(numbers.map(|numbers| numbers.least.to_string()))
+            }
+            _ => None,
+        }
     }
 
     /// What its value may be, in words: `auto, width or 1–8`, `50–400%`.
@@ -404,6 +421,10 @@ mod tests {
         assert_eq!(entry(Shape::Text).read("--anything\x1b"), Ok(Arg::Text("--anything\x1b")), "a password can be anything");
         let flag = entry(Shape::Flag);
         assert!(flag.is_flag() && !either.is_flag() && flag.read("true").is_err());
+        assert_eq!(
+            [either.default(), named.default(), number.default(), flag.default()],
+            [Some("auto".into()), Some("auto".into()), Some("50".into()), None]
+        );
     }
 
     /// The catalog lists the viewer's options, then each backend's own and its settings', each
@@ -453,6 +474,10 @@ mod tests {
         assert_eq!((width.read("window"), width.read("72")), (Ok(Arg::Named("window")), Ok(Arg::Number(72))));
         assert_eq!(width.read("300"), Err("expected window or 20–200, got 300".into()));
         assert!(width.read("auto").is_err(), "no `auto` for a setting that doesn't go by the background");
+        // What each has when it is not given.
+        let defaults: Vec<Option<String>> =
+            ["--theme", "--width", "--pages", "--pager", "--password"].iter().map(|name| catalog.entry(name).unwrap().default()).collect();
+        assert_eq!(defaults, [Some("auto".into()), Some("light".into()), None, None, None]);
         // Whether a config may set it is the option's to say.
         let may: Vec<Settable> = ["--pages", "--password", "--theme"].iter().map(|name| catalog.entry(name).unwrap().spec.config).collect();
         assert_eq!(may, [Settable::Yes, Settable::No("a secret"), Settable::Yes]);

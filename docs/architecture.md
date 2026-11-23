@@ -97,7 +97,7 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 | `cells.rs` | Rendered pixels into lines of text cells, for a terminal without the protocol ([Text cells](#text-cells-cellsrs)). Pure |
 | `tmux.rs` | Asking tmux: its client's terminal, `allow-passthrough`, SSH, who shows the pane, what a pane holds, and the server's options. It knows nothing of images |
 | `sweep.rs` | Pages printed inside tmux: recorded in the tmux server, and deleted from the terminal once no pane holds them. The rule is its own, the cells are read through `kitty.rs`, and tmux is asked only through `tmux.rs`: this pane, the panes, what one holds, and the records |
-| `config.rs` | The reader's config: which file, read within its size, its TOML turned into options by the names of the options catalog, and every error with its line ([The config](#the-config-configrs)). It writes nothing |
+| `config.rs` | The reader's config: which file, read within its size, its TOML turned into options and key bindings by the names of the two catalogs, and every error with its line; and the config written as text, for `--generate-config` and `--print-config` ([The config](#the-config-configrs)) |
 | `commands.rs` | What the pager can do, by name (the catalog), and the keymaps that bind keys to it, for a file's pages and for a list; `?`'s lines and the status line's reminders, read from them ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)). Pure |
 | `pager.rs` | The pager: navigation (`Nav`, no IO), which looks each key up and runs its command, rendering and sending ahead, what is kept in the terminal, redraws |
 | `search.rs` | A file's search (`/`): what is typed, the text read so far, folded, the matches in it and the one the reader is on ([Searching a file's text](#searching-a-files-text-searchrs-pagerrs)). No IO of its own |
@@ -173,6 +173,32 @@ no config.
 - **An error** is a `Wrong`: the line and why. `Config::read` puts the file before it, written
   from the reader's home (`~/.config/clv/config.toml:3: …`). The message goes out through
   `printable` like every other, in `view::run`.
+
+**The config as text.** `config::written` makes a config from the two catalogs of the build, for
+`--print-config` and for `--generate-config`:
+
+- Each option that a config may set (`Catalog::options`, `Settable::Yes`): its help lines (one
+  from each backend that declares the setting), what it takes (`Entry::takes`), and a line
+  `name = value`. The value is what the options give, or else the default (`Entry::default`: a
+  setting's `auto` or its default, another option's first named value).
+- The tables `[keys.pages]` and `[keys.list]`: the commands in the groups that `?` lists them in
+  (`commands::groups`), each group under what its line says, and for each command every key
+  bound to it without a number (`Keymap::all`, the keys that `?` doesn't list too). `ctrl-c` and
+  the bindings with a number are left out, and two lines of help say so.
+
+A line gets `# ` before it unless something set it: an option that is given (`Parsed::has`), a
+key bound otherwise than by default, a key unbound (written `none` under the command that had
+it), and the line of a table with such a key in it. Help is `## `. So with nothing given and the
+default keymaps, every line is commented out: that is the template, and `view::generate` writes
+it (`config::generate`, with `create_new`, so never over a file, a directory or a link). `view`
+handles `--generate-config` before it reads any config, and `--print-config` right after, both
+before `file_args`, since neither takes a file.
+
+`source::tests::the_template_uncommented_is_no_config` takes the `# ` from every such line of the
+build's template (`view::wrong_template`). clv must take the result, and it must give the options
+and the keymaps of no config: the keymaps equal as `Keymaps`, so in the order of their keys and
+in which keys `?` lists. The test also counts the keys written against those that a config can
+write (`commands::writable`).
 
 `view::configured` then adds what the config sets to the `Parsed` options, after the command
 line's (`Parsed::configure`): `Parsed::value` gives the first, so the command line wins, and

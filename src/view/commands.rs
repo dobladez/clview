@@ -370,6 +370,17 @@ impl Keymap {
         listed.map(|(chord, _)| chord.key)
     }
 
+    /// Every key bound to `command` by itself, in their order, those `?` doesn't list too: what a
+    /// config can write of it.
+    pub(super) fn all(&self, command: Command) -> Vec<Key> {
+        self.bindings.iter().filter(|(chord, bound)| *bound == command && !chord.counted).map(|(chord, _)| chord.key).collect()
+    }
+
+    /// The command `key` is bound to by itself, with no number typed before it.
+    pub(super) fn alone(&self, key: Key) -> Option<Command> {
+        self.bound(key, false)
+    }
+
     /// The first key bound to `command`, as `?` names it; nothing if none is.
     pub(super) fn first(&self, command: Command) -> String {
         self.keys(command, false).next().map(long).unwrap_or_default()
@@ -649,6 +660,42 @@ impl Keymaps {
     }
 }
 
+/// The commands of `mode`, each once, in the groups that `?` lists them in, each group with what
+/// its line says, its keys as `keymap` binds them: the viewer's, then each setting's, then the
+/// ways out and `?` itself. What a config's template writes its keys under.
+pub(super) fn groups(mode: Mode, settings: &[&'static Setting], keymap: &Keymap) -> Vec<(String, Vec<Command>)> {
+    let own = match mode {
+        Mode::Pages => PAGE_LINES,
+        Mode::List => LIST_LINES,
+    };
+    let lines = own.iter().chain(BACK_LINES).chain([&HELP_LINE]).filter(|line| !line.counted);
+    let of_viewer = |line: &Line| (line.says, line.commands.to_vec());
+    let of_setting =
+        |setting: &&'static Setting| (setting.help, suggested(setting).into_iter().map(|(_, turn)| Command::Setting(setting, turn)).collect());
+    // The viewer's own lines, the settings' after them, and the ways out last, as `?` has them.
+    let mut all: Vec<(&str, Vec<Command>)> = lines.map(of_viewer).collect();
+    let ways_out = all.split_off(own.iter().filter(|line| !line.counted).count().min(all.len()));
+    all.extend(settings.iter().map(of_setting));
+    all.extend(ways_out);
+    let mut seen: Vec<Command> = Vec::new();
+    let mut groups = Vec::new();
+    for (says, commands) in all {
+        let new: Vec<Command> = commands.into_iter().filter(|command| command.applies(mode) && !seen.contains(command)).collect();
+        if !new.is_empty() {
+            // A command a line lists twice (`next`, with a search and without) is new once.
+            let mut once: Vec<Command> = Vec::new();
+            for command in new {
+                if !once.contains(&command) {
+                    once.push(command);
+                }
+            }
+            seen.extend(&once);
+            groups.push((keymap.fill(says), once));
+        }
+    }
+    groups
+}
+
 /// The command called `name`: one of the viewer's, or one of a setting that `settings` holds.
 fn named(name: &str, settings: &[&'static Setting]) -> Option<Command> {
     let of_settings = settings.iter().flat_map(|setting| suggested(setting).into_iter().map(|(_, turn)| Command::Setting(setting, turn)));
@@ -664,6 +711,14 @@ fn suggested(setting: &'static Setting) -> Vec<(char, Turn)> {
         Keys::Step(down, up) => vec![(down, Turn::Down), (up, Turn::Up)],
         Keys::Zoom => Vec::new(),
     }
+}
+
+/// How many bindings of `keymaps` a config can write, for a build's own tests: every key bound by
+/// itself in either keymap, but `ctrl-c`.
+#[cfg(test)]
+pub(super) fn writable(keymaps: &Keymaps) -> usize {
+    let writable = |keymap: &Keymap| keymap.bindings.iter().filter(|(chord, _)| !chord.counted && chord.key != Key::Interrupt).count();
+    writable(&keymaps.pages).saturating_add(writable(&keymaps.list))
 }
 
 /// The names of the commands made for `setting`, for a build's own tests: a config binds keys to

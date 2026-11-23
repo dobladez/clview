@@ -94,7 +94,12 @@ const OPTIONS: &[OptionSpec] = &[
         config: Settable::No(WHICH_CONFIG),
     },
     OptionSpec { config: Settable::No(WHICH_CONFIG), ..flag(NO_CONFIG, "read no config") },
+    OptionSpec { config: Settable::No(ASKS), ..flag(GENERATE_CONFIG, "write a config with every line commented out, where clv reads one, and exit") },
+    OptionSpec { config: Settable::No(ASKS), ..flag(PRINT_CONFIG, "print the config in effect, and exit") },
 ];
+
+/// Why a config can't set the options that ask for one to be written or printed.
+const ASKS: &str = "it asks for a config, once";
 
 /// Why a config can't set the options that say which config clv reads.
 const WHICH_CONFIG: &str = "it says which config to read";
@@ -111,6 +116,8 @@ const COMPRESSION: &str = "--compression";
 const PROTOCOL: &str = "--protocol";
 const CONFIG: &str = "--config";
 const NO_CONFIG: &str = "--no-config";
+const GENERATE_CONFIG: &str = "--generate-config";
+const PRINT_CONFIG: &str = "--print-config";
 /// The value of `--per-row` for a page as wide as the window.
 const WIDTH: &str = "width";
 
@@ -508,6 +515,29 @@ fn which<'a>(options: &Parsed<'a>) -> Result<config::Which<'a>, String> {
     }
 }
 
+/// `--generate-config`: writes the template of a config where clv reads one (the file `--config`
+/// names, or the reader's own), and prints the path it wrote. It takes no file, and never writes
+/// over a config.
+fn generate(options: &Parsed<'_>, catalog: &Catalog, settings: &[&'static Setting]) -> Result<(), CliError> {
+    asks_alone(options, GENERATE_CONFIG)?;
+    let path = config::place(which(options)?).ok_or("no place for a config: HOME is not set (--config FILE names one)")?;
+    let template = config::written(catalog, &Parsed::default(), settings, &commands::Keymaps::new(settings));
+    config::generate(&path, &template)?;
+    crate::stdout_line(format_args!("{}", printable(&path.display().to_string())))
+}
+
+/// Refuses a file, or the other of `--generate-config` and `--print-config`, given with `asked`:
+/// each is the whole of a run.
+fn asks_alone(options: &Parsed<'_>, asked: &str) -> Result<(), String> {
+    if options.has(GENERATE_CONFIG) && options.has(PRINT_CONFIG) {
+        return Err(format!("give {GENERATE_CONFIG} or {PRINT_CONFIG}, not both"));
+    }
+    match options.operands.first() {
+        Some(_) => Err(format!("{asked} takes no file")),
+        None => Ok(()),
+    }
+}
+
 /// `options`, the command line's, and then those `config` sets: an option on the command line
 /// wins over the same option in the config. `--pager` and `--no-pager` are one option for this,
 /// so either on the command line wins over both in the config; a config that sets both is refused.
@@ -523,6 +553,57 @@ fn configured<'a>(mut options: Parsed<'a>, config: &'a config::Config) -> Result
         }
     }
     Ok(options)
+}
+
+/// What is wrong with the template of a config in a build of `backends`, for a build's own tests.
+/// The template must set nothing as written. With the `# ` taken from every line that sets
+/// something, clv must take it, and it must give the same options and the same keymaps as no
+/// config: the keymaps in the order of their keys and in which keys `?` lists, too.
+#[cfg(test)]
+pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
+    let (catalog, settings) = (catalog(backends), settings(backends));
+    let defaults = commands::Keymaps::new(&settings);
+    let template = config::written(&catalog, &Parsed::default(), &settings, &defaults);
+    let mut wrong: Vec<String> = Vec::new();
+    let plain = |line: &&str| !(line.is_empty() || line.starts_with("## ") || line.starts_with("# "));
+    wrong.extend(template.lines().filter(plain).map(|line| format!("neither help nor commented out: {line}")));
+    // Each option that a config may set, once, and nothing else of the catalog.
+    for entry in catalog.options() {
+        let lines = template.lines().filter(|line| line.starts_with(&format!("# {} = ", entry.spec.key()))).count();
+        if lines != usize::from(entry.spec.config == Settable::Yes) {
+            wrong.push(format!("{} has {lines} lines", entry.spec.key()));
+        }
+    }
+    let uncommented: String = template.lines().map(|line| format!("{}\n", line.strip_prefix("# ").unwrap_or(line))).collect();
+    let config = match config::Config::parse(&uncommented, &catalog) {
+        Ok(config) => config,
+        Err(why) => return [wrong, vec![format!("the template, uncommented, is refused: {why:?}")]].concat(),
+    };
+    // The options: what they resolve to, read as `view` reads them.
+    let resolved = |options: &Parsed<'_>| -> Result<String, String> {
+        let named = |name| given(options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
+        let (protocol, compression) = (Protocol::named(named(PROTOCOL)?), Compression::named(named(COMPRESSION)?));
+        let starts: Vec<(&str, Start)> = starts(&settings, options, &catalog)?.into_iter().map(|(setting, start)| (setting.name, start)).collect();
+        let paging = Paging::from_flags(options.has(PAGER), options.has(NO_PAGER))?;
+        Ok(format!("{:?}", (zoom_given(options, &catalog)?, protocol, compression, starts, paging, options.has("--recurse"))))
+    };
+    let none = Parsed::default();
+    match configured(Parsed::default(), &config) {
+        Ok(set) if resolved(&set) == resolved(&none) => {}
+        Ok(set) => wrong.push(format!("the options differ: {:?}, not {:?}", resolved(&set), resolved(&none))),
+        Err(why) => wrong.push(format!("the options are refused: {why}")),
+    }
+    // Every default binding that a config can write is in it, so the keymaps come out the same.
+    match commands::Keymaps::bound(&settings, &config.keys) {
+        Ok(keymaps) if keymaps == defaults => {}
+        Ok(_) => wrong.push("the keymaps differ".into()),
+        Err(why) => wrong.push(format!("the keys are refused: {why:?}")),
+    }
+    let written = commands::writable(&defaults);
+    if config.keys.len() != written {
+        wrong.push(format!("{} keys written, of the {written} that a config can write", config.keys.len()));
+    }
+    wrong
 }
 
 /// The value option `name` was given, if it was, read against `catalog` by the one parser of
@@ -762,11 +843,20 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     for &name in typed.aliased() {
         note(&format!("warning: {}", renamed(typed.typed(name, &catalog), name)));
     }
+    if typed.has(GENERATE_CONFIG) {
+        return generate(&typed, &catalog, &settings);
+    }
     // The config is read before anything is shown, when clv prints too: whatever is wrong with it
     // stops clv here.
     let config = config::Config::read(which(&typed)?, &catalog)?;
     let options = configured(typed, &config)?;
     let keymaps = commands::Keymaps::bound(&settings, &config.keys).map_err(|(line, why)| config.wrong(line, &why))?;
+    if options.has(PRINT_CONFIG) {
+        asks_alone(&options, PRINT_CONFIG)?;
+        let written = config::written(&catalog, &options, &settings, &keymaps);
+        let mut stdout = std::io::stdout().lock();
+        return stdout.write_all(printable_lines(&written).as_bytes()).and_then(|()| stdout.flush()).map_err(CliError::Stdout);
+    }
     let paths = file_args(&options)?;
     let zoom = zoom_given(&options, &catalog)?;
     let named = |name| given(&options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
@@ -1562,6 +1652,11 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
+/// `text` made safe to write to a terminal, its lines kept: each made [`printable`].
+fn printable_lines(text: &str) -> String {
+    text.lines().map(|line| printable(line) + "\n").collect()
+}
+
 /// A line on stderr that doesn't stop `clv`, made safe for the terminal.
 fn note(line: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{}", printable(line));
@@ -2279,6 +2374,10 @@ mod tests {
             "{help}"
         );
         assert!(help.contains("\n  --no-config                         read no config\n"), "{help}");
+        assert!(
+            help.contains("\n  --generate-config                   write a config with every line commented out, where clv reads one, and exit\n")
+        );
+        assert!(help.contains("\n  --print-config                      print the config in effect, and exit\n"), "{help}");
     }
 
     #[test]

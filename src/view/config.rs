@@ -14,8 +14,10 @@ use std::path::{Path, PathBuf};
 
 use toml::de::{DeTable, DeValue};
 
-use super::commands::{Binding, Mode};
-use crate::args::{Catalog, Entry, Settable};
+use super::commands::{self, Binding, Keymaps, Mode};
+use super::keys::{self, Key};
+use crate::args::{Catalog, Entry, Parsed, Settable};
+use crate::source::Setting;
 
 /// The most of a config that clv reads, in bytes: 1 MiB. A config of a few options and keys is a
 /// few hundred bytes, and a larger file is refused before it is parsed.
@@ -105,7 +107,7 @@ impl Config {
 
     /// `text` as a config, read against `catalog`: what its top level sets, and what `[keys]`,
     /// `[keys.pages]` and `[keys.list]` bind.
-    fn parse(text: &str, catalog: &Catalog) -> Result<Self, Wrong> {
+    pub(super) fn parse(text: &str, catalog: &Catalog) -> Result<Self, Wrong> {
         let table = DeTable::parse(text).map_err(|e| Wrong { line: e.span().map(|span| line(text, span.start)), why: e.message().to_owned() })?;
         // A table is kept in the order of its keys' names: the order of the file is by where each is.
         let mut entries: Vec<_> = table.get_ref().iter().collect();
@@ -153,6 +155,170 @@ fn bindings(keys: &DeTable<'_>, mode: Option<Mode>, text: &str, into: &mut Vec<B
         }
     }
     Ok(())
+}
+
+/// What a config's template starts with: how to read it.
+const ABOUT: &str = "\
+The config of clv. clv reads it when it starts, and never writes over it.
+A line that starts with \"# \" sets something: take the \"# \" away to use it.
+A line that starts with \"## \" is help.
+As written, every line is commented out, so this file sets nothing.";
+
+/// What the template says before the options.
+const ABOUT_OPTIONS: &str = "Options. An option on the command line wins over the same option here.";
+
+/// What the template says before the keys.
+const ABOUT_KEYS: &str = "\
+Keys. A key is bound to a command by the name of the command, or to \"none\".
+[keys.pages] is for the pages of a file, and [keys.list] is for a list.
+[keys] binds a key in both, where its command applies.
+A key that you bind comes first among the keys of its command.
+A punctuation key needs quotes: \"/\" = \"search\".
+Two bindings stay as they are, and a config cannot write them:
+ctrl-c always quits, and a number before enter goes to that page or tile.";
+
+/// The config in effect, as a config: the template that `--generate-config` writes, with what
+/// `options` give and what `keymaps` bind in place of the defaults. Made from the two catalogs of
+/// this build: every option that a config may set, under its help lines, and every key that a
+/// config can write, under what its command does.
+///
+/// A line that sets something is `# name = value` when it is the default, and has no `# ` when
+/// the config or the command line set it. A line of help starts with `## `. So with nothing set,
+/// every line is commented out, and the file sets nothing.
+pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'static Setting], keymaps: &Keymaps) -> String {
+    let mut out = String::new();
+    help(&mut out, ABOUT);
+    out.push('\n');
+    help(&mut out, ABOUT_OPTIONS);
+    for entry in catalog.options().filter(|entry| entry.spec.config == Settable::Yes) {
+        out.push('\n');
+        // Each line of help it has: a setting that two backends declare has one from each.
+        let mut said: Vec<&str> = Vec::new();
+        for other in catalog.entries().iter().filter(|other| other.spec.name == entry.spec.name) {
+            if !said.contains(&other.spec.help) && !other.spec.help.is_empty() {
+                said.push(other.spec.help);
+            }
+        }
+        said.iter().for_each(|said| help(&mut out, said));
+        let takes = if entry.is_flag() { "true or false".to_owned() } else { entry.takes() };
+        help(&mut out, &format!("Takes {takes}."));
+        let (key, given) = (entry.spec.key(), options.has(entry.spec.name));
+        let value = match (entry.is_flag(), options.value(entry.spec.name)) {
+            (true, _) => given.to_string(),
+            (false, Some(value)) => value_written(value),
+            (false, None) => value_written(&entry.default().unwrap_or_default()),
+        };
+        out.push_str(&format!("{}{key} = {value}\n", if given { "" } else { "# " }));
+    }
+    out.push('\n');
+    help(&mut out, ABOUT_KEYS);
+    let defaults = Keymaps::new(settings);
+    for (name, mode) in KEYMAPS {
+        out.push('\n');
+        out.push_str(&keys_written(name, mode, settings, keymaps, &defaults));
+    }
+    out
+}
+
+/// Into `out`, `text` as lines of help: each after `## `.
+fn help(out: &mut String, text: &str) {
+    for line in text.lines() {
+        out.push_str("## ");
+        out.push_str(line);
+        out.push('\n');
+    }
+}
+
+/// The table of the keys of `mode`, called `name`, as [`written`] writes it: every key that a
+/// config can write, under what its command does, in the groups that `?` lists the commands in.
+/// A key bound as it is by default is commented out. A key that the config binds is not, and
+/// neither is a key that it unbinds, written `none` under the command that had it. The table's
+/// own line is commented out unless one of its keys is set.
+fn keys_written(name: &str, mode: Mode, settings: &[&'static Setting], keymaps: &Keymaps, defaults: &Keymaps) -> String {
+    let (now, default) = (keymaps.of(mode), defaults.of(mode));
+    // `ctrl-c` always quits: no config writes it.
+    let writable = |key: &Key| *key != Key::Interrupt;
+    let (mut lines, mut any) = (String::new(), false);
+    for (says, commands) in commands::groups(mode, settings, now) {
+        lines.push('\n');
+        help(&mut lines, &says);
+        for command in commands {
+            let mut bound: Vec<(Key, String, bool)> = Vec::new();
+            for key in now.all(command).into_iter().filter(writable) {
+                bound.push((key, command.name(), default.alone(key) != Some(command)));
+            }
+            for key in default.all(command).into_iter().filter(writable) {
+                if now.alone(key).is_none() {
+                    bound.push((key, NONE.to_owned(), true));
+                }
+            }
+            if bound.is_empty() {
+                help(&mut lines, &format!("No key is bound to {}.", command.name()));
+            }
+            for (key, command, set) in bound {
+                any |= set;
+                lines.push_str(&format!("{}{} = \"{command}\"\n", if set { "" } else { "# " }, key_written(&keys::name(key))));
+            }
+        }
+    }
+    format!("{}[{KEYS}.{name}]\n{lines}", if any { "" } else { "# " })
+}
+
+/// `value` as a config writes it: a number as an integer, anything else as a string.
+fn value_written(value: &str) -> String {
+    if value.parse::<u32>().is_ok() { value.to_owned() } else { quoted(value) }
+}
+
+/// The name of a key as a config writes it: bare where it is letters, digits, `-` and `_` only,
+/// and between quotes otherwise (`"/"`).
+fn key_written(name: &str) -> String {
+    let bare = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if bare { name.to_owned() } else { quoted(name) }
+}
+
+/// `text` as a TOML string, between quotes: `"` and `\` escaped, and a control character written
+/// by its number.
+fn quoted(text: &str) -> String {
+    let mut out = String::from('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Where `--generate-config` writes: the file `--config` names, or else the reader's own. Nowhere,
+/// with no home to put one in.
+pub(super) fn place(which: Which<'_>) -> Option<PathBuf> {
+    match which {
+        Which::File(path) => Some(PathBuf::from(path)),
+        Which::Own | Which::None => own(std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from), std::env::var_os("HOME").map(PathBuf::from)),
+    }
+}
+
+/// Writes `template` to `path`, a config that is not there yet, and makes the directory when there
+/// is none. It never writes over a file: one that is there is the error, which names it. The only
+/// time clv writes a config.
+pub(super) fn generate(path: &Path, template: &str) -> Result<(), String> {
+    use std::io::Write;
+    let named = path.display();
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{named}: can't make its directory ({})", e.kind()))?;
+    }
+    // Made only if nothing is there: a file, a directory or a link, even one that leads nowhere.
+    let mut file = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!("{named} is there already: {} never writes over a config", crate::NAME));
+        }
+        Err(e) => return Err(format!("{named}: can't write it ({})", e.kind())),
+    };
+    file.write_all(template.as_bytes()).map_err(|e| format!("{named}: can't write it ({})", e.kind()))
 }
 
 /// `wrong` in `file`, as the reader is told: `~/.config/clv/config.toml:3: width: expected window
@@ -281,7 +447,9 @@ mod tests {
     static WIDTH: Setting = Setting {
         named: &[Named { name: "window", says: "" }],
         numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }),
+        default: crate::source::Value::Named("window"),
         auto: None,
+        keys: crate::source::Keys::Step('[', ']'),
         ..cycled("width", '[', "--width")
     };
     static SETTINGS: [Setting; 2] = [cycled("theme", 'D', "--theme"), WIDTH];
@@ -407,6 +575,126 @@ mod tests {
         ] {
             assert_eq!(Config::parse(text, &catalog()).unwrap_err(), Wrong::at(line, why), "{text:?}");
         }
+    }
+
+    /// The options that `config` sets, as given.
+    fn options(config: &Config) -> Parsed<'_> {
+        let mut options = Parsed::default();
+        config.options.iter().for_each(|set| options.configure(set.name, set.value.as_deref()));
+        options
+    }
+
+    /// The config in effect is written as a config: the template, with what the options give and
+    /// what the keymaps bind in place of the defaults, not commented out. Read back, it gives the
+    /// same options and the same keymaps.
+    #[test]
+    fn the_config_in_effect_is_written_as_a_config_that_reads_back_as_itself() {
+        let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
+        let defaults = Keymaps::new(&settings);
+        let template = written(&catalog, &Parsed::default(), &settings, &defaults);
+        // As written, it sets nothing: help, a line commented out, or an empty line.
+        assert!(template.lines().all(|line| line.is_empty() || line.starts_with("## ") || line.starts_with("# ")), "{template}");
+        for line in [
+            "# per-row = \"auto\"",
+            "# recurse = false",
+            "# theme = \"auto\"",
+            "# width = \"window\"",
+            "## Takes window or 20–200.",
+            "# [keys.pages]",
+            "# [keys.list]",
+        ] {
+            assert_eq!(template.lines().filter(|other| *other == line).count(), 1, "{line}\n{template}");
+        }
+        // What a config may not set isn't in it.
+        assert!(!template.contains("pages =") && !template.contains("password"), "{template}");
+        // Every key that a config can write, under its table: a quoted one, one `?` doesn't list.
+        for line in [
+            "# space = \"screen-down\"",
+            "# \"/\" = \"search\"",
+            "# \"=\" = \"zoom-in\"",
+            "# \"[\" = \"decrease-width\"",
+            "# D = \"cycle-theme\"",
+            "# \"/\" = \"list-filter\"",
+        ] {
+            assert!(template.lines().any(|other| other == line), "{line}\n{template}");
+        }
+        assert!(!template.contains("ctrl-c =") && template.contains("## ctrl-c always quits"), "{template}");
+        assert_eq!(template.lines().filter(|line| *line == "# enter = \"scroll-down\"" || *line == "# enter = \"list-open\"").count(), 2);
+        assert!(!template.contains("enter = \"go-to\""), "a number and Enter is no config's");
+        // With options given and keys bound: those lines are not commented out, and have their value.
+        let text = "width = 72\ntheme = \"dark\"\nrecurse = true\n[keys]\nx = \"quit\"\nq = \"none\"\nD = \"quit\"\n[keys.list]\nJ = \"list-tile-down\"\n[keys.pages]\nenter = \"next\"\n";
+        let config = Config::parse(text, &catalog).unwrap();
+        let keymaps = Keymaps::bound(&settings, &config.keys).unwrap();
+        let effective = written(&catalog, &options(&config), &settings, &keymaps);
+        for line in ["width = 72", "theme = \"dark\"", "recurse = true", "# per-row = \"auto\"", "[keys.pages]", "[keys.list]"] {
+            assert_eq!(effective.lines().filter(|other| *other == line).count(), 1, "{line}\n{effective}");
+        }
+        let section = |name: &str| {
+            effective.split(&format!("\n[keys.{name}]\n")).nth(1).unwrap_or_default().split("\n[keys.").next().unwrap_or_default().to_owned()
+        };
+        let (pages, list) = (section("pages"), section("list"));
+        // The keys of the config first under their command, an unbound one under the command it had.
+        assert!(pages.contains("\n## quit\nx = \"quit\"\nD = \"quit\"\nq = \"none\"\n"), "{pages}");
+        assert!(pages.contains("\nenter = \"next\"\n# n = \"next\"\n") && !pages.contains("enter = \"scroll-down\""), "{pages}");
+        assert!(pages.contains("## No key is bound to cycle-theme.") && !pages.contains("J ="), "{pages}");
+        assert!(list.contains("\nJ = \"list-tile-down\"\n# down = \"list-tile-down\"\n") && list.contains("# enter = \"list-open\""), "{list}");
+        assert!(list.contains("\nx = \"quit\"\nD = \"quit\"\nq = \"none\"\n"), "{list}");
+        // Read back, it is the config it was written from.
+        let again = Config::parse(&effective, &catalog).unwrap();
+        let said = |config: &Config| config.options.iter().map(|set| (set.name, set.value.clone())).collect::<Vec<_>>();
+        assert_eq!(said(&again), [("--recurse", None), ("--theme", Some("dark".into())), ("--width", Some("72".into()))]);
+        // The keys of each command, in their order: the file groups them by command, so only the
+        // order among the commands may differ.
+        let keys_of = |keymaps: &Keymaps| {
+            [Mode::Pages, Mode::List].map(|mode| {
+                let commands = commands::groups(mode, &settings, keymaps.of(mode)).into_iter().flat_map(|(_, commands)| commands);
+                commands.map(|command| (command.name(), keymaps.of(mode).all(command))).collect::<Vec<_>>()
+            })
+        };
+        let read = Keymaps::bound(&settings, &again.keys).unwrap();
+        assert_eq!(keys_of(&read), keys_of(&keymaps));
+        assert_ne!(keys_of(&read), keys_of(&defaults));
+        assert_eq!(written(&catalog, &options(&again), &settings, &read), effective, "written again, it is the same file");
+    }
+
+    /// A key and a value are written so that TOML reads them back: a key bare where it may be, and
+    /// what is between quotes escaped.
+    #[test]
+    fn a_key_and_a_value_are_written_as_toml_reads_them() {
+        assert_eq!(["ctrl-d", "J", "5", "alt-_"].map(key_written), ["ctrl-d", "J", "5", "alt-_"]);
+        assert_eq!(
+            ["/", "\"", "\\", "é", "alt-é", "", "a b"].map(key_written),
+            ["\"/\"", "\"\\\"\"", "\"\\\\\"", "\"é\"", "\"alt-é\"", "\"\"", "\"a b\""]
+        );
+        assert_eq!(["72", "window", "", "-4", "a\u{1b}\"b"].map(value_written), ["72", "\"window\"", "\"\"", "\"-4\"", "\"a\\u001B\\\"b\""]);
+        for key in ["/", "\"", "\\", "é", "'", "#", "=", "[", "]", ".", " x"] {
+            let text = format!("[keys]\n{} = \"quit\"\n", key_written(key));
+            assert_eq!(Config::parse(&text, &catalog()).map(|config| config.keys[0].key.clone()), Ok(key.to_owned()), "{text}");
+        }
+    }
+
+    /// A config is written once, where none is, its directory made; and never over what is there:
+    /// a file, a directory, or a link that leads nowhere.
+    #[test]
+    fn a_config_is_written_once_and_never_over_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("clview-config-generate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("deep/er/config.toml");
+        assert_eq!(generate(&path, "# width = 72\n"), Ok(()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# width = 72\n");
+        let there = format!("{} is there already: clv never writes over a config", path.display());
+        assert_eq!(generate(&path, "other"), Err(there));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# width = 72\n", "left as it was");
+        assert!(generate(&dir.join("deep"), "x").is_err_and(|why| why.contains("is there already")), "a directory");
+        let link = dir.join("link.toml");
+        std::os::unix::fs::symlink(dir.join("nowhere"), &link).unwrap();
+        assert!(generate(&link, "x").is_err_and(|why| why.contains("is there already")), "a link that leads nowhere");
+        assert!(!dir.join("nowhere").exists());
+        // Under a file, where a directory is needed: said, and nothing written.
+        assert!(generate(&path.join("under/config.toml"), "x").is_err_and(|why| why.contains("can't make its directory")));
+        // Where it goes: the file named, or the reader's own.
+        assert_eq!(place(Which::File("x/c.toml")), Some(PathBuf::from("x/c.toml")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The reader's own config is under `XDG_CONFIG_HOME` where that is an absolute path, and under

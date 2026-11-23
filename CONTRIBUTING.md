@@ -253,7 +253,11 @@ CodeQL's default setup scans the Rust and the workflows.
   broken one costing only its tile. The config (`config_…`): an option that it sets, the command
   line that wins, `--config` and `--no-config`, `pager` with `no-pager`, and a config that is
   wrong, named with its file and its line. A width against a count to a row, with one or both
-  from the config, is `config_width_…` in `tests/it/wordcraft.rs`, which has the documents. What a
+  from the config, is `config_width_…` in `tests/it/wordcraft.rs`, which has the documents.
+  `--generate-config` (`generate_config_…`): the template written once, its path printed, never
+  written over, and the same as `--no-config --print-config`; `--print-config`
+  (`print_config_…`): what the file and the command line set, printed as a config that reads
+  back the same. What a
   config's text gives is unit-tested in `src/view/config.rs`, with a property test that no text
   of a config panics.
 - **`tests/it/view_pager.rs`**: the pager on a pseudo-terminal from script(1), keys in through its

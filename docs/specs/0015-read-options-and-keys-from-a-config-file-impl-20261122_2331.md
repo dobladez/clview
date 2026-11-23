@@ -205,3 +205,58 @@ format, the layout, the names and the bindings with a number.
   - the keys not sorted by place: `the_tables_of_keys_…`
 - **Not in the spec's *Files:*:** `src/view/mod.rs`, `src/view/keys.rs` (the `expect` of task 3
   goes), `tests/it/view.rs`, `docs/architecture.md`, `CONTRIBUTING.md`.
+
+## Task 7: `--generate-config` and `--print-config`
+
+- **One function writes both.** `config::written` makes the config in effect from the catalog,
+  the options and the keymaps. `--generate-config` calls it with no option and the default
+  keymaps, and that is the template.
+- **`--generate-config` prints the path alone**, on stdout, so a shell can use it
+  (`$EDITOR "$(clv --generate-config)"`). The path is written whole, not from the home.
+- **`--print-config` prints the keys in the two tables of the keymaps**, each key where it is
+  bound. A key that `[keys]` binds in both keymaps is printed in both. So what it prints is the
+  config in effect, in a normal form, not the file again.
+- **A key that the config unbinds is printed as `none` under the command that had it.** A key
+  bound to another command is printed under its new command only. A command that is left with no
+  key gets a line of help (`## No key is bound to cycle-theme.`), so the reader still sees its
+  name.
+- **A setting that several backends declare has a help line from each**, as `--help` lists it
+  under each. Each option also gets a line of what it takes (`## Takes window or 20–200.`),
+  which the spec does not ask for: a help line such as "a book's text at N% of its size" does not
+  say the range in the form that the config takes.
+- **The line of a table is commented out too** (`# [keys.pages]`), and loses its `# ` when a key
+  in it is set. "Every line of the template is commented out" holds, and the test that takes
+  every `# ` away gets valid TOML.
+- **Empty lines** separate the options and the groups of keys. A line of the template is help
+  (`## `), commented out (`# `), or empty.
+- **The default of an option** is `Entry::default`: a setting's `auto` where it goes by the
+  terminal's background, else its default; another option's first named value. So `Shape::Value`
+  now says that its first named value is the default.
+- **Each of the two options is the whole of a run.** With a file, clv refuses (`--print-config
+  takes no file`); with both, it refuses. `--no-config --generate-config` writes the reader's own
+  file: `--no-config` only says what to read.
+- **Read back, the keymaps are the same command by command.** The printed file groups the keys
+  by command, so the order of the bindings among the commands can differ from the first config's,
+  which nothing shows. The unit test compares the keys of each command, and checks that the file
+  printed again is the same file.
+- **The test of the template is in `source.rs`**, as the other tests over the build's backends
+  are (`source::tests::the_template_uncommented_is_no_config`), through `view::wrong_template`.
+  It also runs on a build with other settings, with a PDF backend alone, and with no backend.
+- **Seen failing**, each with its piece taken out:
+  - the default taken as the last named value: the template test (`the options differ: (Width,
+    Text(Ascii), Small, …`)
+  - the line of a table never commented out: the template test and
+    `the_config_in_effect_is_written_…`
+  - the keys that `?` does not list left out: the template test (`92 keys written, of the 96
+    that a config can write`)
+  - the file opened without `create_new`: `a_config_is_written_once_…` and `generate_config_…`
+  - a line that is set kept commented out: `print_config_…`
+  - a `"` not escaped: `a_key_and_a_value_are_written_…`
+- **The manual check of the task**, run in a shell with `XDG_CONFIG_HOME` on a new directory:
+  the first run printed the path and exited 0; the second said `… is there already: clv never
+  writes over a config` and exited 1; `clv --no-config --print-config` gave the file, byte for
+  byte. It needs no terminal, and `generate_config_…` checks the same. Left for the owner to do
+  once more in their own shell.
+- **Not in the spec's *Files:*:** `src/args.rs` (`Entry::default`), `src/view/commands.rs`
+  (`groups`, `Keymap::all`), `src/source.rs` (the test), `docs/architecture.md`,
+  `CONTRIBUTING.md`.

@@ -1907,6 +1907,28 @@ pub(crate) mod tests {
         assert_eq!(crate::view::wrong_options(&[&FREE]), ["declaring: --theme is a setting's option, and says another shape"]);
     }
 
+    /// The template that `--generate-config` writes, made from this build's catalogs, sets nothing
+    /// as written. With the `# ` taken from every line that sets something, clv takes it, and it
+    /// gives the same options and keymaps as no config (`view::wrong_template`).
+    #[test]
+    fn the_template_uncommented_is_no_config() {
+        assert_eq!(crate::view::wrong_template(BACKENDS), Vec::<String>::new());
+        // And in a build that declares other settings, or none.
+        static WIDTH: Setting = Setting {
+            named: &[Named { name: "window", says: "" }],
+            numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }),
+            default: Value::Number(72),
+            auto: None,
+            keys: Keys::Step('[', ']'),
+            help: "narrower, or wider; 72{increase-width} sets 72",
+            ..cycled("width", '[', "--width")
+        };
+        static SOME: Declaring = Declaring(&[cycled("theme", 'D', "--theme"), WIDTH]);
+        assert_eq!(crate::view::wrong_template(&[&SOME]), Vec::<String>::new());
+        assert_eq!(crate::view::wrong_template(&[&PDF]), Vec::<String>::new());
+        assert_eq!(crate::view::wrong_template(&[]), Vec::<String>::new());
+    }
+
     /// What is wrong with the names of the settings `backends` declare: a setting that is not called
     /// as its option is, so that its commands are not `cycle-`, `decrease-` or `increase-` and the
     /// name of the option, which a config sets it by; and a phrase that names a command no key is
