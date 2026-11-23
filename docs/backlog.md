@@ -44,14 +44,19 @@ by name on a key of its own, so `/` means one thing everywhere.
 
 ### A config file
 
-For customization and remembering settings, a Mermaid theme of the reader's choosing among them;
-and the positions of files opened before. The command `o` opens a file with, in place of the
-desktop's default app (`zathura`, say), would be one of them
-([Spec-0010](specs/0010-open-file-in-default-app.md)). So would the keys: each bound to a command by
-its name, in the pager's keymaps or the list's
-([Spec-0013](specs/0013-bind-keys-to-named-commands.md)). Two things a key bound anew would leave
-wrong, since they still write a key by hand: a setting's phrase in `?`, which its backend declares
-with the keys it suggests in it (`72] sets 72, 0] the window's`), and the manual's tables.
+[Spec-0015](specs/0015-read-options-and-keys-from-a-config-file.md) gives clv a config file. The
+file holds the defaults of options, an app for `o` to open each format with, and keys bound to
+commands by name.
+
+The positions of files opened before are left. clv would write them as state of its own, apart from
+the config, which clv writes only when the reader asks (`--generate-config`). Open questions for
+that change:
+
+- How clv knows a file again: by its path, or by its size and the time it changed, after a move or
+  an edit.
+- Where clv keeps the state (`$XDG_STATE_HOME`), how many files it remembers, and how a reader
+  turns it off.
+- What a reader may not want written down: the names of the files that the reader opened.
 
 ### More pictures and archives
 
