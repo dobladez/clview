@@ -194,6 +194,19 @@ it (`config::generate`, with `create_new`, so never over a file, a directory or 
 handles `--generate-config` before it reads any config, and `--print-config` right after, both
 before `file_args`, since neither takes a file.
 
+What `--print-config` prints must be a config that clv takes, and that shows a file as the run
+that printed it does. Three things keep that so:
+
+- `view::print_config` checks the options before it writes them, through `view::asked`, which a
+  run calls too: every value read against the catalog, and `--pager` with `--no-pager`. So the
+  two refuse the same things with the same words. It also reads every other option that a config
+  may set.
+- `config::value_written` writes a number as `Entry::read` read it, in base ten. The text as
+  typed can be no TOML integer (`03`), though `u32` parsing takes it.
+- `view::widths` says which width wins over a count to a row, and which yields to one. A run
+  and `print_config` both go by it. The config's width that yields to a count typed is printed
+  as not set (`Parsed::without_config`), as a file shown alone is opened without it.
+
 `source::tests::the_template_uncommented_is_no_config` takes the `# ` from every such line of the
 build's template (`view::wrong_template`). clv must take the result, and it must give the options
 and the keymaps of no config: the keymaps equal as `Keymaps`, so in the order of their keys and

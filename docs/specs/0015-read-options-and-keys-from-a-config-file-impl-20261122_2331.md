@@ -290,3 +290,44 @@ format, the layout, the names and the bindings with a number.
   README also has a line for the config, under what you can do. The backlog's "A config file"
   says what is left, with the spec's two open questions and its Out of scope as ideas not planned.
 - **The spec stays `Implementing`** until the owner does the manual check in kitty and tmux.
+
+## Review fixes: `--print-config` prints a config that clv takes
+
+A review of the branch found two ways for `--print-config` to print what clv does not read back.
+
+- **It printed before the options were checked.** `--print-config --protocol sixel` printed
+  `protocol = "sixel"`, and `--pager --no-pager` printed both as `true`. The checks of a run are
+  now one function, `view::asked` (every value read against the catalog, and the two paging
+  flags), and `print_config` calls it before it writes. It also reads every other option that a
+  config may set, for a backend's option that is no setting, should one come. A run keeps its
+  order: the missing file is still said before a bad value.
+- **It wrote a number as typed.** `--per-row 03` printed `per-row = 03`, which is no TOML.
+  `value_written` now writes what `Entry::read` read: `03`, `+3` and `0003` print `3`. An integer
+  of the config in another base was already read in base ten when the config was parsed
+  (`per-row = 0x3` prints `per-row = 3`, and `width = 0x10` is refused as 16).
+- **`--width 72 --per-row 3 --print-config` prints both, and says nothing.** The warning of a
+  run names the document that the two disagree on, and here no document is shown. Read back,
+  both are the config's, and the width wins on a document, as it did typed: the same pages.
+- **Decided beyond what was asked: the config's width under a count typed is printed as not
+  set.** With `width = 40` in the config and `--per-row 2` typed, a run shows a document in two
+  columns: the count wins. Printed as `width = 40` and `per-row = 2`, the config read back would
+  give the width, since both are then the config's. So `print_config` goes by the same rule as
+  the run (`view::widths`, factored out of `view`) and prints `# width = "window"`. One
+  difference is left: in a list, a run with that config still lays its documents out at 40, and
+  the printed config does not. A config cannot say "this width, but not under a count typed".
+- **Seen failing before the fix**, all four: `print_config_refuses_what_a_run_refuses_and_prints_nothing`
+  (it printed the template with `protocol = "sixel"`), `print_config_writes_a_number_as_it_was_read_not_as_it_was_typed`
+  (`per-row = 03`), `print_config_with_a_settings_option_prints_what_is_in_effect` in
+  `tests/it/wordcraft.rs` (`--width 300` printed), and the unit test
+  `a_value_is_written_as_it_was_read_not_as_it_was_typed`.
+- **Not fixed, measured: a config of many keys takes time that grows as the square.** 35,000
+  keys under `[keys]` (530 KB) took 4.8 s in the debug build, and 10,000 took 0.4 s. Two causes.
+  `config::line` counts the line breaks from the start of the text for every key: with it made
+  constant, the same file took 1.9 s. The rest is `Keymaps::bound`, which for each key searches
+  the keys already taken, and removes and inserts in the list of bindings.
+- **A test of the Org links failed once, and it is not this change's.** In one full run of the
+  gates, `org::links_to_an_org_files_heading_go_to_the_heading_never_a_target_of_its_name` failed
+  at `place_now(…).unwrap()` (`tests/it/org.rs:367`), 200 ms after it had seen the other file's
+  status line. Alone it passed six times of six, and the next full run passed. The test reads the
+  status line after a fixed sleep; nothing here touches the pager. It was not seen in the eleven
+  full runs before.

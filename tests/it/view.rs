@@ -434,6 +434,66 @@ fn print_config_prints_what_the_file_and_the_command_line_set() {
     );
 }
 
+/// `--print-config` checks the options as a run does, before it prints them: a value that an
+/// option doesn't take, and `--pager` with `--no-pager`, are refused with the run's own message,
+/// and nothing is printed. So what it prints is always a config that clv takes.
+#[test]
+fn print_config_refuses_what_a_run_refuses_and_prints_nothing() {
+    let home = crate::bin::config_home("print-refuses", "");
+    for (args, said) in [
+        (&["--protocol", "sixel"][..], "clv: --protocol: expected auto, kitty, blocks or ascii, got sixel\n"),
+        (&["--compression", "best"], "clv: --compression: expected auto, fast or small, got best\n"),
+        (&["--per-row", "9"], "clv: --per-row: expected auto, width or 1–8, got 9\n"),
+        (&["--per-row", "0x3"], "clv: --per-row: expected auto, width or 1–8, got 0x3\n"),
+        (&["--pager", "--no-pager"], "clv: give --pager or --no-pager, not both\n"),
+        (&["--pages", "0"], "clv: --pages: bad page number \"0\"\n"),
+    ] {
+        for which in [&["--no-config", "--print-config"][..], &["--print-config"]] {
+            let out = clv_with_config_home(&home, &[which, args].concat());
+            assert!(!out.status.success() && out.stdout.is_empty(), "{args:?}: {}", text(&out.stdout));
+            assert_eq!(text(&out.stderr), said, "{args:?}");
+            // As the run itself says it.
+            let run = view(&fixture("print-refuses", 1), &[&["--protocol", "kitty"], args].concat());
+            assert!(args.contains(&"--protocol") || text(&run.stderr) == said, "{args:?}: {}", text(&run.stderr));
+        }
+    }
+    // The command line's `--pager` over the config's `no-pager` is no clash: it wins.
+    let home = crate::bin::config_home("print-refuses", "no-pager = true\n");
+    let out = clv_with_config_home(&home, &["--print-config", "--pager"]);
+    assert!(out.status.success() && text(&out.stdout).contains("\npager = true\n") && text(&out.stdout).contains("\n# no-pager = false\n"));
+}
+
+/// `--print-config` writes a number as clv read it, in base ten, never as it was typed: `03` and
+/// `+3` are `3`. So a number that TOML would refuse as written (a leading zero) still prints as a
+/// config that clv takes, and that prints the same.
+#[test]
+fn print_config_writes_a_number_as_it_was_read_not_as_it_was_typed() {
+    let printed = |config: &str, args: &[&str]| {
+        let out = clv_with_config_home(&crate::bin::config_home("print-number", config), &[&["--print-config"], args].concat());
+        assert!(out.status.success() && out.stderr.is_empty(), "{config:?} {args:?}: {}", text(&out.stderr));
+        text(&out.stdout)
+    };
+    let as_three = printed("", &["--per-row", "3"]);
+    assert!(as_three.lines().any(|line| line == "per-row = 3"), "{as_three}");
+    for (config, args) in [
+        ("", &["--per-row", "03"][..]),
+        ("", &["--per-row", "+3"]),
+        ("", &["--per-row", "0003"]),
+        ("per-row = \"03\"\n", &[]),
+        ("per-row = \"+3\"\n", &[]),
+        ("per-row = 0x3\n", &[]),
+        ("per-row = 0o3\n", &[]),
+        ("per-row = 3\n", &[]),
+    ] {
+        let out = printed(config, args);
+        assert_eq!(out, as_three, "{config:?} {args:?}");
+        // What it printed reads back, and prints the same.
+        let again = tmp("print-number", "again.toml");
+        std::fs::write(&again, &out).unwrap();
+        assert_eq!(printed("", &["--config", again.to_str().unwrap()]), out, "{config:?} {args:?}");
+    }
+}
+
 #[test]
 fn without_a_terminal_auto_points_to_the_protocol_option() {
     let pdf = fixture("auto", 1);

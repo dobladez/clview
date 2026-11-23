@@ -121,7 +121,11 @@ clv, and holds these:
 **The config in effect.** `clv --print-config` prints the config that clv would use, from the file
 and the command line. A line that either sets has its value and no `# `. The other lines keep
 their `# ` and their defaults. So `clv --no-config --print-config` prints the template. What clv
-prints is a config: you can save it and read it back with `--config`. It prints the keys in
+prints is a config: you can save it and read it back with `--config`. So clv checks the options
+first, as it does before it shows a file: `clv --print-config --protocol sixel` prints nothing
+and says what `--protocol` takes. clv writes a number as it read it: `--per-row 03` prints
+`per-row = 3`. A `width` of the config that a count on the command line wins over is not in
+effect, so clv prints it as not set (`# width = "window"`). It prints the keys in
 `[keys.pages]` and `[keys.list]`, each key where it is bound; a key that you unbound is `"none"`
 under the command that had it.
 

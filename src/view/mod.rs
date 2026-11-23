@@ -515,6 +515,74 @@ fn which<'a>(options: &Parsed<'a>) -> Result<config::Which<'a>, String> {
     }
 }
 
+/// What the options ask for, each value read against the catalog: all that a run checks of its
+/// options before it opens a file.
+#[derive(Debug)]
+struct Asked {
+    zoom: Zoom,
+    protocol: Protocol,
+    compression: Compression,
+    /// Where each setting starts.
+    starts: Vec<(&'static Setting, Start)>,
+    /// The pages `--pages` picks, if given.
+    pages: Option<Vec<usize>>,
+    paging: Paging,
+}
+
+/// What `options` ask for, read against `catalog`. A value that an option doesn't take is the
+/// error, and so are `--pager` and `--no-pager` together. A run and `--print-config` both check
+/// their options through this, so the two refuse the same things with the same words.
+fn asked(options: &Parsed<'_>, catalog: &Catalog, settings: &[&'static Setting]) -> Result<Asked, String> {
+    let named = |name| given(options, catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
+    let zoom = zoom_given(options, catalog)?;
+    let (protocol, compression) = (Protocol::named(named(PROTOCOL)?), Compression::named(named(COMPRESSION)?));
+    let starts = starts(settings, options, catalog)?;
+    let pages = match given(options, catalog, "--pages")? {
+        Some(Arg::Pages(pages)) => Some(pages),
+        _ => None,
+    };
+    let paging = Paging::from_flags(options.has(PAGER), options.has(NO_PAGER))?;
+    Ok(Asked { zoom, protocol, compression, starts, pages, paging })
+}
+
+/// The width that wins over a count to a row, and the width that yields to one, of what `asked`.
+///
+/// A width in numbers and a count to a row disagree on a document laid out for its room. Both
+/// typed, the width wins, with a warning. One typed and the other from the config, the typed one
+/// wins. Both from the config, the width wins there, and the count holds for the other files.
+/// With `--pages`, a document is laid out as it is opened and the count is the zoom alone.
+///
+/// So the first is the width given in numbers, unless it is the config's and a count was typed:
+/// then it is the second, the width that is not in effect, and there is no first.
+type Width = Option<(&'static Setting, Start)>;
+fn widths(asked: &Asked, options: &Parsed<'_>) -> (Width, Width) {
+    let numbered = |(setting, start): &&(&'static Setting, Start)| {
+        setting.sets_width && options.has(setting.option.name) && matches!(start, Start::Is(Value::Number(_)))
+    };
+    let width = asked.starts.iter().find(numbered).copied();
+    let counted = asked.zoom != Zoom::Auto && !options.by_config(PER_ROW);
+    let yields = width.filter(|(setting, _)| options.by_config(setting.option.name) && counted && asked.pages.is_none());
+    (width.filter(|_| yields.is_none()), yields)
+}
+
+/// `--print-config`: prints the config in effect, from the file and the command line, as a config
+/// that clv takes. So the options are checked first, as a run checks them ([`asked`]), and every
+/// other option that a config may set with them: what a run refuses is refused here, and nothing
+/// is printed. A width of the config that a count typed wins over is not in effect ([`widths`]),
+/// and is printed as not set. It takes no file.
+fn print_config(options: &Parsed<'_>, catalog: &Catalog, settings: &[&'static Setting], keymaps: &commands::Keymaps) -> Result<(), CliError> {
+    asks_alone(options, PRINT_CONFIG)?;
+    let asked = asked(options, catalog, settings)?;
+    for entry in catalog.options().filter(|entry| entry.spec.config == Settable::Yes) {
+        given(options, catalog, entry.spec.name)?;
+    }
+    let (_, yields) = widths(&asked, options);
+    let in_effect = yields.map_or_else(|| options.clone(), |(setting, _)| options.without_config(setting.option.name));
+    let written = config::written(catalog, &in_effect, settings, keymaps);
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(printable_lines(&written).as_bytes()).and_then(|()| stdout.flush()).map_err(CliError::Stdout)
+}
+
 /// `--generate-config`: writes the template of a config where clv reads one (the file `--config`
 /// names, or the reader's own), and prints the path it wrote. It takes no file, and never writes
 /// over a config.
@@ -581,11 +649,9 @@ pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
     };
     // The options: what they resolve to, read as `view` reads them.
     let resolved = |options: &Parsed<'_>| -> Result<String, String> {
-        let named = |name| given(options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
-        let (protocol, compression) = (Protocol::named(named(PROTOCOL)?), Compression::named(named(COMPRESSION)?));
-        let starts: Vec<(&str, Start)> = starts(&settings, options, &catalog)?.into_iter().map(|(setting, start)| (setting.name, start)).collect();
-        let paging = Paging::from_flags(options.has(PAGER), options.has(NO_PAGER))?;
-        Ok(format!("{:?}", (zoom_given(options, &catalog)?, protocol, compression, starts, paging, options.has("--recurse"))))
+        let Asked { zoom, protocol, compression, starts, pages, paging } = asked(options, &catalog, &settings)?;
+        let starts: Vec<(&str, Start)> = starts.into_iter().map(|(setting, start)| (setting.name, start)).collect();
+        Ok(format!("{:?}", (zoom, protocol, compression, starts, pages, paging, options.has("--recurse"))))
     };
     let none = Parsed::default();
     match configured(Parsed::default(), &config) {
@@ -852,22 +918,12 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     let options = configured(typed, &config)?;
     let keymaps = commands::Keymaps::bound(&settings, &config.keys).map_err(|(line, why)| config.wrong(line, &why))?;
     if options.has(PRINT_CONFIG) {
-        asks_alone(&options, PRINT_CONFIG)?;
-        let written = config::written(&catalog, &options, &settings, &keymaps);
-        let mut stdout = std::io::stdout().lock();
-        return stdout.write_all(printable_lines(&written).as_bytes()).and_then(|()| stdout.flush()).map_err(CliError::Stdout);
+        return print_config(&options, &catalog, &settings, &keymaps);
     }
     let paths = file_args(&options)?;
-    let zoom = zoom_given(&options, &catalog)?;
-    let named = |name| given(&options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
-    let protocol = Protocol::named(named(PROTOCOL)?);
-    let compression = Compression::named(named(COMPRESSION)?);
-    let starts = starts(&settings, &options, &catalog)?;
-    let given = match given(&options, &catalog, "--pages")? {
-        Some(Arg::Pages(pages)) => Some(pages),
-        _ => None,
-    };
-    let paging = Paging::from_flags(options.has(PAGER), options.has(NO_PAGER))?;
+    let asked = asked(&options, &catalog, &settings)?;
+    let (width, yields) = widths(&asked, &options);
+    let Asked { zoom, protocol, compression, starts, pages: given, paging } = asked;
     let tty = Tty::open().ok();
     let inside_tmux = tmux::inside();
     let client = inside_tmux.then(tmux::client);
@@ -876,18 +932,8 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     // without a question: its cell from the pixels it reports, or tmux's, or the one assumed; where
     // the cell asked later makes another room, the pager lays the document out once more.
     let told = client.as_ref().and_then(|c| c.as_ref().ok()).and_then(|c| c.cell).map(|(w, h)| Cell { w: f32::from(w), h: f32::from(h) });
-    // A width and a count to a row disagree on a document laid out for its room. Both typed, the width
-    // wins, with a warning. One typed and the other from the config, the typed one wins. Both from
-    // the config, the width wins there, and the count holds for the other files. With `--pages`, a
-    // document is laid out as it is opened and the count is the zoom alone.
-    let numbered = |(setting, start): &&(&'static Setting, Start)| {
-        setting.sets_width && options.has(setting.option.name) && matches!(start, Start::Is(Value::Number(_)))
-    };
-    let width = starts.iter().find(numbered).copied();
-    let counted = zoom != Zoom::Auto && !options.by_config(PER_ROW);
-    // The config's width, which a count typed wins over: a file alone is opened without it.
-    let yields = width.filter(|(setting, _)| options.by_config(setting.option.name) && counted && given.is_none());
-    let width = width.filter(|_| yields.is_none());
+    // The config's width, where a count typed wins over it ([`widths`]): a file alone is opened
+    // without it.
     let alone_options = yields.map_or_else(|| options.clone(), |(setting, _)| options.without_config(setting.option.name));
     let per_row = columns(zoom).filter(|_| given.is_none() && width.is_none());
     let (first, preview) = first_rooms(tty.as_ref().and_then(Tty::size), told, protocol, inside_tmux, per_row);

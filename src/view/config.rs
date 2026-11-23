@@ -20,7 +20,7 @@ use toml::de::{DeTable, DeValue};
 
 use super::commands::{self, Binding, Keymaps, Mode};
 use super::keys::{self, Key};
-use crate::args::{Catalog, Entry, Parsed, Settable};
+use crate::args::{Arg, Catalog, Entry, Parsed, Settable};
 use crate::source::Setting;
 
 /// The most of a config that clv reads, in bytes: 1 MiB. A config of a few options and keys is a
@@ -209,8 +209,8 @@ pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'sta
         let (key, given) = (entry.spec.key(), options.has(entry.spec.name));
         let value = match (entry.is_flag(), options.value(entry.spec.name)) {
             (true, _) => given.to_string(),
-            (false, Some(value)) => value_written(value),
-            (false, None) => value_written(&entry.default().unwrap_or_default()),
+            (false, Some(value)) => value_written(entry, value),
+            (false, None) => value_written(entry, &entry.default().unwrap_or_default()),
         };
         out.push_str(&format!("{}{key} = {value}\n", if given { "" } else { "# " }));
     }
@@ -268,9 +268,16 @@ fn keys_written(name: &str, mode: Mode, settings: &[&'static Setting], keymaps: 
     format!("{}[{KEYS}.{name}]\n{lines}", if any { "" } else { "# " })
 }
 
-/// `value` as a config writes it: a number as an integer, anything else as a string.
-fn value_written(value: &str) -> String {
-    if value.parse::<u32>().is_ok() { value.to_owned() } else { quoted(value) }
+/// `value` of the option `entry` as a config writes it: a number as an integer, a named value as
+/// a string. The number is the one that clv read ([`Entry::read`]), in base ten, never the text as
+/// it was typed: `03` and `+3` are both 3 to clv, and TOML takes neither as that integer. A value
+/// that the option doesn't take is written as a string, for clv to refuse when it reads it.
+fn value_written(entry: &Entry, value: &str) -> String {
+    match entry.read(value) {
+        Ok(Arg::Number(number)) => number.to_string(),
+        Ok(Arg::Named(named)) => quoted(named),
+        _ => quoted(value),
+    }
 }
 
 /// The name of a key as a config writes it: bare where it is letters, digits, `-` and `_` only,
@@ -661,6 +668,27 @@ mod tests {
         assert_eq!(written(&catalog, &options(&again), &settings, &read), effective, "written again, it is the same file");
     }
 
+    /// A number is written as clv read it, in base ten, never as it was typed: a leading zero or a
+    /// sign would be no TOML integer, or another one. A named value is written between quotes.
+    #[test]
+    fn a_value_is_written_as_it_was_read_not_as_it_was_typed() {
+        let (catalog, settings): (Catalog, [&'static Setting; 2]) = (catalog(), [&SETTINGS[0], &SETTINGS[1]]);
+        let keymaps = Keymaps::new(&settings);
+        for (count, width) in [("3", "72"), ("03", "072"), ("+3", "+72"), ("0003", "00072")] {
+            let mut options = Parsed::default();
+            options.configure("--per-row", Some(count));
+            options.configure("--width", Some(width));
+            options.configure("--theme", Some("dark"));
+            let text = written(&catalog, &options, &settings, &keymaps);
+            for line in ["per-row = 3", "width = 72", "theme = \"dark\""] {
+                assert_eq!(text.lines().filter(|other| *other == line).count(), 1, "{count} {width}: {line}\n{text}");
+            }
+            let read: Vec<(&str, Option<String>)> =
+                Config::parse(&text, &catalog).unwrap().options.into_iter().map(|set| (set.name, set.value)).collect();
+            assert_eq!(read, [("--per-row", Some("3".into())), ("--theme", Some("dark".into())), ("--width", Some("72".into()))]);
+        }
+    }
+
     /// A key and a value are written so that TOML reads them back: a key bare where it may be, and
     /// what is between quotes escaped.
     #[test]
@@ -670,10 +698,13 @@ mod tests {
             ["/", "\"", "\\", "é", "alt-é", "", "a b"].map(key_written),
             ["\"/\"", "\"\\\"\"", "\"\\\\\"", "\"é\"", "\"alt-é\"", "\"\"", "\"a b\""]
         );
-        assert_eq!(["72", "window", "", "-4", "a\u{1b}\"b"].map(value_written), ["72", "\"window\"", "\"\"", "\"-4\"", "\"a\\u001B\\\"b\""]);
+        let catalog = catalog();
+        let width = catalog.entry("--width").unwrap();
+        let written = ["72", "072", "+72", "window", "", "-4", "300", "a\u{1b}\"b"].map(|value| value_written(width, value));
+        assert_eq!(written, ["72", "72", "72", "\"window\"", "\"\"", "\"-4\"", "\"300\"", "\"a\\u001B\\\"b\""]);
         for key in ["/", "\"", "\\", "é", "'", "#", "=", "[", "]", ".", " x"] {
             let text = format!("[keys]\n{} = \"quit\"\n", key_written(key));
-            assert_eq!(Config::parse(&text, &catalog()).map(|config| config.keys[0].key.clone()), Ok(key.to_owned()), "{text}");
+            assert_eq!(Config::parse(&text, &catalog).map(|config| config.keys[0].key.clone()), Ok(key.to_owned()), "{text}");
         }
     }
 

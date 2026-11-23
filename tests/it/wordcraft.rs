@@ -854,6 +854,74 @@ fn config_sets_a_setting_as_its_option_does() {
     assert_eq!(text(&out.stderr), format!("clv: {}:1: theme: expected auto, light or dark, got sepia\n", file.display()));
 }
 
+/// `--print-config` with a setting's option: a value that the setting doesn't take is refused as
+/// a run refuses it, and a number is written as it was read. A width and a count to a row are
+/// printed as they are in effect, so that the config printed, read back, shows a document as the
+/// run that printed it does: both typed, both are printed, and the width wins there as it does
+/// typed (no document is shown, so no warning names one); the config's width under a count typed
+/// is not in effect, and is printed as not set.
+#[test]
+fn print_config_with_a_settings_option_prints_what_is_in_effect() {
+    let path = write(tmp("word-print-config", "long.md"), varied(200).as_bytes());
+    let run = |config: &str, args: &[&str]| {
+        let home = crate::bin::config_home("word-print", config);
+        crate::bin::clv()
+            .args(args)
+            .env("XDG_CONFIG_HOME", &home)
+            .env("HOME", "/nonexistent")
+            .env("TERM", "dumb")
+            .env_remove("TMUX")
+            .output()
+            .unwrap()
+    };
+    for (args, said) in [
+        (&["--width", "300"][..], "clv: --width: expected window or 20–200, got 300\n"),
+        (&["--theme", "sepia"], "clv: --theme: expected auto, light or dark, got sepia\n"),
+        (&["--font", "40"], "clv: --font: expected 50–400%, got 40\n"),
+        (&["--margin", "x"], "clv: --margin: expected 0–20, got x\n"),
+        (&["--fences", "sometimes"], "clv: --fences: expected drawn or code, got sometimes\n"),
+    ] {
+        let out = run("", &[&["--print-config"], args].concat());
+        assert!(!out.status.success() && out.stdout.is_empty(), "{args:?}");
+        assert_eq!(text(&out.stderr), said, "{args:?}");
+    }
+    let printed = |config: &str, args: &[&str]| {
+        let out = run(config, &[&["--print-config"], args].concat());
+        assert!(out.status.success() && out.stderr.is_empty(), "{config:?} {args:?}: {}", text(&out.stderr));
+        text(&out.stdout)
+    };
+    let has = |printed: &str, line: &str| printed.lines().filter(|other| *other == line).count() == 1;
+    // A number as it was read.
+    for (config, args) in
+        [("", &["--width", "072", "--font", "0150"][..]), ("width = \"072\"\nfont = \"+150\"\n", &[]), ("width = 0x48\nfont = 150\n", &[])]
+    {
+        let out = printed(config, args);
+        assert!(has(&out, "width = 72") && has(&out, "font = 150"), "{config:?} {args:?}:\n{out}");
+    }
+    // What a config printed shows of the document, read back: its pages' sizes.
+    let shown = |config: &str, args: &[&str]| {
+        let home = crate::bin::config_home("word-print", config);
+        let out = crate::view::view_with(&path, &[&["--protocol", "kitty"], args].concat(), &[("XDG_CONFIG_HOME", home.to_str().unwrap())]);
+        assert!(out.status.success(), "{config:?} {args:?}: {}", text(&out.stderr));
+        images(&out.stdout).iter().map(|d| png_size(&d.png)).collect::<Vec<_>>()
+    };
+    // Both typed: both printed, and nothing said. Read back, the width wins, as it did typed.
+    let both = printed("", &["--width", "40", "--per-row", "2"]);
+    assert!(has(&both, "width = 40") && has(&both, "per-row = 2"), "{both}");
+    assert_eq!(shown(&both, &[]), shown("", &["--width", "40", "--per-row", "2"]));
+    // The width typed over the config's count: both in effect, each for its files.
+    let typed_width = printed("per-row = 2\n", &["--width", "40"]);
+    assert!(has(&typed_width, "width = 40") && has(&typed_width, "per-row = 2"), "{typed_width}");
+    assert_eq!(shown(&typed_width, &[]), shown("per-row = 2\n", &["--width", "40"]));
+    // A count typed over the config's width: the width is not in effect, and is printed so.
+    let typed_count = printed("width = 40\n", &["--per-row", "2"]);
+    assert!(has(&typed_count, "per-row = 2") && has(&typed_count, "# width = \"window\"") && !typed_count.contains("width = 40"), "{typed_count}");
+    assert_eq!(shown(&typed_count, &[]), shown("width = 40\n", &["--per-row", "2"]));
+    assert_ne!(shown(&typed_count, &[]), shown(&both, &[]));
+    // A count of `auto` typed disagrees with nothing: the config's width stays.
+    assert!(has(&printed("width = 40\n", &["--per-row", "auto"]), "width = 40"));
+}
+
 /// A protected Word document opens with its password, says it needs one without, and refuses a
 /// wrong one.
 #[test]
