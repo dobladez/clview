@@ -29,6 +29,16 @@ pub(super) enum Mode {
     List,
 }
 
+impl Mode {
+    /// Where it is, as the reader is told: `search does not apply in a list`.
+    fn said(self) -> &'static str {
+        match self {
+            Self::Pages => "a file's pages",
+            Self::List => "a list",
+        }
+    }
+}
+
 /// Something the pager does when asked, whatever key asks: [`Command::name`] is what it is called.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Command {
@@ -317,7 +327,7 @@ const LIST: &[(Command, &[Chord])] = &[
 ];
 
 /// The keys of one [`Mode`]: each bound to one command.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Keymap {
     bindings: Vec<(Chord, Command)>,
 }
@@ -486,8 +496,20 @@ fn short(key: Key) -> String {
     }
 }
 
+/// A key that a config binds, as the config writes it: the keymap it is for (`None`, every keymap
+/// where the command applies), the name of the key, the name of the command or `none`, and where
+/// in the file it is (its line, and its place, which orders two on one line).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Binding {
+    pub(super) mode: Option<Mode>,
+    pub(super) key: String,
+    pub(super) command: String,
+    pub(super) line: usize,
+    pub(super) at: usize,
+}
+
 /// The keymaps of a run: a file's pages' and a list's.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Keymaps {
     pages: Keymap,
     list: Keymap,
@@ -513,6 +535,79 @@ impl Keymaps {
             Mode::Pages => &self.pages,
             Mode::List => &self.list,
         }
+    }
+
+    /// The keymaps of a run whose config binds `bindings`: the defaults ([`Keymaps::new`]), then
+    /// each key of the config, in the order of the file.
+    ///
+    /// - A key bound in `[keys]` is bound in every keymap where its command applies, and a key
+    ///   bound in the table of one keymap wins there. `none` unbinds a key.
+    /// - A key that the config binds loses its default binding, a setting's suggestion too, and the
+    ///   command keeps its other keys. The key comes first among the keys of its command, so `?`
+    ///   and the reminders show it; two such keys keep the order of the file.
+    /// - A binding that is the same as the default changes nothing: the key keeps its place, and a
+    ///   key that `?` doesn't list (`=`) stays unlisted.
+    /// - A key bound with a number typed before it (`12` and Enter) is never changed.
+    ///
+    /// What can't be bound is the error, with its line: a name that is no key's
+    /// ([`keys::named`]), a digit, `ctrl-c`, a command that doesn't exist, and a command that
+    /// doesn't apply in the keymap of its table.
+    pub(super) fn bound(settings: &[&'static Setting], bindings: &[Binding]) -> Result<Self, (usize, String)> {
+        let defaults = Self::new(settings);
+        let mut keymaps = defaults.clone();
+        let mut wanted: Vec<(&Binding, Key, Option<Command>)> = Vec::new();
+        for binding in bindings {
+            let wrong = |why: String| (binding.line, format!("{}: {why}", binding.key));
+            let key = keys::named(&binding.key).map_err(wrong)?;
+            match key {
+                Key::Char('0'..='9') => return Err(wrong("a digit starts the number typed before a key, so it can't be bound".into())),
+                Key::Interrupt => return Err(wrong("it always quits, so it can't be bound".into())),
+                _ => {}
+            }
+            let command = match binding.command.as_str() {
+                super::config::NONE => None,
+                name => Some(named(name, settings).ok_or_else(|| wrong(format!("no command is called {name}")))?),
+            };
+            if let (Some(mode), Some(command)) = (binding.mode, command)
+                && !command.applies(mode)
+            {
+                return Err(wrong(format!("{} does not apply in {}", command.name(), mode.said())));
+            }
+            wanted.push((binding, key, command));
+        }
+        for mode in [Mode::Pages, Mode::List] {
+            // What the config binds here, a key once: in the table of this keymap, or else in the
+            // table of them all, where its command applies here.
+            let here = |(binding, _, command): &&(&Binding, Key, Option<Command>)| match binding.mode {
+                Some(only) => only == mode,
+                None => command.is_none_or(|command| command.applies(mode)),
+            };
+            let mut bound: Vec<&(&Binding, Key, Option<Command>)> = Vec::new();
+            for binding in wanted.iter().filter(here) {
+                match bound.iter_mut().find(|(_, key, _)| *key == binding.1) {
+                    Some(other) if binding.0.mode.is_some() => *other = binding,
+                    Some(_) => {}
+                    None => bound.push(binding),
+                }
+            }
+            bound.sort_by_key(|(binding, ..)| binding.at);
+            let (keymap, default) = match mode {
+                Mode::Pages => (&mut keymaps.pages, &defaults.pages),
+                Mode::List => (&mut keymaps.list, &defaults.list),
+            };
+            let mut first = 0usize;
+            for (_, key, command) in bound {
+                if default.bound(*key, false) == *command {
+                    continue;
+                }
+                keymap.bindings.retain(|(chord, _)| chord.key != *key || chord.counted);
+                if let Some(command) = command {
+                    keymap.bindings.insert(first.min(keymap.bindings.len()), (Chord { key: *key, counted: false, listed: true }, *command));
+                    first = first.saturating_add(1);
+                }
+            }
+        }
+        Ok(keymaps)
     }
 
     /// [`Keymaps::new`], and what was wrong with what it was given, each left out: a key the
@@ -552,6 +647,12 @@ impl Keymaps {
     fn taken(&self, key: Key) -> Option<Command> {
         [&self.pages, &self.list].into_iter().find_map(|keymap| keymap.command(key, true))
     }
+}
+
+/// The command called `name`: one of the viewer's, or one of a setting that `settings` holds.
+fn named(name: &str, settings: &[&'static Setting]) -> Option<Command> {
+    let of_settings = settings.iter().flat_map(|setting| suggested(setting).into_iter().map(|(_, turn)| Command::Setting(setting, turn)));
+    VIEWER.iter().copied().chain(of_settings).find(|command| command.name() == name)
 }
 
 /// The keys `setting` suggests, each with the way its command turns the setting: one command for a
@@ -915,6 +1016,138 @@ mod tests {
             assert_eq!(keymap.command(Key::Char('q'), false), Some(Command::Quit));
             assert_eq!(keymap.command(Key::Char('h'), false), (mode == Mode::List).then_some(Command::TileLeft));
             assert_eq!(keymap.command(Key::Char('D'), false), Some(Command::Setting(&THEME, Turn::Next)));
+        }
+    }
+
+    fn binding(mode: Option<Mode>, key: &str, command: &str, line: usize) -> Binding {
+        Binding { mode, key: key.into(), command: command.into(), line, at: line }
+    }
+
+    /// A config's keys are bound after the defaults and the settings' suggestions. A key bound
+    /// loses what it was bound to, and comes first among the keys of its command, in the order of
+    /// the file; a key bound as it is by default keeps its place. `[keys]` binds wherever the
+    /// command applies, the table of a keymap wins there, and `none` unbinds. A key bound with a
+    /// number typed before it, and `ctrl-c`, stay as they are.
+    #[test]
+    fn a_configs_keys_come_first_among_their_commands_and_take_the_defaults_place() {
+        let settings: [&'static Setting; 2] = [&THEME, &WIDTH];
+        assert_eq!(Keymaps::bound(&settings, &[]), Ok(Keymaps::new(&settings)));
+        let keymaps = Keymaps::bound(
+            &settings,
+            &[
+                binding(None, "x", "quit", 1),
+                binding(None, "ctrl-d", "screen-down", 2),
+                binding(None, "q", "none", 3),
+                binding(None, "/", "search", 4),
+                binding(None, "X", "quit", 5),
+                binding(None, "S", "search", 6),
+                binding(None, "D", "quit", 7),
+                binding(None, "w", "increase-width", 8),
+                binding(Some(Mode::List), "J", "list-tile-down", 9),
+                binding(Some(Mode::List), "x", "list-open", 10),
+                binding(None, "enter", "next", 11),
+                binding(None, "=", "zoom-in", 12),
+                binding(None, "y", "none", 13),
+            ],
+        )
+        .unwrap();
+        let (pages, list) = (keymaps.of(Mode::Pages), keymaps.of(Mode::List));
+        let key = |c| Key::Char(c);
+        // Bound wherever the command applies; the table of a keymap wins there.
+        assert_eq!((pages.command(key('x'), false), list.command(key('x'), false)), (Some(Command::Quit), Some(Command::Open)));
+        assert_eq!((pages.command(key('S'), false), list.command(key('S'), false)), (Some(Command::Search), None));
+        assert_eq!((pages.command(key('J'), false), list.command(key('J'), false)), (None, Some(Command::TileDown)));
+        assert_eq!((pages.command(key('/'), false), list.command(key('/'), false)), (Some(Command::Search), Some(Command::Filter)));
+        // Unbound, and a key bound to nothing unbound again.
+        assert_eq!([pages.command(key('q'), false), list.command(key('q'), false), pages.command(key('y'), false)], [None; 3]);
+        // First among the keys of its command, in the order of the file; the others keep theirs.
+        assert_eq!((pages.each(&[Command::Quit]), list.each(&[Command::Quit])), ("x  X  D  ctrl-c".to_owned(), "X  D  ctrl-c".to_owned()));
+        assert_eq!(pages.each(&[Command::ScreenDown]), "ctrl-d  space  pagedown  d  ctrl-v");
+        assert_eq!(list.each(&[Command::ScreenDown]), "ctrl-d  space  n  d  ctrl-v  pagedown");
+        assert_eq!((pages.each(&[Command::Search]), list.each(&[Command::TileDown])), ("S  /".to_owned(), "J  ↓  j  ctrl-n".to_owned()));
+        assert_eq!(list.each(&[Command::Open]), "x  enter");
+        // A key bound as it is by default keeps its place, and one that `?` doesn't list stays so.
+        assert_eq!((pages.shown(&ZOOM_LINE), pages.command(key('='), false)), ("+ -".to_owned(), Some(Command::ZoomIn)));
+        // Enter alone is bound again: with a number it still goes to the page, and a list's opens.
+        assert_eq!((pages.command(Key::Enter, false), pages.command(Key::Enter, true)), (Some(Command::Next), Some(Command::GoTo)));
+        assert_eq!((list.command(Key::Enter, false), list.command(Key::Enter, true)), (Some(Command::Open), Some(Command::GoTo)));
+        assert_eq!((pages.each(&[Command::ScrollDown]), pages.each(&[Command::Next])), ("j  ↓  ctrl-n".to_owned(), "enter  n".to_owned()));
+        assert_eq!(pages.first_counted(Command::GoTo), "enter");
+        // A setting's suggestion is left out where the config binds its key, and its commands are
+        // bound by their names.
+        for keymap in [pages, list] {
+            assert_eq!(keymap.command(key('D'), false), Some(Command::Quit));
+            assert!(keymap.each(&[Command::Setting(&THEME, Turn::Next)]).is_empty());
+            assert_eq!(keymap.each(&[Command::Setting(&WIDTH, Turn::Up)]), "w  ]");
+            assert_eq!(keymap.fill("72{increase-width} sets 72"), "72w sets 72");
+            assert_eq!(keymap.command(Key::Interrupt, false), Some(Command::Quit), "ctrl-c still quits");
+        }
+        // What names a key shows it as bound: `?`, the reminders, a line's text.
+        assert_eq!(pages.shown(&QUIT_LINES[0]), "x  esc  X  D  ctrl-c");
+        assert!(pages.reminder(PAGE_HINTS[0], "zoom").ends_with(" · x quit"), "{}", pages.reminder(PAGE_HINTS[0], "zoom"));
+        assert!(pages.fill(PAGE_LINES[9].says).contains("3enter the third on"), "{}", pages.fill(PAGE_LINES[9].says));
+    }
+
+    /// What a config can't bind is refused, with the line that binds it and why: a command that
+    /// doesn't apply in the keymap of its table, a command that doesn't exist, a digit, `ctrl-c`,
+    /// and a name that is no key's.
+    #[test]
+    fn what_a_config_cant_bind_is_refused_with_its_line_and_why() {
+        for (binding, why) in [
+            (binding(Some(Mode::List), "s", "search", 3), "s: search does not apply in a list"),
+            (binding(Some(Mode::Pages), "x", "list-open", 3), "x: list-open does not apply in a file's pages"),
+            (binding(None, "x", "frobnicate", 3), "x: no command is called frobnicate"),
+            (binding(None, "x", "paper", 3), "x: no command is called paper"),
+            (binding(None, "x", "cycle-fences", 3), "x: no command is called cycle-fences"),
+            (binding(None, "x", "None", 3), "x: no command is called None"),
+            (binding(None, "x", "", 3), "x: no command is called "),
+            (binding(None, "5", "quit", 3), "5: a digit starts the number typed before a key, so it can't be bound"),
+            (binding(None, "0", "none", 3), "0: a digit starts the number typed before a key, so it can't be bound"),
+            (binding(None, "ctrl-c", "none", 3), "ctrl-c: it always quits, so it can't be bound"),
+            (binding(None, "ctrl-c", "quit", 3), "ctrl-c: it always quits, so it can't be bound"),
+            (binding(None, "ctrl-D", "quit", 3), "ctrl-D: write ctrl-d: a terminal sends the same byte for both"),
+            (binding(None, "ctrl-m", "quit", 3), "ctrl-m: write enter: a terminal sends the same byte for both"),
+            (binding(None, "tab", "quit", 3), "tab: clv does not read Tab as a key"),
+            (binding(None, "f5", "quit", 3), "f5: clv reads no key of that name"),
+        ] {
+            assert_eq!(Keymaps::bound(&[&THEME], std::slice::from_ref(&binding)), Err((3, why.to_owned())), "{binding:?}");
+        }
+        // The first that is wrong, in the order of the file.
+        let both = [binding(None, "x", "quit", 1), binding(None, "tab", "quit", 2), binding(None, "5", "quit", 3)];
+        assert!(Keymaps::bound(&[], &both).is_err_and(|(line, _)| line == 2));
+    }
+
+    proptest::proptest! {
+        /// Whatever a config binds, the keymaps are refused or they hold: a key is bound once in a
+        /// keymap, to a command that applies there; `ctrl-c` quits; a number and Enter go to the
+        /// page; and no digit is bound.
+        #[test]
+        fn whatever_a_config_binds_the_keymaps_hold(
+            bindings in proptest::collection::vec(
+                (
+                    proptest::option::of(proptest::bool::ANY),
+                    "(x|q|j|J|/|=|D|\\]|enter|esc|space|up|ctrl-d|alt-v|ctrl-c|5|tab|ctrl-D|\\PC{0,3})",
+                    "(quit|none|search|next|go-to|zoom-in|list-open|list-tile-down|cycle-theme|increase-width|screen-down|\\PC{0,6})",
+                ),
+                0..10,
+            ),
+        ) {
+            let mode = |list: Option<bool>| list.map(|list| if list { Mode::List } else { Mode::Pages });
+            let bindings: Vec<Binding> =
+                bindings.iter().enumerate().map(|(at, (list, key, command))| binding(mode(*list), key, command, at)).collect();
+            if let Ok(keymaps) = Keymaps::bound(&[&THEME, &WIDTH], &bindings) {
+                for mode in [Mode::Pages, Mode::List] {
+                    let keymap = keymaps.of(mode);
+                    for (chord, command) in &keymap.bindings {
+                        let same = keymap.bindings.iter().filter(|(other, _)| other.key == chord.key && other.counted == chord.counted).count();
+                        proptest::prop_assert_eq!(same, 1, "{:?} in {:?}", chord, mode);
+                        proptest::prop_assert!(command.applies(mode), "{} in {:?}", command.name(), mode);
+                        proptest::prop_assert!(!matches!(chord.key, Key::Char('0'..='9')));
+                    }
+                    proptest::prop_assert_eq!(keymap.command(Key::Interrupt, false), Some(Command::Quit));
+                    proptest::prop_assert_eq!(keymap.command(Key::Enter, true), Some(Command::GoTo));
+                }
+            }
         }
     }
 

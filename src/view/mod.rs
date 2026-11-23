@@ -766,6 +766,7 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     // stops clv here.
     let config = config::Config::read(which(&typed)?, &catalog)?;
     let options = configured(typed, &config)?;
+    let keymaps = commands::Keymaps::bound(&settings, &config.keys).map_err(|(line, why)| config.wrong(line, &why))?;
     let paths = file_args(&options)?;
     let zoom = zoom_given(&options, &catalog)?;
     let named = |name| given(&options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
@@ -890,7 +891,7 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
         let said = said.or_else(|| instead.is_some().then(|| TEXT_INSTEAD_SHORT.to_owned()));
-        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener, first)?;
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener, first, keymaps)?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());

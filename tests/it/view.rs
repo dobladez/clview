@@ -287,6 +287,42 @@ fn config_that_is_wrong_stops_clv_and_names_the_file_and_the_line() {
     assert!(version.status.success() && version.stderr.is_empty());
 }
 
+/// What a config can't bind stops clv before it shows anything, printing too, with the file and
+/// the line: a command that doesn't apply in the keymap of its table, one that doesn't exist, a
+/// digit, `ctrl-c`, and a key that a terminal sends as another.
+#[test]
+fn config_keys_that_cant_be_bound_are_refused_with_their_line() {
+    let pdf = fixture("config-keys-wrong", 1);
+    let file = crate::bin::config_home("keys-wrong", "").join("clv/config.toml");
+    for (written, said) in [
+        ("[keys]\nx = \"quit\"\n\n[keys.list]\ns = \"search\"\n", ":5: s: search does not apply in a list"),
+        ("[keys.pages]\nx = \"list-open\"\n", ":2: x: list-open does not apply in a file's pages"),
+        ("[keys]\nx = \"frobnicate\"\n", ":2: x: no command is called frobnicate"),
+        ("[keys]\nx = \"paper\"\n", ":2: x: no command is called paper"),
+        ("[keys]\n5 = \"quit\"\n", ":2: 5: a digit starts the number typed before a key, so it can't be bound"),
+        ("[keys]\nctrl-c = \"none\"\n", ":2: ctrl-c: it always quits, so it can't be bound"),
+        ("[keys]\nctrl-D = \"screen-down\"\n", ":2: ctrl-D: write ctrl-d: a terminal sends the same byte for both"),
+        ("[keys]\nctrl-m = \"next\"\n", ":2: ctrl-m: write enter: a terminal sends the same byte for both"),
+        ("[keys]\nctrl-h = \"back\"\n", ":2: ctrl-h: write backspace: a terminal sends the same byte for both"),
+        ("[keys]\ntab = \"next\"\n", ":2: tab: clv does not read Tab as a key"),
+        ("[keys]\nctrl-i = \"next\"\n", ":2: ctrl-i: a terminal sends the same byte for ctrl-i and Tab, and clv does not read Tab as a key"),
+        ("[keys]\nEnter = \"next\"\n", ":2: Enter: write enter: the names of keys are in lower case"),
+        ("[keys]\nx = 3\n", ":2: x: expected the name of a command or \"none\", got 3"),
+        ("keys = \"x\"\n", ":1: keys: expected a table of keys"),
+        ("[keys]\n\"\\u001b]0;t\\u0007\" = \"quit\"\n", ":2: \u{fffd}]0;t\u{fffd}: clv reads no key of that name"),
+        ("[keys]\nx = \"qu\\u001bit\"\n", ":2: x: no command is called qu\u{fffd}it"),
+    ] {
+        let out = configured("keys-wrong", written, &pdf, &["--protocol", "kitty"]);
+        assert!(!out.status.success() && out.stdout.is_empty(), "{written:?}");
+        assert_eq!(text(&out.stderr), format!("clv: {}{said}\n", file.display()), "{written:?}");
+    }
+    // Keys that can be bound say nothing, and change nothing that is printed.
+    let bound = "[keys]\nx = \"quit\"\n\"/\" = \"none\"\nctrl-d = \"screen-down\"\n\n[keys.list]\nJ = \"list-tile-down\"\n";
+    let out = configured("keys-wrong", bound, &pdf, &["--protocol", "kitty"]);
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", text(&out.stderr));
+    assert_eq!(out.stdout, view(&pdf, &["--protocol", "kitty"]).stdout);
+}
+
 #[test]
 fn without_a_terminal_auto_points_to_the_protocol_option() {
     let pdf = fixture("auto", 1);

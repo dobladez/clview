@@ -4936,11 +4936,95 @@ fn epub_t_goes_to_the_books_own_contents_marked_or_guessed() {
 }
 
 /// What `?` has written since `from` bytes of output, once it is whole: its rows.
-#[cfg(feature = "word")]
 fn keys_shown(view: &mut Session, from: usize) -> String {
     view.press("?");
     view.wait_until("the keys", |t| t.len() > from && bar(&t[from..]).contains("these keys: any key goes back"));
     view.text()[from..].to_owned()
+}
+
+/// A config for a test of the keys, to give `clv` with `--config`: `text`, in a file of `test`'s own.
+fn keys_config(test: &str, text: &str) -> String {
+    let path = crate::view::tmp(test, "keys.toml");
+    std::fs::write(&path, text).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+/// A key that the config binds does its command, and is first among that command's keys in `?`
+/// and in the status line's reminder. With Enter bound again, a number and Enter still go to that
+/// page. A key unbound does nothing.
+#[test]
+fn config_keys_bound_again_do_their_command_and_are_first_in_the_keys_listed() {
+    if !pty_works() {
+        return;
+    }
+    let config = keys_config("config-keys", "[keys]\nx = \"quit\"\nq = \"none\"\n\n[keys.pages]\nenter = \"next\"\n");
+    let mut view = Session::start_on(KITTY, &fixture("config-keys", 6), &["--pager", "--per-row", "1", "--config", &config], 100, 40);
+    view.wait_until("page 1", |t| drawn(t, "page 1/6"));
+    // The reminder says the key that quits now.
+    assert!(bar(&view.text()).contains(" · x quit"), "{}", last_bar(&view.text()));
+    let from = view.text().len();
+    let shown = bar(&keys_shown(&mut view, from));
+    assert!(shown.contains(" x esc ctrl-c quit"), "x isn't first among the keys that quit: {shown:?}");
+    // Beside `p`, as the first key of the next page is beside the first of the previous.
+    assert!(shown.contains(" enter p n → ← the next or the previous screen of pages"), "{shown:?}");
+    assert!(shown.contains(" j k ↓ ↑ ctrl-n ctrl-p a few rows down or up"), "Enter is still listed as a row down: {shown:?}");
+    assert!(shown.contains(" 12 enter 12g page 12"), "{shown:?}");
+    // Any key leaves the keys. Enter alone is the next page now; after a number, that page.
+    view.press(" ");
+    let before = view.text().len();
+    view.press("\r");
+    view.wait_until("the next page", |t| drawn(&t[before..], "page 2/6"));
+    let before = view.text().len();
+    view.press("5\r");
+    view.wait_until("page 5", |t| drawn(&t[before..], "page 5/6"));
+    // `q` is bound to nothing: it does nothing.
+    view.press("q");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(view.child.try_wait().unwrap().is_none(), "`q` quit, unbound");
+    view.press("x");
+    assert!(view.finish().success());
+}
+
+/// With every key that quits or leaves unbound, `ctrl-c` still quits: a config can't leave the
+/// reader without a way out.
+#[test]
+fn config_keys_ctrl_c_quits_with_q_unbound() {
+    if !pty_works() {
+        return;
+    }
+    let config = keys_config("config-keys-out", "[keys]\nq = \"none\"\nesc = \"none\"\nbackspace = \"none\"\n");
+    let mut view = Session::start_on(KITTY, &fixture("config-keys-out", 2), &["--pager", "--per-row", "1", "--config", &config], 100, 40);
+    view.wait_until("page 1", |t| drawn(t, "page 1/2"));
+    assert!(bar(&view.text()).contains(" · ctrl-c quit"), "the reminder names the one way out: {}", last_bar(&view.text()));
+    view.press("q\x1b\x7f");
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(view.child.try_wait().unwrap().is_none(), "an unbound key quit");
+    view.press("\x03");
+    assert!(view.finish().success());
+}
+
+/// A setting's line in `?` shows its keys as bound, the phrase of the width too: with `w` bound to
+/// `increase-width`, `72w sets 72`.
+#[cfg(feature = "word")]
+#[test]
+fn config_keys_show_in_a_settings_line_and_its_phrase() {
+    if !pty_works() {
+        return;
+    }
+    let config = keys_config("config-keys-phrase", "[keys]\nw = \"increase-width\"\nM = \"cycle-theme\"\n\"]\" = \"none\"\n");
+    let mut view = Session::start_on(KITTY, &long_markdown("config-keys-phrase", "long.md"), &["--pager", "--config", &config], 100, 40);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    let from = view.text().len();
+    let shown = bar(&keys_shown(&mut view, from));
+    assert!(shown.contains(" [ w 12w 4 characters a line narrower, or wider; 72w sets 72, 0w the window's"), "{shown:?}");
+    assert!(shown.contains(" M D light on dark, or dark on light"), "{shown:?}");
+    // And the key does what it is bound to: the document is laid out again, 4 characters wider.
+    view.press(" ");
+    let before = view.text().len();
+    view.press("72w");
+    view.wait_until("the width set", |t| bar(&t[before..]).contains("width 72"));
+    view.press("q");
+    assert!(view.finish().success());
 }
 
 /// `?` in a window of 80 columns cuts no line: what a line says goes on over the next row. A

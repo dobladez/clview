@@ -147,6 +147,7 @@ pub(super) fn run(
     first_id: u64,
     opener: &Opener<'_, '_>,
     room: Room,
+    keymaps: Keymaps,
 ) -> Result<Vec<String>, String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
@@ -158,7 +159,7 @@ pub(super) fn run(
         showing = w.update(&report, 0).showing;
         watch = Some(w);
     }
-    let settings = Rc::new(Settings::of(super::settings(opener.backends), super::having(opener.backends), terminal.values));
+    let settings = Rc::new(Settings::with(keymaps, super::settings(opener.backends), super::having(opener.backends), terminal.values));
     // The window's room; the count to a row a document is laid out in is the reader's ([`Nav::columns`]).
     let room = Room { per_row: None, ..room };
     let mut level = Level::new(0, shown, zoom, false, settings.clone(), room);
@@ -588,8 +589,15 @@ const NOT_HERE: &str = "not for this file";
 impl Settings {
     /// The settings `declared`, the formats `having` each, at `values`, and the keymaps their keys
     /// make with the viewer's.
+    #[cfg(test)]
     fn of(declared: Vec<&'static Setting>, having: Vec<(&'static str, Vec<&'static str>)>, values: Values) -> Self {
-        Self { keymaps: Keymaps::new(&declared), declared, having, values: std::cell::Cell::new(values), changed: Default::default() }
+        Self::with(Keymaps::new(&declared), declared, having, values)
+    }
+
+    /// The settings `declared`, the formats `having` each, at `values`, with `keymaps`: the keys of
+    /// the run, the reader's config's among them.
+    fn with(keymaps: Keymaps, declared: Vec<&'static Setting>, having: Vec<(&'static str, Vec<&'static str>)>, values: Values) -> Self {
+        Self { keymaps, declared, having, values: std::cell::Cell::new(values), changed: Default::default() }
     }
 
     /// The formats whose files have `setting`, if any lists it.

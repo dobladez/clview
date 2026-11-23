@@ -79,13 +79,21 @@ terminal the environment doesn't name gets no icon, WezTerm among them, though i
 ## The config file
 
 clv reads a config file when it starts. The file sets options, so that you do not type them each
-time. clv reads the file when it prints pages, too.
+time, and it binds keys to commands. clv reads the file when it prints pages, too.
 
 ```toml
 per-row = "width"
 theme = "dark"
 width = 72
 recurse = true
+
+[keys]
+ctrl-d = "screen-down"
+x = "none"
+"/" = "search"
+
+[keys.list]
+J = "list-tile-down"
 ```
 
 **Where it is.** clv reads `$XDG_CONFIG_HOME/clv/config.toml` when that variable holds an absolute
@@ -134,12 +142,79 @@ clv: ~/.config/clv/config.toml:3: width: expected window or 20–200, got 300
 ```
 
 These are errors: text that is not TOML, a name that clv does not know, an option that a config
-may not set, and a value that the option does not take. The message for a value is the same as
-the command line gives. clv refuses a config that is larger than 1 MiB, one that is not a regular
+may not set, a value that the option does not take, and a key or a command that cannot be bound.
+The message for a value is the same as the command line gives. clv refuses a config that is larger than 1 MiB, one that is not a regular
 file, and one that it cannot read. `--config FILE` with no such file is an error too.
 
 A config written for a full build can stop a `clv` built without some backends: `width` is a name
 that a build with images alone does not know.
+
+### Keys in the config
+
+The table `[keys]` binds a key to a command, by the name of the command, in every keymap where
+the command applies. clv has two keymaps: one for the pages of a file, and one for a list. The
+tables `[keys.pages]` and `[keys.list]` bind a key in one keymap, and win over `[keys]` there. The
+value `"none"` unbinds a key.
+
+- A key that you bind loses what it was bound to. The command keeps its other keys.
+- A key that you bind comes first among the keys of its command. So `?`, the reminders of the
+  status line and every message that names a key show your key. Two keys of one command keep
+  the order that the file has them in.
+- A binding that is the same as the default changes nothing.
+- A number typed before a key stays as it is: `12` and `enter` go to page 12, whatever you bind
+  `enter` to. `enter = "next"` changes `enter` alone.
+
+**How to write a key.** Write a key as `?` does ([Keys](#keys)): `j`, `J`, `ctrl-d`, `alt-v`,
+`space`, `enter`, `esc`, `backspace`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup` and
+`pagedown`. A key with letters, digits, `-` and `_` only needs no quotes. A punctuation key does:
+`"/"`, `"?"`, `"["`. clv refuses these keys, and says why:
+
+| Key | Why |
+|---|---|
+| a digit | it starts the number typed before a key |
+| `ctrl-c` | it always quits, so a config cannot leave you without a way out |
+| `ctrl-D` | a terminal sends the same byte for `ctrl-d`: write `ctrl-d` |
+| `ctrl-m`, `ctrl-j` | a terminal sends the same byte for `enter`: write `enter` |
+| `ctrl-h` | a terminal sends the same byte for `backspace`: write `backspace` |
+| `tab`, `ctrl-i` | clv does not read Tab as a key |
+
+clv also refuses a command that does not exist, and a command that does not apply in the keymap
+of its table: `[keys.list] s = "search"`.
+
+**The commands.** A command for the list alone starts with `list-`. The others are for the pages
+of a file, or for both.
+
+| Command | Where | What it does |
+|---|---|---|
+| `screen-down`, `screen-up` | both | a screen on or back |
+| `scroll-down`, `scroll-up` | pages | a few rows down or up, or a row of pages |
+| `next`, `previous` | pages | the next or the previous screen of pages; with a search kept, the next match or the match before |
+| `next-page`, `previous-page` | pages | the next or the previous screen of pages, with a search kept too |
+| `previous-match` | pages | with a search kept, the match before |
+| `go-to`, `last` | both | the first page or tile (after a number, that one), or the last |
+| `zoom-in`, `zoom-out` | both | the zoom; on a document, the size of its text |
+| `increase-per-row`, `decrease-per-row` | both | one more page or tile to a row, or one fewer |
+| `search` | pages | search the text of the file |
+| `follow`, `copy-link` | pages | label the links on screen, to follow one or to copy its address |
+| `contents` | pages | to the contents, in a file that has a place for them |
+| `copy` | both | copy the page or the tile to the clipboard |
+| `open-in-app` | both | open the file in the app that the desktop opens it with |
+| `rerender` | both | render the pages again |
+| `back` | both | clear the search or the filter; then back through the links followed; then out of the file or the folder |
+| `leave` | both | clear the search or the filter; then out of the file or the folder, or quit |
+| `quit` | both | quit |
+| `help` | both | the keys (`?`) |
+| `list-tile-left`, `list-tile-right`, `list-tile-up`, `list-tile-down` | list | the tile before, after, above or below |
+| `list-open` | list | open the tile: a file to its pages, a folder to its list |
+| `list-filter` | list | filter the tiles by name |
+| `cycle-theme` | both | documents and diagrams light on dark, or dark on light |
+| `decrease-width`, `increase-width` | both | a document's lines narrower or wider |
+| `decrease-margin`, `increase-margin` | both | a document's side margins narrower or wider |
+| `cycle-fences` | both | a document's fenced blocks drawn, or as code |
+
+The last four rows are the commands of the settings. A command that steps an option is
+`increase-` or `decrease-` and the name of the option, and a command that goes to the next named
+value is `cycle-` and that name. A `clv` built without documents does not have them.
 
 ## Keys
 
@@ -155,6 +230,9 @@ that none is cut; in a window too short for that (80 × 24), each line keeps to 
 its middle where it is too long, so that every key is still listed. Each key does what the
 command it is bound to does, and several keys may be bound to one: the keys of `less` and `vi`,
 and some of Emacs's.
+
+The keys below are the defaults. [The config file](#keys-in-the-config) binds a key to another
+command, or to none, and `?` then lists the keys as you bound them.
 
 A key has one spelling, in lower case, and this manual writes a key as `?` does: `ctrl-v`, `alt-v`,
 `enter`, `esc`, `backspace`, `space`, `pageup`, `pagedown`, `home` and `end`. `?` draws the four

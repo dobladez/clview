@@ -166,3 +166,42 @@ format, the layout, the names and the bindings with a number.
   helper, the 34 pass under the same home.
 - **Not in the spec's *Files:*:** `Cargo.lock`, `tests/it/bin.rs`, `tests/it/wordcraft.rs`,
   `CONTRIBUTING.md` (its Tests), `docs/adr/README.md`.
+
+## Task 6: keys from the config
+
+- **The config writes, the keymaps judge.** `config.rs` reads the three tables into
+  `commands::Binding`s, text and place only. `Keymaps::bound` reads each key (`keys::named`) and
+  finds each command, and its refusals come back with their line. So `config.rs` knows no key
+  and no command.
+- **The config goes on after the settings' suggestions**, not before them as the spec's
+  Approach has it. Applied last, "the same as the default" covers a setting's key too (`D =
+  "cycle-theme"` changes nothing), and a key that the config binds takes a suggestion's place
+  by the same rule that takes a default's. The result is what the spec's Requirements ask.
+  Applied before, the template with its `# ` taken out could not give the keymaps of no config.
+- **A general binding where its command does not apply is skipped there, silently.** `[keys] x
+  = "search"` binds `x` in a file's pages and leaves `x` in a list as it was. `none` in `[keys]`
+  unbinds in both.
+- **A key bound to what it is bound to by default keeps its place**, and that includes a key
+  bound to nothing: `y = "none"` changes nothing.
+- **The keymaps are built in `view`, before any file opens**, and handed to the pager
+  (`pager::run`, `Settings::with`). So a binding that can't be made stops clv when it prints,
+  too.
+- **`pages` and `list` under `[keys]`.** A table there is a keymap's. A string there
+  (`pages = "quit"`) is a key called `pages`, and clv reads no key of that name.
+- **No message wrote a key by hand.** Every message that names a key of the keymaps already
+  went through `Keymap::fill` or `Keymap::first`. The keys of a search, a filter and the links'
+  labels being typed (`⏎ search · esc cancel`) are outside the keymaps, and stay.
+- **`keys_shown` in `tests/it/view_pager.rs`** lost its `cfg(feature = "word")`: a test on a PDF
+  uses it now.
+- **Seen failing**, each with its piece taken out:
+  - the config's key put last, not first: `a_configs_keys_come_first_…` (`ctrl-c  x  X  D`) and
+    `config_keys_bound_again_…` (the reminder says `ctrl-c quit`)
+  - the skip of a binding that is the default's: `a_configs_keys_come_first_…` (`/  S`)
+  - the refusal of a digit and of `ctrl-c`: `what_a_config_cant_bind_…`, the property test, and
+    `config_keys_that_cant_be_bound_…`
+  - the old binding left in: the property test (a key bound twice) and `config_keys_ctrl_c_…`
+    (`q` still quits)
+  - a setting's phrase not filled: `config_keys_show_in_a_settings_line_…`
+  - the keys not sorted by place: `the_tables_of_keys_…`
+- **Not in the spec's *Files:*:** `src/view/mod.rs`, `src/view/keys.rs` (the `expect` of task 3
+  goes), `tests/it/view.rs`, `docs/architecture.md`, `CONTRIBUTING.md`.

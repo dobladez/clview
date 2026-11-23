@@ -233,8 +233,10 @@ CodeQL's default setup scans the Rust and the workflows.
 ## Tests
 
 - **Unit tests** in each module, among them property tests for the key decoder (answers cut
-  anywhere among keys are never keys), the catalog of commands and the keymaps (each key bound once,
-  every command where it applies, `?` and the reminders read from them), the fit and the grid, that the reader's page stays on
+  anywhere among keys are never keys) and the names of keys (the name of every key reads back as
+  that key), the catalog of commands and the keymaps (each key bound once,
+  every command where it applies, `?` and the reminders read from them; a config's keys on top of
+  them, whatever it binds), the options catalog and its one parser of values, the fit and the grid, that the reader's page stays on
   screen, and a search's matches and rectangles (within their text, within their page). The
   pager's search is tested on a fake text (`search::tests::Fake`), which gives what it is asked
   when the test lets it.
@@ -260,7 +262,11 @@ CodeQL's default setup scans the Rust and the workflows.
   without the protocol as well, for text cells. A list's file opened on demand is sent at its true size,
   and one that turns out broken keeps its tile. The keys bound by default that came last: `d`, `u`
   and Emacs's among a file's pages and a list's tiles, `Alt-V` written as an ESC and `v`, an Alt key
-  bound to nothing, and `u` leaving neither a file nor a list. `--help`'s icon is tested here too, since it depends
+  bound to nothing, and `u` leaving neither a file nor a list. A config's keys (`config_keys_…`): a key
+  bound again that does its command and is first in `?` and in the reminder, a number and `enter`
+  with `enter` bound again, `ctrl-c` with every other way out unbound, and a setting's phrase
+  with its key bound again; what can't be bound is refused through a pipe, in `tests/it/view.rs`.
+  `--help`'s icon is tested here too, since it depends
   on stdout being a terminal. A PDF's search too: its text read in a worker seen with `ps`, gone
   with the search, the file and the pager, and a page past the worker's heap, written by the test,
   costing the search that page; and its tint, read back from the PNGs sent: on the matches and

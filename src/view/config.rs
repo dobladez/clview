@@ -1,5 +1,6 @@
 //! The reader's config: a TOML file that sets options, by the names of the options catalog
-//! ([`crate::args::Catalog`]).
+//! ([`crate::args::Catalog`]), and binds keys to commands, by the names of the catalog of commands
+//! ([`super::commands`]).
 //!
 //! clv reads `$XDG_CONFIG_HOME/clv/config.toml` when that variable holds an absolute path, and
 //! `$HOME/.config/clv/config.toml` otherwise, on macOS too. `--config FILE` reads another file, and
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use toml::de::{DeTable, DeValue};
 
+use super::commands::{Binding, Mode};
 use crate::args::{Catalog, Entry, Settable};
 
 /// The most of a config that clv reads, in bytes: 1 MiB. A config of a few options and keys is a
@@ -21,6 +23,13 @@ const MAX_SIZE: u64 = 1 << 20;
 
 /// Where the config is, under the directory of configs.
 const FILE: &str = "config.toml";
+
+/// The table of the keys, at the top level, and its two tables of the keys of one keymap.
+const KEYS: &str = "keys";
+const KEYMAPS: [(&str, Mode); 2] = [("pages", Mode::Pages), ("list", Mode::List)];
+
+/// What unbinds a key, in place of the name of a command.
+pub(super) const NONE: &str = "none";
 
 /// Which config to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +72,9 @@ pub(super) struct Config {
     pub(super) file: String,
     /// The options it sets, in the order of the file.
     pub(super) options: Vec<Set>,
+    /// The keys it binds, in the order of the file, as it writes them: the keymaps say which are
+    /// keys and commands ([`super::commands::Keymaps::bound`]).
+    pub(super) keys: Vec<Binding>,
 }
 
 impl Config {
@@ -91,7 +103,8 @@ impl Config {
         said(&self.file, &Wrong::at(line, why))
     }
 
-    /// `text` as a config, read against `catalog`: what its top level sets.
+    /// `text` as a config, read against `catalog`: what its top level sets, and what `[keys]`,
+    /// `[keys.pages]` and `[keys.list]` bind.
     fn parse(text: &str, catalog: &Catalog) -> Result<Self, Wrong> {
         let table = DeTable::parse(text).map_err(|e| Wrong { line: e.span().map(|span| line(text, span.start)), why: e.message().to_owned() })?;
         // A table is kept in the order of its keys' names: the order of the file is by where each is.
@@ -100,14 +113,46 @@ impl Config {
         let mut config = Self::default();
         for (key, value) in entries {
             let (name, at) = (key.get_ref().as_ref(), line(text, key.span().start));
+            if name == KEYS {
+                let DeValue::Table(keys) = value.get_ref() else { return Err(Wrong::at(at, format!("{KEYS}: expected a table of keys"))) };
+                bindings(keys, None, text, &mut config.keys)?;
+                continue;
+            }
             let entry = option(catalog, name).map_err(|why| Wrong::at(at, why))?;
             let wrong = |why: String| Wrong::at(at, format!("{name}: {why}"));
             if let Some(value) = given(entry, value.get_ref(), text.get(value.span()).unwrap_or_default()).map_err(wrong)? {
                 config.options.push(Set { name: entry.spec.name, value, line: at });
             }
         }
+        // In the order of the file, whichever table each is in.
+        config.keys.sort_by_key(|binding| binding.at);
         Ok(config)
     }
+}
+
+/// Into `into`, what the table `keys` binds in `mode` (`None`, in every keymap where the command
+/// applies): each key and the name of its command, or [`NONE`], as written. The tables of the
+/// keymaps, in the table of them all, are read in turn.
+fn bindings(keys: &DeTable<'_>, mode: Option<Mode>, text: &str, into: &mut Vec<Binding>) -> Result<(), Wrong> {
+    for (key, value) in keys.iter() {
+        let (name, at) = (key.get_ref().as_ref(), key.span().start);
+        let keymap = KEYMAPS.iter().find(|(keymap, _)| mode.is_none() && *keymap == name);
+        match (value.get_ref(), keymap) {
+            (DeValue::Table(keys), Some((_, mode))) => bindings(keys, Some(*mode), text, into)?,
+            (DeValue::String(command), _) => {
+                into.push(Binding { mode, key: name.to_owned(), command: command.to_string(), line: line(text, at), at })
+            }
+            (other, _) => {
+                let got: String = match other {
+                    DeValue::Array(_) => "an array".to_owned(),
+                    DeValue::Table(_) => "a table".to_owned(),
+                    _ => text.get(value.span()).unwrap_or_default().chars().take(40).collect(),
+                };
+                return Err(Wrong::at(line(text, at), format!("{name}: expected the name of a command or \"{NONE}\", got {got}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `wrong` in `file`, as the reader is told: `~/.config/clv/config.toml:3: width: expected window
@@ -327,6 +372,43 @@ mod tests {
         assert_eq!(said("c.toml", &Wrong { line: None, why: "no".into() }), "c.toml: no");
     }
 
+    /// `[keys]`, `[keys.pages]` and `[keys.list]` bind keys to commands by name, as written: in
+    /// the order of the file, whichever table each is in. What is no name of a command is said.
+    #[test]
+    fn the_tables_of_keys_bind_keys_to_commands_as_written_in_the_order_of_the_file() {
+        let text = "width = 72\n[keys.list]\nJ = \"list-tile-down\"\n[keys]\nctrl-d = \"screen-down\"\nx = \"none\"\n\"/\" = \"search\"\n[keys.pages]\nenter = \"next\"\n";
+        let config = Config::parse(text, &catalog()).unwrap();
+        let bound: Vec<(Option<Mode>, &str, &str, usize)> =
+            config.keys.iter().map(|b| (b.mode, b.key.as_str(), b.command.as_str(), b.line)).collect();
+        assert_eq!(
+            bound,
+            [
+                (Some(Mode::List), "J", "list-tile-down", 3),
+                (None, "ctrl-d", "screen-down", 5),
+                (None, "x", "none", 6),
+                (None, "/", "search", 7),
+                (Some(Mode::Pages), "enter", "next", 9)
+            ]
+        );
+        assert_eq!(config.options.len(), 1, "the options beside them");
+        // An inline table is a table too, and two on a line keep their order.
+        let config = Config::parse("keys = { b = \"quit\", a = \"none\", list = { z = \"list-open\" } }", &catalog()).unwrap();
+        assert_eq!(config.keys.iter().map(|b| (b.key.as_str(), b.mode)).collect::<Vec<_>>(), [("b", None), ("a", None), ("z", Some(Mode::List))]);
+        assert_eq!(Config::parse("[keys]\n[keys.pages]\n[keys.list]\n", &catalog()).map(|config| config.keys.len()), Ok(0));
+        for (text, line, why) in [
+            ("keys = 3", 1, "keys: expected a table of keys"),
+            ("keys = \"x\"", 1, "keys: expected a table of keys"),
+            ("[keys]\nx = 3", 2, "x: expected the name of a command or \"none\", got 3"),
+            ("[keys]\nx = true", 2, "x: expected the name of a command or \"none\", got true"),
+            ("[keys]\n\nx = [\"quit\"]", 3, "x: expected the name of a command or \"none\", got an array"),
+            ("[keys.other]\nx = \"quit\"", 1, "other: expected the name of a command or \"none\", got a table"),
+            ("[keys.pages.more]\nx = \"quit\"", 1, "more: expected the name of a command or \"none\", got a table"),
+            ("[keys.list]\npages = { x = \"quit\" }", 2, "pages: expected the name of a command or \"none\", got a table"),
+        ] {
+            assert_eq!(Config::parse(text, &catalog()).unwrap_err(), Wrong::at(line, why), "{text:?}");
+        }
+    }
+
     /// The reader's own config is under `XDG_CONFIG_HOME` where that is an absolute path, and under
     /// `.config` in the home otherwise, on macOS too; a message names it from the home.
     #[test]
@@ -390,9 +472,9 @@ mod tests {
         fn no_text_of_a_config_panics(
             lines in proptest::collection::vec(
                 (
-                    "(width|theme|per-row|recurse|pager|pages|password|zoom|keys|\\[keys\\]|\\[\\[a\\]\\]|[a-z.\"' -]{0,8})",
+                    "(width|theme|per-row|recurse|pager|pages|password|zoom|keys|keys.x|keys.pages.enter|keys.list.\"/\"|keys.ctrl-c|\\[keys\\]|\\[\\[a\\]\\]|[a-z.\"' -]{0,8})",
                     "( = |=| |\\.x = )",
-                    "(72|300|-1|0x48|1e9|true|false|\"dark\"|\"auto\"|'window'|\\[1, 2\\]|\\{ a = 1 \\}|1979-05-27|\"\"\"|[\\PC]{0,6})",
+                    "(72|300|-1|0x48|1e9|true|false|\"dark\"|\"auto\"|'window'|\"quit\"|\"none\"|\"list-open\"|\\[1, 2\\]|\\{ a = 1 \\}|1979-05-27|\"\"\"|[\\PC]{0,6})",
                 ),
                 0..12,
             ),
@@ -404,9 +486,11 @@ mod tests {
             // Any text at all in a few of them: most of those are no TOML, and say so.
             lines.insert(at.min(lines.len()), junk.unwrap_or_default());
             let text = lines.concat();
-            let _ = sets(&text);
+            // The keys it binds go on to the keymaps, which refuse them or take them.
+            let keys = |text: &str| Config::parse(text, &catalog()).map(|config| super::super::commands::Keymaps::bound(&[], &config.keys));
+            let _ = (sets(&text), keys(&text));
             let cut = (0..=cut.min(text.len())).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0);
-            let _ = sets(&text[..cut]);
+            let _ = (sets(&text[..cut]), keys(&text[..cut]));
         }
     }
 }

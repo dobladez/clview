@@ -309,7 +309,6 @@ const NEVER_ALT: [char; 5] = ['[', 'O', '\\', '_', ']'];
 /// case. A key that a terminal sends as another is refused, with the name to write: `ctrl-D` is
 /// `ctrl-d`, `ctrl-m` and `ctrl-j` are `enter`, `ctrl-h` is `backspace`. So is Tab, and `ctrl-i`,
 /// which is Tab's byte: clv reads no Tab.
-#[cfg_attr(not(test), expect(dead_code, reason = "a config binds keys by these names, once clv reads one: Spec-0015"))]
 pub(crate) fn named(text: &str) -> Result<Key, String> {
     if let Some(read) = spelled(text) {
         return read;

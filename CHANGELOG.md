@@ -13,6 +13,10 @@ works today. A version's section becomes the notes of its
   without the dashes: `per-row = "width"`, `theme = "dark"`, `width = 72`. An option on the command
   line wins over the config. `--config FILE` reads another file, and `--no-config` reads none.
   When the config is wrong, clv stops and names the file, the line and the problem.
+- The config binds keys to commands by name, under `[keys]`, or under `[keys.pages]` and
+  `[keys.list]` for one keymap: `ctrl-d = "screen-down"`, `x = "none"`. `?`, the status line and
+  the messages show the keys as you bound them. A number before `enter` and `ctrl-c` stay as
+  they are. The manual lists the commands.
 
 ### Changed
 

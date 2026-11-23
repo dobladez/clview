@@ -165,6 +165,11 @@ no config.
   give: a string as it is, an integer in base ten. It then reads that text with `Entry::read`,
   the parser of the command line, so the two give the same message for the same bad value. A
   flag is a boolean, and `false` sets nothing.
+- **Keys.** `config::bindings` reads the tables `[keys]`, `[keys.pages]` and `[keys.list]` into
+  `commands::Binding`s: the keymap (`None` for `[keys]`), the key and the command as written,
+  and the place. It checks only that each value is a string. `Keymaps::bound` knows the keys and
+  the commands ([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)), and its
+  refusals come back with their line.
 - **An error** is a `Wrong`: the line and why. `Config::read` puts the file before it, written
   from the reader's home (`~/.config/clv/config.toml:3: …`). The message goes out through
   `printable` like every other, in `view::run`.
@@ -1052,7 +1057,7 @@ What the pager can do is apart from the keys that do it, as in Emacs
   in `?` (`Line`, in `PAGE_LINES`, `LIST_LINES`, `BACK_LINES`, `QUIT_LINES`), which two commands that
   go together share, as down and up do.
 - **The keymaps.** A `Keymap` binds keys to commands, one for a file's pages and one for a list
-  (`Keymaps`), built once a run with the pager's settings (`pager::Settings::of`): the viewer's
+  (`Keymaps`), built once a run, before any file opens: the viewer's
   defaults first (`PAGES`, `LIST`), then the keys each setting suggests (`Setting::keys`), in both
   keymaps, since a setting holds for a list's tiles as for a file's pages. A key goes to one command:
   a suggestion that is already bound in either keymap, a digit among them, is left out, and so is a
@@ -1066,6 +1071,26 @@ What the pager can do is apart from the keys that do it, as in Emacs
   `ctrl-p`, `ctrl-f`, `ctrl-b`, `ctrl-v`, `alt-v`), and `back` is Backspace alone: `u` is a screen
   up, as `d` is a screen down, and a setting's key is never one of them, so the theme's is `D`
   ([ADR-0036](adr/0036-keys-are-bound-to-named-commands.md)).
+
+**A config's keys** go on top of those (`Keymaps::bound`, which `view` calls before any file
+opens, so a wrong binding stops clv before it shows anything). `keys::named` reads each key, and
+`commands::named` finds each command among the viewer's and the settings'. Then, for each
+keymap, in the order of the file:
+
+- A binding from `[keys]` holds where its command applies (`Command::applies`). A binding from
+  the table of a keymap wins over it there.
+- A binding that is the same as the default is skipped, so the key keeps its place, and `=` and
+  `_` stay unlisted.
+- Any other binding takes out what the key was bound to without a number, a setting's
+  suggestion too, and puts the key before every default. So the key is the first of its command
+  for `Keymap::keys`, which `?`, the reminders and `Keymap::fill` all read.
+- `none` only takes the binding out.
+
+A binding with a number (`counted`) is never touched, so `12` and Enter still go to page 12.
+`bound` refuses a digit and `ctrl-c` (`Key::Interrupt`), a command that does not exist, and a
+command that does not apply in the keymap of its table. The pager gets the keymaps from `view`
+(`pager::run`, `Settings::with`). `whatever_a_config_binds_the_keymaps_hold` is the property
+test: a key is bound once in a keymap, `ctrl-c` quits, and a number and Enter go to the page.
 
 `Nav::key` takes what is typed outside the keymaps first: any key while `?` shows, the links' labels,
 the text of a filter or a search being typed, and the number typed before a key, which is its digits
