@@ -654,6 +654,11 @@ pub(crate) fn wrong_template(backends: &[&dyn Backend]) -> Vec<String> {
         }
     }
     let uncommented: String = template.lines().map(|line| format!("{}\n", line.strip_prefix("# ").unwrap_or(line))).collect();
+    // Only a setting's line loses its `# `: an explanation, a rule of `#` among them, is as it was.
+    let explained = |text: &str| text.lines().filter(|line| line.starts_with("##")).map(str::to_owned).collect::<Vec<_>>();
+    if explained(&uncommented) != explained(&template) {
+        wrong.push("a line of explanation changed with the settings' lines".into());
+    }
     let config = match config::Config::parse(&uncommented, &catalog) {
         Ok(config) => config,
         Err(why) => return [wrong, vec![format!("the template, uncommented, is refused: {why:?}")]].concat(),

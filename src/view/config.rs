@@ -180,12 +180,22 @@ A line that starts with one \"#\" is an example: it shows the default.
 To change a setting, remove the \"# \" from its line and edit the value.
 A line that keeps its \"#\" changes nothing.";
 
-/// What the template says before the options.
-const ABOUT_OPTIONS: &str = "Options. An option on the command line wins over the same option here.";
+/// How many `#` make a rule: the line above and below the title of each part of the template.
+const RULE: usize = 78;
 
-/// What the template says before the keys.
+/// The titles of the template's parts: its options, its keys, and each of the three tables of
+/// the keys.
+const OPTIONS_TITLE: &str = "Options";
+const KEYS_TITLE: &str = "Keys";
+const BOTH_TITLE: &str = "Keys in the pages of a file and in a list";
+const KEYMAP_TITLES: [&str; 2] = ["Keys in the pages of a file only", "Keys in a list only"];
+
+/// What the template says under the title of the options.
+const ABOUT_OPTIONS: &str = "An option on the command line wins over the same option here.";
+
+/// What the template says under the title of the keys.
 const ABOUT_KEYS: &str = "\
-Keys. Each line binds a key to a command: key = \"command\".
+Each line binds a key to a command: key = \"command\".
 Write \"none\" in place of the command to unbind the key.
 A key that you bind comes first among the keys of its command. The other keys stay.
 A punctuation key needs quotes: \"/\" = \"search\".
@@ -212,6 +222,7 @@ pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'sta
     let mut out = String::new();
     help(&mut out, ABOUT);
     out.push('\n');
+    banner(&mut out, OPTIONS_TITLE);
     help(&mut out, ABOUT_OPTIONS);
     for entry in catalog.options().filter(|entry| entry.spec.config == Settable::Yes) {
         out.push('\n');
@@ -234,10 +245,21 @@ pub(super) fn written(catalog: &Catalog, options: &Parsed<'_>, settings: &[&'sta
         out.push_str(&format!("{}{key} = {value}\n", if given { "" } else { "# " }));
     }
     out.push('\n');
+    banner(&mut out, KEYS_TITLE);
     help(&mut out, ABOUT_KEYS);
     out.push('\n');
     out.push_str(&keys_written(settings, keymaps, &Keymaps::new(settings)));
     out
+}
+
+/// Into `out`, the banner that starts a part of the template: a rule of [`RULE`] `#`, the part's
+/// `title`, and a rule, so that a reader sees where each part starts. A rule starts with `##`, so
+/// it is a line of explanation as the file says, and no setting's line.
+fn banner(out: &mut String, title: &str) {
+    let rule = "#".repeat(RULE);
+    out.push_str(&format!("{rule}\n"));
+    help(out, title);
+    out.push_str(&format!("{rule}\n"));
 }
 
 /// Into `out`, `text` as lines of explanation: each after `## `, and an empty one as `##` alone,
@@ -339,18 +361,20 @@ fn keys_written(settings: &[&'static Setting], keymaps: &Keymaps, defaults: &Key
     fn only<'l>(lines: &'l [Line], alike: &dyn Fn(&Said) -> bool) -> Vec<(Vec<String>, &'l Said)> {
         lines.iter().filter(|line| !alike(&line.said)).map(|line| (vec![line.says.clone()], &line.said)).collect()
     }
-    let mut out = table(KEYS.to_owned(), both.collect());
-    for ((name, _), lines) in KEYMAPS.iter().zip([&pages, &list]) {
+    let mut out = table(BOTH_TITLE, KEYS.to_owned(), both.collect());
+    for (((name, _), title), lines) in KEYMAPS.iter().zip(KEYMAP_TITLES).zip([&pages, &list]) {
         out.push('\n');
-        out.push_str(&table(format!("{KEYS}.{name}"), only(lines, &alike)));
+        out.push_str(&table(title, format!("{KEYS}.{name}"), only(lines, &alike)));
     }
     out
 }
 
-/// The table called `name` with `lines` in it, each under its lines of help, said once for the
-/// lines that share them.
-fn table(name: String, lines: Vec<(Vec<String>, &Said)>) -> String {
-    let mut out = format!("[{name}]\n");
+/// The table called `name` under the banner of its `title`, with `lines` in it, each under its
+/// lines of help, said once for the lines that share them.
+fn table(title: &str, name: String, lines: Vec<(Vec<String>, &Said)>) -> String {
+    let mut out = String::new();
+    banner(&mut out, title);
+    out.push_str(&format!("[{name}]\n"));
     let mut last: Option<&Vec<String>> = None;
     for (says, said) in &lines {
         if last != Some(says) {
@@ -747,15 +771,32 @@ mod tests {
         assert!(template.starts_with(top), "{template}");
         // An explanation's empty line is `##` alone, and no line ends with a space.
         assert!(template.lines().any(|line| line == "##") && !template.lines().any(|line| line.ends_with(' ')), "{template}");
-        let intro = "## Keys. Each line binds a key to a command: key = \"command\".\n\
+        let intro = "## Each line binds a key to a command: key = \"command\".\n\
                     ## Write \"none\" in place of the command to unbind the key.\n";
         let brackets = "##\n## The three lines in brackets start the tables of the keys. Leave them as they are.\n\
                       ##   [keys]        binds a key in the pages of a file and in a list\n\
                       ##   [keys.pages]  binds a key in the pages of a file only\n\
                       ##   [keys.list]   binds a key in a list only\n##\n\
                       ## A config cannot change two bindings: ctrl-c always quits, and a number\n\
-                      ## before enter goes to that page or tile.\n\n[keys]\n";
+                      ## before enter goes to that page or tile.\n\n";
         assert!(template.contains(intro) && template.contains(brackets), "{template}");
+        // Each of its five parts starts with a banner: a rule of 78 `#`, its title, a rule. A rule
+        // starts with `##`, so it is an explanation, and stays when the `# ` are taken away.
+        let rule = "#".repeat(78);
+        for (title, after) in [
+            ("Options", "## An option on the command line wins over the same option here.\n\n"),
+            ("Keys", "## Each line binds a key to a command: key = \"command\".\n"),
+            ("Keys in the pages of a file and in a list", "[keys]\n\n## "),
+            ("Keys in the pages of a file only", "[keys.pages]\n\n## "),
+            ("Keys in a list only", "[keys.list]\n\n## "),
+        ] {
+            let banner = format!("\n\n{rule}\n## {title}\n{rule}\n{after}");
+            assert_eq!(template.matches(&banner).count(), 1, "{title}\n{template}");
+        }
+        assert_eq!(template.lines().filter(|line| *line == rule).count(), 10, "{template}");
+        assert!(template.starts_with(&format!("{top}{rule}\n## Options\n")), "{template}");
+        let uncommented: String = template.lines().map(|line| format!("{}\n", line.strip_prefix("# ").unwrap_or(line))).collect();
+        assert_eq!(uncommented.lines().filter(|line| *line == rule).count(), 10, "a rule is no setting's line");
         let once = |line: &str| template.lines().filter(|other| *other == line).count() == 1;
         for line in ["# per-row = \"auto\"", "# recurse = false", "# theme = \"auto\"", "# width = \"window\"", "## Takes window or 20–200."] {
             assert!(once(line), "{line}\n{template}");

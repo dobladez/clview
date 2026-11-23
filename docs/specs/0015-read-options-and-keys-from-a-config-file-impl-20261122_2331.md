@@ -396,3 +396,21 @@ default, and to change a setting the reader removes the `# ` and edits the value
 - **Seen failing on the old words:** `the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys`
   and `generate_config_writes_the_template_once_and_print_config_prints_it`, both changed first
   to ask for the new ones.
+
+## Banners in the template
+
+The owner asked for the sections of the generated file to stand out. Each of the five parts now
+starts with a banner: a rule of 78 `#`, a title, and a rule (`config::banner`). The titles are
+"Options", "Keys", "Keys in the pages of a file and in a list", "Keys in the pages of a file
+only" and "Keys in a list only". The explanations under the first two no longer start with
+"Options." and "Keys.".
+
+- **A rule is an explanation by the file's own rule**: it starts with `##`. The test that takes
+  `# ` from the settings' lines leaves it alone, since `##…` does not start with `# `.
+  `view::wrong_template` now checks that outright: the lines of explanation are the same before
+  and after. TOML would not tell, since a rule with one `#` fewer is a comment still.
+- **A commit of its own**, after the one with the new words: that one was made before the
+  request for banners came, and an earlier word from the lead was to rewrite no commit.
+- **Seen failing before the change:** `the_template_writes_a_key_that_both_keymaps_bind_alike_once_under_keys`
+  and `generate_config_writes_the_template_once_and_print_config_prints_it`, both changed first
+  to ask for the banners.

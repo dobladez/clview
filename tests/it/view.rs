@@ -356,6 +356,17 @@ fn generate_config_writes_the_template_once_and_print_config_prints_it() {
     // It starts by saying how to read it.
     assert!(written.starts_with("## The config of clv. clv reads this file when it starts, and never changes it.\n##\n"), "{written}");
     assert!(written.contains("\n## A line that starts with one \"#\" is an example: it shows the default.\n"), "{written}");
+    // Each part under a banner: a rule of `#`, its title, a rule.
+    let rule = "#".repeat(78);
+    for (title, after) in [
+        ("Options", "## An option"),
+        ("Keys", "## Each line binds"),
+        ("Keys in the pages of a file and in a list", "[keys]\n"),
+        ("Keys in the pages of a file only", "[keys.pages]\n"),
+        ("Keys in a list only", "[keys.list]\n"),
+    ] {
+        assert!(written.contains(&format!("\n\n{rule}\n## {title}\n{rule}\n{after}")), "{title}:\n{written}");
+    }
     assert!(tables.iter().all(|table| written.lines().filter(|line| line == table).count() == 1), "{written}");
     // A key that both keymaps bind alike is there once.
     assert_eq!(written.lines().filter(|line| *line == "# q = \"quit\"").count(), 1, "{written}");

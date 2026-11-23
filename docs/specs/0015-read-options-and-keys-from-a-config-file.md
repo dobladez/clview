@@ -177,7 +177,8 @@ its option.
   so the defaults of a later release still reach the reader. A line that sets something starts
   with one `#`: it is an example that shows the default, for the reader to take the `# ` from and
   edit. A line of explanation starts with `##`, so a reader, and the test below, can tell the two
-  apart. The file starts by saying so. The three lines that start the tables of the keys (`[keys]`, `[keys.pages]`,
+  apart. The file starts by saying so. A banner starts each of its parts (the options, the keys,
+  and each of the three tables): a line of 78 `#`, the title of the part, and a line of 78 `#`. The three lines that start the tables of the keys (`[keys]`, `[keys.pages]`,
   `[keys.list]`) are not commented out: an empty table sets nothing, and a reader takes the `# `
   from one line to bind a key.
 - clv makes the template from the catalogs of this build:
@@ -359,3 +360,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 - 2026-11-23 — A task added after a review of the branch: `--print-config` printed options that a run refuses, and a number as it was typed.
 - 2026-11-23 — The template's requirement changed after the owner tried it: its tables of keys are not commented out, and a key that both keymaps bind alike is written once, under `[keys]`. With the tables commented out, a key uncommented under one was read as an option (`unknown option x`), and `q = "quit"` was in the file twice.
 - 2026-11-23 — The words at the top of the template and before its keys rewritten, after the owner read them: a line with one `#` is an example that shows the default, and a line with `##` is an explanation.
+- 2026-11-23 — A banner before each part of the template, a title between two lines of `#`, after the owner asked for the sections to stand out.

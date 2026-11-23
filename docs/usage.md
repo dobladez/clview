@@ -111,8 +111,9 @@ there, clv refuses and names it. This is the only time that clv writes a config.
 Every line of the template that sets something is commented out, so the file sets nothing as
 written, and a default that a later release changes still reaches you. A line that starts with
 one `#` is an example, and shows the default: to change a setting, remove the `# ` from its line
-and edit the value. A line that starts with `##` is an explanation. The template is made for your
-build of clv, and holds these:
+and edit the value. A line that starts with `##` is an explanation. A banner starts each part
+of the file: a line of `#`, the title of the part, and a line of `#`. The template is made for
+your build of clv, and holds these:
 
 - each option that a config may set, with its help lines, what it takes and its default
   (`# width = "window"`)
