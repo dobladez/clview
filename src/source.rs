@@ -1221,6 +1221,7 @@ pub(crate) trait Pool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::args::{Settable, Shape};
 
     /// The core never depends on an extension (CONTRIBUTING's rule): nothing in `src/view/`,
     /// `src/main.rs`, `src/args.rs` or `src/encode.rs` names a module of `src/source/`, a backend
@@ -1736,7 +1737,15 @@ pub(crate) mod tests {
             zero: Value::Named("light"),
             auto: Some(Auto { light: "light", dark: "dark" }),
             keys: Keys::Cycle(key),
-            option: OptionSpec { name: option, short: None, value: Some("auto|light|dark"), help: "", alias: None },
+            option: OptionSpec {
+                name: option,
+                short: None,
+                value: Some("auto|light|dark"),
+                help: "",
+                alias: None,
+                shape: Shape::Setting,
+                config: Settable::Yes,
+            },
             help: "",
             does: "do this",
             effect: Effect::Redraw,
@@ -1867,6 +1876,35 @@ pub(crate) mod tests {
         assert_eq!(wrong_keys(&[&PLUS]).len(), 2, "the zoom keys as a Step are the viewer's");
         assert_eq!(wrong_keys(&[&THEME, &OTHER]).len(), 1, "two settings");
         assert_eq!(wrong_keys(&[&THEME, &STEPS]).len(), 1, "two sets of keys");
+    }
+
+    /// Every option of the build says what its value is, in a way the catalog can read
+    /// (`view::wrong_options`): a flag has no value in `--help`, an option that takes a value takes
+    /// some, and a setting's option leaves its shape to the setting.
+    #[test]
+    fn every_option_says_what_its_value_is() {
+        assert_eq!(crate::view::wrong_options(BACKENDS), Vec::<String>::new());
+        // What it would say.
+        const BASE: OptionSpec =
+            OptionSpec { name: "--it", short: None, value: None, help: "", alias: None, shape: Shape::Flag, config: Settable::Yes };
+        static WRONG: Fake = Fake {
+            name: "wrong",
+            shows: "nothing",
+            magic: b"%",
+            options: &[
+                OptionSpec { value: Some("X"), ..BASE },
+                OptionSpec { shape: Shape::Text, ..BASE },
+                OptionSpec { value: Some("X"), shape: Shape::Value { named: &[], numbers: None }, ..BASE },
+                OptionSpec { name: "-i", ..BASE },
+            ],
+            holds: false,
+        };
+        static FREE: Declaring = Declaring(&[Setting {
+            option: OptionSpec { shape: Shape::Text, ..cycled("theme", 'D', "--theme").option },
+            ..cycled("theme", 'D', "--theme")
+        }]);
+        assert_eq!(crate::view::wrong_options(&[&WRONG]).len(), 4, "{:?}", crate::view::wrong_options(&[&WRONG]));
+        assert_eq!(crate::view::wrong_options(&[&FREE]), ["declaring: --theme is a setting's option, and says another shape"]);
     }
 
     /// What is wrong with the names of the settings `backends` declare: a setting that is not called

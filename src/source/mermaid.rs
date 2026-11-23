@@ -36,7 +36,7 @@ use super::{
     Again, Anchor, Auto, BACKENDS, Backend, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Named, Opened, Pixels, Pool, Render,
     Request, Room, Setting, Source, Texts, Value, Values, opener,
 };
-use crate::args::{OptionSpec, Parsed};
+use crate::args::{OptionSpec, Parsed, Settable, Shape};
 
 /// Mermaid diagrams, turned into SVG by merman.
 pub(super) struct Mermaid;
@@ -65,6 +65,8 @@ const THEME: Setting = Setting {
         value: Some("auto|light|dark"),
         help: "a diagram in Mermaid's dark theme, light on dark, or dark on white (auto: as the terminal is)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "light on dark, or dark on light",
     does: "go dark",

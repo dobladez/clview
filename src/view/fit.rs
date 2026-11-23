@@ -25,16 +25,6 @@ pub(crate) enum Zoom {
 }
 
 impl Zoom {
-    /// `s`, the value of `option`, named as it was typed (`--per-row`, or its old name `--zoom`).
-    pub(crate) fn parse(s: &str, option: &str) -> Result<Self, String> {
-        match (s, s.parse::<u16>()) {
-            ("auto", _) => Ok(Self::Auto),
-            ("width", _) => Ok(Self::Width),
-            (_, Ok(n @ 1..=MAX_PER_ROW)) => Ok(Self::PerRow(n)),
-            (other, _) => Err(format!("{option} {other:?}: use auto, width or a number of pages per row (1–{MAX_PER_ROW})")),
-        }
-    }
-
     /// One step in from `per_row` pages to a row (as last drawn): one fewer, and from one, the
     /// width. `None` at the width, as far in as it goes.
     pub(crate) fn zoomed_in(self, per_row: u16) -> Option<Self> {
@@ -440,21 +430,6 @@ mod tests {
         // Both bounds hold at once.
         let both = Size { natural: true, largest: Some(0.5), ..page };
         assert_eq!(layout(both, 8000, 2000, CELL, Fit::Page, u16::MAX).unwrap().scale, 0.5);
-    }
-
-    #[test]
-    fn zoom_names() {
-        let parse = |s| Zoom::parse(s, "--per-row");
-        assert_eq!(parse("auto"), Ok(Zoom::Auto));
-        assert_eq!(parse("width"), Ok(Zoom::Width));
-        assert_eq!(parse("1"), Ok(Zoom::PerRow(1)));
-        assert_eq!(parse("8"), Ok(Zoom::PerRow(MAX_PER_ROW)));
-        for wrong in ["0", "9", "65536", "-1", "page", ""] {
-            assert!(parse(wrong).is_err_and(|e| e.contains("use auto, width or a number of pages per row (1–8)")), "{wrong:?}");
-        }
-        // The option is named as it was typed.
-        assert!(parse("9").is_err_and(|e| e.starts_with("--per-row \"9\": use auto")));
-        assert!(Zoom::parse("9", "--zoom").is_err_and(|e| e.starts_with("--zoom \"9\": use auto")));
     }
 
     #[test]

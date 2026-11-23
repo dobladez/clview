@@ -196,7 +196,7 @@ fn zoom_is_still_taken_for_per_row_and_warns() {
     assert!(!both.status.success() && both.stdout.is_empty());
     assert!(text(&both.stderr).contains("--per-row and --zoom are one option: give one of them"), "{}", text(&both.stderr));
     // An error names the option as it was typed.
-    for (option, said) in [("--zoom", "--zoom \"9\": use auto"), ("--per-row", "--per-row \"9\": use auto")] {
+    for (option, said) in [("--zoom", "clv: --zoom: expected auto"), ("--per-row", "clv: --per-row: expected auto")] {
         let out = view(&pdf, &["--protocol", "kitty", option, "9"]);
         assert!(!out.status.success() && text(&out.stderr).contains(said), "{option}: {}", text(&out.stderr));
     }
@@ -206,9 +206,14 @@ fn zoom_is_still_taken_for_per_row_and_warns() {
 fn bad_arguments_say_what_is_allowed() {
     let pdf = fixture("args", 1);
     for (args, expected) in [
-        (&["--per-row", "sideways"][..], "use auto, width or a number of pages per row (1–8)"),
-        (&["--per-row", "9"], "use auto, width or a number of pages per row (1–8)"),
-        (&["--protocol", "sixel"], "use auto, kitty, blocks or ascii"),
+        // One form of message for a value an option doesn't take, the viewer's and a setting's alike.
+        (&["--per-row", "sideways"][..], "clv: --per-row: expected auto, width or 1–8, got sideways\n"),
+        (&["--per-row", "9"], "clv: --per-row: expected auto, width or 1–8, got 9\n"),
+        (&["--protocol", "sixel"], "clv: --protocol: expected auto, kitty, blocks or ascii, got sixel\n"),
+        (&["--compression", "best"], "clv: --compression: expected auto, fast or small, got best\n"),
+        (&["--theme", "sepia"], "clv: --theme: expected auto, light or dark, got sepia\n"),
+        (&["--width", "300"], "clv: --width: expected window or 20–200, got 300\n"),
+        (&["--per-row", "\x1b[2J"], "clv: --per-row: expected auto, width or 1–8, got \u{fffd}[2J\n"),
         (&["--fit", "width"], "unknown option --fit"),
         (&["--pages", "0"], "bad page number"),
         (&["--protocol", "kitty", "--pages"], "--pages needs a value"),
@@ -391,7 +396,7 @@ fn compression_trades_bytes_for_speed_and_auto_follows_ssh() {
     assert_eq!(png(&[], &[("SSH_CONNECTION", "192.0.2.7 50122 192.0.2.1 22")]), small);
     assert_eq!(png(&["--compression", "fast"], &[("SSH_TTY", "/dev/pts/3")]), fast);
     let bad = view(&pdf, &["--protocol", "kitty", "--compression", "best"]);
-    assert!(text(&bad.stderr).contains("use auto, fast or small"));
+    assert!(text(&bad.stderr).contains("--compression: expected auto, fast or small, got best"));
 }
 
 #[test]

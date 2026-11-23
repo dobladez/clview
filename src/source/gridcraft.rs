@@ -23,13 +23,20 @@ use super::head::{COMPOUND, Names, ZIP, mimetype};
 use super::{
     Again, BACKENDS, Backend, Deferred, Format, Frame, HEAD, Input, Links, Opened, Pool, Render, Reopenable, Request, Source, Texts, opener,
 };
-use crate::args::{OptionSpec, Parsed};
+use crate::args::{OptionSpec, Parsed, Settable, Shape};
 
 /// Spreadsheets, printed by gridcraft.
 pub(super) struct Gridcraft;
 
-const OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected workbook", alias: None }];
+const OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "--password",
+    short: None,
+    value: Some("PW"),
+    help: "the password of a protected workbook",
+    alias: None,
+    shape: Shape::Text,
+    config: Settable::No("a password does not belong in a plain file"),
+}];
 
 impl Backend for Gridcraft {
     fn name(&self) -> &'static str {

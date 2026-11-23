@@ -48,13 +48,20 @@ use super::{
     MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Named, Numbers, Opened, Pixels, Pool, Render, Reopenable, Request, Room, Setting, Source, Target, Texts,
     Told, Value, Values, Want, guarded,
 };
-use crate::args::{OptionSpec, Parsed};
+use crate::args::{OptionSpec, Parsed, Settable, Shape};
 
 /// Word documents, OpenDocument text, RTF, Markdown and HTML, laid out and drawn by wordcraft.
 pub(super) struct Wordcraft;
 
-const OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the password of a protected Word document", alias: None }];
+const OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "--password",
+    short: None,
+    value: Some("PW"),
+    help: "the password of a protected Word document",
+    alias: None,
+    shape: Shape::Text,
+    config: Settable::No("a password does not belong in a plain file"),
+}];
 
 /// Markdown and HTML on dark paper, light on dark, or as printed, dark on light: they have no paper
 /// of their own ([ADR-0015](../../docs/adr/0015-markdown-and-html-on-dark-paper-the-terminals-own-colour.md)).
@@ -72,6 +79,8 @@ const THEME: Setting = Setting {
         value: Some("auto|light|dark"),
         help: "Markdown and HTML light on dark or dark on light (auto: as the terminal is)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "light on dark, or dark on light",
     does: "go dark",
@@ -99,6 +108,8 @@ const WIDTH: Setting = Setting {
         value: Some("window|N"),
         help: "Markdown and HTML laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "4 characters a line narrower, or wider; 72{increase-width} sets 72, 0{increase-width} the window's",
     does: "reflow",
@@ -118,7 +129,15 @@ const FONT: Setting = Setting {
     zero: Value::Number(FONT_DEFAULT),
     auto: None,
     keys: Keys::Zoom,
-    option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "Markdown and HTML text at N% of its size (50-400)", alias: None },
+    option: OptionSpec {
+        name: "--font",
+        short: None,
+        value: Some("N"),
+        help: "Markdown and HTML text at N% of its size (50-400)",
+        alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
+    },
     help: "text larger, or smaller; 150{zoom-in} sets 150%, 0{zoom-in} 100%",
     does: "have a font size",
     effect: Effect::Relayout,
@@ -143,6 +162,8 @@ const MARGIN: Setting = Setting {
         value: Some("N"),
         help: "Markdown and HTML side margins of N characters of code (0-20)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "margins a character narrower, or wider; 5{increase-margin} sets 5, 0{increase-margin} back to 3",
     does: "have margins",
@@ -169,6 +190,8 @@ const FENCES: Setting = Setting {
         value: Some("drawn|code"),
         help: "Markdown and HTML's fenced blocks drawn as pictures (```mermaid), or shown as code",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "fenced blocks drawn, or as code",
     does: "draw fenced blocks",
@@ -2576,7 +2599,7 @@ mod tests {
     /// The options, with `--width` at `width` if given.
     fn given(width: Option<&str>) -> Parsed<'static> {
         let args: &'static [String] = width.map_or(&[], |width| Box::leak(vec!["--width".to_owned(), width.to_owned()].into_boxed_slice()));
-        Parsed::parse(args, &[WIDTH.option]).unwrap()
+        Parsed::parse(args, &crate::args::Catalog::of(&[WIDTH.option])).unwrap()
     }
 
     /// A room of `cols` × `rows` cells of `cell_w` × `cell_h` pixels, two cells between pages.

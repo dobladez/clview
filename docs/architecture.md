@@ -108,6 +108,38 @@ the per-backend tests (`tests/it/pdfcraft.rs`, `resvg.rs`, `tar.rs`, `wordcraft.
 
 The viewer is Unix only (macOS, Linux, FreeBSD): it needs `/dev/tty`. Nothing in it is `unsafe`.
 
+### The options catalog (`args.rs`)
+
+clv lists every option of a build once, in a `Catalog`, as it lists every command
+([Commands and keymaps](#commands-and-keymaps-commandsrs-pagerrs)). `view::catalog` makes it: the
+viewer's own options (`OPTIONS`), then each backend's own (`Backend::options`) and the option of
+each of its settings (`Setting::option`), in the backends' order. The viewer names no backend
+for it.
+
+An `Entry` of the catalog is an `OptionSpec` and who declares it (`By`: the viewer, a backend,
+or a setting). The `OptionSpec` holds these:
+
+- its name, its short name and its alias
+- its help line, and how `--help` writes its value
+- the shape of its value (`Shape`): a flag, named values or a number in a range or either
+  (`Shape::Value`), a page list, or free text
+- whether a config may set it (`Settable`), and why not
+
+A setting's option has the shape `Shape::Setting`: the catalog reads what it takes from the
+setting itself (`Entry::named`, `Entry::numbers`: `auto` where the setting goes by the terminal's
+background, its named values, its numbers). So a backend declares what a setting takes once.
+`Catalog::declare` sets that shape whatever the backend wrote.
+
+One parser reads a value: `Entry::read` gives an `Arg` (a named value, a number, pages or text).
+A value that the option does not take gets one form of message, `expected auto, width or 1–8, got
+9`, and `view::given` puts the option before it as the reader typed it. `Zoom`, `Protocol`,
+`Compression` and where a setting starts (`view::starts`) are all made from an `Arg`.
+
+`Parsed::parse` reads the command line against the catalog, and `--help` is made from it
+(`view::usage`): the viewer's entries, then each backend's under what that backend shows.
+`source::tests::every_option_says_what_its_value_is` holds every option of the build to a shape
+that the catalog can read (`view::wrong_options`).
+
 ## Sources (`src/source.rs`)
 
 The pager and the printer never see a PDF. They see a `Source`: how many pages it has, each
@@ -282,6 +314,7 @@ window's page holds) and the most a number is laid out at there (`most`: the lon
 holds). The level asks when it is made and keeps the answer on its `Nav` (`Nav::bounds`), and `turned`
 takes it. `view::settings` makes the
 build's table, each setting once. The viewer takes a setting's option for any file (`takes_all`),
+reads its value against the catalog ([The options catalog](#the-options-catalog-argsrs)),
 starts each at what its option says or its default, resolving `auto` by the background (`starting`),
 and asks the terminal for its background only when what is shown has a setting with `auto`, or is a
 list. Every request carries the values (`Request::values`, a `Values` of at most `MAX_SETTINGS`, so a

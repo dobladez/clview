@@ -70,3 +70,37 @@ surprises, and what a later reader would want.
   fails on `"Ctrl-D"`. With `pagedown` written `PageDown` again, the two unit tests fail.
 - **Not in the spec's *Files:*:** `src/view/pager.rs` (its tests' expected text) and
   `docs/architecture.md`.
+
+## Task 4: the options catalog
+
+- **`OptionSpec` stays what a backend declares, and the catalog adds who declares it.**
+  `OptionSpec` gets `shape` (`Shape`) and `config` (`Settable`). `Catalog` (in `args.rs`) holds an
+  `Entry` for each: the `OptionSpec` and `By` (the viewer, a backend, or a setting). The catalog
+  is made at run time (`view::catalog`), because the viewer names no backend.
+- **A setting's option has the shape `Shape::Setting`.** The spec says that the catalog reads
+  `Setting::named`, `numbers` and `auto`. A `Shape` with the named values written again would be
+  a second declaration to keep alike. So `Shape::Setting` means "what the setting takes", and
+  `Entry::named` and `Entry::numbers` read the setting. `Catalog::declare` sets that shape
+  whatever the backend wrote, so the variant is constructed in the core in every build, and needs
+  no `cfg` for a build without backends.
+- **`args.rs` names `source::Numbers` and `source::Setting`.** `args.rs` is core and `source.rs`
+  is the contract, so the layers hold. The range of a number is the setting's own type.
+- **`OptionSpec::value` stays**, as `--help` writes the value (`auto|width|1-8`, `N`, `PW`). It
+  could be made from the shape, but then `--help` would change (`1-8` and `N` are both a range).
+  `source::tests::every_option_says_what_its_value_is` checks that a flag has none and the others
+  have one.
+- **The value read is `Arg`, not `Given`**: `view/mod.rs` has a `Given` already (the files given),
+  and `source.rs` a `Got`.
+- **One form of message.** `--per-row "9": use auto, width or a number of pages per row (1–8)`
+  is now `--per-row: expected auto, width or 1–8, got 9`, as a setting's was. `Zoom::parse`,
+  `Protocol::parse` and `Compression::parse` are gone: each is made from an `Arg`.
+- **`--help` is the same text**, compared with a build of `main`: only the version line differs.
+- **`config` has no reader yet** outside the tests. It carries an `expect(dead_code)` that task 5
+  takes out.
+- **Seen failing:** without the range check, `one_parser_reads_a_value_by_the_shape_of_its_option`
+  reads `9` as a number. Without the shape set in `Catalog::declare`, the catalog test reads a
+  setting declared as free text as text. With the PDF backend's `--password` declared a flag,
+  `every_option_says_what_its_value_is` says `--password: the value --help writes and its shape
+  disagree`.
+- **Not in the spec's *Files:*:** `src/view/fit.rs` (`Zoom::parse` and its test go),
+  `src/view/pager.rs` (a test's `OptionSpec`), `docs/architecture.md`, `CHANGELOG.md`.

@@ -33,7 +33,7 @@ use super::{
     Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, HEAD, Input, Job, Keys, Landmark, Links, Named, Near,
     Numbers, Opened, Pool, Render, Room, Setting, Source, Target, Texts, Told, Value, Values, opener,
 };
-use crate::args::{OptionSpec, Parsed};
+use crate::args::{OptionSpec, Parsed, Settable, Shape};
 
 /// Org-mode documents, parsed by orgize.
 pub(super) struct Org;
@@ -61,6 +61,8 @@ const THEME: Setting = Setting {
         value: Some("auto|light|dark"),
         help: "an Org document light on dark or dark on light (auto: as the terminal is)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "light on dark, or dark on light",
     does: "go dark",
@@ -83,6 +85,8 @@ const WIDTH: Setting = Setting {
         value: Some("window|N"),
         help: "an Org document laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "4 characters a line narrower, or wider; 72{increase-width} sets 72, 0{increase-width} the window's",
     does: "reflow",
@@ -99,7 +103,15 @@ const FONT: Setting = Setting {
     zero: Value::Number(100),
     auto: None,
     keys: Keys::Zoom,
-    option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "an Org document's text at N% of its size (50-400)", alias: None },
+    option: OptionSpec {
+        name: "--font",
+        short: None,
+        value: Some("N"),
+        help: "an Org document's text at N% of its size (50-400)",
+        alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
+    },
     help: "text larger, or smaller; 150{zoom-in} sets 150%, 0{zoom-in} 100%",
     does: "have a font size",
     effect: Effect::Relayout,
@@ -121,6 +133,8 @@ const MARGIN: Setting = Setting {
         value: Some("N"),
         help: "an Org document's side margins of N characters of code (0-20)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "margins a character narrower, or wider; 5{increase-margin} sets 5, 0{increase-margin} back to 3",
     does: "have margins",
@@ -143,6 +157,8 @@ const FENCES: Setting = Setting {
         value: Some("drawn|code"),
         help: "an Org document's source blocks drawn as pictures (#+begin_src mermaid), or shown as code",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "fenced blocks drawn, or as code",
     does: "draw fenced blocks",

@@ -1,8 +1,16 @@
-//! Command-line options and page lists.
+//! Command-line options, the catalog that lists them, and page lists.
+//!
+//! The catalog ([`Catalog`]) lists every option of a build once: the viewer's own, each backend's
+//! own, and each setting's. An entry says who declares the option, the shape of its value and
+//! whether a config may set it, and one parser reads a value against it ([`Entry::read`]),
+//! wherever the value came from.
+
+use crate::source::{Numbers, Setting};
 
 /// An option: its `name` (`--per-row`), the `short` one it has too (`-r`), what its value looks like
-/// (`None` for one that takes none) and what it does, as `--help` shows them; and the `alias` it is
-/// still taken by, an old name `--help` doesn't show (`--zoom`).
+/// (`None` for one that takes none) and what it does, as `--help` shows them; the `alias` it is
+/// still taken by, an old name `--help` doesn't show (`--zoom`); the shape of its value; and
+/// whether a config may set it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -10,6 +18,37 @@ pub(crate) struct OptionSpec {
     pub(crate) value: Option<&'static str>,
     pub(crate) help: &'static str,
     pub(crate) alias: Option<&'static str>,
+    pub(crate) shape: Shape,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read once clv reads a config: Spec-0015's next task"))]
+    pub(crate) config: Settable,
+}
+
+/// The shape of an option's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shape {
+    /// No value: the option is given, or it is not.
+    Flag,
+    /// One of some named values, a number in a range, or either: `auto|fast|small`, `50-400`,
+    /// `auto|width|1-8`. The first named value is the option's default.
+    Value { named: &'static [&'static str], numbers: Option<Numbers> },
+    /// What its setting takes: its named values, `auto` where it goes by the terminal's background,
+    /// and its numbers. The shape of a setting's option, whatever its backend writes: the catalog
+    /// reads the setting ([`Entry::named`], [`Entry::numbers`]), so that a backend declares what a
+    /// setting takes once.
+    Setting,
+    /// A page list: `1,3-5`.
+    Pages,
+    /// Free text: a password, a path.
+    Text,
+}
+
+/// Whether a config may set an option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Settable {
+    /// It may.
+    Yes,
+    /// It may not, and why, as the reader is told: `it belongs to one run`.
+    No(&'static str),
 }
 
 impl OptionSpec {
@@ -26,6 +65,138 @@ impl OptionSpec {
     }
 }
 
+/// Who declares an option.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum By {
+    /// The viewer: the option holds whatever is shown.
+    Viewer,
+    /// A backend, by its name: the option is for its files.
+    Backend(&'static str),
+    /// A setting, and the backend that declares it so, by its name. Two backends may declare one
+    /// setting, each with its own help line: the first is the setting's.
+    Setting(&'static Setting, &'static str),
+}
+
+/// An option as the catalog lists it: what it is, and who declares it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Entry {
+    pub(crate) spec: OptionSpec,
+    pub(crate) by: By,
+}
+
+/// The value of an option, read ([`Entry::read`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Arg<'a> {
+    /// One of the option's named values, as the option names it.
+    Named(&'static str),
+    Number(u32),
+    /// 0-based pages, in the order given.
+    Pages(Vec<usize>),
+    Text(&'a str),
+}
+
+impl Entry {
+    /// The named values it takes: for a setting's option, `auto` where the setting goes by the
+    /// terminal's background, then the setting's named values.
+    pub(crate) fn named(&self) -> Vec<&'static str> {
+        match (self.spec.shape, self.by) {
+            (Shape::Setting, By::Setting(setting, _)) => {
+                let auto = setting.auto.map(|_| AUTO);
+                auto.into_iter().chain(setting.named.iter().map(|named| named.name)).collect()
+            }
+            (Shape::Value { named, .. }, _) => named.to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The numbers it takes, if it takes any.
+    pub(crate) fn numbers(&self) -> Option<Numbers> {
+        match (self.spec.shape, self.by) {
+            (Shape::Setting, By::Setting(setting, _)) => setting.numbers,
+            (Shape::Value { numbers, .. }, _) => numbers,
+            _ => None,
+        }
+    }
+
+    /// Whether it takes no value.
+    pub(crate) fn is_flag(&self) -> bool {
+        self.spec.shape == Shape::Flag
+    }
+
+    /// What its value may be, in words: `auto, width or 1–8`, `50–400%`.
+    pub(crate) fn takes(&self) -> String {
+        let range = self.numbers().map(|numbers| format!("{}–{}{}", numbers.least, numbers.most, numbers.unit));
+        let takes: Vec<String> = self.named().into_iter().map(str::to_owned).chain(range).collect();
+        match (self.spec.shape, takes.split_last()) {
+            (Shape::Pages, _) => "pages, as 1,3-5".into(),
+            (Shape::Text, _) => "text".into(),
+            (_, Some((last, []))) => last.clone(),
+            (_, Some((last, rest))) => format!("{} or {last}", rest.join(", ")),
+            (_, None) => "nothing".into(),
+        }
+    }
+
+    /// `given` read as the value of this option: the one parser of a value, from the command line
+    /// and from a config alike. A value the option doesn't take is the error, which says what it
+    /// takes, and the same wherever the value came from: `expected window or 20–200, got 300`.
+    /// The caller says which option, as the reader gave it.
+    pub(crate) fn read<'a>(&self, given: &'a str) -> Result<Arg<'a>, String> {
+        match self.spec.shape {
+            Shape::Pages => return page_list(given).map(Arg::Pages),
+            Shape::Text => return Ok(Arg::Text(given)),
+            Shape::Flag | Shape::Value { .. } | Shape::Setting => {}
+        }
+        if let Some(named) = self.named().into_iter().find(|named| *named == given) {
+            return Ok(Arg::Named(named));
+        }
+        if let (Some(numbers), Ok(number)) = (self.numbers(), given.parse::<u32>())
+            && (numbers.least..=numbers.most).contains(&number)
+        {
+            return Ok(Arg::Number(number));
+        }
+        Err(format!("expected {}, got {given}", self.takes()))
+    }
+}
+
+/// The value a setting's option takes where the setting goes by the terminal's background.
+pub(crate) const AUTO: &str = "auto";
+
+/// Every option of a build, each with who declares it: the viewer's, then each backend's own and
+/// its settings', in the backends' order. `--help`, the command line and a config are all read
+/// against it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Catalog(Vec<Entry>);
+
+impl Catalog {
+    /// The viewer's options alone.
+    pub(crate) fn of(viewer: &[OptionSpec]) -> Self {
+        Self(viewer.iter().map(|spec| Entry { spec: *spec, by: By::Viewer }).collect())
+    }
+
+    /// Adds the options of the backend called `backend`: its own, then its settings'.
+    pub(crate) fn declare(&mut self, backend: &'static str, options: &[OptionSpec], settings: &'static [Setting]) {
+        self.0.extend(options.iter().map(|spec| Entry { spec: *spec, by: By::Backend(backend) }));
+        // A setting's option has the setting's shape, whatever its backend wrote.
+        let option = |setting: &'static Setting| OptionSpec { shape: Shape::Setting, ..setting.option };
+        self.0.extend(settings.iter().map(|setting| Entry { spec: option(setting), by: By::Setting(setting, backend) }));
+    }
+
+    /// Every entry, in order: an option two backends declare is there twice, as each declares it.
+    pub(crate) fn entries(&self) -> &[Entry] {
+        &self.0
+    }
+
+    /// The option called `name`, as the first to declare it does.
+    pub(crate) fn entry(&self, name: &str) -> Option<&Entry> {
+        self.0.iter().find(|entry| entry.spec.name == name)
+    }
+
+    /// The option `arg` asks for on a command line: by its name, its short name or its alias.
+    fn asked(&self, arg: &str) -> Option<&Entry> {
+        self.0.iter().find(|entry| entry.spec.name == arg || entry.spec.short == Some(arg) || entry.spec.alias == Some(arg))
+    }
+}
+
 /// A command line read against the options it may hold, before any file is read.
 #[derive(Debug, Default)]
 pub(crate) struct Parsed<'a> {
@@ -38,11 +209,11 @@ pub(crate) struct Parsed<'a> {
 }
 
 impl<'a> Parsed<'a> {
-    /// Refuses an option not in `specs`, and one left without its value. An option that takes a
+    /// Refuses an option not in `catalog`, and one left without its value. An option that takes a
     /// value takes the next argument, whatever it is: a password can be anything. An argument
     /// that starts with `-` is an option, but for `-` alone; `./-file` names a file that does. An
     /// option given by its alias is that option, and given by both its name and its alias, refused.
-    pub(crate) fn parse(args: &'a [String], specs: &[OptionSpec]) -> Result<Self, String> {
+    pub(crate) fn parse(args: &'a [String], catalog: &Catalog) -> Result<Self, String> {
         let mut parsed = Self::default();
         let mut rest = args.iter();
         let mut by_name = Vec::new();
@@ -51,13 +222,11 @@ impl<'a> Parsed<'a> {
                 parsed.operands.push(arg);
                 continue;
             }
-            let spec = specs
-                .iter()
-                .find(|spec| spec.name == arg || spec.short == Some(arg) || spec.alias == Some(arg))
-                .ok_or_else(|| format!("unknown option {arg}"))?;
-            let value = match spec.value {
-                Some(_) => Some(rest.next().ok_or_else(|| format!("{arg} needs a value"))?.as_str()),
-                None => None,
+            let entry = catalog.asked(arg).ok_or_else(|| format!("unknown option {arg}"))?;
+            let spec = &entry.spec;
+            let value = match entry.is_flag() {
+                false => Some(rest.next().ok_or_else(|| format!("{arg} needs a value"))?.as_str()),
+                true => None,
             };
             if let Some(alias) = spec.alias {
                 let (by, other) = if alias == arg { (&mut parsed.aliased, &by_name) } else { (&mut by_name, &parsed.aliased) };
@@ -74,8 +243,8 @@ impl<'a> Parsed<'a> {
     }
 
     /// How option `name` was given, the first time: by its name, or by its alias (`--zoom`).
-    pub(crate) fn typed(&self, name: &'static str, specs: &[OptionSpec]) -> &'static str {
-        let alias = specs.iter().find(|spec| spec.name == name).and_then(|spec| spec.alias);
+    pub(crate) fn typed(&self, name: &'static str, catalog: &Catalog) -> &'static str {
+        let alias = catalog.entry(name).and_then(|entry| entry.spec.alias);
         match alias {
             Some(alias) if self.aliased.contains(&name) => alias,
             _ => name,
@@ -171,32 +340,125 @@ mod tests {
         assert!(page_list("").is_err());
     }
 
+    const fn option(name: &'static str, value: Option<&'static str>, shape: Shape) -> OptionSpec {
+        OptionSpec { name, short: None, value, help: "", alias: None, shape, config: Settable::Yes }
+    }
+
+    /// One parser reads a value, by the shape of its option: a named value, a number in the range,
+    /// either, a page list, or free text. A value the option doesn't take is refused with what it
+    /// takes, the same wherever the value came from.
+    #[test]
+    fn one_parser_reads_a_value_by_the_shape_of_its_option() {
+        const NUMBERS: Numbers = Numbers { least: 1, most: 8, step: 1, unit: "" };
+        const PERCENT: Numbers = Numbers { least: 50, most: 400, step: 10, unit: "%" };
+        let entry = |shape| Entry { spec: option("--it", Some("X"), shape), by: By::Viewer };
+        let either = entry(Shape::Value { named: &["auto", "width"], numbers: Some(NUMBERS) });
+        assert_eq!((either.read("auto"), either.read("width")), (Ok(Arg::Named("auto")), Ok(Arg::Named("width"))));
+        assert_eq!((either.read("1"), either.read("8")), (Ok(Arg::Number(1)), Ok(Arg::Number(8))));
+        for wrong in ["0", "9", "65536", "-1", "page", "", "Auto", " 3", "4294967296"] {
+            assert_eq!(either.read(wrong), Err(format!("expected auto, width or 1–8, got {wrong}")), "{wrong:?}");
+        }
+        let named = entry(Shape::Value { named: &["auto", "fast", "small"], numbers: None });
+        assert_eq!((named.read("small"), named.read("3")), (Ok(Arg::Named("small")), Err("expected auto, fast or small, got 3".into())));
+        let number = entry(Shape::Value { named: &[], numbers: Some(PERCENT) });
+        assert_eq!((number.read("150"), number.read("500")), (Ok(Arg::Number(150)), Err("expected 50–400%, got 500".into())));
+        assert_eq!((number.takes(), named.takes(), either.takes()), ("50–400%".into(), "auto, fast or small".into(), "auto, width or 1–8".into()));
+        let pages = entry(Shape::Pages);
+        assert_eq!(pages.read("1,3-5"), Ok(Arg::Pages(vec![0, 2, 3, 4])));
+        assert!(pages.read("0").is_err_and(|e| e.contains("bad page number")));
+        assert_eq!(entry(Shape::Text).read("--anything\x1b"), Ok(Arg::Text("--anything\x1b")), "a password can be anything");
+        let flag = entry(Shape::Flag);
+        assert!(flag.is_flag() && !either.is_flag() && flag.read("true").is_err());
+    }
+
+    /// The catalog lists the viewer's options, then each backend's own and its settings', each
+    /// with who declares it. A setting's option takes what the setting has, whatever shape its
+    /// backend wrote: `auto` where it goes by the terminal's background, its named values and its
+    /// numbers. An option two backends declare is listed under each, and is the first's.
+    #[test]
+    fn the_catalog_lists_each_option_with_who_declares_it_and_reads_a_settings_from_the_setting() {
+        use crate::source::tests::cycled;
+        static THEME: Setting = cycled("theme", 'D', "--theme");
+        static WIDTH: Setting = Setting {
+            named: &[crate::source::Named { name: "window", says: "" }],
+            numbers: Some(Numbers { least: 20, most: 200, step: 4, unit: "" }),
+            auto: None,
+            option: option("--width", Some("window|N"), Shape::Text),
+            ..cycled("width", '[', "--width")
+        };
+        static OURS: [Setting; 2] = [THEME, WIDTH];
+        static THEIRS: [Setting; 1] = [Setting { option: OptionSpec { help: "theirs", ..THEME.option }, ..THEME }];
+        let viewer = [option("--pages", Some("1,3-5"), Shape::Pages), option("--pager", None, Shape::Flag)];
+        let password = OptionSpec { config: Settable::No("a secret"), ..option("--password", Some("PW"), Shape::Text) };
+        let mut catalog = Catalog::of(&viewer);
+        catalog.declare("ours", &[password], &OURS);
+        catalog.declare("theirs", &[password], &THEIRS);
+        let listed: Vec<(&str, String)> =
+            catalog.entries().iter().map(|entry| (entry.spec.name, format!("{:?}", entry.by).chars().take(7).collect())).collect();
+        assert_eq!(
+            listed,
+            [
+                ("--pages", "Viewer".to_owned()),
+                ("--pager", "Viewer".into()),
+                ("--password", "Backend".into()),
+                ("--theme", "Setting".into()),
+                ("--width", "Setting".into()),
+                ("--password", "Backend".into()),
+                ("--theme", "Setting".into())
+            ]
+        );
+        let theme = catalog.entry("--theme").unwrap();
+        assert!(matches!(theme.by, By::Setting(setting, "ours") if setting.name == "theme") && theme.spec.help.is_empty(), "the first's");
+        assert_eq!((theme.named(), theme.numbers(), theme.takes()), (vec!["auto", "light", "dark"], None, "auto, light or dark".to_owned()));
+        assert_eq!((theme.read("auto"), theme.read("dark")), (Ok(Arg::Named("auto")), Ok(Arg::Named("dark"))));
+        assert_eq!(theme.read("sepia"), Err("expected auto, light or dark, got sepia".into()));
+        // Its backend wrote free text: the setting says what it takes all the same.
+        let width = catalog.entry("--width").unwrap();
+        assert_eq!((width.spec.shape, width.named()), (Shape::Setting, vec!["window"]));
+        assert_eq!((width.read("window"), width.read("72")), (Ok(Arg::Named("window")), Ok(Arg::Number(72))));
+        assert_eq!(width.read("300"), Err("expected window or 20–200, got 300".into()));
+        assert!(width.read("auto").is_err(), "no `auto` for a setting that doesn't go by the background");
+        // Whether a config may set it is the option's to say.
+        let may: Vec<Settable> = ["--pages", "--password", "--theme"].iter().map(|name| catalog.entry(name).unwrap().spec.config).collect();
+        assert_eq!(may, [Settable::Yes, Settable::No("a secret"), Settable::Yes]);
+        assert!(catalog.entry("--zoom").is_none() && Catalog::default().entries().is_empty());
+    }
+
     #[test]
     fn unknown_options_are_refused_and_values_taken_whatever_they_are() {
         let specs = [
-            OptionSpec { name: "--password", short: None, value: Some("PW"), help: "", alias: None },
-            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None },
-            OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "", alias: None },
+            OptionSpec {
+                name: "--password",
+                short: None,
+                value: Some("PW"),
+                help: "",
+                alias: None,
+                shape: Shape::Text,
+                config: Settable::No("a password does not belong in a plain file"),
+            },
+            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None, shape: Shape::Flag, config: Settable::Yes },
+            OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "", alias: None, shape: Shape::Flag, config: Settable::Yes },
         ];
+        let catalog = Catalog::of(&specs);
         let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         let given = args(&["a.pdf", "--pager", "--password", "--anything", "b.pdf"]);
-        let parsed = Parsed::parse(&given, &specs).unwrap();
+        let parsed = Parsed::parse(&given, &catalog).unwrap();
         assert_eq!(parsed.value("--password"), Some("--anything"), "a password can look like an option");
         assert_eq!(parsed.operands, ["a.pdf", "b.pdf"]);
         assert!(parsed.has("--pager") && !parsed.has("--zoom"));
         assert_eq!(parsed.value("--pager"), None);
         assert_eq!(parsed.names().collect::<Vec<_>>(), ["--pager", "--password"]);
         let given = args(&["--password", "first", "--password", "second"]);
-        assert_eq!(Parsed::parse(&given, &specs).unwrap().value("--password"), Some("first"));
-        assert_eq!(Parsed::parse(&args(&["a.pdf", "--zoom", "2"]), &specs).unwrap_err(), "unknown option --zoom");
-        assert_eq!(Parsed::parse(&args(&["a.pdf", "--password"]), &specs).unwrap_err(), "--password needs a value");
+        assert_eq!(Parsed::parse(&given, &catalog).unwrap().value("--password"), Some("first"));
+        assert_eq!(Parsed::parse(&args(&["a.pdf", "--zoom", "2"]), &catalog).unwrap_err(), "unknown option --zoom");
+        assert_eq!(Parsed::parse(&args(&["a.pdf", "--password"]), &catalog).unwrap_err(), "--password needs a value");
         // A short name is the option's, as the option's name.
         let given = args(&["-r", "dir", "-"]);
-        let parsed = Parsed::parse(&given, &specs).unwrap();
+        let parsed = Parsed::parse(&given, &catalog).unwrap();
         assert!(parsed.has("--recurse") && parsed.names().eq(["--recurse"]));
         assert_eq!(parsed.operands, ["dir", "-"], "`-` alone is no option");
-        assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &specs).unwrap_err(), "unknown option -x");
-        assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &specs).unwrap().value("--password"), Some("-r"));
+        assert_eq!(Parsed::parse(&args(&["-x", "a.pdf"]), &catalog).unwrap_err(), "unknown option -x");
+        assert_eq!(Parsed::parse(&args(&["--password", "-r"]), &catalog).unwrap().value("--password"), Some("-r"));
     }
 
     /// An option is taken by its alias too, as itself, the alias remembered to warn of; given by both,
@@ -204,23 +466,32 @@ mod tests {
     #[test]
     fn an_option_is_taken_by_its_alias_and_refused_by_both() {
         let specs = [
-            OptionSpec { name: "--per-row", short: None, value: Some("N"), help: "", alias: Some("--zoom") },
-            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None },
+            OptionSpec {
+                name: "--per-row",
+                short: None,
+                value: Some("N"),
+                help: "",
+                alias: Some("--zoom"),
+                shape: Shape::Text,
+                config: Settable::Yes,
+            },
+            OptionSpec { name: "--pager", short: None, value: None, help: "", alias: None, shape: Shape::Flag, config: Settable::Yes },
         ];
+        let catalog = Catalog::of(&specs);
         let args = |a: &[&str]| a.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         let given = args(&["a.pdf", "--zoom", "3", "--pager"]);
-        let parsed = Parsed::parse(&given, &specs).unwrap();
+        let parsed = Parsed::parse(&given, &catalog).unwrap();
         assert_eq!((parsed.value("--per-row"), parsed.value("--zoom")), (Some("3"), None), "the alias is the option");
-        assert_eq!((parsed.aliased(), parsed.typed("--per-row", &specs)), (&["--per-row"][..], "--zoom"));
+        assert_eq!((parsed.aliased(), parsed.typed("--per-row", &catalog)), (&["--per-row"][..], "--zoom"));
         let given = args(&["--per-row", "3"]);
-        let parsed = Parsed::parse(&given, &specs).unwrap();
-        assert_eq!((parsed.aliased().len(), parsed.typed("--per-row", &specs), parsed.typed("--pager", &specs)), (0, "--per-row", "--pager"));
+        let parsed = Parsed::parse(&given, &catalog).unwrap();
+        assert_eq!((parsed.aliased().len(), parsed.typed("--per-row", &catalog), parsed.typed("--pager", &catalog)), (0, "--per-row", "--pager"));
         for both in [["--zoom", "2", "--per-row", "3"], ["--per-row", "2", "--zoom", "3"]] {
-            assert_eq!(Parsed::parse(&args(&both), &specs).unwrap_err(), "--per-row and --zoom are one option: give one of them", "{both:?}");
+            assert_eq!(Parsed::parse(&args(&both), &catalog).unwrap_err(), "--per-row and --zoom are one option: give one of them", "{both:?}");
         }
         // Twice by its alias is as twice by its name: the first holds.
         let given = args(&["--zoom", "2", "--zoom", "3"]);
-        let parsed = Parsed::parse(&given, &specs).unwrap();
+        let parsed = Parsed::parse(&given, &catalog).unwrap();
         assert_eq!((parsed.value("--per-row"), parsed.aliased()), (Some("2"), &["--per-row"][..]));
         assert_eq!(specs[0].shown(), "--per-row N");
     }

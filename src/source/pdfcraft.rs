@@ -34,7 +34,7 @@ use super::{
     Ask, Backend, Deferred, Format, Frame, Got, Input, Job, Links, MAX_ADDRESS, MAX_LINK_RECTS, MAX_LINKS, MAX_NAME, Opened, Pixels, Request, Room,
     Source, Target, Texts, Told, Values, Want,
 };
-use crate::args::{OptionSpec, Parsed};
+use crate::args::{OptionSpec, Parsed, Settable, Shape};
 
 /// The integration tests' PDFs, written by hand: the one with links is read by the tests here too.
 #[cfg(test)]
@@ -45,8 +45,15 @@ mod fixtures;
 /// PDFs, rendered by pdfcraft.
 pub(super) struct Pdfcraft;
 
-const OPTIONS: &[OptionSpec] =
-    &[OptionSpec { name: "--password", short: None, value: Some("PW"), help: "the user or the owner password of an encrypted PDF", alias: None }];
+const OPTIONS: &[OptionSpec] = &[OptionSpec {
+    name: "--password",
+    short: None,
+    value: Some("PW"),
+    help: "the user or the owner password of an encrypted PDF",
+    alias: None,
+    shape: Shape::Text,
+    config: Settable::No("a password does not belong in a plain file"),
+}];
 
 impl Backend for Pdfcraft {
     fn name(&self) -> &'static str {

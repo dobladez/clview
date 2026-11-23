@@ -33,10 +33,10 @@ use cells::{Colours, Glyphs, Ground, Style};
 pub(crate) use commands::{setting_commands, unbound_in_phrases, wrong_keys};
 
 use crate::CliError;
-use crate::args::{OptionSpec, OwnedOptions, Parsed, page_list};
+use crate::args::{AUTO, Arg, By, Catalog, OptionSpec, OwnedOptions, Parsed, Settable, Shape};
 use crate::source::{
-    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Opened, Openers, Part, Ready, Request, Room, Setting, Source, Value,
-    Values,
+    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Numbers, Opened, Openers, Part, Ready, Request, Room, Setting,
+    Source, Value, Values,
 };
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
@@ -50,32 +50,53 @@ const OPTIONS: &[OptionSpec] = &[
         value: Some("1,3-5"),
         help: "the pages to show, in this order (default: all); of a list, its tiles",
         alias: None,
+        shape: Shape::Pages,
+        config: Settable::No("it belongs to one run"),
     },
-    OptionSpec { name: "--recurse", short: Some("-r"), value: None, help: "a directory's subdirectories' files, not folders", alias: None },
+    OptionSpec { short: Some("-r"), ..flag("--recurse", "a directory's subdirectories' files, not folders") },
     OptionSpec {
         name: PER_ROW,
         short: None,
         value: Some("auto|width|1-8"),
         help: "auto: two side by side if they fit; width; or N pages (a list's tiles) to a row",
         alias: Some(ZOOM),
+        shape: Shape::Value { named: &[AUTO, WIDTH], numbers: Some(Numbers { least: 1, most: fit::MAX_PER_ROW as u32, step: 1, unit: "" }) },
+        config: Settable::Yes,
     },
-    OptionSpec { name: "--pager", short: None, value: None, help: "always page, even through one page", alias: None },
-    OptionSpec { name: "--no-pager", short: None, value: None, help: "never page: print the pages and exit", alias: None },
+    flag(PAGER, "always page, even through one page"),
+    flag(NO_PAGER, "never page: print the pages and exit"),
     OptionSpec {
-        name: "--compression",
+        name: COMPRESSION,
         short: None,
         value: Some("auto|fast|small"),
         help: "fast PNGs or small ones (auto: small over SSH, else fast)",
         alias: None,
+        shape: Shape::Value { named: &[AUTO, "fast", "small"], numbers: None },
+        config: Settable::Yes,
     },
     OptionSpec {
-        name: "--protocol",
+        name: PROTOCOL,
         short: None,
         value: Some("auto|kitty|blocks|ascii"),
         help: "kitty: don't ask the terminal first; blocks or ascii: text cells",
         alias: None,
+        shape: Shape::Value { named: &[AUTO, "kitty", "blocks", "ascii"], numbers: None },
+        config: Settable::Yes,
     },
 ];
+
+/// A flag of the viewer's called `name`, which a config may set.
+const fn flag(name: &'static str, help: &'static str) -> OptionSpec {
+    OptionSpec { name, short: None, value: None, help, alias: None, shape: Shape::Flag, config: Settable::Yes }
+}
+
+/// The viewer's options that the code asks for by name.
+const PAGER: &str = "--pager";
+const NO_PAGER: &str = "--no-pager";
+const COMPRESSION: &str = "--compression";
+const PROTOCOL: &str = "--protocol";
+/// The value of `--per-row` for a page as wide as the window.
+const WIDTH: &str = "width";
 
 /// How many pages to a row (a list's tiles), and its old name, still taken, with a warning.
 const PER_ROW: &str = "--per-row";
@@ -192,13 +213,13 @@ enum Protocol {
 }
 
 impl Protocol {
-    fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "auto" => Ok(Self::Auto),
-            "kitty" => Ok(Self::Kitty),
-            "blocks" => Ok(Self::Text(Glyphs::Blocks)),
-            "ascii" => Ok(Self::Text(Glyphs::Ascii)),
-            other => Err(format!("--protocol {other:?}: use auto, kitty, blocks or ascii")),
+    /// From the value of `--protocol`, one of those its option names; `auto` for any other.
+    fn named(name: &str) -> Self {
+        match name {
+            "kitty" => Self::Kitty,
+            "blocks" => Self::Text(Glyphs::Blocks),
+            "ascii" => Self::Text(Glyphs::Ascii),
+            _ => Self::Auto,
         }
     }
 }
@@ -307,12 +328,12 @@ enum Compression {
 }
 
 impl Compression {
-    fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "auto" => Ok(Self::Auto),
-            "fast" => Ok(Self::Fast),
-            "small" => Ok(Self::Small),
-            other => Err(format!("--compression {other:?}: use auto, fast or small")),
+    /// From the value of `--compression`, one of those its option names; `auto` for any other.
+    fn named(name: &str) -> Self {
+        match name {
+            "fast" => Self::Fast,
+            "small" => Self::Small,
+            _ => Self::Auto,
         }
     }
 
@@ -423,42 +444,78 @@ enum Start {
     Auto,
 }
 
+/// The catalog of this build's options: the viewer's, then those `backends` declare, each
+/// backend's own and its settings' ([`Catalog`]). Everything that reads an option reads it against
+/// this: the command line, `--help` and a setting's start.
+fn catalog(backends: &[&dyn Backend]) -> Catalog {
+    let mut catalog = Catalog::of(OPTIONS);
+    for backend in backends {
+        catalog.declare(backend.name(), backend.options(), backend.settings());
+    }
+    catalog
+}
+
+/// What is wrong with the options this build declares, the viewer's and those of `backends`, for a
+/// build's own tests: a name that is no `--name`, a value that `--help` writes for a flag (or none
+/// for an option that takes one), an option that takes nothing at all, and a setting's option
+/// whose backend wrote another shape than the setting's.
+#[cfg(test)]
+pub(crate) fn wrong_options(backends: &[&dyn Backend]) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for entry in catalog(backends).entries() {
+        let name = entry.spec.name;
+        if name.strip_prefix("--").is_none_or(|rest| rest.is_empty() || rest.starts_with('-')) {
+            wrong.push(format!("{name}: an option is called --name"));
+        }
+        if entry.spec.value.is_none() != entry.is_flag() {
+            wrong.push(format!("{name}: the value --help writes and its shape disagree"));
+        }
+        if matches!(entry.spec.shape, Shape::Value { .. } | Shape::Setting) && entry.named().is_empty() && entry.numbers().is_none() {
+            wrong.push(format!("{name}: it takes a value, and no value at all"));
+        }
+        if let By::Setting(setting, backend) = entry.by
+            && setting.option.shape != Shape::Setting
+        {
+            wrong.push(format!("{backend}: {name} is a setting's option, and says another shape"));
+        }
+    }
+    wrong
+}
+
+/// The value option `name` was given, if it was, read against `catalog` by the one parser of
+/// values ([`crate::args::Entry::read`]). A value the option doesn't take is the error, which names
+/// the option as the reader gave it.
+fn given<'a>(options: &Parsed<'a>, catalog: &Catalog, name: &'static str) -> Result<Option<Arg<'a>>, String> {
+    let (Some(value), Some(entry)) = (options.value(name), catalog.entry(name)) else { return Ok(None) };
+    // The value is the reader's own text, said back made safe for the terminal.
+    entry.read(value).map(Some).map_err(|why| printable(&format!("{}: {why}", options.typed(name, catalog))))
+}
+
+/// How many pages to a row `--per-row` asks for: `auto` where it isn't given.
+fn zoom_given(options: &Parsed<'_>, catalog: &Catalog) -> Result<Zoom, String> {
+    Ok(match given(options, catalog, PER_ROW)? {
+        Some(Arg::Named(WIDTH)) => Zoom::Width,
+        Some(Arg::Number(n)) => Zoom::PerRow(u16::try_from(n).unwrap_or(fit::MAX_PER_ROW)),
+        _ => Zoom::Auto,
+    })
+}
+
 /// Where each of `settings` starts: as its option says, if `options` give it, or else by the
 /// terminal's background if it goes by that, or else at its default. A value its option doesn't
 /// take is the error, saying what it does.
-fn starts(settings: &[&'static Setting], options: &Parsed<'_>) -> Result<Vec<(&'static Setting, Start)>, String> {
-    let start = |setting: &'static Setting| match options.value(setting.option.name) {
-        Some(given) => started(setting, given).map(|start| (setting, start)),
-        None if setting.auto.is_some() => Ok((setting, Start::Auto)),
-        None => Ok((setting, Start::Is(setting.default))),
+fn starts(settings: &[&'static Setting], options: &Parsed<'_>, catalog: &Catalog) -> Result<Vec<(&'static Setting, Start)>, String> {
+    let start = |setting: &'static Setting| {
+        let start = match given(options, catalog, setting.option.name)? {
+            // `auto` where it goes by the terminal's background; else one of its named values.
+            Some(Arg::Named(AUTO)) if setting.auto.is_some() => Start::Auto,
+            Some(Arg::Named(named)) => Start::Is(Value::Named(named)),
+            Some(Arg::Number(number)) => Start::Is(Value::Number(number)),
+            Some(Arg::Pages(_) | Arg::Text(_)) | None if setting.auto.is_some() => Start::Auto,
+            Some(Arg::Pages(_) | Arg::Text(_)) | None => Start::Is(setting.default),
+        };
+        Ok((setting, start))
     };
     settings.iter().copied().map(start).collect()
-}
-
-/// Where `given`, the value of `setting`'s option, has it start: `auto` where it goes by the
-/// terminal's background, one of its named values, or one of its numbers.
-fn started(setting: &'static Setting, given: &str) -> Result<Start, String> {
-    if setting.auto.is_some() && given == "auto" {
-        return Ok(Start::Auto);
-    }
-    if let Some(named) = setting.named.iter().find(|named| named.name == given) {
-        return Ok(Start::Is(Value::Named(named.name)));
-    }
-    if let (Some(numbers), Ok(number)) = (setting.numbers, given.parse::<u32>())
-        && (numbers.least..=numbers.most).contains(&number)
-    {
-        return Ok(Start::Is(Value::Number(number)));
-    }
-    let auto = setting.auto.map(|_| String::from("auto"));
-    let named = setting.named.iter().map(|named| named.name.to_owned());
-    let range = setting.numbers.map(|numbers| format!("{}–{}{}", numbers.least, numbers.most, numbers.unit));
-    let takes: Vec<String> = auto.into_iter().chain(named).chain(range).collect();
-    let takes = match takes.split_last() {
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-        None => "nothing".into(),
-    };
-    Err(format!("{}: expected {takes}, got {}", setting.option.name, printable(given)))
 }
 
 /// What the settings start at, from where `starts` says, and the colour of dark paper, for a
@@ -531,18 +588,29 @@ pub(crate) fn usage(backends: &[&dyn Backend]) -> String {
     // column, so the column counts the indent.
     const VIEWERS: &str = "  ";
     const BACKENDS: &str = "     ";
+    // Made from the catalog: each option where the one that declares it is.
+    let catalog = catalog(backends);
+    let declared_by = |backend: Option<&str>| {
+        let by = move |entry: &&crate::args::Entry| match (entry.by, backend) {
+            (By::Viewer, None) => true,
+            (By::Backend(name) | By::Setting(_, name), Some(backend)) => name == backend,
+            _ => false,
+        };
+        catalog.entries().iter().filter(by).map(|entry| entry.spec).collect::<Vec<OptionSpec>>()
+    };
+    let indent = |by: By| if matches!(by, By::Viewer) { VIEWERS } else { BACKENDS };
     let left = |indent: &str, option: &OptionSpec| format!("{indent}{}", option.shown());
-    let viewers = OPTIONS.iter().map(|o| left(VIEWERS, o));
-    let width = viewers.chain(backends.iter().flat_map(|b| options_of(*b)).map(|o| left(BACKENDS, &o))).map(|o| o.len()).max().unwrap_or(0);
+    let width = catalog.entries().iter().map(|entry| left(indent(entry.by), &entry.spec).len()).max().unwrap_or(0);
     let list = |out: &mut String, indent: &str, options: &[OptionSpec]| {
         for option in options {
             out.push_str(&format!("{:width$}  {}\n", left(indent, option), option.help));
         }
     };
-    list(&mut out, VIEWERS, OPTIONS);
-    for backend in backends {
-        let options = options_of(*backend);
-        if !options.is_empty() {
+    list(&mut out, VIEWERS, &declared_by(None));
+    for (at, backend) in backends.iter().enumerate() {
+        // A backend's options are listed once, under the first of its name.
+        let options = declared_by(Some(backend.name()));
+        if !options.is_empty() && !backends.iter().take(at).any(|before| before.name() == backend.name()) {
             out.push_str(&format!("\n   for {}:\n", backend.shows()));
             list(&mut out, BACKENDS, &options);
         }
@@ -571,11 +639,6 @@ fn listed(format: &crate::source::Format) -> String {
         (true, false) => format!("{} ({fences})", format.name),
         (false, false) => format!("{} ({extensions}, {fences})", format.name),
     }
-}
-
-/// The options `backend` takes: its own, then its settings'.
-fn options_of(backend: &dyn Backend) -> Vec<OptionSpec> {
-    backend.options().iter().copied().chain(backend.settings().iter().map(|setting| setting.option)).collect()
 }
 
 /// What backends show, as `--help` lists it: the libraries they show it through, and in which
@@ -651,19 +714,22 @@ fn capitalized(text: &str) -> String {
 
 fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<(), CliError> {
     let settings = settings(backends);
-    let known: Vec<OptionSpec> =
-        OPTIONS.iter().chain(backends.iter().flat_map(|b| b.options())).copied().chain(settings.iter().map(|s| s.option)).collect();
-    let options = Parsed::parse(args, &known)?;
+    let catalog = catalog(backends);
+    let options = Parsed::parse(args, &catalog)?;
     for &name in options.aliased() {
-        note(&format!("warning: {}", renamed(options.typed(name, &known), name)));
+        note(&format!("warning: {}", renamed(options.typed(name, &catalog), name)));
     }
     let paths = file_args(&options)?;
-    let zoom = options.value(PER_ROW).map_or(Ok(Zoom::Auto), |given| Zoom::parse(given, options.typed(PER_ROW, &known)))?;
-    let protocol = Protocol::parse(options.value("--protocol").unwrap_or("auto"))?;
-    let compression = Compression::parse(options.value("--compression").unwrap_or("auto"))?;
-    let starts = starts(&settings, &options)?;
-    let given = options.value("--pages").map(|list| page_list(list).map_err(|e| format!("--pages: {e}"))).transpose()?;
-    let paging = Paging::from_flags(options.has("--pager"), options.has("--no-pager"))?;
+    let zoom = zoom_given(&options, &catalog)?;
+    let named = |name| given(&options, &catalog, name).map(|given| if let Some(Arg::Named(named)) = given { named } else { AUTO });
+    let protocol = Protocol::named(named(PROTOCOL)?);
+    let compression = Compression::named(named(COMPRESSION)?);
+    let starts = starts(&settings, &options, &catalog)?;
+    let given = match given(&options, &catalog, "--pages")? {
+        Some(Arg::Pages(pages)) => Some(pages),
+        _ => None,
+    };
+    let paging = Paging::from_flags(options.has(PAGER), options.has(NO_PAGER))?;
     let tty = Tty::open().ok();
     let inside_tmux = tmux::inside();
     let client = inside_tmux.then(tmux::client);
@@ -688,7 +754,7 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
         _ if !alone => zoom,
         (Zoom::Auto, _) => zoom,
         (_, Some((setting, _))) => {
-            let per_row = options.typed(PER_ROW, &known);
+            let per_row = options.typed(PER_ROW, &catalog);
             note(&format!("warning: {} and {per_row} disagree on {}: the width wins", setting.option.name, shown.pages.name));
             Zoom::Auto
         }
@@ -1751,9 +1817,29 @@ mod tests {
         assert_eq!(started(&WIDTH, "300"), Err("--width: expected page or 20–200, got 300".into()));
         assert!(started(&WIDTH, "19").is_err() && started(&WIDTH, "auto").is_err() && started(&WIDTH, "-4").is_err());
         let given = args(&["a.md", "--width", "72"]);
-        let options = Parsed::parse(&given, &[THEME.option, WIDTH.option]).unwrap();
-        let started: Vec<(&str, Start)> = starts(&[&THEME, &WIDTH], &options).unwrap().into_iter().map(|(s, start)| (s.name, start)).collect();
+        let catalog = declaring(&DOCUMENT);
+        let options = Parsed::parse(&given, &catalog).unwrap();
+        let started: Vec<(&str, Start)> =
+            starts(&[&THEME, &WIDTH], &options, &catalog).unwrap().into_iter().map(|(s, start)| (s.name, start)).collect();
         assert_eq!(started, [("theme", Start::Auto), ("width", Start::Is(Value::Number(72)))]);
+    }
+
+    /// The two settings of the tests, as a backend declares them.
+    static DOCUMENT: [Setting; 2] = [THEME, WIDTH];
+
+    /// The catalog of a build whose one backend declares `settings`.
+    fn declaring(settings: &'static [Setting]) -> Catalog {
+        let mut catalog = Catalog::of(OPTIONS);
+        catalog.declare("tests", &[], settings);
+        catalog
+    }
+
+    /// Where `setting` starts when its option is given `given`, read against a catalog that holds it.
+    fn started(setting: &'static Setting, given: &str) -> Result<Start, String> {
+        let catalog = declaring(std::slice::from_ref(setting));
+        let given = args(&["a.md", setting.option.name, given]);
+        let options = Parsed::parse(&given, &catalog).unwrap();
+        starts(&[setting], &options, &catalog).map(|starts| starts[0].1)
     }
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -1763,11 +1849,19 @@ mod tests {
     /// The room the tests open files for: 80 × 23 cells of the cell assumed.
     const ROOM: Room = Room { cols: 80, rows: 23, cell_w: 10.0, cell_h: 20.0, gap: 2, per_row: None };
 
-    const PASSWORD: OptionSpec = OptionSpec { name: "--password", short: None, value: Some("PW"), help: "a password", alias: None };
+    const PASSWORD: OptionSpec = OptionSpec {
+        name: "--password",
+        short: None,
+        value: Some("PW"),
+        help: "a password",
+        alias: None,
+        shape: Shape::Text,
+        config: Settable::No("a secret"),
+    };
 
     /// The viewer's options, and a backend's `--password`.
     fn parsed(given: &[String]) -> Parsed<'_> {
-        Parsed::parse(given, &[OPTIONS, &[PASSWORD]].concat()).unwrap()
+        Parsed::parse(given, &Catalog::of(&[OPTIONS, &[PASSWORD]].concat())).unwrap()
     }
 
     #[test]
@@ -1796,7 +1890,7 @@ mod tests {
         use crate::source::tests::{Declaring, PDF};
         static DOCUMENTS: Declaring = Declaring(std::slice::from_ref(&THEME));
         let given = args(&["a.pdf", "--theme", "dark"]);
-        let options = Parsed::parse(&given, &[OPTIONS, &[THEME.option]].concat()).unwrap();
+        let options = Parsed::parse(&given, &Catalog::of(&[OPTIONS, &[THEME.option]].concat())).unwrap();
         assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF], &options, "a.pdf"), Ok(()));
         assert_eq!(takes_all(&[&PDF, &DOCUMENTS], &[&PDF, &PDF], &options, "any of these files"), Ok(()));
         assert!(takes_all(&[&PDF], &[&PDF], &options, "a.pdf").is_err(), "not this build's");
@@ -2063,7 +2157,15 @@ mod tests {
         assert!(help.contains(&format!("\n\n   for locked PDFs:\n     {:31}  a password\n\n", "--password PW")), "{help}");
         assert!(!help.contains("for PDFs:") && !help.contains("for images:") && !help.contains("no options"), "{help}");
         // An option that needs it widens the column, its indent counted.
-        const LONG: OptionSpec = OptionSpec { name: "--a-rather-long-option-indeed", short: None, value: Some("VALUE"), help: "long", alias: None };
+        const LONG: OptionSpec = OptionSpec {
+            name: "--a-rather-long-option-indeed",
+            short: None,
+            value: Some("VALUE"),
+            help: "long",
+            alias: None,
+            shape: Shape::Text,
+            config: Settable::Yes,
+        };
         const TAKES_IT: Fake = Fake { name: "long", shows: "long things", magic: b"%PDF-", options: &[LONG], holds: false };
         let wide = usage(&[&TAKES_IT]);
         assert!(wide.contains("\n     --a-rather-long-option-indeed VALUE  long\n"), "{wide}");

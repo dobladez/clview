@@ -32,7 +32,7 @@ use super::{
     Again, Anchor, Ask, Auto, BACKENDS, Backend, Bounded, Bounds, Deferred, Effect, Format, Frame, HEAD, Input, Job, Keys, Landmark, Links, MAX_NAME,
     Named, Near, Numbers, Opened, Pool, Render, Reopenable, Request, Room, Setting, Source, Start, Target, Texts, Told, Value, Values, opener,
 };
-use crate::args::{OptionSpec, OwnedOptions, Parsed};
+use crate::args::{OptionSpec, OwnedOptions, Parsed, Settable, Shape};
 
 /// Ebooks, their packages read by rbook.
 pub(super) struct Epub;
@@ -63,6 +63,8 @@ const THEME: Setting = Setting {
         value: Some("auto|light|dark"),
         help: "a book light on dark or dark on light (auto: as the terminal is)",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "light on dark, or dark on light",
     does: "go dark",
@@ -85,6 +87,8 @@ const WIDTH: Setting = Setting {
         value: Some("window|N"),
         help: "a book laid out to lines of N characters of code (20-200), or as wide as the window",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "4 characters a line narrower, or wider; 72{increase-width} sets 72, 0{increase-width} the window's",
     does: "reflow",
@@ -101,7 +105,15 @@ const FONT: Setting = Setting {
     zero: Value::Number(100),
     auto: None,
     keys: Keys::Zoom,
-    option: OptionSpec { name: "--font", short: None, value: Some("N"), help: "a book's text at N% of its size (50-400)", alias: None },
+    option: OptionSpec {
+        name: "--font",
+        short: None,
+        value: Some("N"),
+        help: "a book's text at N% of its size (50-400)",
+        alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
+    },
     help: "text larger, or smaller; 150{zoom-in} sets 150%, 0{zoom-in} 100%",
     does: "have a font size",
     effect: Effect::Relayout,
@@ -117,7 +129,15 @@ const MARGIN: Setting = Setting {
     zero: Value::Number(3),
     auto: None,
     keys: Keys::Step('{', '}'),
-    option: OptionSpec { name: "--margin", short: None, value: Some("N"), help: "a book's side margins of N characters of code (0-20)", alias: None },
+    option: OptionSpec {
+        name: "--margin",
+        short: None,
+        value: Some("N"),
+        help: "a book's side margins of N characters of code (0-20)",
+        alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
+    },
     help: "margins a character narrower, or wider; 5{increase-margin} sets 5, 0{increase-margin} back to 3",
     does: "have margins",
     effect: Effect::Relayout,
@@ -139,6 +159,8 @@ const FENCES: Setting = Setting {
         value: Some("drawn|code"),
         help: "a book's fenced blocks drawn as pictures, or shown as code",
         alias: None,
+        shape: Shape::Setting,
+        config: Settable::Yes,
     },
     help: "fenced blocks drawn, or as code",
     does: "draw fenced blocks",
