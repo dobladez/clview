@@ -3135,24 +3135,32 @@ mod tests {
     /// A reference costs what it is long, not what its chapter's directory is deep: a place in the
     /// chapter itself (`#x`) asks nothing of any path, and a path is found from the directory as it
     /// is written, with nothing of it taken apart for each. Under a directory 2,000 deep, 800,000
-    /// of each in one tag are read in the time they take at the book's top; they took 20 s.
+    /// of each in one tag are read in the time they take at the book's top; they took 20 s. The
+    /// test times the two one after the other, so that a slow machine slows both.
     #[test]
     fn a_reference_costs_nothing_for_its_chapters_depth() {
         let deep = "d/".repeat(2_000);
         let (here, there) = (format!("{deep}one.xhtml"), format!("{deep}two.xhtml"));
         let numbers: HashMap<&str, usize> = [(here.as_str(), 1), (there.as_str(), 2)].into();
+        let at_top: HashMap<&str, usize> = [("one.xhtml", 1), ("two.xhtml", 2)].into();
         let none = book(&[]);
         let written = Written { chapter: 1, directory: deep.trim_end_matches('/'), zipped: &none, chapters: &numbers };
+        let top = Written { chapter: 1, directory: "", zipped: &none, chapters: &at_top };
         let many = |attribute: &str| chapter(&format!("<a {}>x</a>", attribute.repeat(800_000)));
-        for (attribute, to, most) in
-            [(r##"href="#x" "##, r##" href="#c1-x""##, 3), ("href=\"\" ", r##" href="#c1""##, 3), (r#"href="two.xhtml" "#, r##" href="#c2""##, 3)]
+        for (attribute, to) in
+            [(r##"href="#x" "##, r##" href="#c1-x""##), ("href=\"\" ", r##" href="#c1""##), (r#"href="two.xhtml" "#, r##" href="#c2""##)]
         {
             let links = many(attribute);
-            let since = std::time::Instant::now();
-            let (body, ..) = written.body(&links, MAX_WRITTEN).unwrap();
-            let took = since.elapsed();
-            assert_eq!(body.matches(to).count(), 800_000, "{attribute}");
-            assert!(took < Duration::from_secs(most), "{attribute}: {took:?}");
+            let time = |written: &Written| {
+                let since = std::time::Instant::now();
+                let (body, ..) = written.body(&links, MAX_WRITTEN).unwrap();
+                assert_eq!(body.matches(to).count(), 800_000, "{attribute}");
+                since.elapsed()
+            };
+            let (at_the_top, deep) = (time(&top), time(&written));
+            // Not the time of a fixed number of seconds, which a busy machine can pass: five times
+            // the time at the top, and one second for the noise of a short one.
+            assert!(deep < at_the_top * 5 + Duration::from_secs(1), "{attribute}: {deep:?} deep, {at_the_top:?} at the top");
         }
         // What a path is found to be is what it was: from the directory, up it, from the top.
         let from = |directory: &str, reference: &str| from_the_top(directory, reference);
