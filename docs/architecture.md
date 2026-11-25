@@ -1058,6 +1058,35 @@ The status line's right side shows the value the document is laid out at when it
 in a narrow window
 ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
 
+### A file changed on disk
+
+A file of its own on disk keeps a `Stamp` in its `OnDisk` (`mod.rs`): its modification time and its
+size. `Opener::file` takes the stamp before the backend reads the bytes. So a write during the read
+makes the stamp older than the bytes, and the pager warns about a file that is already current,
+never the other way.
+
+Each pass of the loop, `Pager::watch_disk` stats the file of the level on screen, at most every
+`DISK_EVERY` (1 s). It sets `Nav::disk` to `Same`, `Changed` or `Gone`. A list, a pipe and an
+archive's file have no stamp, so they stay `Same`. `Nav::painted` writes the status line with the
+warning (`Nav::warnings`, the longest that fits) in black on yellow (`ESC[0;1;30;43m`), and the rest
+in reverse video. `Nav::status` is the same line without the colors, for the tests.
+
+`r` (`Command::Rerender`) gives `Step::Reload`. `Pager::reload` stats the file again, so a write
+that the last look missed counts. For a changed file, it runs `Opener::reload` on `Openers`: a job
+that chooses the backend again from the file's first bytes and opens the file alone, for the room
+on screen. A panic in the backend costs only the job. `Pager::reload_on` polls the job each pass.
+The new source goes through `Pager::replace_with`, the same path as a relayout, with the new stamp,
+and with the pages that `--pages` picked that the new file still has. When the new source has
+other values than the ones wanted, the next pass lays it out again. A failure keeps the old level and
+says why. A relayout that replaces the level meanwhile passes the job on to the new level. Leaving
+the level drops the job.
+
+Some backends read their file again for a relayout (Markdown and HTML), and some lay out the bytes
+they kept (a PDF's tile). So the stamp can't follow a relayout. Instead, `Pager::relayout` calls
+`Pager::reload` for a changed file before it starts a layout, and waits for the reload. The layout
+then starts from the new source. After a reload fails, `Pager::unreloaded` keeps the file's stamp.
+A relayout doesn't reload that file again until the stamp changes, but `r` still reloads it.
+
 ### Files opened when their tiles are wanted
 
 The files "opened" above are only read as far as their first bytes for a backend that says `Backend::deferred`: the file, among

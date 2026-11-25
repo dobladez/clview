@@ -49,8 +49,8 @@ use super::relayout::{self, Ended, Hold, Relayout};
 use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
-    FALLBACK_SIZE, Found, Item, OnDisk, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Shown, Terminal, cell_lines,
-    chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
+    FALLBACK_SIZE, Found, Item, OnDisk, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Shown, Stamp, Terminal,
+    cell_lines, chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -211,6 +211,9 @@ pub(super) fn run(
         spots: Vec::new(),
         labels: None,
         arriving: None,
+        reloading: None,
+        disk_seen: None,
+        unreloaded: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -235,7 +238,7 @@ pub(super) fn run(
             Duration::ZERO
         } else if pager.reading.is_some() {
             PROGRESS_EVERY.min(TICK)
-        } else if pager.going_into.is_some() || pager.relayout.is_under_way() {
+        } else if pager.going_into.is_some() || pager.relayout.is_under_way() || pager.reloading.is_some() {
             POLL
         } else if let Some(wait) = pager.copier.wait() {
             wait
@@ -331,6 +334,7 @@ pub(super) fn run(
                     Step::Follow => pager.follow(opener)?,
                     Step::Contents => pager.go_to_contents(),
                     Step::Return => pager.jump_back(),
+                    Step::Reload => pager.reload(opener),
                 }
                 if quit {
                     break;
@@ -353,8 +357,10 @@ pub(super) fn run(
         redraw |= pager.go_on_into()?;
         redraw |= pager.notice_on(Instant::now());
         redraw |= pager.watch_room();
+        redraw |= pager.watch_disk(Instant::now());
+        redraw |= pager.reload_on()?;
         pager.refresh_bounds();
-        redraw |= pager.relayout()?;
+        redraw |= pager.relayout(opener)?;
         // A layout that failed put the count to a row back: the bounds follow it before the draw.
         pager.refresh_bounds();
         redraw |= pager.copy_on()?;
@@ -407,7 +413,27 @@ enum Step {
     /// `back` with a link followed: back to where the reader was before the last one
     /// ([`Nav::jumps`]).
     Return,
+    /// `r`: the pages rendered again, and in a file's pages the file opened again if it changed on
+    /// disk ([`Pager::reload`]).
+    Reload,
 }
+
+/// How the file shown stands on disk against what was read of it ([`super::Stamp`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Disk {
+    /// As it was read, or no file of its own to look at (a pipe, an archive's).
+    Same,
+    /// Written since it was read.
+    Changed,
+    /// Not there any more: deleted, or moved.
+    Gone,
+}
+
+/// How often the pager looks at the file shown on disk ([`Pager::watch_disk`]): a stat each time.
+const DISK_EVERY: Duration = Duration::from_secs(1);
+
+/// What the status line says while the file on screen is opened again (`r`).
+const RELOADING: &str = "reloading…";
 
 /// Where the reader was when a link was followed, to come back to (`back`): the page and how far down
 /// it, in the page's unit, which is where to come back to while the layout is the one it was
@@ -473,6 +499,9 @@ struct Nav {
     help: bool,
     /// Render the pages again even if nothing changed (`r`, Ctrl-L).
     rerender: bool,
+    /// How the file shown stands on disk against what was read of it: the status line warns when
+    /// it changed or is gone ([`Pager::watch_disk`]).
+    disk: Disk,
     /// The settings this build declares, and their values, shared by every level.
     settings: Rc<Settings>,
     /// The settings what is shown has, by name: a key of another says so, and changes nothing.
@@ -866,6 +895,7 @@ impl Nav {
             hint: true,
             help: false,
             rerender: false,
+            disk: Disk::Same,
             settings: Rc::default(),
             has: Vec::new(),
             bounds: Vec::new(),
@@ -1099,7 +1129,10 @@ impl Nav {
             Command::OpenInApp => return self.pages.get(self.at).map_or(Step::Continue, |page| Step::Launch(*page)),
             Command::MorePerRow => self.per_row_key(true),
             Command::FewerPerRow => self.per_row_key(false),
-            Command::Rerender => self.rerender = true,
+            Command::Rerender => {
+                self.rerender = true;
+                return Step::Reload;
+            }
             Command::Setting(setting, turn) => return self.turn(setting, turn, command),
             // In a list: from tile to tile, the screen following.
             Command::Open => return self.pages.get(self.at).map_or(Step::Continue, |tile| Step::Open(*tile)),
@@ -1675,17 +1708,60 @@ impl Nav {
     /// which ends two spaces before the right side. Until the first key, the message is the
     /// reminder of the keys, as much of it as fits. A list's filter takes the message's place:
     /// always while it is typed, otherwise when there is no message. A file's search does while it is
-    /// typed (`/word 17…`), and kept, comes before the message (`/word 3/17`).
+    /// typed (`/word 17…`), and kept, comes before the message (`/word 3/17`). A file changed on
+    /// disk since it was read is said before all of them ([`Nav::warnings`]). The tests read it as
+    /// text; the terminal gets it painted ([`Nav::painted`]).
+    #[cfg(test)]
     fn status(&self, name: &str, cols: u16, rendering: bool) -> String {
+        self.status_warned(name, cols, rendering).0
+    }
+
+    /// The status line as the terminal gets it, its colours with it: in reverse video, and the
+    /// warning that the file changed on disk, if there is one, black on yellow.
+    fn painted(&self, name: &str, cols: u16, rendering: bool) -> Vec<u8> {
+        let (line, warning) = self.status_warned(name, cols, rendering);
+        let byte = |at: usize| line.char_indices().nth(at).map_or(line.len(), |(byte, _)| byte);
+        let mut out = b"\x1b[7m".to_vec();
+        match warning {
+            Some((start, end)) => {
+                let (start, end) = (byte(start), byte(end));
+                out.extend_from_slice(line.get(..start).unwrap_or_default().as_bytes());
+                out.extend_from_slice(b"\x1b[0;1;30;43m");
+                out.extend_from_slice(line.get(start..end).unwrap_or_default().as_bytes());
+                out.extend_from_slice(b"\x1b[0;7m");
+                out.extend_from_slice(line.get(end..).unwrap_or_default().as_bytes());
+            }
+            None => out.extend_from_slice(line.as_bytes()),
+        }
+        out.extend_from_slice(b"\x1b[0m");
+        out
+    }
+
+    /// What the status line says when the file changed on disk, the longest first: with the key
+    /// that reloads it, if one is bound, then shorter. None for a file as it was read.
+    fn warnings(&self) -> Vec<String> {
+        let (said, short) = match self.disk {
+            Disk::Same => return Vec::new(),
+            Disk::Changed => ("changed on disk", "changed"),
+            Disk::Gone => ("gone from disk", "gone"),
+        };
+        let key = self.keymap().first(Command::Rerender);
+        let reloads = (self.disk == Disk::Changed && !key.is_empty()).then(|| format!("{said}, {key} reloads"));
+        reloads.into_iter().chain([said.to_owned(), short.to_owned()]).collect()
+    }
+
+    /// [`Nav::status`], and where in it the warning that the file changed on disk is, in
+    /// characters from its start to its end, if it is there.
+    fn status_warned(&self, name: &str, cols: u16, rendering: bool) -> (String, Option<(usize, usize)>) {
         let width = usize::from(cols);
         // A number being typed is all the line says: the number, and the keys that take it here.
         if !self.typed.is_empty() {
-            return self.typing(width);
+            return (self.typing(width), None);
         }
         // A message that takes the whole line is all it says, as much of it as fits.
         if let Some(notice) = &self.notice {
             let line = format!(" {}", cut(notice, width.saturating_sub(2)));
-            return printable(&line.chars().chain(std::iter::repeat(' ')).take(width).collect::<String>());
+            return (printable(&line.chars().chain(std::iter::repeat(' ')).take(width).collect::<String>()), None);
         }
         let (place, widest) = self.place();
         let zoom = if self.zoom == Zoom::Width { "width".to_owned() } else { format!("{} per row", self.per_row) };
@@ -1746,13 +1822,25 @@ impl Nav {
             None => said,
         };
         // A space at the start; the message, then two spaces; and at least two spaces between the
-        // name and the message, or one after the name alone.
-        let said = cut(&said, room.saturating_sub(3));
+        // name and the message, or one after the name alone. The warning comes first, and is cut last.
+        let warning = self.warnings().into_iter().find(|warning| chars(warning) <= room.saturating_sub(3));
+        let warned = warning.as_ref().map_or(0, |warning| chars(warning).saturating_add(2));
+        let said = cut(&said, room.saturating_sub(3).saturating_sub(warned));
+        let said = match &warning {
+            Some(warning) if said.is_empty() => warning.clone(),
+            Some(warning) => format!("{warning}  {said}"),
+            None => said,
+        };
         let tail = if said.is_empty() { String::new() } else { format!("{said}  ") };
         let name = cut(name, room.saturating_sub(chars(&tail)).saturating_sub(if said.is_empty() { 2 } else { 3 }));
         let gap = room.saturating_sub(1usize.saturating_add(chars(&name)).saturating_add(chars(&tail)));
         let left: String = format!(" {name}{}{tail}", " ".repeat(gap)).chars().chain(std::iter::repeat(' ')).take(room).collect();
-        printable(&format!("{left}{right}"))
+        // The tail ends the left side, which it fits: the warning starts it.
+        let span = warning.map(|warning| {
+            let start = room.saturating_sub(chars(&tail));
+            (start, start.saturating_add(chars(&warning)))
+        });
+        (printable(&format!("{left}{right}")), span)
     }
 
     /// The status line while a number is typed, exactly `width` characters, none a control character:
@@ -2105,6 +2193,14 @@ struct Pager<'a> {
     labels: Option<Labels>,
     /// A link to another file being followed, until its level shows: where in that file it leads.
     arriving: Option<Arrival>,
+    /// The file on screen being opened again (`r`, [`Pager::reload`]): the level it is for, the job,
+    /// and the file's stamp taken before the job read it.
+    reloading: Option<(u64, Handle, Option<Stamp>)>,
+    /// When the file on screen was last looked at on disk ([`Pager::watch_disk`]).
+    disk_seen: Option<Instant>,
+    /// The stamp of the file whose reload failed last: a relayout reloads that file no more
+    /// ([`Pager::relayout`]), so that a broken file is not opened again on every turn.
+    unreloaded: Option<Option<Stamp>>,
 }
 
 /// Where in the file a link leads into the reader arrives: at the place its `#fragment` names, or
@@ -2312,9 +2408,9 @@ impl Pager<'_> {
         }
         let labels_sent = self.draw_labels(&mut out, cell, size.cols, area_rows);
         cursor(&mut out, size.rows.saturating_sub(1), 0);
-        out.extend_from_slice(b"\x1b[2K\x1b[7m");
-        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !ready).as_bytes());
-        out.extend_from_slice(b"\x1b[0m\x1b[?2026l");
+        out.extend_from_slice(b"\x1b[2K");
+        out.extend_from_slice(&self.level.nav.painted(&self.level.name(), size.cols, !ready));
+        out.extend_from_slice(b"\x1b[?2026l");
         self.wrote(labels_sent);
         self.tty.write_all(&out)?;
         // A page left as it was, and an old copy gone with this draw's placements: there is room for
@@ -2331,9 +2427,8 @@ impl Pager<'_> {
         let size = self.tty.size().unwrap_or(FALLBACK_SIZE);
         let mut out = Vec::new();
         cursor(&mut out, size.rows.saturating_sub(1), 0);
-        out.extend_from_slice(b"\x1b[2K\x1b[7m");
-        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, !self.ready).as_bytes());
-        out.extend_from_slice(b"\x1b[0m");
+        out.extend_from_slice(b"\x1b[2K");
+        out.extend_from_slice(&self.level.nav.painted(&self.level.name(), size.cols, !self.ready));
         self.wrote(0);
         self.tty.write_all(&out)
     }
@@ -2911,9 +3006,8 @@ impl Pager<'_> {
         self.level.nav.message = Some(said);
         let mut out = Vec::new();
         cursor(&mut out, size.rows.saturating_sub(1), 0);
-        out.extend_from_slice(b"\x1b[2K\x1b[7m");
-        out.extend_from_slice(self.level.nav.status(&self.level.name(), size.cols, true).as_bytes());
-        out.extend_from_slice(b"\x1b[0m");
+        out.extend_from_slice(b"\x1b[2K");
+        out.extend_from_slice(&self.level.nav.painted(&self.level.name(), size.cols, true));
         self.wrote(0);
         self.tty.write_all(&out)
     }
@@ -2981,7 +3075,7 @@ impl Pager<'_> {
     /// failure keeps this one, says why once, puts the values back to what is on screen, so the next
     /// step starts from it, and remembers the pair that failed, not asked for again until the values or
     /// the room change, or `r`. Whether the screen changed.
-    fn relayout(&mut self) -> Result<bool, String> {
+    fn relayout(&mut self, opener: &Opener<'_, '_>) -> Result<bool, String> {
         if self.level.nav.list || self.level.nav.picked {
             return Ok(false);
         }
@@ -3026,6 +3120,17 @@ impl Pager<'_> {
             self.level.nav.relaying = None;
             return Ok(changed);
         };
+        // A file changed on disk is opened again first, and laid out once it is: some backends read
+        // their file again for a layout and some don't, and the reader gets the new file either way.
+        if self.reloading.is_some() {
+            return Ok(changed);
+        }
+        if let Some((Disk::Changed, _, now)) = self.on_disk_now()
+            && self.unreloaded != Some(now)
+        {
+            self.reload(opener);
+            return Ok(true);
+        }
         let Some(job) = self.level.source.relayout(values, room) else {
             self.level.nav.message = Some("it can't be laid out again".into());
             self.put_back(laid, laid_room);
@@ -3088,13 +3193,109 @@ impl Pager<'_> {
         Room { per_row: self.level.nav.columns_in(&self.room), ..self.room }
     }
 
+    /// How the file on screen stands on disk now against the stamp taken when it was read: the same,
+    /// changed or gone. `None` for what has no file of its own (a list, a pipe, an archive's file).
+    fn on_disk_now(&self) -> Option<(Disk, PathBuf, Option<Stamp>)> {
+        let Ok(OnDisk { path, stamp, .. }) = &self.level.on_disk else { return None };
+        if self.level.nav.list {
+            return None;
+        }
+        let now = Stamp::of(path);
+        let disk = match now {
+            _ if now == *stamp => Disk::Same,
+            None => Disk::Gone,
+            Some(_) => Disk::Changed,
+        };
+        Some((disk, path.clone(), now))
+    }
+
+    /// Look at the file on screen on disk, every [`DISK_EVERY`]: the status line warns once it has
+    /// changed or gone since it was read. Whether the warning changed.
+    fn watch_disk(&mut self, now: Instant) -> bool {
+        if self.disk_seen.is_some_and(|seen| now.saturating_duration_since(seen) < DISK_EVERY) {
+            return false;
+        }
+        self.disk_seen = Some(now);
+        let disk = self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk);
+        std::mem::replace(&mut self.level.nav.disk, disk) != disk
+    }
+
+    /// `r` in a file's pages: the file opened again, on the openers' threads, if it changed on disk
+    /// since it was read ([`Opener::reload`]), laid out for the room it is shown in. Its pages show in
+    /// place of these once it is open ([`Pager::reload_on`]); until then these stay, the status line
+    /// saying `reloading…`. A file not changed, or gone from disk, which the status line already
+    /// says, is only rendered again.
+    fn reload(&mut self, opener: &Opener<'_, '_>) {
+        if self.reloading.is_some() {
+            return;
+        }
+        let Some((disk, path, stamp)) = self.on_disk_now() else { return };
+        self.level.nav.disk = disk;
+        match disk {
+            Disk::Same | Disk::Gone => {}
+            Disk::Changed => {
+                let Some(path) = path.to_str().map(str::to_owned) else {
+                    self.level.nav.message = Some("not reloaded: its path isn't UTF-8".into());
+                    return;
+                };
+                let job = opener.reload(path, self.room_for());
+                self.reloading = Some((self.level.id, self.openers.run(job), stamp));
+                self.level.nav.message = Some(RELOADING.into());
+            }
+        }
+    }
+
+    /// Take the file opened again by `r` ([`Pager::reload`]), once it is: its pages in place of these,
+    /// where the reader was ([`Pager::replace`]), the pages `--pages` picked kept as far as it still
+    /// has them. One that failed keeps these, and says why. A relayout in this level's place passes
+    /// the job on to it ([`Pager::replace_with`]); leaving the level forgets the job, which runs to its
+    /// end for nobody. Whether the screen changed.
+    fn reload_on(&mut self) -> Result<bool, String> {
+        let Some((level, handle, stamp)) = &self.reloading else { return Ok(false) };
+        if *level != self.level.id {
+            self.reloading = None;
+            return Ok(false);
+        }
+        let Some(done) = handle.try_take() else { return Ok(false) };
+        let stamp = *stamp;
+        self.reloading = None;
+        if self.level.nav.message.as_deref() == Some(RELOADING) {
+            self.level.nav.message = None;
+        }
+        match done {
+            Ok(source) => {
+                if let Ok(on_disk) = &mut self.level.on_disk {
+                    on_disk.stamp = stamp;
+                }
+                let picked = self.level.nav.picked.then(|| self.level.nav.pages.clone());
+                self.replace_with(source, picked)?;
+                self.level.nav.disk = self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk);
+                self.unreloaded = None;
+            }
+            Err(why) => {
+                self.level.nav.message = Some(format!("not reloaded: {}", printable(&why)));
+                self.unreloaded = Some(stamp);
+            }
+        }
+        Ok(true)
+    }
+
     /// `source`, the document on screen laid out again, in a level of its own in place of this one: at
     /// the page where the paragraph at the top of the screen now is, scrolled to it where a page scrolls
     /// ([`Source::anchor`]), or at the reader's page where the sources don't say; at the same zoom, gone
     /// into from a list if this one was, with its search ([`Search::relaid`]). This one goes as a level
     /// gone back from does ([`Pager::let_go`]).
     fn replace(&mut self, source: Box<dyn Source + Send>) -> Result<(), String> {
-        let place = self.place_on_screen().and_then(|anchor| source.find(&anchor));
+        self.replace_with(source, None)
+    }
+
+    /// [`Pager::replace`], showing `picked` of the new source's pages where `--pages` picked them: those
+    /// it still has, in their order, or all of them if it has none of them. The reader stays at the
+    /// same place in the pages picked, as no paragraph is found among them.
+    fn replace_with(&mut self, source: Box<dyn Source + Send>, picked: Option<Vec<usize>>) -> Result<(), String> {
+        let count = source.pages();
+        let picked = picked.map(|pages| pages.into_iter().filter(|page| *page < count).collect::<Vec<_>>()).filter(|pages| !pages.is_empty());
+        let place = if picked.is_some() { None } else { self.place_on_screen().and_then(|anchor| source.find(&anchor)) };
         let search = self.level.nav.take_search();
         // A list's tile opened whole is the file opened, not laid out again: labels asked for while
         // it opened are asked of it, for the same pages.
@@ -3102,7 +3303,11 @@ impl Pager<'_> {
         let labels = self.level.nav.hints.as_ref().filter(|hints| opened && hints.waiting()).map(|hints| hints.aim());
         let on_screen: Vec<usize> = self.level.nav.on_screen().into_iter().flatten().collect();
         let source: Box<dyn Source> = source;
-        let shown = Shown { pages: Pages::all(Rc::from(source), self.level.name.clone(), self.level.on_disk.clone()), items: Vec::new() };
+        let mut pages = Pages::all(Rc::from(source), self.level.name.clone(), self.level.on_disk.clone());
+        if let Some(picked) = picked {
+            pages = Pages { pages: picked, picked: true, ..pages };
+        }
+        let shown = Shown { pages, items: Vec::new() };
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone(), self.room);
         self.levels = self.levels.wrapping_add(1);
         let last = level.nav.pages.len().saturating_sub(1);
@@ -3143,6 +3348,12 @@ impl Pager<'_> {
             nav.search = texts.map(|texts| search.relaid(texts, &nav.pages, nav.count, follow));
         }
         self.relayout.forget();
+        // A reload asked for the level this replaces is for the new one, the same file.
+        if let Some((reloaded, ..)) = &mut self.reloading
+            && *reloaded == self.level.id
+        {
+            *reloaded = level.id;
+        }
         let gone = std::mem::replace(&mut self.level, level);
         let id = gone.id;
         drop(gone);
@@ -3239,8 +3450,8 @@ impl Pager<'_> {
         let said = match on_disk {
             Err(why) => format!("{name}: {why}"),
             // Its real name, which may not be the one it was given by.
-            Ok(OnDisk { path, named: Err(why) }) => format!("{}: {why}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
-            Ok(OnDisk { path, named: Ok(()) }) => self.launches.start(&name, path, false, now),
+            Ok(OnDisk { path, named: Err(why), .. }) => format!("{}: {why}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
+            Ok(OnDisk { path, named: Ok(()), .. }) => self.launches.start(&name, path, false, now),
         };
         self.level.nav.message = Some(said);
     }
@@ -5454,6 +5665,33 @@ mod tests {
         let mut typing = nav;
         typing.key(Key::Char('7'));
         assert_eq!(typing.status("a.pdf", 80, false), format!("{:<80}", " 7: g page · . per row"));
+    }
+
+    /// A file changed on disk is said first on the status line, with the key that reloads it, before
+    /// any message, and cut last; the terminal gets it black on yellow and the rest in reverse video,
+    /// the line as wide as the window whatever it is. A file gone from disk says so; none, nothing.
+    #[test]
+    fn the_status_line_warns_of_a_file_changed_on_disk() {
+        const YELLOW: &str = "\x1b[0;1;30;43m";
+        let painted = |nav: &Nav, cols| String::from_utf8(nav.painted("report.pdf", cols, false)).unwrap();
+        let mut nav = reader(2, 12, 40, 40);
+        assert!(!painted(&nav, 120).contains(YELLOW) && !nav.status("report.pdf", 120, false).contains("disk"));
+        nav.disk = Disk::Changed;
+        nav.message = Some("a page's warning".into());
+        let line = nav.status("report.pdf", 120, false);
+        assert!(line.starts_with(" report.pdf  ") && line.contains("  changed on disk, r reloads  a page's warning  "), "{line:?}");
+        assert!(painted(&nav, 120).contains(&format!("{YELLOW}changed on disk, r reloads\x1b[0;7m  a page's warning")), "{:?}", painted(&nav, 120));
+        for cols in 0..=200 {
+            assert_eq!(chars(&nav.status("report.pdf", cols, false)), usize::from(cols));
+            let painted = painted(&nav, cols);
+            let shown = painted.replace(YELLOW, "").replace("\x1b[0;7m", "").replace("\x1b[7m", "").replace("\x1b[0m", "");
+            assert_eq!(shown, nav.status("report.pdf", cols, false), "only colours are added");
+        }
+        // Narrow, the message goes before the warning, which then says less.
+        assert!(nav.status("report.pdf", 70, false).starts_with(" changed on disk, r reloads  …  "), "{:?}", nav.status("report.pdf", 70, false));
+        assert!(nav.status("report.pdf", 50, false).starts_with("   changed    page"), "{:?}", nav.status("report.pdf", 50, false));
+        nav.disk = Disk::Gone;
+        assert!(painted(&nav, 120).contains(&format!("{YELLOW}gone from disk\x1b[0;7m")));
     }
 
     /// While a number is typed, the status line is the number and the keys that take it here, and

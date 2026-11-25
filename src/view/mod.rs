@@ -36,7 +36,7 @@ pub(crate) use commands::{setting_commands, unbound_in_phrases, wrong_keys};
 use crate::CliError;
 use crate::args::{AUTO, Arg, By, Catalog, OptionSpec, OwnedOptions, Parsed, Settable, Shape};
 use crate::source::{
-    Backend, Container, Directory, Folder, Frame, Input, Joined, Later, Listing, Numbers, Opened, Openers, Part, Ready, Request, Room, Setting,
+    Backend, Container, Directory, Folder, Frame, Input, Job, Joined, Later, Listing, Numbers, Opened, Openers, Part, Ready, Request, Room, Setting,
     Source, Value, Values,
 };
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
@@ -1130,11 +1130,28 @@ impl Pages {
 /// A file of its own on disk, as another app opens it (the pager's `o`): its real path, absolute
 /// and every link followed ([`Input::on_disk`]), and whether its name says a format of the backend
 /// that showed it ([`crate::source::named_as`]), or why not. Kept from the moment it is opened, through
-/// all the levels its pages are shown in, since its `Input` is consumed by then.
+/// all the levels its pages are shown in, since its `Input` is consumed by then. Its stamp, taken
+/// before its bytes are read, tells the pager when the file changes on disk (`r` reloads it).
 #[derive(Clone, Debug)]
 pub(super) struct OnDisk {
     pub(super) path: std::path::PathBuf,
     pub(super) named: Result<(), String>,
+    pub(super) stamp: Option<Stamp>,
+}
+
+/// What tells one version of a file from another on disk: when it was last written, and its
+/// size. `None` from [`Stamp::of`] for a file that can't be found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Stamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
+impl Stamp {
+    /// The stamp of the file at `path` now, or `None` if it isn't there.
+    pub(super) fn of(path: &std::path::Path) -> Option<Self> {
+        std::fs::metadata(path).ok().map(|m| Self { modified: m.modified().ok(), len: m.len() })
+    }
 }
 
 /// A file on disk, for another app to open, or why there is none: it is in an archive, it came
@@ -1406,6 +1423,25 @@ impl<'o, 'a> Opener<'o, 'a> {
         }
     }
 
+    /// A job that opens the file at `path` again, as a file shown alone is opened, laid out for
+    /// `room`: for the file on screen once it has changed on disk (`r`). The backend is chosen
+    /// again, from what the file starts with now. A file that now holds files, or has no pages,
+    /// is the job's error; so is a panic in its backend.
+    fn reload(&self, path: String, room: Room) -> Job {
+        let (backends, options) = (self.backends.to_vec(), self.alone.owned());
+        Box::new(move || {
+            let open = || -> Result<Box<dyn Source + Send>, String> {
+                let (backend, input) = crate::source::choose(&path, &backends)?;
+                match backend.open_at(input, &options.parsed(), room)? {
+                    Opened::Pages(source) if source.pages() == 0 => Err(format!("{path}: no pages to show")),
+                    Opened::Pages(source) => Ok(source),
+                    Opened::Files(_) => Err(format!("{path}: it holds files now, so it is no longer shown as pages")),
+                }
+            };
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(open)).unwrap_or_else(|_| Err(format!("{path}: it couldn't be opened again")))
+        })
+    }
+
     /// The file `chosen`, with the backend that opens it, as a tile called `name`: opened to all
     /// its pages, or for a file that holds files, to a container of them; or if `defer` and the
     /// backend says what it costs is better spent later, not opened until its tile is wanted. A file
@@ -1416,7 +1452,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         let path = input.path.clone();
         let room = if defer { self.preview } else { self.room };
         // Asked before the input is consumed, which it is opened through.
-        let on_disk = input.on_disk().map(|path| OnDisk { named: crate::source::named_as(backend, &path), path });
+        let on_disk = input.on_disk().map(|path| OnDisk { named: crate::source::named_as(backend, &path), stamp: Stamp::of(&path), path });
         let input = match input.deferred_by(backend).filter(|_| defer) {
             Some(deferred) => match input.later() {
                 Ok(file) => {

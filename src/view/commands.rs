@@ -819,7 +819,7 @@ pub(super) const PAGE_LINES: &[Line] = &[
     line(&[Command::CopyLink], "label them, and copy the address of the one whose label is typed"),
     CONTENTS_LINE,
     line(&[Command::Back], "back to where the last link followed was"),
-    line(&[Command::Rerender], "render the pages again"),
+    line(&[Command::Rerender], "render the pages again, and reload a file changed on disk"),
     line(&[Command::Copy], "copy the page to the clipboard"),
     line(&[Command::OpenInApp], "open the file in the app the desktop opens it with"),
 ];

@@ -242,7 +242,7 @@ of a file, or for both.
 | `contents` | pages | to the contents, in a file that has a place for them |
 | `copy` | both | copy the page or the tile to the clipboard |
 | `open-in-app` | both | open the file in the app that the desktop opens it with |
-| `rerender` | both | render the pages again |
+| `rerender` | both | render the pages again; in a file's pages, reload the file if it changed on disk |
 | `back` | both | clear the search or the filter; then back through the links followed; then out of the file or the folder |
 | `leave` | both | clear the search or the filter; then out of the file or the folder, or quit |
 | `quit` | both | quit |
@@ -313,7 +313,7 @@ In a file's pages:
 | `f` | label the links on screen; type a label to follow its link ([Following links](#following-links)) |
 | `F` | label them, and copy the address of the link whose label you type |
 | `T` | to the contents, in a file that has a place for them: a [book](#books). Backspace comes back |
-| `r`, `ctrl-l` | render the pages again |
+| `r`, `ctrl-l` | render the pages again; reload the file if it changed on disk ([The status line](#the-status-line)) |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML, [books](#books), [Org documents](#org-documents) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
@@ -400,6 +400,17 @@ at the end still differ), and a message (a page that failed, `fully zoomed in`) 
 right side, cutting the name shorter while it is there. Until the first key, the message is a
 reminder of the main keys. A [search](#searching-a-documents-text) is said there too, before any
 message: what is typed and its count, then the match you are on.
+
+`clv` looks at the file on disk once a second. When the file changes after `clv` read it, the status
+line says `changed on disk, r reloads` in black on yellow, before any message. When the file is
+deleted or moved, it says `gone from disk`. A narrow window shortens the warning to `changed on disk`,
+then to `changed`. A file in an archive, or one read through a pipe, isn't looked at.
+
+`r` reads the changed file again and shows it at the same place: the same paragraph in a Markdown
+or HTML file, the same page in other files. The status line says `reloading…` until the file is
+read, and the old pages stay until then. With `--pages`, `r` keeps the pages that the file still
+has. A change of the width, the font size, the margin or the window reads a changed file again too,
+before `clv` lays it out. In a list, `r` reads no file again: go into the file, then press `r`.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
 says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,

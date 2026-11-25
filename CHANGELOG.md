@@ -21,6 +21,10 @@ works today. A version's section becomes the notes of its
   option with its default, and every key with its command. A key that a file's pages and a list
   bind alike is there once, under `[keys]`. It never writes over a file.
   `clv --print-config` prints the config in effect, from the file and the command line.
+- When the file shown changes on disk, the status line says `changed on disk, r reloads` in black
+  on yellow, or `gone from disk` when the file is deleted. `r` reads the file again and keeps your
+  place. Before, `r` only rendered the old pages again. When a document is laid out again for a new
+  width, font size, margin or window, `clv` first reads the file again if it changed.
 
 ### Changed
 

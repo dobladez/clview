@@ -358,6 +358,86 @@ fn more_than_a_page_opens_the_pager_and_pages_arrive_without_a_key() {
     assert!(view.text().contains("\x1b[?1049l"), "the alternate screen was left");
 }
 
+/// A file written again while it is shown is said on the status line, black on yellow, and `r`
+/// opens it again, at the page the reader was on, the warning gone. A file deleted is said too, and
+/// `r` leaves the pages as they are.
+#[test]
+fn r_reloads_a_file_changed_on_disk_which_the_status_line_says() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("reload", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 80, 60);
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3"));
+    view.press("n");
+    view.wait_until("page 2 shown", |t| drawn(t, "page 2/3"));
+    std::fs::write(&pdf, crate::fixtures::letter("Pager test", 5)).unwrap();
+    view.wait_until("the change said", |t| t.contains("\x1b[0;1;30;43mchanged on disk, r reloads\x1b[0;7m"));
+    let since = |view: &Session, at: usize| view.text().get(at..).unwrap_or_default().to_owned();
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("the file reloaded, at the same page", |t| drawn(t.get(before..).unwrap_or_default(), "page 2/5"));
+    let reloaded = view.text().len();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(!since(&view, reloaded).contains("changed on disk"), "the warning stayed: {:?}", since(&view, reloaded));
+
+    std::fs::remove_file(&pdf).unwrap();
+    view.wait_until("the file gone said", |t| t.get(reloaded..).unwrap_or_default().contains("\x1b[0;1;30;43mgone from disk\x1b[0;7m"));
+    let gone = view.text().len();
+    view.press("r");
+    view.wait_until("the pages sent again", |t| transmitted(t.get(gone..).unwrap_or_default()) > 0);
+    std::thread::sleep(Duration::from_millis(500));
+    let after = since(&view, gone);
+    assert!(after.contains("gone from disk\x1b[0;7m") && drawn(&after, "page 2/5") && !after.contains("reloading"), "{after:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// With `--pages`, a file reloaded keeps the pages picked that it still has, in their order.
+#[test]
+fn r_reloads_the_pages_picked_that_the_file_still_has() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("reload-picked", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--pages", "3,1"], 80, 60);
+    view.wait_until("page 3 shown", |t| drawn(t, "page 3/3 · 1 of 2"));
+    view.press("n");
+    view.wait_until("page 1 shown", |t| drawn(t, "page 1/3 · 2 of 2"));
+    std::fs::write(&pdf, crate::fixtures::letter("Pager test", 2)).unwrap();
+    view.wait_until("the change said", |t| t.contains("changed on disk, r reloads"));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("page 1 alone left", |t| drawn(t.get(before..).unwrap_or_default(), "page 1/2 · 1 of 1"));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A relayout of a file changed on disk reloads it first: the new text shows, and the warning goes.
+#[cfg(feature = "word")]
+#[test]
+fn a_relayout_of_a_file_changed_on_disk_reloads_it() {
+    if !pty_works() {
+        return;
+    }
+    let path = long_markdown("relayout-reload", "long.md");
+    let mut view = Session::start_on(KITTY, &path, &["--pager"], 100, 60);
+    view.wait_until("page 1", |t| t.contains("  page 1/"));
+    view.press("/with\r");
+    view.wait_until("every paragraph found", |t| last_bar(t).contains(" /with 1/60 "));
+    let half: String = (1..=60).map(|n| format!("Paragraph {n}, {} other words.\n\n", if n % 2 == 0 { "with" } else { "sans" })).collect();
+    std::fs::write(&path, format!("# Long\n\n{half}")).unwrap();
+    view.wait_until("the change said", |t| t.contains("changed on disk, r reloads"));
+    view.press("40]");
+    view.wait_until("laid out again from the new text", |t| bar(t).contains("· width 40 ·") && last_bar(t).contains(" /with 30 "));
+    let laid = view.text().len();
+    std::thread::sleep(Duration::from_millis(1500));
+    let since = view.text().get(laid..).unwrap_or_default().to_owned();
+    assert!(!last_bar(&view.text()).contains("changed on disk") && !since.contains("changed on disk"), "the warning stayed: {since:?}");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// `?` shows the keys in place of the pages, which come back, unsent, with any key.
 #[test]
 fn question_mark_shows_the_keys_in_place_of_the_pages() {
