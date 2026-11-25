@@ -1214,18 +1214,27 @@ pub(super) enum Recipe {
 }
 
 /// A path given on the command line, and the real path it led to when the list was last made: a
-/// file gone since is found by it among the old items, and kept.
+/// file gone since is found by it among the old items, and kept. A file that has no file of its own
+/// to stamp (`/dev/stdin`, a pipe) can't be read twice: its item is kept here, and the path is
+/// never read again.
 #[derive(Clone)]
 pub(super) struct GivenPath {
     path: String,
     real: Option<std::path::PathBuf>,
+    unstamped: Option<Item>,
 }
 
 impl Recipe {
-    /// The list of `paths`, given on the command line, with `-r` if `recurse`.
-    fn given(paths: &[&str], recurse: bool) -> Self {
-        let paths = paths.iter().map(|path| GivenPath { path: (*path).to_owned(), real: crate::source::real(path).ok() }).collect();
-        Self::Given { paths, recurse }
+    /// The list of `paths`, given on the command line, with `-r` if `recurse`, and the items of those
+    /// that have no file of their own, by their places among the paths.
+    fn given(paths: &[&str], recurse: bool, unstamped: Vec<Option<Item>>) -> Self {
+        let unstamped = unstamped.into_iter().chain(std::iter::repeat_with(|| None));
+        let paths = paths.iter().zip(unstamped).map(|(path, unstamped)| GivenPath {
+            path: (*path).to_owned(),
+            real: crate::source::real(path).ok(),
+            unstamped,
+        });
+        Self::Given { paths: paths.collect(), recurse }
     }
 
     /// What messages call the list: the path given, if there is one; the paths given, if there are more.
@@ -1240,25 +1249,27 @@ impl Recipe {
     }
 }
 
-/// A list's items before it was made again, by the real path of their files: each one whose file is
-/// as it was is kept, not opened again ([`Opener::step`]).
-pub(super) type Old = std::collections::HashMap<std::path::PathBuf, Item>;
+/// A list's items before it was made again, by the real path of their files and the name each was
+/// opened under: each one whose file is as it was is kept, not opened again ([`Opener::step`]). Two
+/// names for one file (`notes.md` and `notes.org`, linked to one text) are two items, which their
+/// backends may read differently.
+pub(super) type Old = std::collections::HashMap<(std::path::PathBuf, String), Item>;
 
-/// `items`, by the real paths of their files ([`Old`]).
+/// `items`, by the real paths of their files and their names ([`Old`]).
 pub(super) fn old(items: &[Item]) -> Old {
-    items.iter().filter_map(|item| Some((item.on_disk()?.path.clone(), item.clone()))).collect()
+    items.iter().filter_map(|item| Some(((item.on_disk()?.path.clone(), item.name().to_owned()), item.clone()))).collect()
 }
 
-/// The item of `old` whose file is at `path` (real or not), if its stamp is the one it was opened
-/// with: called `name`. A stamp missing then (a file not found) keeps nothing.
+/// The item of `old` opened as `name` whose file is at `path` (real or not), if its stamp is the
+/// one it was opened with. A stamp missing then (a file not found) keeps nothing.
 fn kept(old: &Old, path: &std::path::Path, name: &str) -> Option<Item> {
     if old.is_empty() {
         return None;
     }
     let real = std::fs::canonicalize(path).ok()?;
-    let item = old.get(&real)?;
+    let item = old.get(&(real, name.to_owned()))?;
     let stamp = item.on_disk()?.stamp;
-    (stamp.is_some() && stamp == Stamp::of(&real)).then(|| item.clone().named(name))
+    (stamp.is_some() && stamp == Stamp::of(&item.on_disk()?.path)).then(|| item.clone())
 }
 
 /// The tiles of `items` as one source, a page each, in order: a file's first page, a folder for a
@@ -1315,6 +1326,18 @@ enum Piece {
     Item(Item),
     /// A file given kept from the list made before, as it can't be opened again now, and why.
     Kept(Item, String),
+}
+
+impl Piece {
+    /// The file's item, if it has no file of its own on disk to stamp (`/dev/stdin`, a pipe): one
+    /// that can't be read again.
+    fn unstamped(&self) -> Option<Item> {
+        let item = match self {
+            Self::File(Ok(Some((_, item))), _) | Self::Item(item) | Self::Kept(item, _) => item,
+            _ => return None,
+        };
+        (item.on_disk().is_none() && !matches!(item, Item::Container { .. })).then(|| item.clone())
+    }
 }
 
 /// A list being made again ([`Opener::make`]): from its recipe, the next path given, the container
@@ -1413,8 +1436,11 @@ impl<'o, 'a> Opener<'o, 'a> {
     fn open(&self, paths: &[&str], recurse: bool) -> Result<Given, String> {
         let mut found = Found::default();
         let old = Old::default();
+        let mut unstamped = Vec::new();
         for path in paths {
-            match self.piece(path, paths.len(), recurse, &old, None) {
+            let piece = self.piece(path, paths.len(), recurse, &old, None);
+            unstamped.push(piece.unstamped());
+            match piece {
                 Piece::File(Ok(Some((backend, Item::File(pages)))), _) if paths.len() == 1 => {
                     takes_all(self.backends, &[backend], self.options, path)?;
                     return Ok(Given { shown: Shown::file(pages), left_out: Vec::new(), warnings: Vec::new() });
@@ -1444,7 +1470,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
             takes_all(self.backends, &used, self.options, "any of these files")?;
         }
-        let shown = Shown { recipe: Some(Recipe::given(paths, recurse)), ..Shown::list(items, String::new(), directories) };
+        let shown = Shown { recipe: Some(Recipe::given(paths, recurse, unstamped)), ..Shown::list(items, String::new(), directories) };
         Ok(Given { shown, left_out, warnings })
     }
 
@@ -1462,7 +1488,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         } else {
             match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, count > 1)) {
                 Ok(Some((_, Item::Container { container, .. }))) => container,
-                Err(why) => match real.and_then(|real| old.get(real)) {
+                Err(why) => match real.and_then(|real| old.get(&(real.to_path_buf(), name.clone()))) {
                     Some(item) => return Piece::Kept(item.clone().named(&name), why),
                     None => return Piece::File(Err(why), name),
                 },
@@ -1518,11 +1544,17 @@ impl<'o, 'a> Opener<'o, 'a> {
                 Recipe::Given { paths, recurse } => {
                     let count = paths.len();
                     let Some(named) = paths.get_mut(at) else { return Made::Done };
-                    let piece = self.piece(&named.path, count, *recurse, &making.old, named.real.as_deref());
-                    if let Ok(real) = crate::source::real(&named.path) {
-                        named.real = Some(real);
+                    // A file with none of its own to stamp was read once, and is kept as it was.
+                    if let Some(item) = &named.unstamped {
+                        Piece::Item(item.clone())
+                    } else {
+                        let piece = self.piece(&named.path, count, *recurse, &making.old, named.real.as_deref());
+                        if let Ok(real) = crate::source::real(&named.path) {
+                            named.real = Some(real);
+                        }
+                        named.unstamped = piece.unstamped();
+                        piece
                     }
-                    piece
                 }
             };
             match piece {

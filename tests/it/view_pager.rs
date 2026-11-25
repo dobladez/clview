@@ -659,6 +659,68 @@ fn auto_reload_holds_a_file_given_that_cant_be_opened_again() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A file given that can't be read twice, `/dev/stdin` from a pipe, keeps its tile when the list is
+/// made again: it is never read again.
+#[test]
+fn r_keeps_a_file_given_through_a_pipe() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-stdin", &["a.pdf", "b.pdf"]);
+    let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+    let command = format!("cat '{}' | exec '{BIN}' /dev/stdin '{}' --protocol kitty --pager", a.display(), b.display());
+    let mut view = Session::start_command(PLAIN, &command, 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::write(&b, crate::fixtures::letter("B again", 3)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) > 0));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(last_bar(&view.text()).contains("/2 "), "the pipe's tile went: {}", last_bar(&view.text()));
+    view.press("l\r");
+    view.wait_until("b, as it is now", |t| drawn(t, "page 1/3"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Two names for one file, each read by the backend its name says (`notes.md` as Markdown,
+/// `notes.org` as Org), keep their own tiles when the list is made again.
+#[cfg(all(feature = "word", feature = "org"))]
+#[test]
+fn r_keeps_each_name_of_one_file_as_its_own_tile() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-aliases", &["c.pdf"]);
+    std::fs::write(dir.join("text"), "* Heading\n\nSome text, and more text.\n").unwrap();
+    std::os::unix::fs::symlink(dir.join("text"), dir.join("notes.md")).unwrap();
+    std::os::unix::fs::symlink(dir.join("text"), dir.join("notes.org")).unwrap();
+    let (md, org, c) = (dir.join("notes.md"), dir.join("notes.org"), dir.join("c.pdf"));
+    let mut view = Session::start(&md, &[org.to_str().unwrap(), c.to_str().unwrap(), "--protocol", "kitty"], 120, 60);
+    view.wait_until("the list", |t| drawn(t, "1/3") && transmitted(t) >= 3);
+    let distinct = |text: &str| {
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        for (_, image) in pngs(text) {
+            if !seen.contains(image.as_raw()) {
+                seen.push(image.into_raw());
+            }
+        }
+        seen.len()
+    };
+    assert_eq!(distinct(&view.text()), 3, "the two names drew alike before");
+    std::fs::write(&c, crate::fixtures::letter("C again", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) >= 3));
+    assert_eq!(distinct(view.text().get(before..).unwrap_or_default()), 3, "one name took the other's tile");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Going into a tile whose file changed since the list opened it opens the file again first: its
 /// page is the file as it is now, with nothing to warn of. A picture is laid out once, so nothing
 /// else would read it again.

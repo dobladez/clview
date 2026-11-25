@@ -127,3 +127,28 @@ decisions, changes from its plan, surprises, and what a later reader would want.
   screen. It now holds what had changed, by path, with its stamp, over every tile
   (`Pager::changes`), and auto-reload leaves a change alone while every change on screen is one of
   those (`Pager::failed_before`).
+
+## Codex review fixes (2)
+
+- A reload that failed recorded the stamps when it ended, so a file written again while it ran was
+  held back though never tried. `settle_on` now takes `Pager::changes(true)` as it starts the reload
+  (`Pager::auto_tried`), and `auto_reloaded` keeps those. Test:
+  `auto_reload_tries_again_a_file_changed_while_a_reload_that_failed_ran` in `tests/it/tar.rs`: a
+  broken `a.pdf` is read first as the list is made again, a slow tar (3 GiB of zeros) makes it
+  last, and a valid
+  `a.pdf` is written meanwhile. Seen failing with the stamps taken at the end. A broken PNG
+  doesn't fail there: the image backend takes a `.png` by its name, and defers it.
+- A path given that can't be read twice (`/dev/stdin` from a pipe) had no stamp, so no entry in
+  `Old`, and a list made again read the spent pipe and dropped its tile. `GivenPath::unstamped` now
+  keeps such an item, by its place among the paths, and the path is never read again. Test:
+  `r_keeps_a_file_given_through_a_pipe`, seen failing with the kept item passed over.
+- `Old` was keyed by the real path alone, so two names for one file shared one item.
+  It is keyed by the real path and the name the file was opened under now, and `retiled` the same.
+  Test: `r_keeps_each_name_of_one_file_as_its_own_tile`, `notes.md` and `notes.org` linked to one
+  text: three distinct tiles before and after `r`. Seen failing (two distinct) with the map and
+  its lookup keyed by the path alone. A first revert that changed only the map passed, since
+  nothing was found to keep.
+- With a 6 GiB tar, the first full run failed
+  `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` (its worker not
+  killed for its memory) while the tar was read twice in parallel; it passed alone. 3 GiB is enough
+  for the test, and the full run passes with it.

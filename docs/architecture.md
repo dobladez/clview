@@ -1099,15 +1099,19 @@ the list again, and for a changed one starts `Opener::make` through `Reading`, t
 gone into takes, with `Reading::relist` naming the level. `Opener::make_on` goes through the paths
 given a step at a time (`Opener::piece`, which `Opener::open` uses too), waits for a container that
 reads itself, and opens a container's files with `Opener::begin` and `Opener::step`. The old list's
-items go in as `Old`, by the real paths of their files. `Opener::step` asks the container where an
+items go in as `Old`, by the real paths of their files and the names they were opened under: two
+names for one file (`notes.md` and `notes.org`) are two items, which their backends read
+differently. `Opener::step` asks the container where an
 entry is on disk (`Container::file_on_disk`, a directory's path joined to the name; none for an
 archive) and stats it before it opens it. An item whose path and stamp are the same is kept, its
 source or its `Later` with it (`Slot::Kept`). A path given that can't be opened now keeps its old
-item, found by the real path it led to before (`GivenPath::real`).
+item, found by the real path it led to before (`GivenPath::real`). A path given whose item has no
+file of its own to stamp (`/dev/stdin`, a pipe) can't be read twice: its item stays in the recipe
+(`GivenPath::unstamped`), and the path isn't read again.
 
 `Pager::relist` builds the new level in place of the old one, as `Pager::replace_with` does for a
-file. `retiled` maps each old tile to its new tile once: by the real path of its file, else by its
-name, the second of two items named alike to the second. That map keeps the tile chosen, the filter
+file. `retiled` maps each old tile to its new tile once: by the real path of its file, where it has
+one, and its name, the second of two tiles alike in both to the second. That map keeps the tile chosen, the filter
 (`Filter::given`, `last` and `chosen_before`) and the tiles that `--pages` picked. A result for a
 level no longer on screen is dropped. An empty result keeps the old level and says so. A path given
 that couldn't be opened again keeps its old item, and its reason goes in `Found::unreopened`: the
@@ -1126,7 +1130,8 @@ wait starts over. When they held still, it calls `Pager::reload`, as `r` does. T
 the time. `Pager::auto_reloaded` ends it: `reloaded` as the level's message, which
 `Pager::reloaded_on` takes back after `RELOADED_FOR` (1.5 s). A reload that failed, a list left
 empty, or a list with a path given that couldn't be opened again keeps in `Pager::auto_failed` what
-had changed, by path, with its stamp (`Pager::changes`, over every tile). Auto-reload leaves a change
+had changed when the reload started, by path, with its stamp (`Pager::auto_tried`, from
+`Pager::changes` over every tile): a change made while it ran was never tried. Auto-reload leaves a change
 alone while every change on screen is one of those (`Pager::failed_before`), and the warning shows.
 `Nav::status_warned` puts `auto` on the right side, in the longest variant only, so it goes first.
 

@@ -222,6 +222,7 @@ pub(super) fn run(
         settle: None,
         auto_failed: None,
         auto_reloading: false,
+        auto_tried: Vec::new(),
         reloaded_until: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
@@ -2262,28 +2263,25 @@ struct Pager<'a> {
     auto_failed: Option<Vec<(PathBuf, Option<Stamp>)>>,
     /// Whether the reload under way is auto-reload's: once done, the status line says `reloaded`.
     auto_reloading: bool,
+    /// What had changed on disk when auto-reload's reload under way started, by path, with its
+    /// stamp: what it works from, kept in [`Pager::auto_failed`] if it fails.
+    auto_tried: Vec<(PathBuf, Option<Stamp>)>,
     /// When `reloaded` goes from the status line.
     reloaded_until: Option<Instant>,
 }
 
 /// Each tile of the `old` list, by its place, to its tile among the `new` items, if it is still
-/// there: by the real path of its file where it has one, else by its name, the second of two files
-/// named alike to the second. Each new tile is taken once.
+/// there: by the real path of its file, where it has one, and its name, the second of two tiles
+/// alike in both to the second. Each new tile is taken once.
 fn retiled(old: &[Item], new: &[Item]) -> Vec<Option<usize>> {
-    let mut by_path: HashMap<&Path, VecDeque<usize>> = HashMap::new();
-    let mut by_name: HashMap<&str, VecDeque<usize>> = HashMap::new();
-    for (tile, item) in new.iter().enumerate() {
-        match item.on_disk() {
-            Some(on_disk) => by_path.entry(on_disk.path.as_path()).or_default().push_back(tile),
-            None => by_name.entry(item.name()).or_default().push_back(tile),
-        }
+    fn key(item: &Item) -> (Option<&Path>, &str) {
+        (item.on_disk().map(|on_disk| on_disk.path.as_path()), item.name())
     }
-    old.iter()
-        .map(|item| match item.on_disk() {
-            Some(on_disk) => by_path.get_mut(on_disk.path.as_path())?.pop_front(),
-            None => by_name.get_mut(item.name())?.pop_front(),
-        })
-        .collect()
+    let mut tiles: HashMap<(Option<&Path>, &str), VecDeque<usize>> = HashMap::new();
+    for (tile, item) in new.iter().enumerate() {
+        tiles.entry(key(item)).or_default().push_back(tile);
+    }
+    old.iter().map(|item| tiles.get_mut(&key(item))?.pop_front()).collect()
 }
 
 /// Where in the file a link leads into the reader arrives: at the place its `#fragment` names, or
@@ -3510,8 +3508,10 @@ impl Pager<'_> {
             return false;
         }
         self.settle = None;
+        let tried = self.changes(true);
         self.reload(opener);
         self.auto_reloading = self.reloading.is_some() || self.reading.is_some();
+        self.auto_tried = if self.auto_reloading { tried } else { Vec::new() };
         true
     }
 
@@ -3523,11 +3523,13 @@ impl Pager<'_> {
         }
         match worked {
             true => {
+                self.auto_tried.clear();
                 self.level.nav.message.get_or_insert_with(|| RELOADED.into());
                 self.reloaded_until = Some(Instant::now() + RELOADED_FOR);
                 self.auto_failed = None;
             }
-            false => self.auto_failed = Some(self.changes(true)),
+            // What it tried, not what is there now: a change since was never tried.
+            false => self.auto_failed = Some(std::mem::take(&mut self.auto_tried)),
         }
     }
 
