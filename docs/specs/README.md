@@ -51,7 +51,7 @@ fails while it disagrees with them.
 | 0013 | [Bind keys to named commands, and rebind them](0013-bind-keys-to-named-commands.md) | Done |
 | 0014 | [Show Org-mode documents](0014-show-org-mode-documents.md) | Done |
 | 0015 | [Read options and keys from a config file](0015-read-options-and-keys-from-a-config-file.md) | Implementing |
-| 0016 | [Warn when a list's directory changes, and let pages and lists refresh by themselves](0016-watch-lists-on-disk-and-refresh-by-themselves.md) | Ready |
+| 0016 | [Warn when a list's directory changes, and let pages and lists refresh by themselves](0016-watch-lists-on-disk-and-refresh-by-themselves.md) | Implementing |
 
 ## Lifecycle
 

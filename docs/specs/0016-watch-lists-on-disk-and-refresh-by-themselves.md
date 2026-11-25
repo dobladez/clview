@@ -1,6 +1,6 @@
 # Spec-0016: Warn when a list's directory changes, and let pages and lists refresh by themselves
 
-- **Status:** Ready
+- **Status:** Implementing
 - **Date:** 2026-11-25
 - **Related:** commit `abe33f3`, which this builds on (a file's pages warn when the file changes,
   and `r` reloads it); [A file changed on disk](../architecture.md#a-file-changed-on-disk),
@@ -269,3 +269,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   and `--pages` by name, an empty result, the stamp's own hold, `reloaded` as a message, the limit
   of 1,024 directories, a relist tied to its level. The promise to keep unchanged tiles in the
   terminal is dropped, since `r` sends every page again. Tasks and Done written (spec-update).
+- 2026-11-25 — Implementing ([notes](0016-watch-lists-on-disk-and-refresh-by-themselves-impl-20261125_1728.md)).
