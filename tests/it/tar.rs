@@ -187,6 +187,32 @@ fn a_tar_being_read_says_how_far_it_has_got_and_esc_stops_it() {
     assert!(view.finish().success());
 }
 
+/// Esc stops a list being made again (`r`), and keeps the list as it was: here, a tar given with
+/// `-r` that now takes a while to read.
+#[test]
+fn esc_stops_a_list_made_again() {
+    if !pty_works() {
+        return;
+    }
+    let dir = tmp("tar-relist", "given");
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = write(dir.join("photos.tar.gz"), &gzip(&tar(&[("b.png", png(80, 60))])));
+    let picture = write(dir.join("a.png"), &png(60, 80));
+    let mut view = Session::start(&archive, &[picture.to_str().unwrap(), "-r", "--protocol", "kitty"], 80, 48);
+    view.wait_until("the list", |t| bar(t).contains(" 1/2 "));
+    write(dir.join("photos.tar.gz"), &slow(7));
+    write(dir.join("a.png"), &png(70, 70));
+    view.wait_until("the change said", |t| t.contains("changed on disk, r reloads"));
+    view.press("r");
+    view.wait_until("reloading", |t| bar(t).contains(" reloading… "));
+    view.press("\x1b");
+    view.wait_until("stopped", |t| bar(t).contains(" stopped reloading "));
+    view.press("l");
+    view.wait_until("the list as it was", |t| bar(t).contains(" a.png ") && bar(t).contains(" 2/2 "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// What the tar backend decompresses bzip2 and xz with is named only by it and its tests
 /// (`AGENTS.md`). (Gzip's flate2 is the SVG backend's too, for svgz.)
 #[test]

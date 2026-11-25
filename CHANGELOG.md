@@ -26,7 +26,9 @@ works today. A version's section becomes the notes of its
   place. Before, `r` only rendered the old pages again. When a document is laid out again for a new
   width, font size, margin or window, `clv` first reads the file again if it changed.
 - A list warns the same way when a file is added to its directory, removed or renamed, or when the
-  file of a tile on screen changes. With `-r`, the subdirectories count too.
+  file of a tile on screen changes. With `-r`, the subdirectories count too. `r` then makes the list
+  again: new files show, removed ones go, and only the files that changed are read again. The tile
+  you are on, the filter and the zoom stay.
 
 ### Changed
 

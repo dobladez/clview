@@ -242,7 +242,7 @@ of a file, or for both.
 | `contents` | pages | to the contents, in a file that has a place for them |
 | `copy` | both | copy the page or the tile to the clipboard |
 | `open-in-app` | both | open the file in the app that the desktop opens it with |
-| `rerender` | both | render the pages again; in a file's pages, reload the file if it changed on disk |
+| `rerender` | both | render the pages again; reload the file, or make the list again, if it changed on disk |
 | `back` | both | clear the search or the filter; then back through the links followed; then out of the file or the folder |
 | `leave` | both | clear the search or the filter; then out of the file or the folder, or quit |
 | `quit` | both | quit |
@@ -340,6 +340,7 @@ In a list:
 | `/` | filter the tiles by name, as you type ([Filtering a list](#filtering-a-list)) |
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
+| `r`, `ctrl-l` | render the tiles again; make the list again if it changed on disk ([The status line](#the-status-line)) |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `o` | open the tile's file in the app the desktop opens it with, or its folder in the file manager ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
@@ -418,7 +419,17 @@ once when a list has more.
 or HTML file, the same page in other files. The status line says `reloading…` until the file is
 read, and the old pages stay until then. With `--pages`, `r` keeps the pages that the file still
 has. A change of the width, the font size, the margin or the window reads a changed file again too,
-before `clv` lays it out. In a list, `r` reads no file again: go into the file, then press `r`.
+before `clv` lays it out.
+
+In a list, `r` makes the list again, as it was made: it lists the directory again, and goes
+through the paths given on the command line again, with `-r` if it was given. A new file shows at
+its place, and a file removed goes. `clv` opens again only the files that changed. The tile you
+were on stays chosen, by its name; if its file is gone, the tile now at its place is chosen. The
+filter, the tiles that `--pages` picked, the zoom and the count to a row stay. Until the list is
+made, the old tiles stay, the status line says `reloading…`, and `esc` stops it. A file named on the
+command line stays in the list when it is gone. A list with nothing left in it stays as it was, and
+the status line says `nothing left in … that clv shows`. When you go into a tile whose file changed,
+`clv` reads the file again first.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
 says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,

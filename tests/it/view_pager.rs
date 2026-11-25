@@ -473,6 +473,157 @@ fn a_list_given_with_r_warns_of_a_file_added_to_a_subdirectory() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `r` in a list whose directory changed lists it again: a file added shows at its place, the tile
+/// the reader was on still chosen by its name, and the warning gone. A file removed is dropped,
+/// and the reader on it goes to the tile now at its place.
+#[test]
+fn r_lists_a_directory_again_and_keeps_the_tile_by_name() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist", &["b.pdf", "d.pdf", "f.pdf"]);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/3"));
+    view.press("l");
+    view.wait_until("d chosen", |t| last_bar(t).contains(" d.pdf ") && last_bar(t).contains(" 2/3 "));
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("A", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("listed again, d still chosen", |t| {
+        let t = t.get(before..).unwrap_or_default();
+        last_bar(t).contains(" d.pdf ") && drawn(t, "3/4") && chosen(t).as_deref() == Some("d.pdf")
+    });
+    let listed = view.text().len();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(!view.text().get(listed..).unwrap_or_default().contains("changed on disk"), "the warning stayed");
+    // d removed: the reader goes to the tile now at its place, f.
+    std::fs::remove_file(dir.join("d.pdf")).unwrap();
+    view.wait_until("the change said", |t| t.get(listed..).unwrap_or_default().contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("d dropped, f chosen", |t| {
+        let t = t.get(before..).unwrap_or_default();
+        last_bar(t).contains(" f.pdf ") && drawn(t, "3/3") && chosen(t).as_deref() == Some("f.pdf")
+    });
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `r` keeps a list's filter by its text, and the tile chosen by its name: a file added that
+/// matches is among the matches, and Esc puts the whole list back, the same tile chosen.
+#[test]
+fn r_keeps_a_lists_filter_by_name() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-filter", &["alpha.pdf", "beta.pdf", "alpine.pdf"]);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/3"));
+    view.press("/alp\r");
+    view.wait_until("filtered", |t| last_bar(t).contains(" /alp ") && last_bar(t).contains(" 1 of 2 "));
+    view.press("l");
+    view.wait_until("alpine chosen", |t| last_bar(t).contains(" alpine.pdf /alp 2/3 · 2 of 2 "));
+    std::fs::write(dir.join("alps.pdf"), crate::fixtures::letter("Alps", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("listed again, filtered", |t| last_bar(t.get(before..).unwrap_or_default()).contains(" alpine.pdf /alp 2/4 · 2 of 3 "));
+    view.press("\x1b");
+    view.wait_until("the whole list", |t| last_bar(t).contains(" alpine.pdf 2/4 ") && !last_bar(t).contains(" of "));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A list made again with nothing left in it keeps its tiles, and says so.
+#[test]
+fn r_on_a_list_emptied_keeps_its_tiles_and_says_so() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-emptied", &["a.pdf", "b.pdf"]);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::remove_file(dir.join("a.pdf")).unwrap();
+    std::fs::remove_file(dir.join("b.pdf")).unwrap();
+    std::fs::write(dir.join("notes.txt"), "plain text\n").unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    // The directory's name, long, is cut in its middle.
+    view.wait_until("said", |t| {
+        let bar = last_bar(t.get(before..).unwrap_or_default());
+        bar.contains(" nothing left in clv") && bar.contains(" that clv shows ")
+    });
+    assert!(last_bar(&view.text()).contains(" 1/2 "), "{}", last_bar(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A file named on the command line is never dropped from its list: gone, its tile stays, as the
+/// other files are opened again.
+#[test]
+fn r_keeps_a_file_named_on_the_command_line_that_is_gone() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-named", &["a.pdf", "b.pdf"]);
+    let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::remove_file(&b).unwrap();
+    std::fs::write(&a, crate::fixtures::letter("A again", 3)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("listed again", |t| t.get(before..).is_some_and(|t| drawn(t, "1/2") && transmitted(t) > 0));
+    view.press("l");
+    view.wait_until("b still there", |t| last_bar(t).contains(" b.pdf 2/2 "));
+    view.press("h\r");
+    view.wait_until("a opened, as it is now", |t| drawn(t, "page 1/3"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Going into a tile whose file changed since the list opened it opens the file again first: its
+/// page is the file as it is now, with nothing to warn of. A picture is laid out once, so nothing
+/// else would read it again.
+#[cfg(feature = "image")]
+#[test]
+fn going_into_a_tile_changed_on_disk_opens_it_again() {
+    if !pty_works() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("clview-pager-relist-into-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    save(&dir.join("a.png"), 400, 300);
+    save(&dir.join("b.png"), 400, 300);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    save(&dir.join("b.png"), 300, 600);
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    view.press("l");
+    view.wait_until("b chosen", |t| last_bar(t).contains(" b.png "));
+    let before = view.text().len();
+    view.press("\r");
+    view.wait_until("b opened", |t| drawn(t.get(before..).unwrap_or_default(), "page 1/1"));
+    let opened = view.text().len();
+    std::thread::sleep(Duration::from_millis(1500));
+    let since = view.text().get(before..).unwrap_or_default().to_owned();
+    let (w, h) = *sent_sizes(&since).last().expect("b's page sent");
+    assert!(h > w, "b as it was: {w} × {h}");
+    let after = view.text().get(opened..).unwrap_or_default().to_owned();
+    assert!(!after.contains("changed on disk") && !last_bar(&view.text()).contains("changed on disk"), "{after:?}");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// With `--pages`, a file reloaded keeps the pages picked that it still has, in their order.
 #[test]
 fn r_reloads_the_pages_picked_that_the_file_still_has() {

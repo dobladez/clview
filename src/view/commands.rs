@@ -853,7 +853,7 @@ pub(super) const LIST_LINES: &[Line] = &[
     line(&[Command::Filter], "filter by name as you type: enter keeps it, esc clears it"),
     pair(&ZOOM, "bigger, fewer to a row; smaller, more to a row"),
     pair(&PER_ROW, "one more tile to a row, or one fewer; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1),
-    line(&[Command::Rerender], "render again"),
+    line(&[Command::Rerender], "render again, and list again a directory changed on disk"),
     line(&[Command::Copy], "copy its picture to the clipboard"),
     line(&[Command::OpenInApp], "open it in the desktop's app: a file in its app, a folder in the file manager"),
 ];

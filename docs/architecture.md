@@ -1092,6 +1092,27 @@ other values than the ones wanted, the next pass lays it out again. A failure ke
 says why. A relayout that replaces the level meanwhile passes the job on to the new level. Leaving
 the level drops the job.
 
+In a list, `r` makes the list again from its recipe (`Recipe`, in `mod.rs`): the paths given on
+the command line and `-r` (`Recipe::Given`), or the container gone into or reached by a link
+(`Recipe::Container`). A level keeps its recipe (`Level::recipe`). `Pager::relist_from_disk` stats
+the list again, and for a changed one starts `Opener::make` through `Reading`, the path a container
+gone into takes, with `Reading::relist` naming the level. `Opener::make_on` goes through the paths
+given a step at a time (`Opener::piece`, which `Opener::open` uses too), waits for a container that
+reads itself, and opens a container's files with `Opener::begin` and `Opener::step`. The old list's
+items go in as `Old`, by the real paths of their files. `Opener::step` asks the container where an
+entry is on disk (`Container::file_on_disk`, a directory's path joined to the name; none for an
+archive) and stats it before it opens it. An item whose path and stamp are the same is kept, its
+source or its `Later` with it (`Slot::Kept`). A path given that can't be opened now keeps its old
+item, found by the real path it led to before (`GivenPath::real`).
+
+`Pager::relist` builds the new level in place of the old one, as `Pager::replace_with` does for a
+file. It keeps the tile chosen, the filter (`Filter::given`, `last` and `chosen_before`) and the
+tiles that `--pages` picked by their names, two items with one name told apart by their order. A
+result for a level no longer on screen is dropped. An empty result keeps the old level and says so.
+Esc stops the relist (`Pager::stop_reading`), and `back` stops it and goes back. `Pager::open` asks
+`Opener::again` for a tile whose file changed since it was opened, and goes into the file opened
+again.
+
 Some backends read their file again for a relayout (Markdown and HTML), and some lay out the bytes
 they kept (a PDF's tile). So the stamp can't follow a relayout. Instead, `Pager::relayout` calls
 `Pager::reload` for a changed file before it starts a layout, and waits for the reload. The layout

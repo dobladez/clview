@@ -808,6 +808,11 @@ pub(crate) trait Container {
     fn on_disk(&self) -> Result<PathBuf, String> {
         Err(ARCHIVES_FOLDER.into())
     }
+    /// Where the file it listed as `name` is on disk, for the viewer to stat before it opens the
+    /// file again: a file as it was is not opened again. None for an archive's file, by default.
+    fn file_on_disk(&self, _name: &str) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// Why a container has no folder of its own to show: it is an archive, or a folder in one.

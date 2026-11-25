@@ -24,6 +24,7 @@
 //! inside tmux, the pager asks tmux after writing whether everything reached the terminal.
 //! `docs/architecture.md` has the details.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
@@ -37,8 +38,8 @@ use super::launch;
 use super::link;
 use crate::encode::{self, PngEffort};
 use crate::source::{
-    Anchor, Ask, Bounds, Container, Effect, Frame, Handle, Keys, Landmark, Later, Link, Links, MAX_NAME, Named, Numbers, Openers, Pool, Ready,
-    Request, Room, Setting, Source, Target, Texts, Told, Value, Values,
+    Anchor, Ask, Bounds, Container, Effect, Frame, Handle, Keys, Landmark, Later, Link, Links, MAX_NAME, Named, Numbers, Openers, Pool, Request,
+    Room, Setting, Source, Target, Texts, Told, Value, Values,
 };
 
 use super::files::{Files, Written};
@@ -49,8 +50,8 @@ use super::relayout::{self, Ended, Hold, Relayout};
 use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
-    FALLBACK_SIZE, Found, Item, OnDisk, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Shown, Stamp, Terminal,
-    Watched, cell_lines, chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
+    FALLBACK_SIZE, Found, Item, Made, Making, OnDisk, Opener, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Recipe, Shown, Stamp,
+    Terminal, Watched, cell_lines, chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -233,7 +234,7 @@ pub(super) fn run(
     loop {
         let wait = if !pending.is_empty() {
             ESCAPE_WAIT
-        } else if pager.reading.as_ref().is_some_and(|r| r.opening.is_some()) {
+        } else if pager.reading.as_ref().is_some_and(|r| r.making.is_opening()) {
             // Opening a container's files: only a look for keys between them.
             Duration::ZERO
         } else if pager.reading.is_some() {
@@ -298,8 +299,14 @@ pub(super) fn run(
                 // Reading a container gone into: the keys that leave or go back stop it, and
                 // the keys that quit, quit. Nothing else moves meanwhile.
                 if pager.reading.is_some() || pager.going_into.is_some() {
+                    let relisting = pager.reading.as_ref().is_some_and(|reading| reading.relist.is_some());
                     match pager.level.nav.command(key) {
                         Some(Command::Quit) => quit = true,
+                        // A list made again: `back` goes back too, Esc keeps the list as it was.
+                        Some(Command::Back) if relisting => {
+                            pager.stop_reading();
+                            pager.back()?;
+                        }
                         Some(Command::Back | Command::Leave) => pager.stop_reading(),
                         _ => {}
                     }
@@ -2057,6 +2064,8 @@ struct Level {
     /// For a list, the directories on disk it was read from, with their stamps: looked at with the
     /// files of its tiles on screen ([`Pager::list_on_disk_now`]).
     directories: Watched,
+    /// For a list, how it was made, to make it again (`r`, [`Pager::reload`]).
+    recipe: Option<Recipe>,
 }
 
 impl Level {
@@ -2065,7 +2074,7 @@ impl Level {
     /// document laid out for its room is never wider than it: the width is one to a row there.
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>, room: Room) -> Self {
         let list = shown.is_list();
-        let Shown { pages: Pages { source, name, pages, picked, on_disk }, items, directories } = shown;
+        let Shown { pages: Pages { source, name, pages, picked, on_disk }, items, directories, recipe } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
         // A place it can't be asked by, as a name is asked, is none.
@@ -2093,6 +2102,7 @@ impl Level {
             leaving: None,
             depth: 0,
             directories,
+            recipe,
         }
     }
 
@@ -2226,13 +2236,14 @@ struct Labels {
     drawn: Option<String>,
 }
 
-/// A container gone into from the list, being read or its files opened ([`Pager::read_on`]): its
-/// name from the first list, and since when.
+/// A list being made ([`Pager::read_on`]): a container gone into from the list, being read or its
+/// files opened, or the list on screen made again (`r`), for the level `relist`. Its name from the
+/// first list, and since when.
 struct Reading {
     name: String,
-    container: Rc<dyn Container>,
-    opening: Option<Opening>,
+    making: Making,
     since: Instant,
+    relist: Option<u64>,
 }
 
 /// A file of a list the reader chose to go into, waited for until it is opened.
@@ -2707,7 +2718,8 @@ impl Pager<'_> {
             Item::Container { name, container } => {
                 self.level.nav.message = Some(format!("opening {name}…"));
                 self.draw()?;
-                self.reading = Some(Reading { name, container, opening: None, since: Instant::now() });
+                let making = opener.make(Recipe::Container(container), HashMap::new());
+                self.reading = Some(Reading { name, making, since: Instant::now(), relist: None });
                 self.read_on(opener)?;
             }
         }
@@ -2879,7 +2891,9 @@ impl Pager<'_> {
     /// list of its own, once read ([`Pager::read_on`]). What was on screen stops rendering, and
     /// waits to be gone back to.
     fn open(&mut self, at: usize, opener: &Opener<'_, '_>) -> Result<(), String> {
-        let level = match self.level.items.get(at) {
+        // A file changed on disk since the list opened it is opened again first.
+        let again = self.level.items.get(at).and_then(|item| opener.again(item));
+        let level = match again.as_ref().or_else(|| self.level.items.get(at)) {
             Some(Item::File(pages)) => {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
                 Level::new(self.levels, Shown::file(pages), Zoom::Auto, true, self.settings.clone(), self.room)
@@ -2896,7 +2910,8 @@ impl Pager<'_> {
                 let (name, container) = (format!("{}{name}", self.level.name), container.clone());
                 self.level.nav.message = Some(format!("opening {name}…"));
                 self.draw()?;
-                self.reading = Some(Reading { name, container, opening: None, since: Instant::now() });
+                let making = opener.make(Recipe::Container(container), HashMap::new());
+                self.reading = Some(Reading { name, making, since: Instant::now(), relist: None });
                 self.read_on(opener)?;
                 return Ok(());
             }
@@ -2906,39 +2921,31 @@ impl Pager<'_> {
         Ok(())
     }
 
-    /// Read on the container gone into: how far it has got on the status line, until its files are
-    /// opened and it shows, as a level of its own. Whether it does now.
+    /// Read on the container gone into, or the list made again: how far it has got on the status
+    /// line, until its files are opened and it shows, as a level of its own or in place of the list
+    /// made again ([`Pager::relist`]). A list made again for a level no longer on screen is dropped.
+    /// Whether the screen changed.
     fn read_on(&mut self, opener: &Opener<'_, '_>) -> Result<bool, String> {
         let Some(gone_into) = self.reading.as_mut() else { return Ok(false) };
-        let opening = match gone_into.opening.as_mut() {
-            Some(opening) => opening,
-            None => match gone_into.container.ready() {
-                Ready::Reading { read, of } => {
-                    let said = reading(&gone_into.name, read, of);
-                    return self.say(said).map(|()| false);
-                }
-                Ready::Now => match opener.begin(gone_into.container.clone(), "", false) {
-                    Ok(opening) => gone_into.opening.insert(opening),
-                    Err(why) => {
-                        let Some(Reading { name, .. }) = self.reading.take() else { return Ok(false) };
-                        self.arriving = None;
-                        self.later.push(why.1);
-                        self.level.nav.message = Some(format!("nothing in {name} that {} shows", crate::NAME));
-                        return Ok(true);
-                    }
-                },
-            },
+        if gone_into.relist.is_some_and(|level| level != self.level.id) {
+            self.reading = None;
+            return Ok(false);
+        }
+        let said = match opener.make_on(&mut gone_into.making, Some(Instant::now() + PROGRESS_EVERY)) {
+            Made::Done => None,
+            _ if gone_into.relist.is_some() => Some(RELOADING.to_owned()),
+            Made::Reading { read, of } => Some(reading(&gone_into.name, read, of)),
+            Made::Opening(done) if gone_into.since.elapsed() >= PROGRESS_AFTER => Some(opened(&gone_into.name, done)),
+            Made::Opening(_) => Some(format!("opening {}…", gone_into.name)),
         };
-        if !opener.step(opening, Some(Instant::now() + PROGRESS_EVERY)) {
-            let said = match gone_into.since.elapsed() >= PROGRESS_AFTER {
-                true => opened(&gone_into.name, opening.done()),
-                false => format!("opening {}…", gone_into.name),
-            };
+        if let Some(said) = said {
             return self.say(said).map(|()| false);
         }
-        let Some(Reading { name, container, opening: Some(opening), .. }) = self.reading.take() else { return Ok(false) };
-        let mut found = Found::default();
-        opener.finish(&mut found, opening);
+        let Some(Reading { name, making, relist, .. }) = self.reading.take() else { return Ok(false) };
+        let (found, recipe) = opener.made(making);
+        if relist.is_some() {
+            return self.relist(found, recipe);
+        }
         let Found { items, left_out, warnings, directories, .. } = found;
         self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
         if items.is_empty() {
@@ -2947,11 +2954,89 @@ impl Pager<'_> {
             return Ok(true);
         }
         self.level.nav.message = None;
-        let mut level = Level::new(self.levels, Shown::list(items, name, directories), self.level.nav.zoom, true, self.settings.clone(), self.room);
+        let from = match &recipe {
+            Recipe::Container(container) => Some(container.clone()),
+            Recipe::Given { .. } => None,
+        };
+        let shown = Shown { recipe: Some(recipe), ..Shown::list(items, name, directories) };
+        let mut level = Level::new(self.levels, shown, self.level.nav.zoom, true, self.settings.clone(), self.room);
         level.nav.message = left_out_note(&left_out);
-        level.from = Some(container);
+        level.from = from;
         self.enter(level);
         self.arrive();
+        Ok(true)
+    }
+
+    /// The list on screen made again (`r`), from what `found`, in place of this one: its tiles sent
+    /// again. The tile the reader is on, the filter and the tiles `--pages` picked are kept by their
+    /// names; a tile gone leaves the reader on the one now at its place, or the last. The zoom and the
+    /// count to a row stay. A list with nothing left in it keeps this one, and says so. Whether the
+    /// screen changed.
+    fn relist(&mut self, found: Found, recipe: Recipe) -> Result<bool, String> {
+        if self.level.nav.message.as_deref() == Some(RELOADING) {
+            self.level.nav.message = None;
+        }
+        let Found { items, left_out, warnings, directories, .. } = found;
+        self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
+        if items.is_empty() {
+            self.level.nav.message = Some(format!("nothing left in {} that {} shows", recipe.name(), crate::NAME));
+            return Ok(true);
+        }
+        let old = &self.level;
+        // Each name of the new list, to its tiles, the last first: two files named alike are told
+        // apart by their order.
+        let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (tile, item) in items.iter().enumerate().rev() {
+            by_name.entry(item.name()).or_default().push(tile);
+        }
+        let mut taken = by_name.clone();
+        let mut new_of = |tile: usize| old.items.get(tile).and_then(|item| taken.get_mut(item.name())?.pop());
+        let place = |tile: Option<usize>| {
+            let item = tile.and_then(|tile| old.items.get(tile))?;
+            by_name.get(item.name())?.last().copied()
+        };
+        let picked: Option<Vec<usize>> = old.nav.picked.then(|| {
+            let given = old.nav.filter.as_ref().map_or(&old.nav.pages, |filter| &filter.given);
+            given.iter().filter_map(|tile| new_of(*tile)).collect::<Vec<_>>()
+        });
+        let picked = picked.filter(|picked| !picked.is_empty());
+        let last = items.len().saturating_sub(1);
+        // Gone, the tile now at its place.
+        let chosen = old.nav.chosen().map(|tile| place(Some(tile)).unwrap_or(tile.min(last)));
+        let filter = old
+            .nav
+            .filter
+            .as_ref()
+            .map(|filter| (filter.text.clone(), filter.typing, filter.before.clone(), place(filter.last), place(filter.chosen_before)));
+        let (zoom, nested, hint, from, name, depth, at) =
+            (old.nav.zoom, old.nav.nested, old.nav.hint, old.from.clone(), old.name.clone(), old.depth, old.nav.at);
+        let mut shown = Shown { recipe: Some(recipe), ..Shown::list(items, name, directories) };
+        if let Some(picked) = picked {
+            shown.pages = Pages { pages: picked, picked: true, ..shown.pages };
+        }
+        let mut level = Level::new(self.levels, shown, zoom, nested, self.settings.clone(), self.room);
+        self.levels = self.levels.wrapping_add(1);
+        level.from = from;
+        level.depth = depth;
+        level.nav.hint = hint;
+        level.nav.message = left_out_note(&left_out);
+        let nav = &mut level.nav;
+        match filter {
+            Some((text, typing, before, last, chosen_before)) => {
+                let given = nav.pages.clone();
+                nav.filter = Some(Filter { text, typing, given, last, before, chosen_before });
+                nav.refilter(chosen.or(last));
+            }
+            None => {
+                let position = chosen.and_then(|tile| nav.pages.iter().position(|t| *t == tile));
+                nav.at = position.unwrap_or(at).min(nav.pages.len().saturating_sub(1));
+            }
+        }
+        self.relayout.forget();
+        let gone = std::mem::replace(&mut self.level, level);
+        let id = gone.id;
+        drop(gone);
+        self.let_go(id)?;
         Ok(true)
     }
 
@@ -2987,9 +3072,17 @@ impl Pager<'_> {
         if let Some(GoingInto { name, .. }) = self.going_into.take() {
             self.level.nav.message = Some(format!("stopped opening {name}"));
         }
-        if let Some(Reading { name, container, .. }) = self.reading.take() {
-            container.release();
-            self.level.nav.message = Some(format!("stopped opening {name}"));
+        if let Some(Reading { name, making, relist, .. }) = self.reading.take() {
+            making.release();
+            self.level.nav.message = match relist {
+                Some(_) => Some("stopped reloading".into()),
+                None => {
+                    if let Recipe::Container(container) = making.recipe() {
+                        container.release();
+                    }
+                    Some(format!("stopped opening {name}"))
+                }
+            };
         }
     }
 
@@ -3260,7 +3353,12 @@ impl Pager<'_> {
     /// saying `reloading…`. A file not changed, or gone from disk, which the status line already
     /// says, is only rendered again.
     fn reload(&mut self, opener: &Opener<'_, '_>) {
-        if self.reloading.is_some() {
+        if self.reloading.is_some() || self.reading.is_some() {
+            return;
+        }
+        if let Some(disk) = self.list_on_disk_now() {
+            self.level.nav.disk = disk;
+            self.relist_from_disk(disk, opener);
             return;
         }
         let Some((disk, path, stamp)) = self.on_disk_now() else { return };
@@ -3277,6 +3375,18 @@ impl Pager<'_> {
                 self.level.nav.message = Some(RELOADING.into());
             }
         }
+    }
+
+    /// `r` in a list: the list made again from its recipe ([`Opener::make`]) if a directory it was
+    /// read from, or a tile's file on screen, changed on disk, through the path a container gone into
+    /// takes ([`Pager::read_on`]), the old list's items kept where their files are as they were. Until
+    /// it is made, these tiles stay, the status line saying `reloading…`. A list as it was, or gone
+    /// from disk, is only rendered again.
+    fn relist_from_disk(&mut self, disk: Disk, opener: &Opener<'_, '_>) {
+        let Some(recipe) = self.level.recipe.clone().filter(|_| disk == Disk::Changed) else { return };
+        let making = opener.make(recipe, super::old(&self.level.items));
+        self.level.nav.message = Some(RELOADING.into());
+        self.reading = Some(Reading { name: self.level.name.clone(), making, since: Instant::now(), relist: Some(self.level.id) });
     }
 
     /// Take the file opened again by `r` ([`Pager::reload`]), once it is: its pages in place of these,

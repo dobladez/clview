@@ -46,6 +46,11 @@ impl Container for Directory {
         Input::open(path.to_str().ok_or_else(|| format!("{}: the name isn't UTF-8", path.display()))?)
     }
 
+    /// Its path joined to the name: a directory's file is opened by that path.
+    fn file_on_disk(&self, name: &str) -> Option<PathBuf> {
+        Some(Path::new(&self.path).join(name))
+    }
+
     /// Its real path, a directory's.
     fn on_disk(&self) -> Result<PathBuf, String> {
         let real = super::real(&self.path)?;
@@ -239,6 +244,7 @@ mod tests {
         let listing = list(dir.to_str().unwrap(), false).unwrap();
         assert_eq!(names(&listing), ["b9.png", "b10.pdf", "empty/", "sub/"]);
         assert_eq!(opened(&dir, &listing, 0), dir.join("b9.png").to_str().unwrap());
+        assert_eq!(Directory::new(dir.to_str().unwrap()).file_on_disk("b9.png"), Some(dir.join("b9.png")), "where it opens");
         assert_eq!(listing.entries[3].container.as_ref().unwrap().path(), dir.join("sub").to_str().unwrap());
         assert!(listing.entries[0].container.is_none());
         assert!(!listing.cut && listing.unread.is_empty(), "{listing:?}");

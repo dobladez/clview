@@ -231,7 +231,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   listed, with and without `-r`, and the limit); `cargo test -j 2 --test it
   a_list_warns_of_a_file_added_to_its_directory`, `…a_list_warns_of_a_tile_rewritten_on_screen`,
   `…a_list_given_with_r_warns_of_a_file_added_to_a_subdirectory`, `…a_zips_list_is_not_looked_at`.
-- [ ] **`r` makes a list again** — `Opener::begin` and `step` reusing an item by path and stamp;
+- [x] **`r` makes a list again** — `Opener::begin` and `step` reusing an item by path and stamp;
   `Pager::relist` through `read_on`'s path with the recipe, tied to its level; the tile, the
   filter and `--pages` by name; an empty result; a changed tile opened again when gone into;
   usage and architecture. *Files:* `src/view/mod.rs`, `src/view/pager.rs`,

@@ -1082,6 +1082,8 @@ pub(super) struct Shown {
     /// A list's directories on disk, with their stamps, for the pager to look at
     /// ([`Listing::directories`]); none for a file.
     pub(super) directories: Watched,
+    /// How a list was made, to make it again (`r`); none for a file.
+    pub(super) recipe: Option<Recipe>,
 }
 
 /// Directories on disk, by their real paths, each with its stamp taken before it was read.
@@ -1091,12 +1093,12 @@ impl Shown {
     /// A list of `items`, every tile, its items' names following `name`, read from `directories`.
     pub(super) fn list(items: Vec<Item>, name: String, directories: Watched) -> Self {
         // Never opened in another app as a whole: its tiles each are, as what they are.
-        Self { pages: Pages::all(Rc::new(tiles(&items)), name, Err(String::new())), items, directories }
+        Self { pages: Pages::all(Rc::new(tiles(&items)), name, Err(String::new())), items, directories, recipe: None }
     }
 
     /// A file's `pages`.
     pub(super) fn file(pages: Pages) -> Self {
-        Self { pages, items: Vec::new(), directories: Vec::new() }
+        Self { pages, items: Vec::new(), directories: Vec::new(), recipe: None }
     }
 
     /// Whether this is a list: it has items.
@@ -1156,6 +1158,7 @@ pub(super) type Place = Result<OnDisk, String>;
 
 /// A tile of a list: a file, shown by its first page and opened to its pages, or a container (a
 /// directory), shown as a folder and opened to a list of its own.
+#[derive(Clone)]
 pub(super) enum Item {
     File(Pages),
     /// A file not opened until its tile is wanted.
@@ -1180,6 +1183,80 @@ impl Item {
             Self::Later { name, .. } | Self::Container { name, .. } => name,
         }
     }
+
+    /// Its file on disk, and the stamp taken when it was opened; none for a container, or a file
+    /// that has no path of its own.
+    pub(super) fn on_disk(&self) -> Option<&OnDisk> {
+        match self {
+            Self::File(Pages { on_disk: Ok(on_disk), .. }) | Self::Later { on_disk: Ok(on_disk), .. } => Some(on_disk),
+            _ => None,
+        }
+    }
+
+    /// The same, called `name`.
+    fn named(mut self, name: &str) -> Self {
+        match &mut self {
+            Self::File(Pages { name: named, .. }) | Self::Later { name: named, .. } | Self::Container { name: named, .. } => *named = name.to_owned(),
+        }
+        self
+    }
+}
+
+/// How a list was made, to make it again (`r`, [`Opener::make`]).
+#[derive(Clone)]
+pub(super) enum Recipe {
+    /// From the command line: the paths given, and whether `-r` was.
+    Given { paths: Vec<GivenPath>, recurse: bool },
+    /// A container gone into, or reached by a link: listed without `-r`.
+    Container(Rc<dyn Container>),
+}
+
+/// A path given on the command line, and the real path it led to when the list was last made: a
+/// file gone since is found by it among the old items, and kept.
+#[derive(Clone)]
+pub(super) struct GivenPath {
+    path: String,
+    real: Option<std::path::PathBuf>,
+}
+
+impl Recipe {
+    /// The list of `paths`, given on the command line, with `-r` if `recurse`.
+    fn given(paths: &[&str], recurse: bool) -> Self {
+        let paths = paths.iter().map(|path| GivenPath { path: (*path).to_owned(), real: crate::source::real(path).ok() }).collect();
+        Self::Given { paths, recurse }
+    }
+
+    /// What messages call the list: the path given, if there is one; the paths given, if there are more.
+    pub(super) fn name(&self) -> String {
+        match self {
+            Self::Given { paths, .. } => match paths.as_slice() {
+                [one] => file_name(&one.path),
+                _ => "the paths given".into(),
+            },
+            Self::Container(container) => file_name(container.path()),
+        }
+    }
+}
+
+/// A list's items before it was made again, by the real path of their files: each one whose file is
+/// as it was is kept, not opened again ([`Opener::step`]).
+pub(super) type Old = std::collections::HashMap<std::path::PathBuf, Item>;
+
+/// `items`, by the real paths of their files ([`Old`]).
+pub(super) fn old(items: &[Item]) -> Old {
+    items.iter().filter_map(|item| Some((item.on_disk()?.path.clone(), item.clone()))).collect()
+}
+
+/// The item of `old` whose file is at `path` (real or not), if its stamp is the one it was opened
+/// with: called `name`. A stamp missing then (a file not found) keeps nothing.
+fn kept(old: &Old, path: &std::path::Path, name: &str) -> Option<Item> {
+    if old.is_empty() {
+        return None;
+    }
+    let real = std::fs::canonicalize(path).ok()?;
+    let item = old.get(&real)?;
+    let stamp = item.on_disk()?.stamp;
+    (stamp.is_some() && stamp == Stamp::of(&real)).then(|| item.clone().named(name))
 }
 
 /// The tiles of `items` as one source, a page each, in order: a file's first page, a folder for a
@@ -1203,19 +1280,84 @@ pub(super) struct Opening {
     order: Vec<usize>,
     /// How many of `order` are opened.
     next: usize,
-    /// Each entry's file, by its place in the listing, once opened.
-    opened: Vec<Option<Chosen>>,
+    /// Each entry's file, by its place in the listing, once opened or kept.
+    opened: Vec<Option<Slot>>,
+    /// The items of the list made before, kept where their files are as they were.
+    old: Rc<Old>,
 }
 
 /// A file as [`Opener::file`] opens it: with the backend that opened it, a tile; `None` for a file
 /// no backend opens; or why it can't be shown.
 type Chosen = Result<Option<(&'static dyn Backend, Item)>, String>;
 
+/// A container's file in the list being made: opened, or kept from the list made before.
+enum Slot {
+    Opened(Chosen),
+    Kept(Item),
+}
+
 impl Opening {
     /// How many of its entries are opened, and of how many.
     pub(super) fn done(&self) -> (usize, usize) {
         (self.next, self.order.len())
     }
+}
+
+/// What a path given adds to a list ([`Opener::piece`]).
+enum Piece {
+    /// A file opened, or why not, by its name.
+    File(Chosen, String),
+    /// A container to list: its files named with this prefix, its containers' too if recursing.
+    List(Rc<dyn Container>, String, bool),
+    /// A folder among other paths, or a file kept from the list made before.
+    Item(Item),
+}
+
+/// A list being made again ([`Opener::make`]): from its recipe, the next path given, the container
+/// waiting to be listed (with its prefix, and whether recursing) while it reads itself, its files
+/// being opened, and what is found so far.
+pub(super) struct Making {
+    recipe: Recipe,
+    next: usize,
+    waiting: Option<(Rc<dyn Container>, String, bool)>,
+    opening: Option<Opening>,
+    found: Found,
+    old: Rc<Old>,
+}
+
+impl Making {
+    /// Let go of what the containers it lists from the paths given read: it is stopped. A container
+    /// gone into is the list's own, and stays.
+    pub(super) fn release(&self) {
+        if let Recipe::Given { .. } = self.recipe {
+            let opening = self.opening.as_ref().map(|opening| &opening.container);
+            for container in self.waiting.as_ref().map(|(container, ..)| container).into_iter().chain(opening) {
+                container.release();
+            }
+        }
+    }
+
+    /// The recipe it makes the list from.
+    pub(super) fn recipe(&self) -> &Recipe {
+        &self.recipe
+    }
+
+    /// Whether it is opening a container's files, which it does a few at a time.
+    pub(super) fn is_opening(&self) -> bool {
+        self.opening.is_some()
+    }
+}
+
+/// How far making a list has got ([`Opener::make_on`]).
+pub(super) enum Made {
+    /// A container still reads itself: `read` bytes of `of`, when it knows.
+    Reading {
+        read: u64,
+        of: Option<u64>,
+    },
+    /// A container's files being opened: how many of how many.
+    Opening((usize, usize)),
+    Done,
 }
 
 /// The file arguments: the arguments that are neither an option nor an option's value.
@@ -1265,33 +1407,18 @@ impl<'o, 'a> Opener<'o, 'a> {
     /// nothing shows is passed over. An option that none of the files' backends takes is refused,
     /// since it would do nothing.
     fn open(&self, paths: &[&str], recurse: bool) -> Result<Given, String> {
-        let is_dir = |path: &str| std::fs::metadata(path).is_ok_and(|m| m.is_dir());
         let mut found = Found::default();
+        let old = Old::default();
         for path in paths {
-            let name = file_name(path);
-            let container: Rc<dyn Container> = if is_dir(path) {
-                Rc::new(Directory::new(path))
-            } else {
-                // A file alone is shown at once, so it is opened at once.
-                match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, paths.len() > 1)) {
-                    Ok(Some((_, Item::Container { container, .. }))) => container,
-                    Ok(Some((backend, Item::File(pages)))) if paths.len() == 1 => {
-                        takes_all(self.backends, &[backend], self.options, path)?;
-                        return Ok(Given { shown: Shown::file(pages), left_out: Vec::new(), warnings: Vec::new() });
-                    }
-                    Err(why) if paths.len() == 1 => return Err(why),
-                    opened => {
-                        found.file(opened, name);
-                        continue;
-                    }
+            match self.piece(path, paths.len(), recurse, &old, None) {
+                Piece::File(Ok(Some((backend, Item::File(pages)))), _) if paths.len() == 1 => {
+                    takes_all(self.backends, &[backend], self.options, path)?;
+                    return Ok(Given { shown: Shown::file(pages), left_out: Vec::new(), warnings: Vec::new() });
                 }
-            };
-            match (paths.len(), recurse) {
-                // Alone, its contents, named from it.
-                (1, _) => self.list(&mut found, container, "", recurse),
-                // Among others, recursing: its files, named from its own name.
-                (_, true) => self.list(&mut found, container, &format!("{name}/"), true),
-                (_, false) => found.items.push(Item::Container { name: format!("{name}/"), container }),
+                Piece::File(Err(why), _) if paths.len() == 1 => return Err(why),
+                Piece::File(opened, name) => found.file(opened, name),
+                Piece::List(container, prefix, recurse) => self.list(&mut found, container, &prefix, recurse),
+                Piece::Item(item) => found.items.push(item),
             }
         }
         let Found { items, used, left_out, warnings, directories, .. } = found;
@@ -1300,7 +1427,7 @@ impl<'o, 'a> Opener<'o, 'a> {
                 return Err(why.clone());
             }
             warn(&warnings, &left_out);
-            return Err(match paths.iter().any(|p| is_dir(p)) {
+            return Err(match paths.iter().any(|p| std::fs::metadata(p).is_ok_and(|m| m.is_dir())) {
                 false => format!("none of the {} files can be shown", paths.len()),
                 true => "nothing given can be shown".into(),
             });
@@ -1309,7 +1436,114 @@ impl<'o, 'a> Opener<'o, 'a> {
         if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
             takes_all(self.backends, &used, self.options, "any of these files")?;
         }
-        Ok(Given { shown: Shown::list(items, String::new(), directories), left_out, warnings })
+        let shown = Shown { recipe: Some(Recipe::given(paths, recurse)), ..Shown::list(items, String::new(), directories) };
+        Ok(Given { shown, left_out, warnings })
+    }
+
+    /// What the path given `path`, one of `count` given, adds to a list, with `-r` if `recurse`: a
+    /// directory, or a file that holds files, to list (alone, its contents; among others, recursing,
+    /// its files named from its name; among others, a folder); or a file. A file alone is shown at
+    /// once, so it is opened at once. A file of `old` as it was is kept, not opened again; one that
+    /// can't be opened now, but was at `real`, is kept as it was: a file given is never dropped.
+    fn piece(&self, path: &str, count: usize, recurse: bool, old: &Old, real: Option<&std::path::Path>) -> Piece {
+        let name = file_name(path);
+        let container: Rc<dyn Container> = if std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+            Rc::new(Directory::new(path))
+        } else if let Some(item) = kept(old, std::path::Path::new(path), &name) {
+            return Piece::Item(item);
+        } else {
+            match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, count > 1)) {
+                Ok(Some((_, Item::Container { container, .. }))) => container,
+                Err(why) => match real.and_then(|real| old.get(real)) {
+                    Some(item) => return Piece::Item(item.clone().named(&name)),
+                    None => return Piece::File(Err(why), name),
+                },
+                opened => return Piece::File(opened, name),
+            }
+        };
+        match (count, recurse) {
+            (1, _) => Piece::List(container, String::new(), recurse),
+            (_, true) => Piece::List(container, format!("{name}/"), true),
+            (_, false) => Piece::Item(Item::Container { name: format!("{name}/"), container }),
+        }
+    }
+
+    /// A list made again from `recipe`, a step at a time ([`Opener::make_on`]), keeping the items of
+    /// `old` whose files are as they were.
+    pub(super) fn make(&self, recipe: Recipe, old: Old) -> Making {
+        Making { recipe, next: 0, waiting: None, opening: None, found: Found::default(), old: Rc::new(old) }
+    }
+
+    /// Make `making` on until `until`, or to its end: how far it has got. A container still reading
+    /// itself is waited for, and a container's files are opened a few at a time.
+    pub(super) fn make_on(&self, making: &mut Making, until: Option<Instant>) -> Made {
+        loop {
+            if let Some(opening) = making.opening.as_mut() {
+                if !self.step(opening, until) {
+                    return Made::Opening(opening.done());
+                }
+                if let Some(opening) = making.opening.take() {
+                    self.finish(&mut making.found, opening);
+                }
+                continue;
+            }
+            if let Some((container, ..)) = &making.waiting {
+                if let Ready::Reading { read, of } = container.ready() {
+                    return Made::Reading { read, of };
+                }
+                if let Some((container, prefix, recurse)) = making.waiting.take() {
+                    match self.begin(container, &prefix, recurse, making.old.clone()) {
+                        Ok(opening) => making.opening = Some(opening),
+                        Err(left) => making.found.left_out.push(left),
+                    }
+                }
+                continue;
+            }
+            if until.is_some_and(|until| Instant::now() >= until) {
+                return Made::Opening((0, 0));
+            }
+            let at = making.next;
+            making.next = making.next.saturating_add(1);
+            let piece = match &mut making.recipe {
+                Recipe::Container(container) if at == 0 => Piece::List(container.clone(), String::new(), false),
+                Recipe::Container(_) => return Made::Done,
+                Recipe::Given { paths, recurse } => {
+                    let count = paths.len();
+                    let Some(named) = paths.get_mut(at) else { return Made::Done };
+                    let piece = self.piece(&named.path, count, *recurse, &making.old, named.real.as_deref());
+                    if let Ok(real) = crate::source::real(&named.path) {
+                        named.real = Some(real);
+                    }
+                    piece
+                }
+            };
+            match piece {
+                Piece::File(opened, name) => making.found.file(opened, name),
+                Piece::List(container, prefix, recurse) => making.waiting = Some((container, prefix, recurse)),
+                Piece::Item(item) => making.found.items.push(item),
+            }
+        }
+    }
+
+    /// What `making` found, once made, and its recipe, the real paths of the paths given as they are now.
+    pub(super) fn made(&self, making: Making) -> (Found, Recipe) {
+        (making.found, making.recipe)
+    }
+
+    /// `item` opened again, as a list opens a file, if its file changed on disk since it was opened:
+    /// for a tile gone into. `None` for one as it was, gone, or that can't be opened now, which is
+    /// gone into as it is.
+    pub(super) fn again(&self, item: &Item) -> Option<Item> {
+        let on_disk = item.on_disk()?;
+        let now = Stamp::of(&on_disk.path);
+        if now.is_none() || now == on_disk.stamp {
+            return None;
+        }
+        let path = on_disk.path.to_str()?;
+        match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), item.name(), true)) {
+            Ok(Some((_, again @ (Item::File(_) | Item::Later { .. })))) => Some(again),
+            _ => None,
+        }
     }
 
     /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
@@ -1323,7 +1557,7 @@ impl<'o, 'a> Opener<'o, 'a> {
             progress.say(&reading(&name, read, of));
             std::thread::sleep(PROGRESS_EVERY);
         }
-        match self.begin(container, prefix, recurse) {
+        match self.begin(container, prefix, recurse, Rc::default()) {
             Ok(mut opening) => {
                 while !self.step(&mut opening, Some(Instant::now() + PROGRESS_EVERY)) {
                     progress.say(&opened(&name, opening.done()));
@@ -1336,9 +1570,9 @@ impl<'o, 'a> Opener<'o, 'a> {
     }
 
     /// `container` listed, to open its files (its containers' too if `recurse`; its containers
-    /// otherwise), each named `prefix` and its name in it; or the container's name and why it
-    /// can't be listed.
-    pub(super) fn begin(&self, container: Rc<dyn Container>, prefix: &str, recurse: bool) -> Result<Opening, (String, String)> {
+    /// otherwise), each named `prefix` and its name in it, keeping those of `old` whose files are as
+    /// they were; or the container's name and why it can't be listed.
+    fn begin(&self, container: Rc<dyn Container>, prefix: &str, recurse: bool, old: Rc<Old>) -> Result<Opening, (String, String)> {
         let listing = container.list(recurse).map_err(|why| (file_name(container.path()), why))?;
         let count = listing.entries.len();
         // The container's order, if it is one: each entry once.
@@ -1348,11 +1582,12 @@ impl<'o, 'a> Opener<'o, 'a> {
             true => listing.quickest.clone(),
             false => (0..count).collect(),
         };
-        Ok(Opening { container, prefix: prefix.to_owned(), opened: (0..count).map(|_| None).collect(), order, next: 0, listing })
+        Ok(Opening { container, prefix: prefix.to_owned(), opened: (0..count).map(|_| None).collect(), order, next: 0, listing, old })
     }
 
-    /// Open `opening`'s files until `until`, or all of them: whether all are.
-    pub(super) fn step(&self, opening: &mut Opening, until: Option<Instant>) -> bool {
+    /// Open `opening`'s files until `until`, or all of them: whether all are. A file is stat-ed
+    /// first, where it is on disk: one as it was in the list made before is kept, not opened again.
+    fn step(&self, opening: &mut Opening, until: Option<Instant>) -> bool {
         while let Some(&at) = opening.order.get(opening.next) {
             if until.is_some_and(|until| Instant::now() >= until) {
                 return false;
@@ -1362,8 +1597,13 @@ impl<'o, 'a> Opener<'o, 'a> {
             // A file that nothing shows is passed over: a directory holds all sorts.
             if entry.container.is_none() {
                 let name = format!("{}{}", opening.prefix, entry.name);
+                let on_disk = opening.container.file_on_disk(&entry.name);
+                if let Some(item) = on_disk.and_then(|path| kept(&opening.old, &path, &name)) {
+                    *slot = Some(Slot::Kept(item));
+                    continue;
+                }
                 let shown = opening.container.open(&entry.name).map(|input| crate::source::shown_by(input, self.backends));
-                *slot = Some(shown.and_then(|chosen| self.file(chosen, &name, true)));
+                *slot = Some(Slot::Opened(shown.and_then(|chosen| self.file(chosen, &name, true))));
             }
         }
         true
@@ -1376,7 +1616,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         self.openers.clone()
     }
 
-    pub(super) fn finish(&self, found: &mut Found, opening: Opening) {
+    fn finish(&self, found: &mut Found, opening: Opening) {
         let Opening { container, prefix, listing, opened, .. } = opening;
         let path = container.path();
         let (before, listed) = (found.items.len(), listing.entries.len());
@@ -1384,7 +1624,8 @@ impl<'o, 'a> Opener<'o, 'a> {
             let name = format!("{prefix}{}", entry.name);
             match (entry.container, opened) {
                 (Some(inner), _) => found.items.push(Item::Container { name: format!("{name}/"), container: inner }),
-                (None, Some(opened)) => found.file(opened, name),
+                (None, Some(Slot::Opened(opened))) => found.file(opened, name),
+                (None, Some(Slot::Kept(item))) => found.items.push(item),
                 (None, None) => {}
             }
         }
@@ -2357,34 +2598,81 @@ mod tests {
         assert_eq!((cut.directories.len(), cut.warnings.len()), (3, 1), "a listing that read more says so");
     }
 
+    /// A container of `a.pdf`, `b.pdf` and `c.pdf` in `dir`, quickest opened in the order
+    /// `quickest`, which records the files it opens.
+    struct Ordered {
+        dir: std::path::PathBuf,
+        quickest: Vec<usize>,
+        opened: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Container for Ordered {
+        fn path(&self) -> &str {
+            "ordered"
+        }
+        fn list(&self, _recurse: bool) -> Result<Listing, String> {
+            let entries = ["a.pdf", "b.pdf", "c.pdf"].map(|name| crate::source::Listed { name: name.into(), container: None }).into();
+            Ok(Listing { entries, quickest: self.quickest.clone(), ..Listing::default() })
+        }
+        fn open(&self, name: &str) -> Result<Input, String> {
+            self.opened.borrow_mut().push(name.to_owned());
+            crate::source::choose(self.dir.join(name).to_str().unwrap(), &[&crate::source::tests::PDF]).map(|(_, input)| input)
+        }
+        fn file_on_disk(&self, name: &str) -> Option<std::path::PathBuf> {
+            Some(self.dir.join(name))
+        }
+    }
+
+    /// A list made again keeps each item whose file is as it was, by its path and its stamp, and
+    /// opens only the files that changed: the container is never asked for the others.
+    #[test]
+    fn an_unchanged_file_is_not_opened_again() {
+        use crate::source::tests::PDF;
+
+        let dir = std::env::temp_dir().join(format!("clview-unchanged-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            std::fs::write(dir.join(name), b"%PDF-").unwrap();
+        }
+        let given = args(&[]);
+        let options = parsed(&given);
+        let opener = Opener::new(&[&PDF], &options, &options, ROOM, ROOM);
+        let container = Rc::new(Ordered { dir: dir.clone(), quickest: Vec::new(), opened: std::cell::RefCell::default() });
+        let made = |old: Old| {
+            let mut making = opener.make(Recipe::Container(container.clone()), old);
+            while !matches!(opener.make_on(&mut making, None), Made::Done) {}
+            opener.made(making).0.items
+        };
+        let first = made(Old::default());
+        assert_eq!(*container.opened.borrow(), ["a.pdf", "b.pdf", "c.pdf"]);
+        container.opened.borrow_mut().clear();
+        std::fs::write(dir.join("b.pdf"), b"%PDF-1.7").unwrap();
+        let again = made(old(&first));
+        assert_eq!(*container.opened.borrow(), ["b.pdf"], "only the file that changed");
+        assert_eq!(again.iter().map(Item::name).collect::<Vec<_>>(), ["a.pdf", "b.pdf", "c.pdf"]);
+        let source = |item: &Item| match item {
+            Item::File(pages) => Rc::as_ptr(&pages.source).cast::<()>(),
+            Item::Later { later, .. } => Rc::as_ptr(later).cast::<()>(),
+            Item::Container { .. } => std::ptr::null(),
+        };
+        assert_eq!(source(&again[0]), source(&first[0]), "a.pdf kept, its source with it");
+        assert_ne!(source(&again[1]), source(&first[1]), "b.pdf opened again");
+        // A file gone is dropped; nothing else is opened.
+        container.opened.borrow_mut().clear();
+        std::fs::remove_file(dir.join("c.pdf")).unwrap();
+        let after = made(old(&again));
+        assert_eq!(*container.opened.borrow(), ["c.pdf"], "c.pdf, asked for, isn't there");
+        assert_eq!(after.iter().map(Item::name).collect::<Vec<_>>(), ["a.pdf", "b.pdf"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// A container's files are opened in the order it says is quickest (a compressed tar's, as they
     /// come in it), and shown in the order listed; an order that isn't each entry once is passed
     /// over.
     #[test]
     fn a_containers_files_are_opened_in_its_quickest_order() {
-        use std::cell::RefCell;
-
         use crate::source::tests::PDF;
-        use crate::source::{Listed, Listing};
 
-        struct Ordered {
-            dir: std::path::PathBuf,
-            quickest: Vec<usize>,
-            opened: RefCell<Vec<String>>,
-        }
-        impl Container for Ordered {
-            fn path(&self) -> &str {
-                "ordered"
-            }
-            fn list(&self, _recurse: bool) -> Result<Listing, String> {
-                let entries = ["a.pdf", "b.pdf", "c.pdf"].map(|name| Listed { name: name.into(), container: None }).into();
-                Ok(Listing { entries, quickest: self.quickest.clone(), ..Listing::default() })
-            }
-            fn open(&self, name: &str) -> Result<Input, String> {
-                self.opened.borrow_mut().push(name.to_owned());
-                crate::source::choose(self.dir.join(name).to_str().unwrap(), &[&PDF]).map(|(_, input)| input)
-            }
-        }
         let dir = std::env::temp_dir().join(format!("clview-quickest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for name in ["a.pdf", "b.pdf", "c.pdf"] {
@@ -2394,7 +2682,7 @@ mod tests {
         let options = parsed(&given);
         let opener = Opener::new(&[&PDF], &options, &options, ROOM, ROOM);
         for (quickest, opened) in [(vec![2, 0, 1], ["c.pdf", "a.pdf", "b.pdf"]), (vec![0, 0, 1], ["a.pdf", "b.pdf", "c.pdf"])] {
-            let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: RefCell::default() });
+            let container = Rc::new(Ordered { dir: dir.clone(), quickest, opened: std::cell::RefCell::default() });
             let mut found = Found::default();
             opener.list(&mut found, container.clone(), "", false);
             assert_eq!(*container.opened.borrow(), opened);
