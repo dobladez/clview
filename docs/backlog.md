@@ -303,3 +303,20 @@ Every key the pager takes goes to a command with a name, its help and whether it
 ([Spec-0013](specs/0013-bind-keys-to-named-commands.md)). A key could ask for one by name, as Emacs's
 `M-x` does: its name typed on the status line, completed among the commands where the reader is, a
 number before it taken as its count. A command no key is bound to would be reached that way.
+
+### A badge on a tile whose file changed
+
+A list warns when a tile's file changed on disk ([Spec-0016](specs/0016-watch-lists-on-disk-and-refresh-by-themselves.md)),
+but the status line doesn't say which tile. A small badge over each changed tile would say it. clv
+could draw the badge as it draws the link labels: one image, placed over the pages with `z=1`
+([ADR-0035](adr/0035-link-labels-as-placements-of-one-image-of-letters.md)). Inside tmux and in
+text cells, the badge would be characters written over the tile's cells, as the labels are there.
+
+### A document that notices its pictures changed
+
+A file's pages warn when the file changes on disk, and `r` reloads it
+([Spec-0016](specs/0016-watch-lists-on-disk-and-refresh-by-themselves.md)). A Markdown, HTML or Org
+document also draws pictures from beside it: images, SVG drawings, and Mermaid files by path.
+A change to one of them doesn't count today. A reader who edits a document and its diagram side by
+side would expect it to. The backend knows which files a document read; the contract would have to
+hand their paths to the pager, as `Listing` hands a list's directories.
