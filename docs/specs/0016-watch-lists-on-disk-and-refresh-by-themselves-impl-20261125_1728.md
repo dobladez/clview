@@ -100,3 +100,9 @@ decisions, changes from its plan, surprises, and what a later reader would want.
   written); `settle_on` never reloading (`…reloads_a_list`, and the file's); `busy` blind to a search
   typed (`…waits_while_a_search_is_typed`); the option's value dropped (`config_auto_reload_…`).
 - `CONTRIBUTING.md`'s Tests says what the new pager, zip and tar tests cover.
+
+## Done checklist
+
+- The gates, the tests each seen failing, and the docs: checked (2026-11-25).
+- The three manual checks, in kitty and in a private tmux, wait for the owner: the tests play a
+  terminal on a pseudo-terminal, and can't show what kitty draws.

@@ -251,15 +251,15 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 ## Done
 
-- [ ] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
-- [ ] Tests added, each seen failing without the change: the ones the Tasks name.
+- [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
+- [x] Tests added, each seen failing without the change: the ones the Tasks name.
 - [ ] Manual: in kitty, run `clv -r <dir>` on a directory with a subdirectory of pictures. Copy a
   picture into the subdirectory: the warning shows within a second. Press `r`: the new tile shows,
   and the tile you were on is still chosen.
 - [ ] Manual: in kitty, open a Markdown file, press `R` (`auto` shows), and save the file from an
   editor: the pages reload, `reloaded` shows, and the paragraph at the top stays.
 - [ ] Manual: in a private tmux (`tmux -L`), the warning and `r` in a list work as in kitty.
-- [ ] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
+- [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
 
