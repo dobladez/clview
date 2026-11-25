@@ -5,6 +5,7 @@
 
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use ::zip::write::SimpleFileOptions;
 use ::zip::{CompressionMethod, ZipWriter};
@@ -286,4 +287,21 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+/// An archive's list is not looked at on disk: an archive written again says nothing, as a file in
+/// one doesn't.
+#[test]
+fn a_zips_list_is_not_looked_at() {
+    if !pty_works() {
+        return;
+    }
+    let path = archive(&tmp("zip-unwatched", "photos.zip"), &[("a.png", png(80, 60)), ("b.png", png(60, 80))]);
+    let mut view = Session::start(&path, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| bar(t).contains(" 1/2 "));
+    archive(&path, &[("a.png", png(80, 60)), ("b.png", png(60, 80)), ("c.png", png(40, 40))]);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(!view.text().contains("on disk"), "{}", bar(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
 }

@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use super::{Container, Input, Listed, Listing};
+use super::{Container, Input, Listed, Listing, MAX_WATCHED, Stamp};
 
 /// The most files and subdirectories listed from a directory: each becomes a source, and a
 /// source holds its header (a PDF, its whole file).
@@ -38,7 +38,7 @@ impl Container for Directory {
     }
 
     fn list(&self, recurse: bool) -> Result<Listing, String> {
-        list_within(&self.path, recurse, MAX_FILES, MAX_DEPTH)
+        list_within(&self.path, recurse, MAX_FILES, MAX_DEPTH, MAX_WATCHED)
     }
 
     fn open(&self, name: &str) -> Result<Input, String> {
@@ -57,10 +57,10 @@ impl Container for Directory {
 }
 
 /// What the directory at `dir` holds to show ([`Container::list`]), within `max_files` files and
-/// `max_depth` directories down.
-fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> Result<Listing, String> {
+/// `max_depth` directories down, and the first `max_watched` directories it read, to look at.
+fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize, max_watched: usize) -> Result<Listing, String> {
     let mut listing = Listing::default();
-    let top = entries(Path::new(dir)).map_err(|e| format!("{dir}: {e}"))?;
+    let top = stamped(Path::new(dir), &mut listing, max_watched).map_err(|e| format!("{dir}: {e}"))?;
     // Each directory being listed, from `dir` down: the prefix of its names, and the entries left.
     let mut open = vec![(String::new(), top.into_iter())];
     let mut read = 0usize;
@@ -83,13 +83,30 @@ fn list_within(dir: &str, recurse: bool, max_files: usize, max_depth: usize) -> 
             Kind::File => listing.entries.push(Listed { name, container: None }),
             Kind::Directory if !recurse => listing.entries.push(Listed { name, container: Some(Rc::new(Directory { path })) }),
             Kind::Directory if depth >= max_depth => listing.unread.push((name, format!("{path}: more than {max_depth} directories down"))),
-            Kind::Directory => match entries(Path::new(&path)) {
+            Kind::Directory => match stamped(Path::new(&path), &mut listing, max_watched) {
                 Ok(inside) => open.push((format!("{name}/"), inside.into_iter())),
                 Err(e) => listing.unread.push((name, format!("{path}: {e}"))),
             },
         }
     }
     Ok(listing)
+}
+
+/// The entries of `dir` ([`entries`]), its real path and its stamp kept in `listing` first, among
+/// the first `max_watched` directories: taken before it is read, a file added meanwhile shows as a
+/// change. A directory without a real path (under `/dev`) is read, but not kept.
+fn stamped(dir: &Path, listing: &mut Listing, max_watched: usize) -> Result<Vec<Entry>, String> {
+    let real = dir.to_str().and_then(|dir| super::real(dir).ok());
+    if let Some(real) = real {
+        match listing.directories.len() < max_watched {
+            true => {
+                let stamp = Stamp::of(&real);
+                listing.directories.push((real, stamp));
+            }
+            false => listing.unwatched = true,
+        }
+    }
+    entries(dir)
 }
 
 /// An entry of a directory worth listing.
@@ -235,12 +252,35 @@ mod tests {
         assert_eq!(names(&listing), ["a.png", "m/b.png", "m/n/c.png", "z.png"]);
         assert_eq!(opened(&dir, &listing, 2), dir.join("m/n/c.png").to_str().unwrap());
         // Within limits: two files, or one directory down.
-        let cut = list_within(dir.to_str().unwrap(), true, 2, MAX_DEPTH).unwrap();
+        let cut = list_within(dir.to_str().unwrap(), true, 2, MAX_DEPTH, MAX_WATCHED).unwrap();
         assert_eq!(names(&cut), ["a.png", "m/b.png"]);
         assert!(cut.cut);
-        let shallow = list_within(dir.to_str().unwrap(), true, MAX_FILES, 1).unwrap();
+        let shallow = list_within(dir.to_str().unwrap(), true, MAX_FILES, 1, MAX_WATCHED).unwrap();
         assert_eq!(names(&shallow), ["a.png", "m/b.png", "z.png"]);
         assert!(shallow.unread.iter().any(|(name, why)| name == "m/n" && why.ends_with("m/n: more than 1 directories down")), "{shallow:?}");
+    }
+
+    /// The directories a listing read, real and stamped, for the viewer to look at: the directory
+    /// alone, or recursing each one read too, and the first ones only past the limit.
+    #[test]
+    fn a_listing_gives_the_directories_it_read_with_their_stamps() {
+        let dir = tree("watched", &["a.png", "m/b.png", "m/n/c.png", "z/", ".hidden/d.png"]);
+        let real = std::fs::canonicalize(&dir).unwrap();
+        let paths = |listing: &Listing| listing.directories.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
+        let flat = list(dir.to_str().unwrap(), false).unwrap();
+        assert_eq!(paths(&flat), std::slice::from_ref(&real));
+        assert_eq!(flat.directories[0].1, Stamp::of(&real));
+        assert!(flat.directories[0].1.is_some() && !flat.unwatched);
+        let deep = list(dir.to_str().unwrap(), true).unwrap();
+        assert_eq!(paths(&deep), [real.clone(), real.join("m"), real.join("m/n"), real.join("z")]);
+        assert!(!deep.unwatched);
+        // A file added after the listing changes its directory's stamp.
+        std::fs::write(dir.join("m/new.png"), "new").unwrap();
+        assert_ne!(Stamp::of(&real.join("m")), deep.directories[1].1, "the stamp moved");
+        let two = list_within(dir.to_str().unwrap(), true, MAX_FILES, MAX_DEPTH, 2).unwrap();
+        assert_eq!(paths(&two), [real.clone(), real.join("m")]);
+        assert!(two.unwatched);
+        assert_eq!(names(&two), names(&list(dir.to_str().unwrap(), true).unwrap()), "the listing went on");
     }
 
     #[cfg(unix)]

@@ -36,8 +36,8 @@ pub(crate) use commands::{setting_commands, unbound_in_phrases, wrong_keys};
 use crate::CliError;
 use crate::args::{AUTO, Arg, By, Catalog, OptionSpec, OwnedOptions, Parsed, Settable, Shape};
 use crate::source::{
-    Backend, Container, Directory, Folder, Frame, Input, Job, Joined, Later, Listing, Numbers, Opened, Openers, Part, Ready, Request, Room, Setting,
-    Source, Value, Values,
+    Backend, Container, Directory, Folder, Frame, Input, Job, Joined, Later, Listing, MAX_WATCHED, Numbers, Opened, Openers, Part, Ready, Request,
+    Room, Setting, Source, Stamp, Value, Values,
 };
 use fit::{Area, Cell, Fit, Grid, Layout, Size, Zoom};
 use kitty::{IdColor, Wrap};
@@ -1079,13 +1079,24 @@ pub(super) struct Shown {
     pub(super) pages: Pages,
     /// A list's files and directories, in the order of its tiles; none for a file.
     pub(super) items: Vec<Item>,
+    /// A list's directories on disk, with their stamps, for the pager to look at
+    /// ([`Listing::directories`]); none for a file.
+    pub(super) directories: Watched,
 }
 
+/// Directories on disk, by their real paths, each with its stamp taken before it was read.
+pub(super) type Watched = Vec<(std::path::PathBuf, Option<Stamp>)>;
+
 impl Shown {
-    /// A list of `items`, every tile, its items' names following `name`.
-    pub(super) fn list(items: Vec<Item>, name: String) -> Self {
+    /// A list of `items`, every tile, its items' names following `name`, read from `directories`.
+    pub(super) fn list(items: Vec<Item>, name: String, directories: Watched) -> Self {
         // Never opened in another app as a whole: its tiles each are, as what they are.
-        Self { pages: Pages::all(Rc::new(tiles(&items)), name, Err(String::new())), items }
+        Self { pages: Pages::all(Rc::new(tiles(&items)), name, Err(String::new())), items, directories }
+    }
+
+    /// A file's `pages`.
+    pub(super) fn file(pages: Pages) -> Self {
+        Self { pages, items: Vec::new(), directories: Vec::new() }
     }
 
     /// Whether this is a list: it has items.
@@ -1137,21 +1148,6 @@ pub(super) struct OnDisk {
     pub(super) path: std::path::PathBuf,
     pub(super) named: Result<(), String>,
     pub(super) stamp: Option<Stamp>,
-}
-
-/// What tells one version of a file from another on disk: when it was last written, and its
-/// size. `None` from [`Stamp::of`] for a file that can't be found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Stamp {
-    modified: Option<std::time::SystemTime>,
-    len: u64,
-}
-
-impl Stamp {
-    /// The stamp of the file at `path` now, or `None` if it isn't there.
-    pub(super) fn of(path: &std::path::Path) -> Option<Self> {
-        std::fs::metadata(path).ok().map(|m| Self { modified: m.modified().ok(), len: m.len() })
-    }
 }
 
 /// A file on disk, for another app to open, or why there is none: it is in an archive, it came
@@ -1281,7 +1277,7 @@ impl<'o, 'a> Opener<'o, 'a> {
                     Ok(Some((_, Item::Container { container, .. }))) => container,
                     Ok(Some((backend, Item::File(pages)))) if paths.len() == 1 => {
                         takes_all(self.backends, &[backend], self.options, path)?;
-                        return Ok(Given { shown: Shown { pages, items: Vec::new() }, left_out: Vec::new(), warnings: Vec::new() });
+                        return Ok(Given { shown: Shown::file(pages), left_out: Vec::new(), warnings: Vec::new() });
                     }
                     Err(why) if paths.len() == 1 => return Err(why),
                     opened => {
@@ -1298,7 +1294,7 @@ impl<'o, 'a> Opener<'o, 'a> {
                 (_, false) => found.items.push(Item::Container { name: format!("{name}/"), container }),
             }
         }
-        let Found { items, used, left_out, warnings } = found;
+        let Found { items, used, left_out, warnings, directories, .. } = found;
         if items.is_empty() {
             if let ([(_, why)], []) = (left_out.as_slice(), warnings.as_slice()) {
                 return Err(why.clone());
@@ -1313,7 +1309,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         if !items.iter().any(|item| matches!(item, Item::Container { .. })) {
             takes_all(self.backends, &used, self.options, "any of these files")?;
         }
-        Ok(Given { shown: Shown::list(items, String::new()), left_out, warnings })
+        Ok(Given { shown: Shown::list(items, String::new(), directories), left_out, warnings })
     }
 
     /// Into `found`, `container`'s files (its containers' too if `recurse`; its containers
@@ -1396,6 +1392,7 @@ impl<'o, 'a> Opener<'o, 'a> {
         if listing.cut {
             found.warnings.push(format!("{path}: the listing stopped at {listed} files, as many as {} lists", crate::NAME));
         }
+        found.watch(path, listing.directories, listing.unwatched);
         if found.items.len() == before {
             found.left_out.push((file_name(path), format!("{path}: nothing in it that {} shows", crate::NAME)));
         }
@@ -1528,16 +1525,31 @@ impl Progress {
 }
 
 /// What [`Opener::open`] has found so far: the tiles, the backends that opened their files, the
-/// files left out, with why, and what else to say.
+/// files left out, with why, what else to say, and the directories on disk read, to look at.
 #[derive(Default)]
 pub(super) struct Found {
     pub(super) items: Vec<Item>,
     used: Vec<&'static dyn Backend>,
     pub(super) left_out: Vec<(String, String)>,
     pub(super) warnings: Vec<String>,
+    pub(super) directories: Watched,
+    /// Whether more directories were read than are looked at, which is said once.
+    unwatched: bool,
 }
 
 impl Found {
+    /// The `directories` that listing the container at `path` read, to look at, as far as
+    /// [`MAX_WATCHED`] for the whole list; past that, said once. `unwatched` says the container read
+    /// more than it gave.
+    fn watch(&mut self, path: &str, directories: Watched, unwatched: bool) {
+        let room = MAX_WATCHED.saturating_sub(self.directories.len());
+        if (unwatched || directories.len() > room) && !self.unwatched {
+            self.unwatched = true;
+            self.warnings.push(format!("{path}: {} looks for changes in the first {MAX_WATCHED} directories read, no more", crate::NAME));
+        }
+        self.directories.extend(directories.into_iter().take(room));
+    }
+
     /// The file called `name`, as [`Opener::file`] opened it.
     fn file(&mut self, opened: Chosen, name: String) {
         match opened {
@@ -2324,6 +2336,25 @@ mod tests {
         let top = dir.to_str().unwrap();
         assert_eq!(names(&[top], true), ["book.arc/", "book.arc.d/a.pdf", "c.pdf"]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A list looks at [`MAX_WATCHED`] directories at most, the first ones read, whatever its
+    /// listings gave, and says once that there were more.
+    #[test]
+    fn a_list_looks_at_the_first_directories_read_and_says_once_there_were_more() {
+        let dirs =
+            |from: usize, count: usize| -> Watched { (from..from + count).map(|n| (std::path::PathBuf::from(format!("/d{n}")), None)).collect() };
+        let mut found = Found::default();
+        found.watch("a", dirs(0, 1000), false);
+        assert!(found.warnings.is_empty());
+        found.watch("b", dirs(1000, 30), false);
+        found.watch("c", dirs(2000, 5), true);
+        assert_eq!(found.directories.len(), MAX_WATCHED);
+        assert_eq!(found.directories.last().map(|(path, _)| path.clone()), Some(std::path::PathBuf::from("/d1023")));
+        assert_eq!(found.warnings, [format!("b: clv looks for changes in the first {MAX_WATCHED} directories read, no more")]);
+        let mut cut = Found::default();
+        cut.watch("d", dirs(0, 3), true);
+        assert_eq!((cut.directories.len(), cut.warnings.len()), (3, 1), "a listing that read more says so");
     }
 
     /// A container's files are opened in the order it says is quickest (a compressed tar's, as they

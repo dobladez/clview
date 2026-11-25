@@ -50,7 +50,7 @@ use super::search::{self, Search, fold};
 use super::tty::{RawMode, Tty, WindowSize};
 use super::{
     FALLBACK_SIZE, Found, Item, OnDisk, Opener, Opening, Output, PROGRESS_AFTER, PROGRESS_EVERY, Pages, Place, QUIET, Shown, Stamp, Terminal,
-    cell_lines, chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
+    Watched, cell_lines, chars, checked, cut, label, left_out_note, opened, page_layout, page_size, png, printable, reading, request, tmux,
 };
 
 /// How often the window size is checked while no key comes.
@@ -2054,6 +2054,9 @@ struct Level {
     leaving: Option<Jump>,
     /// How many links to other files were followed to get here: at most [`MAX_DEPTH`].
     depth: usize,
+    /// For a list, the directories on disk it was read from, with their stamps: looked at with the
+    /// files of its tiles on screen ([`Pager::list_on_disk_now`]).
+    directories: Watched,
 }
 
 impl Level {
@@ -2062,7 +2065,7 @@ impl Level {
     /// document laid out for its room is never wider than it: the width is one to a row there.
     fn new(id: u64, shown: Shown, zoom: Zoom, nested: bool, settings: Rc<Settings>, room: Room) -> Self {
         let list = shown.is_list();
-        let Shown { pages: Pages { source, name, pages, picked, on_disk }, items } = shown;
+        let Shown { pages: Pages { source, name, pages, picked, on_disk }, items, directories } = shown;
         let names = items.iter().map(|item| fold(item.name())).collect();
         let has = source.settings();
         // A place it can't be asked by, as a name is asked, is none.
@@ -2089,6 +2092,7 @@ impl Level {
             seeking: None,
             leaving: None,
             depth: 0,
+            directories,
         }
     }
 
@@ -2691,7 +2695,7 @@ impl Pager<'_> {
         self.arriving = Some(arrival);
         match item {
             Item::File(pages) => {
-                let level = Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true, self.settings.clone(), self.room);
+                let level = Level::new(self.levels, Shown::file(pages), Zoom::Auto, true, self.settings.clone(), self.room);
                 self.enter(level);
                 self.arrive();
             }
@@ -2878,7 +2882,7 @@ impl Pager<'_> {
         let level = match self.level.items.get(at) {
             Some(Item::File(pages)) => {
                 let pages = Pages { name: format!("{}{}", self.level.name, pages.name), ..pages.clone() };
-                Level::new(self.levels, Shown { pages, items: Vec::new() }, Zoom::Auto, true, self.settings.clone(), self.room)
+                Level::new(self.levels, Shown::file(pages), Zoom::Auto, true, self.settings.clone(), self.room)
             }
             // It may not be open yet, or be the file that turns out not to open.
             Some(Item::Later { name, later, on_disk }) => {
@@ -2935,7 +2939,7 @@ impl Pager<'_> {
         let Some(Reading { name, container, opening: Some(opening), .. }) = self.reading.take() else { return Ok(false) };
         let mut found = Found::default();
         opener.finish(&mut found, opening);
-        let Found { items, left_out, warnings, .. } = found;
+        let Found { items, left_out, warnings, directories, .. } = found;
         self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
         if items.is_empty() {
             self.arriving = None;
@@ -2943,7 +2947,7 @@ impl Pager<'_> {
             return Ok(true);
         }
         self.level.nav.message = None;
-        let mut level = Level::new(self.levels, Shown::list(items, name), self.level.nav.zoom, true, self.settings.clone(), self.room);
+        let mut level = Level::new(self.levels, Shown::list(items, name, directories), self.level.nav.zoom, true, self.settings.clone(), self.room);
         level.nav.message = left_out_note(&left_out);
         level.from = Some(container);
         self.enter(level);
@@ -2963,7 +2967,7 @@ impl Pager<'_> {
         match outcome {
             Ok(source) => {
                 self.level.nav.message = None;
-                let shown = Shown { pages: Pages::all(source, name, on_disk), items: Vec::new() };
+                let shown = Shown::file(Pages::all(source, name, on_disk));
                 let level = Level::new(self.levels, shown, Zoom::Auto, true, self.settings.clone(), self.room);
                 self.enter(level);
                 self.arrive();
@@ -3209,14 +3213,44 @@ impl Pager<'_> {
         Some((disk, path.clone(), now))
     }
 
-    /// Look at the file on screen on disk, every [`DISK_EVERY`]: the status line warns once it has
+    /// How the list on screen stands on disk now: changed when a directory it was read from or the
+    /// file of a tile on screen changed since it was read, else gone when one of them is gone, else
+    /// the same. Only the tiles on screen are looked at, never every file of the list; a folder's
+    /// tile is not. `None` for a file's pages.
+    fn list_on_disk_now(&self) -> Option<Disk> {
+        let level = &self.level;
+        if !level.nav.list {
+            return None;
+        }
+        let tiles = level.nav.on_screen().into_iter().flatten().filter_map(|tile| match level.items.get(tile) {
+            Some(Item::File(Pages { on_disk: Ok(OnDisk { path, stamp, .. }), .. }) | Item::Later { on_disk: Ok(OnDisk { path, stamp, .. }), .. }) => {
+                Some((path, stamp))
+            }
+            _ => None,
+        });
+        let mut gone = false;
+        for (path, stamp) in level.directories.iter().map(|(path, stamp)| (path, stamp)).chain(tiles) {
+            match Stamp::of(path) {
+                now if now == *stamp => {}
+                None => gone = true,
+                Some(_) => return Some(Disk::Changed),
+            }
+        }
+        Some(if gone { Disk::Gone } else { Disk::Same })
+    }
+
+    /// Look at what is on screen on disk, every [`DISK_EVERY`]: the file of a file's pages, or a
+    /// list's directories and the files of its tiles on screen. The status line warns once it has
     /// changed or gone since it was read. Whether the warning changed.
     fn watch_disk(&mut self, now: Instant) -> bool {
         if self.disk_seen.is_some_and(|seen| now.saturating_duration_since(seen) < DISK_EVERY) {
             return false;
         }
         self.disk_seen = Some(now);
-        let disk = self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk);
+        let disk = match self.list_on_disk_now() {
+            Some(disk) => disk,
+            None => self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk),
+        };
         std::mem::replace(&mut self.level.nav.disk, disk) != disk
     }
 
@@ -3307,7 +3341,7 @@ impl Pager<'_> {
         if let Some(picked) = picked {
             pages = Pages { pages: picked, picked: true, ..pages };
         }
-        let shown = Shown { pages, items: Vec::new() };
+        let shown = Shown::file(pages);
         let mut level = Level::new(self.levels, shown, self.level.nav.zoom, self.level.nav.nested, self.settings.clone(), self.room);
         self.levels = self.levels.wrapping_add(1);
         let last = level.nav.pages.len().saturating_sub(1);

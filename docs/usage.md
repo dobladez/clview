@@ -406,6 +406,14 @@ line says `changed on disk, r reloads` in black on yellow, before any message. W
 deleted or moved, it says `gone from disk`. A narrow window shortens the warning to `changed on disk`,
 then to `changed`. A file in an archive, or one read through a pipe, isn't looked at.
 
+A list warns the same way. Once a second, `clv` looks at the directory that the list shows, and at
+the files of the tiles on screen. With `-r`, it looks at each subdirectory too. When a file is added
+to a directory, removed or renamed, or when a tile's file on screen changes, the status line says
+`changed on disk, r reloads`. When the directory is deleted or moved, it says `gone from disk`. A
+list of files named on the command line warns when a tile's file on screen changes. A list of an
+archive (zip, tar) isn't looked at. `clv` looks at 1,024 directories at most for a list, and says so
+once when a list has more.
+
 `r` reads the changed file again and shows it at the same place: the same paragraph in a Markdown
 or HTML file, the same page in other files. The status line says `reloading…` until the file is
 read, and the old pages stay until then. With `--pages`, `r` keeps the pages that the file still
@@ -1546,6 +1554,7 @@ limit, it does as the last column says. How large a page is drawn is under
 | What | Limit | Past it |
 |---|---|---|
 | A directory, or a directory in an archive | 4,096 files listed | the listing stops, with a warning |
+| The directories a list looks at for changes on disk | 1,024 | the first 1,024 read are looked at, and a warning says so |
 | A directory's entries read, or an archive's | 100,000 | the listing stops, with a warning |
 | Directories down, with `-r` or in an archive | 32 | what is deeper is left out, with a warning |
 | A file in an archive, unpacked | 512 MiB | left out, with a warning |

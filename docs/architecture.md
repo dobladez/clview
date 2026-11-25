@@ -1058,16 +1058,27 @@ The status line's right side shows the value the document is laid out at when it
 in a narrow window
 ([ADR-0022](adr/0022-markdown-and-html-reflow-to-a-width-in-characters-as-a-new-level.md)).
 
-### A file changed on disk
+### Files and lists changed on disk
 
-A file of its own on disk keeps a `Stamp` in its `OnDisk` (`mod.rs`): its modification time and its
-size. `Opener::file` takes the stamp before the backend reads the bytes. So a write during the read
-makes the stamp older than the bytes, and the pager warns about a file that is already current,
-never the other way.
+A file of its own on disk keeps a `Stamp` (`source.rs`) in its `OnDisk` (`mod.rs`): its modification
+time and its size. `Opener::file` takes the stamp before the backend reads the bytes. So a write
+during the read makes the stamp older than the bytes, and the pager warns about a file that is
+already current, never the other way. clv polls with `stat`, and doesn't use the OS's file notices
+([ADR-0044](adr/0044-files-and-lists-on-disk-polled-with-stat.md)).
 
-Each pass of the loop, `Pager::watch_disk` stats the file of the level on screen, at most every
-`DISK_EVERY` (1 s). It sets `Nav::disk` to `Same`, `Changed` or `Gone`. A list, a pipe and an
-archive's file have no stamp, so they stay `Same`. `Nav::painted` writes the status line with the
+A list's directories come through the contract, with their stamps: `Listing::directories` holds the
+real path of each directory that a listing read. `Directory::list` (`dir.rs`) stamps each one before
+it reads it, for the same reason. Without `-r`, that is the directory alone; with `-r`, each
+subdirectory read too. An archive's listing gives none. `Found::watch` keeps the first `MAX_WATCHED`
+(1,024) for the whole list, and says once when a listing read more. `Shown::directories` takes them to
+the list's `Level::directories`.
+
+Each pass of the loop, `Pager::watch_disk` looks at the level on screen, at most every `DISK_EVERY`
+(1 s). In a file's pages, `Pager::on_disk_now` stats the file. In a list, `Pager::list_on_disk_now`
+stats its directories, and the files of the tiles on screen (`Nav::on_screen`), never every file of
+the list. A changed one makes the list `Changed`; else a gone one makes it `Gone`. The result goes
+in `Nav::disk`: `Same`, `Changed` or `Gone`. A pipe and an archive's file have no stamp, and an
+archive's list has no directories, so they stay `Same`. `Nav::painted` writes the status line with the
 warning (`Nav::warnings`, the longest that fits) in black on yellow (`ESC[0;1;30;43m`), and the rest
 in reverse video. `Nav::status` is the same line without the colors, for the tests.
 

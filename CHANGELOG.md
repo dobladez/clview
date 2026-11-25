@@ -25,6 +25,8 @@ works today. A version's section becomes the notes of its
   on yellow, or `gone from disk` when the file is deleted. `r` reads the file again and keeps your
   place. Before, `r` only rendered the old pages again. When a document is laid out again for a new
   width, font size, margin or window, `clv` first reads the file again if it changed.
+- A list warns the same way when a file is added to its directory, removed or renamed, or when the
+  file of a tile on screen changes. With `-r`, the subdirectories count too.
 
 ### Changed
 

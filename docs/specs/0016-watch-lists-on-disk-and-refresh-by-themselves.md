@@ -3,7 +3,7 @@
 - **Status:** Implementing
 - **Date:** 2026-11-25
 - **Related:** commit `abe33f3`, which this builds on (a file's pages warn when the file changes,
-  and `r` reloads it); [A file changed on disk](../architecture.md#a-file-changed-on-disk),
+  and `r` reloads it); [Files and lists changed on disk](../architecture.md#files-and-lists-changed-on-disk),
   [Lists and levels](../architecture.md#lists-and-levels) and
   [Commands and keymaps](../architecture.md#commands-and-keymaps-commandsrs-pagerrs) in the
   architecture; [The status line](../usage.md#the-status-line), [Keys](../usage.md#keys) and
@@ -222,7 +222,7 @@ file notices: ADR-0044 says why.
 
 One checkbox each: a session's work, and a commit that builds and passes on its own.
 
-- [ ] **A list looks at its directories and its tiles, and warns** — `Stamp` into `src/source.rs`;
+- [x] **A list looks at its directories and its tiles, and warns** — `Stamp` into `src/source.rs`;
   `Listing::directories` with stamps taken before each read, filled by `dir.rs` (1,024 at most for
   the whole list, said once past that); a list keeps its recipe; `Pager::watch_disk` for a list;
   ADR-0044; usage's status line, architecture's section renamed, a CHANGELOG line. *Files:*

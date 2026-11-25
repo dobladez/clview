@@ -393,6 +393,86 @@ fn r_reloads_a_file_changed_on_disk_which_the_status_line_says() {
     assert!(view.finish().success());
 }
 
+/// A directory of the test's own, made afresh, holding a one-page PDF for each of `names` (a name
+/// ending in `/` is a directory).
+fn pdfs(test: &str, names: &[&str]) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("clview-pager-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in names {
+        let path = dir.join(name);
+        match name.strip_suffix('/') {
+            Some(_) => std::fs::create_dir_all(&path).unwrap(),
+            None => {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, crate::fixtures::letter(name, 1)).unwrap();
+            }
+        }
+    }
+    dir
+}
+
+/// The warning that what is on screen changed on disk, as the terminal gets it: black on yellow.
+const CHANGED: &str = "\x1b[0;1;30;43mchanged on disk, r reloads\x1b[0;7m";
+
+/// A file added to a directory listed is said on the status line, as a file's change is.
+#[test]
+fn a_list_warns_of_a_file_added_to_its_directory() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("list-added", &["a.pdf", "b.pdf"]);
+    let mut view = Session::start(&dir, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(!view.text().contains("changed on disk"), "said before any change");
+    std::fs::write(dir.join("c.pdf"), crate::fixtures::letter("C", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A tile's file written again while the tile is on screen is said, for files named on the command
+/// line too, whose directory isn't listed. A file gone is said as gone.
+#[test]
+fn a_list_warns_of_a_tile_rewritten_on_screen() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("list-rewritten", &["a.pdf", "b.pdf"]);
+    let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::write(&b, crate::fixtures::letter("B again", 3)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    view.press("q");
+    assert!(view.finish().success());
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::remove_file(&b).unwrap();
+    view.wait_until("the file gone said", |t| t.contains("\x1b[0;1;30;43mgone from disk\x1b[0;7m"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// With `-r`, a file added to a subdirectory is said: each directory read is looked at.
+#[test]
+fn a_list_given_with_r_warns_of_a_file_added_to_a_subdirectory() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("list-recursed", &["a.pdf", "trip/deep/b.pdf"]);
+    let mut view = Session::start(&dir, &["-r", "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::write(dir.join("trip/deep/c.pdf"), crate::fixtures::letter("C", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// With `--pages`, a file reloaded keeps the pages picked that it still has, in their order.
 #[test]
 fn r_reloads_the_pages_picked_that_the_file_still_has() {

@@ -829,6 +829,26 @@ impl std::fmt::Debug for dyn Container + '_ {
     }
 }
 
+/// The most directories a list looks at on disk ([`Listing::directories`]), for the whole list: a
+/// stat each, once a second.
+pub(crate) const MAX_WATCHED: usize = 1024;
+
+/// What tells one version of a file or a directory from another on disk: when it was last
+/// written, and its size. A directory's changes when a file is added to it, removed or renamed.
+/// `None` from [`Stamp::of`] for what can't be found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Stamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
+impl Stamp {
+    /// The stamp of the file or the directory at `path` now, or `None` if it isn't there.
+    pub(crate) fn of(path: &Path) -> Option<Self> {
+        std::fs::metadata(path).ok().map(|m| Self { modified: m.modified().ok(), len: m.len() })
+    }
+}
+
 /// What a container holds to show.
 #[derive(Debug, Default)]
 pub(crate) struct Listing {
@@ -842,6 +862,13 @@ pub(crate) struct Listing {
     /// The order its entries are quickest opened in, by their place in `entries`, when that isn't
     /// the order they are listed in: a compressed tar's, as its files come in it. Empty otherwise.
     pub(crate) quickest: Vec<usize>,
+    /// The directories on disk that the listing read, for the viewer to look at: the real path of
+    /// each, and its stamp taken before it was read, so that a file added meanwhile shows as a
+    /// change. Empty for what isn't on disk (an archive's folder): nothing is looked at.
+    pub(crate) directories: Vec<(PathBuf, Option<Stamp>)>,
+    /// Whether the listing read more directories than it gives in `directories`, which holds the
+    /// first ones read.
+    pub(crate) unwatched: bool,
 }
 
 /// A file or a container listed.
