@@ -4,7 +4,7 @@
 //! `quit`. The catalog is the viewer's own ([`VIEWER`]) and, for each setting a backend declares, one
 //! or two named from it: `cycle-theme`, or `decrease-width` and `increase-width`. Each has its name,
 //! what it makes of a number typed before it ([`Count`]), where it applies ([`Mode`]) and its line in
-//! `?` ([`Line`]). The names are a contract with the reader's config, and keep to three rules
+//! `?` ([`Line`]). The names are a contract with the reader's config, and keep to four rules
 //! ([`Command::name`]).
 //!
 //! A [`Keymap`] binds keys to commands: one for a file's pages and one for a list ([`Keymaps`]),
@@ -76,6 +76,8 @@ pub(super) enum Command {
     Copy,
     OpenInApp,
     Rerender,
+    /// Auto-reload on or off: a file or a list that changes on disk reloaded by itself.
+    ToggleAutoReload,
     /// Clear the search or the filter kept; then back through the links followed; then out of the
     /// file or the folder, where there is somewhere to go back to.
     Back,
@@ -142,6 +144,7 @@ pub(super) const VIEWER: &[Command] = &[
     Command::Copy,
     Command::OpenInApp,
     Command::Rerender,
+    Command::ToggleAutoReload,
     Command::Back,
     Command::Leave,
     Command::Quit,
@@ -167,11 +170,13 @@ impl PartialEq for Command {
 impl Eq for Command {}
 
 impl Command {
-    /// What it is called, in kebab-case. The names keep to three rules:
+    /// What it is called, in kebab-case. The names keep to four rules:
     ///
     /// - A command that steps an option is `increase-` or `decrease-` and the name of the option. A
     ///   command that goes to the next named value of an option is `cycle-` and that name. A setting's
     ///   commands are built so from the setting's name, which is its option's.
+    /// - A command that turns a flag of the viewer's on and off is `toggle-` and the name of the
+    ///   flag's option.
     /// - A command for the list alone is `list-` and what it does. The others have no prefix.
     /// - No name has the prefix of a format or a backend: a name two backends declare is one setting.
     pub(super) fn name(self) -> String {
@@ -198,6 +203,7 @@ impl Command {
             Self::Copy => "copy",
             Self::OpenInApp => "open-in-app",
             Self::Rerender => "rerender",
+            Self::ToggleAutoReload => "toggle-auto-reload",
             Self::Back => "back",
             Self::Leave => "leave",
             Self::Quit => "quit",
@@ -295,6 +301,7 @@ const PAGES: &[(Command, &[Chord])] = &[
     (Command::Copy, &[ch('c')]),
     (Command::OpenInApp, &[ch('o')]),
     (Command::Rerender, &[ch('r'), key(Key::Ctrl('l'))]),
+    (Command::ToggleAutoReload, &[ch('R')]),
     (Command::Back, &[key(Key::Backspace)]),
     (Command::Leave, &[key(Key::Escape)]),
     (Command::Quit, &[ch('q'), key(Key::Interrupt)]),
@@ -320,6 +327,7 @@ const LIST: &[(Command, &[Chord])] = &[
     (Command::Copy, &[ch('c')]),
     (Command::OpenInApp, &[ch('o')]),
     (Command::Rerender, &[ch('r'), key(Key::Ctrl('l'))]),
+    (Command::ToggleAutoReload, &[ch('R')]),
     (Command::Back, &[key(Key::Backspace)]),
     (Command::Leave, &[key(Key::Escape)]),
     (Command::Quit, &[ch('q'), key(Key::Interrupt)]),
@@ -820,6 +828,7 @@ pub(super) const PAGE_LINES: &[Line] = &[
     CONTENTS_LINE,
     line(&[Command::Back], "back to where the last link followed was"),
     line(&[Command::Rerender], "render the pages again, and reload a file changed on disk"),
+    line(&[Command::ToggleAutoReload], "auto-reload on or off: reload by itself a file that changes on disk"),
     line(&[Command::Copy], "copy the page to the clipboard"),
     line(&[Command::OpenInApp], "open the file in the app the desktop opens it with"),
 ];
@@ -854,6 +863,7 @@ pub(super) const LIST_LINES: &[Line] = &[
     pair(&ZOOM, "bigger, fewer to a row; smaller, more to a row"),
     pair(&PER_ROW, "one more tile to a row, or one fewer; 3{decrease-per-row} sets 3, 0{decrease-per-row} auto").with(3, 1),
     line(&[Command::Rerender], "render again, and list again a directory changed on disk"),
+    line(&[Command::ToggleAutoReload], "auto-reload on or off: list again by itself a directory that changes"),
     line(&[Command::Copy], "copy its picture to the clipboard"),
     line(&[Command::OpenInApp], "open it in the desktop's app: a file in its app, a folder in the file manager"),
 ];
@@ -1234,6 +1244,7 @@ mod tests {
                 "T",
                 "backspace",
                 "r  ctrl-l",
+                "R",
                 "c",
                 "o"
             ]
@@ -1251,6 +1262,7 @@ mod tests {
                 "+ -",
                 ", .  3.",
                 "r  ctrl-l",
+                "R",
                 "c",
                 "o"
             ]

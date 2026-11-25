@@ -64,6 +64,7 @@ const OPTIONS: &[OptionSpec] = &[
         shape: Shape::Value { named: &[AUTO, WIDTH], numbers: Some(Numbers { least: 1, most: fit::MAX_PER_ROW as u32, step: 1, unit: "" }) },
         config: Settable::Yes,
     },
+    flag(AUTO_RELOAD, "reload a file or a list by itself when it changes on disk"),
     flag(PAGER, "always page, even through one page"),
     flag(NO_PAGER, "never page: print the pages and exit"),
     OptionSpec {
@@ -114,6 +115,7 @@ const fn flag(name: &'static str, help: &'static str) -> OptionSpec {
 
 /// The viewer's options that the code asks for by name.
 const PAGER: &str = "--pager";
+const AUTO_RELOAD: &str = "--auto-reload";
 const NO_PAGER: &str = "--no-pager";
 const COMPRESSION: &str = "--compression";
 const PROTOCOL: &str = "--protocol";
@@ -1053,7 +1055,7 @@ fn view(args: &[String], backends: &'static [&'static dyn Backend]) -> Result<()
     if paging {
         let tty = tty.as_ref().ok_or("--pager needs a terminal to read keys from")?;
         let said = said.or_else(|| instead.is_some().then(|| TEXT_INSTEAD_SHORT.to_owned()));
-        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener, first, keymaps)?;
+        let later = pager::run(tty, shown, said, &terminal, zoom, first_id, &opener, first, keymaps, options.has(AUTO_RELOAD))?;
         // Said once the screen is back: what the directories gone into left out.
         warn(&later, &[]);
         return Ok(());

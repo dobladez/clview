@@ -29,6 +29,9 @@ works today. A version's section becomes the notes of its
   file of a tile on screen changes. With `-r`, the subdirectories count too. `r` then makes the list
   again: new files show, removed ones go, and only the files that changed are read again. The tile
   you are on, the filter and the zoom stay.
+- Auto-reload: `R`, or `--auto-reload` (`auto-reload = true` in the config), reloads a file or
+  makes a list again by itself when it changes on disk, once the writes pause. The status line says
+  `auto` while it is on, and `reloaded` after a reload.
 
 ### Changed
 

@@ -275,7 +275,12 @@ CodeQL's default setup scans the Rust and the workflows.
   with the search, the file and the pager, and a page past the worker's heap, written by the test,
   costing the search that page; and its tint, read back from the PNGs sent: on the matches and
   nowhere else, the page before deleted once the new one is placed, gone with `Esc`, absent from
-  a copy, and in text cells' colours.
+  a copy, and in text cells' colours. Files and lists changed on disk: the warning for a file, a
+  directory, a subdirectory with `-r` and a tile's file; `r` reloading a file, and making a list
+  again with its tile, its filter and a file named on the command line kept, and an emptied list
+  kept; a tile gone into opened again; `R` and `--auto-reload` (a config's too), reloading once the
+  writes pause, waiting while a search is typed, and not trying a failed reload again until the file
+  changes.
 - **`tests/it/view_tmux.rs`**: the pager in a private tmux server (`tmux -L`, killed at the end), its
   clients on script(1) pseudo-terminals. It covers flips, a hidden pane, a second client, a page
   tinted for a search reaching a client that attaches later, and
@@ -323,7 +328,8 @@ CodeQL's default setup scans the Rust and the workflows.
   `src/source/mermaid.rs`.
 - **`tests/it/zip.rs`** and **`tests/it/tar.rs`**: archives through the viewer, as lists and as
   folders to go into; for tar, read on a thread of its own, a file compressed alone, and that nothing
-  else names its decompressors. A Markdown document in a zip and in a tar drawing the pictures
+  else names its decompressors. A zip's list not looked at on disk, and Esc stopping a list made
+  again while a tar given reads itself. A Markdown document in a zip and in a tar drawing the pictures
   beside it, by `..` too, never from above the archive's top or from disk, in its list's tile and
   opened from the list, still after a relayout; and a picture measured from its first bytes, its
   rest failing the zip's checksum. What a held file's first bytes and neighbours are is unit-tested

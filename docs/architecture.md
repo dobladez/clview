@@ -1113,6 +1113,18 @@ Esc stops the relist (`Pager::stop_reading`), and `back` stops it and goes back.
 `Opener::again` for a tile whose file changed since it was opened, and goes into the file opened
 again.
 
+Auto-reload (`--auto-reload`, `Command::ToggleAutoReload` on `R`) is `Settings::auto_reload`, which
+every level shares; `Pager::toggle_auto_reload` turns it. While it is on, `Pager::watch_disk` says
+nothing of a change (`Pager::said`). It holds the change in `Pager::settle` instead: the stamps of
+what is on screen (`Pager::stamps_now`), and a time `SETTLE` (500 ms) later. `Pager::settle_on`
+stats them again at that time. When they moved, or the reader is busy (`Pager::busy`: `?`, the
+links' labels, a number, a search or a filter being typed, or a file or a list being opened), the
+wait starts over. When they held still, it calls `Pager::reload`, as `r` does. The run loop wakes at
+the time. `Pager::auto_reloaded` ends it: `reloaded` as the level's message, which
+`Pager::reloaded_on` takes back after `RELOADED_FOR` (1.5 s); or, for a reload that failed or a list
+left empty, the stamps in `Pager::auto_failed`, which auto-reload leaves alone until they move.
+`Nav::status_warned` puts `auto` on the right side, in the longest variant only, so it goes first.
+
 Some backends read their file again for a relayout (Markdown and HTML), and some lay out the bytes
 they kept (a PDF's tile). So the stamp can't follow a relayout. Instead, `Pager::relayout` calls
 `Pager::reload` for a changed file before it starts a layout, and waits for the reload. The layout
@@ -1172,10 +1184,12 @@ What the pager can do is apart from the keys that do it, as in Emacs
   `contents`, `back`, `quit`…) and, for each setting a build declares, one or two built from the setting's name,
   `Command::Setting(&Setting, Turn)`: `cycle-theme` for a `Keys::Cycle`, `decrease-width` and
   `increase-width` for a `Keys::Step`. The viewer names none of a backend's commands. The names
-  keep to three rules, since a config binds keys to them. A command that steps an option is
+  keep to four rules, since a config binds keys to them. A command that steps an option is
   `increase-` or `decrease-` and the name of the option, and one that goes to the next named value
-  is `cycle-` and that name (`increase-per-row`, `cycle-fences`). A command for the list alone is
-  `list-` and what it does (`list-open`, `list-filter`). No name has the prefix of a format or a
+  is `cycle-` and that name (`increase-per-row`, `cycle-fences`). A command that turns a flag of the
+  viewer's on and off is `toggle-` and the name of the flag's option (`toggle-auto-reload`). A
+  command for the list alone is `list-` and what it does (`list-open`, `list-filter`). No name has
+  the prefix of a format or a
   backend, because a name that two backends declare is one setting. A setting on the zoom keys
   (`Keys::Zoom`) has none of its own: `zoom-in` and `zoom-out` hand over to it where it applies
   (`Nav::zoom_setting`, [Settings](#settings)). Each command says what it makes of the number typed

@@ -71,3 +71,32 @@ decisions, changes from its plan, surprises, and what a later reader would want.
   left out (`r_on_a_list_emptied_…`); Esc ignored while a list is made again
   (`esc_stops_a_list_made_again`); a path given that can't be opened left out
   (`r_keeps_a_file_named_…`); `Opener::again` never asked (`going_into_…`).
+
+## Auto-reload
+
+- Its state on and off is `Settings::auto_reload`, a `Cell` that every level shares, as the
+  settings' values are, so that `Nav` can put `auto` on the status line. `pager::run` takes the
+  option's value.
+- The stamps held are those of what `watch_disk` looks at (`Pager::stamps_now`): a file's, or a
+  list's directories and its tiles on screen. A reload that failed, and a list made again with
+  nothing left in it, keep them in `Pager::auto_failed`: auto-reload leaves that change alone, and
+  the warning shows, until they move.
+- While the reader is busy, the hold's time moves on by `SETTLE`, rather than the loop waking
+  at once over and over.
+- `Pager::reload` set the warning itself for a change (`abe33f3`). With auto-reload on, it goes
+  through `Pager::said`, which says nothing of a change: `auto_reload_reloads_a_list` caught the
+  warning shown while the list was made again.
+- `auto` sits before `? help`, in the longest form of the right side only, so it goes first. At 44
+  columns it still fits beside two pages; the test narrows to 40.
+- `config_auto_reload_starts_it_on` is in `tests/it/view_pager.rs`, not `tests/it/view.rs`: only
+  the pager shows that auto-reload is on, and a pipe prints. It reads the config through `--config`,
+  as the pager's other config tests do.
+- The names' rules grow to four (`toggle-`), in `commands.rs`'s docs and architecture's. ADR-0043,
+  which listed three, is left as the record of its moment.
+- Added beyond *Verify:* `auto_reload_tries_a_reload_that_failed_again_only_once_the_file_changes`,
+  for a requirement no test named: seen failing with `auto_failed` never set, when it tried again.
+- Each test seen failing with its fix reverted: `R` bound to nothing (`capital_r_…`); the hold not
+  started over when the stamps move (`…once_its_writes_pause`, which saw a reload while the file was
+  written); `settle_on` never reloading (`…reloads_a_list`, and the file's); `busy` blind to a search
+  typed (`…waits_while_a_search_is_typed`); the option's value dropped (`config_auto_reload_…`).
+- `CONTRIBUTING.md`'s Tests says what the new pager, zip and tar tests cover.

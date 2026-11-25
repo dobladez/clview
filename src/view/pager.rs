@@ -129,6 +129,8 @@ const MAX_RESENDS: u32 = 8;
 const ANSWER_WAIT: Duration = Duration::from_millis(100);
 /// The key for the keys, always on the status line.
 const HELP: &str = "? help";
+/// What the status line's right side says while auto-reload is on.
+const AUTO: &str = "auto";
 /// The widest the zoom is said: `8 per row`.
 const ZOOM_WIDTH: usize = 9;
 /// Page through what is `shown` until the user quits, `note` on the status line first. Image ids
@@ -149,6 +151,7 @@ pub(super) fn run(
     opener: &Opener<'_, '_>,
     room: Room,
     keymaps: Keymaps,
+    auto_reload: bool,
 ) -> Result<Vec<String>, String> {
     // Inside tmux: who shows the pane, before any image goes.
     let mut watch = None;
@@ -161,6 +164,7 @@ pub(super) fn run(
         watch = Some(w);
     }
     let settings = Rc::new(Settings::with(keymaps, super::settings(opener.backends), super::having(opener.backends), terminal.values));
+    settings.auto_reload.set(auto_reload);
     // The window's room; the count to a row a document is laid out in is the reader's ([`Nav::columns`]).
     let room = Room { per_row: None, ..room };
     let mut level = Level::new(0, shown, zoom, false, settings.clone(), room);
@@ -215,6 +219,10 @@ pub(super) fn run(
         reloading: None,
         disk_seen: None,
         unreloaded: None,
+        settle: None,
+        auto_failed: None,
+        auto_reloading: false,
+        reloaded_until: None,
     };
     // Files only where one terminal gets the escape codes: inside tmux, every terminal showing
     // the pane gets them, and the first to read a file deletes it before the others can. (Inside
@@ -261,6 +269,9 @@ pub(super) fn run(
         let wait = pager.tmux_check.map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
         // A message that has the whole status line gives it back then.
         let wait = pager.moment.due().map_or(wait, |at| wait.min(at.saturating_duration_since(Instant::now())));
+        // A change on disk held to see whether its writes pause, and `reloaded`, which goes.
+        let due = [pager.settle.as_ref().map(|settle| settle.due), pager.reloaded_until];
+        let wait = due.into_iter().flatten().fold(wait, |wait, at| wait.min(at.saturating_duration_since(Instant::now())));
         let read = tty.read_timeout(wait)?;
         if let Some(bytes) = &read {
             if pending.is_empty() {
@@ -342,6 +353,7 @@ pub(super) fn run(
                     Step::Contents => pager.go_to_contents(),
                     Step::Return => pager.jump_back(),
                     Step::Reload => pager.reload(opener),
+                    Step::AutoReload => pager.toggle_auto_reload(),
                 }
                 if quit {
                     break;
@@ -365,6 +377,8 @@ pub(super) fn run(
         redraw |= pager.notice_on(Instant::now());
         redraw |= pager.watch_room();
         redraw |= pager.watch_disk(Instant::now());
+        redraw |= pager.settle_on(Instant::now(), opener);
+        redraw |= pager.reloaded_on(Instant::now());
         redraw |= pager.reload_on()?;
         pager.refresh_bounds();
         redraw |= pager.relayout(opener)?;
@@ -423,6 +437,8 @@ enum Step {
     /// `r`: the pages rendered again, and in a file's pages the file opened again if it changed on
     /// disk ([`Pager::reload`]).
     Reload,
+    /// `R`: auto-reload on or off ([`Pager::toggle_auto_reload`]).
+    AutoReload,
 }
 
 /// How the file shown stands on disk against what was read of it ([`super::Stamp`]).
@@ -441,6 +457,21 @@ const DISK_EVERY: Duration = Duration::from_secs(1);
 
 /// What the status line says while the file on screen is opened again (`r`).
 const RELOADING: &str = "reloading…";
+
+/// How long auto-reload waits for the stamps of what changed on disk to hold still before it
+/// reloads ([`Pager::settle_on`]): the writes paused.
+const SETTLE: Duration = Duration::from_millis(500);
+
+/// What the status line says once auto-reload has reloaded what is on screen, for [`RELOADED_FOR`].
+const RELOADED: &str = "reloaded";
+const RELOADED_FOR: Duration = Duration::from_millis(1500);
+
+/// A change on disk that auto-reload saw, held until the stamps of what is on screen hold still:
+/// stat-ed again at `due`, the wait starting over if they moved ([`Pager::settle_on`]).
+struct Settle {
+    due: Instant,
+    stamps: Vec<Option<Stamp>>,
+}
 
 /// Where the reader was when a link was followed, to come back to (`back`): the page and how far down
 /// it, in the page's unit, which is where to come back to while the layout is the one it was
@@ -579,6 +610,9 @@ struct Settings {
     /// The keys, in a file's pages and in a list: the viewer's defaults, and those the settings
     /// declared suggest for their commands ([`Keymaps`]). Built once, with the settings.
     keymaps: Keymaps,
+    /// Whether what changes on disk is reloaded by itself (`--auto-reload`, `R`), in every level:
+    /// the status line says `auto` while it is.
+    auto_reload: std::cell::Cell<bool>,
 }
 
 /// The moment a message has the whole status line for ([`Nav::notice`]): from when the pager first
@@ -633,7 +667,7 @@ impl Settings {
     /// The settings `declared`, the formats `having` each, at `values`, with `keymaps`: the keys of
     /// the run, the reader's config's among them.
     fn with(keymaps: Keymaps, declared: Vec<&'static Setting>, having: Vec<(&'static str, Vec<&'static str>)>, values: Values) -> Self {
-        Self { keymaps, declared, having, values: std::cell::Cell::new(values), changed: Default::default() }
+        Self { keymaps, declared, having, values: std::cell::Cell::new(values), changed: Default::default(), auto_reload: Default::default() }
     }
 
     /// The formats whose files have `setting`, if any lists it.
@@ -1140,6 +1174,7 @@ impl Nav {
                 self.rerender = true;
                 return Step::Reload;
             }
+            Command::ToggleAutoReload => return Step::AutoReload,
             Command::Setting(setting, turn) => return self.turn(setting, turn, command),
             // In a list: from tile to tile, the screen following.
             Command::Open => return self.pages.get(self.at).map_or(Step::Continue, |tile| Step::Open(*tile)),
@@ -1776,6 +1811,11 @@ impl Nav {
         let laid = self.relaying.as_ref().map(|wanted| format!("{wanted}…")).or_else(|| self.laid.clone());
         let laid = laid.map(|laid| format!("{laid:<width$} · ", width = self.laid_width()));
         let mut rights = Vec::new();
+        // Auto-reload on is said first of all, and dropped first.
+        if self.settings.auto_reload.get() {
+            let laid = laid.as_deref().unwrap_or_default();
+            rights.push(format!("{slot} {place:<widest$} · {laid}{zoom:<ZOOM_WIDTH$} · {AUTO} · {HELP} "));
+        }
         if let Some(laid) = laid {
             rights.push(format!("{slot} {place:<widest$} · {laid}{zoom:<ZOOM_WIDTH$} · {HELP} "));
         }
@@ -2215,6 +2255,15 @@ struct Pager<'a> {
     /// The stamp of the file whose reload failed last: a relayout reloads that file no more
     /// ([`Pager::relayout`]), so that a broken file is not opened again on every turn.
     unreloaded: Option<Option<Stamp>>,
+    /// Auto-reload: a change seen, held until its writes pause ([`Pager::settle_on`]).
+    settle: Option<Settle>,
+    /// Auto-reload: the stamps of what is on screen when its reload failed, which it doesn't try
+    /// again until they move.
+    auto_failed: Option<Vec<Option<Stamp>>>,
+    /// Whether the reload under way is auto-reload's: once done, the status line says `reloaded`.
+    auto_reloading: bool,
+    /// When `reloaded` goes from the status line.
+    reloaded_until: Option<Instant>,
 }
 
 /// Where in the file a link leads into the reader arrives: at the place its `#fragment` names, or
@@ -2929,6 +2978,7 @@ impl Pager<'_> {
         let Some(gone_into) = self.reading.as_mut() else { return Ok(false) };
         if gone_into.relist.is_some_and(|level| level != self.level.id) {
             self.reading = None;
+            self.auto_reloading = false;
             return Ok(false);
         }
         let said = match opener.make_on(&mut gone_into.making, Some(Instant::now() + PROGRESS_EVERY)) {
@@ -2980,6 +3030,7 @@ impl Pager<'_> {
         self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
         if items.is_empty() {
             self.level.nav.message = Some(format!("nothing left in {} that {} shows", recipe.name(), crate::NAME));
+            self.auto_reloaded(false);
             return Ok(true);
         }
         let old = &self.level;
@@ -3037,6 +3088,7 @@ impl Pager<'_> {
         let id = gone.id;
         drop(gone);
         self.let_go(id)?;
+        self.auto_reloaded(true);
         Ok(true)
     }
 
@@ -3069,6 +3121,7 @@ impl Pager<'_> {
     /// file to go into, which, begun, goes on opening for its tile.
     fn stop_reading(&mut self) {
         self.arriving = None;
+        self.auto_reloading = false;
         if let Some(GoingInto { name, .. }) = self.going_into.take() {
             self.level.nav.message = Some(format!("stopped opening {name}"));
         }
@@ -3344,7 +3397,117 @@ impl Pager<'_> {
             Some(disk) => disk,
             None => self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk),
         };
+        // Auto-reload says nothing of a change: it holds it until its writes pause, then reloads. One
+        // whose reload failed is said, until its stamps move.
+        let disk = match disk {
+            Disk::Changed if self.settings.auto_reload.get() && self.auto_failed.as_ref() != Some(&self.stamps_now()) => {
+                if self.settle.is_none() && self.reloading.is_none() && self.reading.is_none() {
+                    self.settle = Some(Settle { due: now + SETTLE, stamps: self.stamps_now() });
+                }
+                Disk::Same
+            }
+            disk => disk,
+        };
         std::mem::replace(&mut self.level.nav.disk, disk) != disk
+    }
+
+    /// What the status line says of `disk`: with auto-reload on, nothing of a change, which it
+    /// reloads.
+    fn said(&self, disk: Disk) -> Disk {
+        match disk {
+            Disk::Changed if self.settings.auto_reload.get() => Disk::Same,
+            disk => disk,
+        }
+    }
+
+    /// The stamps of what is looked at on disk now: the file of a file's pages, or a list's
+    /// directories and the files of its tiles on screen.
+    fn stamps_now(&self) -> Vec<Option<Stamp>> {
+        let level = &self.level;
+        if !level.nav.list {
+            return level.on_disk.as_ref().map(|on_disk| Stamp::of(&on_disk.path)).into_iter().collect();
+        }
+        let tiles = level.nav.on_screen().into_iter().flatten().filter_map(|tile| level.items.get(tile)?.on_disk());
+        level.directories.iter().map(|(path, _)| Stamp::of(path)).chain(tiles.map(|on_disk| Stamp::of(&on_disk.path))).collect()
+    }
+
+    /// Whether the reader is in the middle of something that a reload would get in the way of: the
+    /// keys on screen, the links' labels, a number, a search or a filter being typed, or a file or a
+    /// list being opened.
+    fn busy(&self) -> bool {
+        let nav = &self.level.nav;
+        let typing = nav.search.as_ref().is_some_and(Search::typing) || nav.filter.as_ref().is_some_and(|filter| filter.typing);
+        nav.help
+            || nav.hints.is_some()
+            || !nav.typed.is_empty()
+            || typing
+            || self.reading.is_some()
+            || self.going_into.is_some()
+            || self.reloading.is_some()
+    }
+
+    /// Auto-reload, once the change it holds is due: the stamps looked at again, and if they held
+    /// still, what is on screen reloaded as `r` does it. If they moved, the wait starts over. While
+    /// the reader is busy ([`Pager::busy`]), it waits too. Whether the screen changed.
+    fn settle_on(&mut self, now: Instant, opener: &Opener<'_, '_>) -> bool {
+        let Some(settle) = &self.settle else { return false };
+        if now < settle.due {
+            return false;
+        }
+        if !self.settings.auto_reload.get() {
+            self.settle = None;
+            return false;
+        }
+        let stamps = self.stamps_now();
+        if self.busy() || stamps != settle.stamps {
+            self.settle = Some(Settle { due: now + SETTLE, stamps });
+            return false;
+        }
+        self.settle = None;
+        self.reload(opener);
+        self.auto_reloading = self.reloading.is_some() || self.reading.is_some();
+        true
+    }
+
+    /// Auto-reload's reload done: `reloaded` said if it worked, for [`RELOADED_FOR`]; if not, the
+    /// stamps kept, so that it isn't tried again by itself until they move.
+    fn auto_reloaded(&mut self, worked: bool) {
+        if !std::mem::take(&mut self.auto_reloading) {
+            return;
+        }
+        match worked {
+            true => {
+                self.level.nav.message.get_or_insert_with(|| RELOADED.into());
+                self.reloaded_until = Some(Instant::now() + RELOADED_FOR);
+                self.auto_failed = None;
+            }
+            false => self.auto_failed = Some(self.stamps_now()),
+        }
+    }
+
+    /// `reloaded` goes from the status line once its time is up, if it is still what the line
+    /// says. Whether it went.
+    fn reloaded_on(&mut self, now: Instant) -> bool {
+        if self.reloaded_until.is_none_or(|until| now < until) {
+            return false;
+        }
+        self.reloaded_until = None;
+        let said = self.level.nav.message.as_deref() == Some(RELOADED);
+        if said {
+            self.level.nav.message = None;
+        }
+        said
+    }
+
+    /// `R`: auto-reload on or off, said on the status line. What is on screen is looked at again at
+    /// once, for its warning or for its reload.
+    fn toggle_auto_reload(&mut self) {
+        let on = !self.settings.auto_reload.get();
+        self.settings.auto_reload.set(on);
+        self.settle = None;
+        self.auto_failed = None;
+        self.disk_seen = None;
+        self.level.nav.message = Some(if on { "auto-reload on" } else { "auto-reload off" }.into());
     }
 
     /// `r` in a file's pages: the file opened again, on the openers' threads, if it changed on disk
@@ -3357,12 +3520,12 @@ impl Pager<'_> {
             return;
         }
         if let Some(disk) = self.list_on_disk_now() {
-            self.level.nav.disk = disk;
+            self.level.nav.disk = self.said(disk);
             self.relist_from_disk(disk, opener);
             return;
         }
         let Some((disk, path, stamp)) = self.on_disk_now() else { return };
-        self.level.nav.disk = disk;
+        self.level.nav.disk = self.said(disk);
         match disk {
             Disk::Same | Disk::Gone => {}
             Disk::Changed => {
@@ -3398,6 +3561,7 @@ impl Pager<'_> {
         let Some((level, handle, stamp)) = &self.reloading else { return Ok(false) };
         if *level != self.level.id {
             self.reloading = None;
+            self.auto_reloading = false;
             return Ok(false);
         }
         let Some(done) = handle.try_take() else { return Ok(false) };
@@ -3415,10 +3579,12 @@ impl Pager<'_> {
                 self.replace_with(source, picked)?;
                 self.level.nav.disk = self.on_disk_now().map_or(Disk::Same, |(disk, ..)| disk);
                 self.unreloaded = None;
+                self.auto_reloaded(true);
             }
             Err(why) => {
                 self.level.nav.message = Some(format!("not reloaded: {}", printable(&why)));
                 self.unreloaded = Some(stamp);
+                self.auto_reloaded(false);
             }
         }
         Ok(true)

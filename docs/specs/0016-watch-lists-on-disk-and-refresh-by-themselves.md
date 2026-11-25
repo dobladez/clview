@@ -241,7 +241,7 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   `…r_on_a_list_emptied_keeps_its_tiles_and_says_so`,
   `…r_keeps_a_file_named_on_the_command_line_that_is_gone`,
   `…going_into_a_tile_changed_on_disk_opens_it_again`, `…esc_stops_a_list_made_again`.
-- [ ] **Auto-reload** — `--auto-reload`, `toggle-auto-reload` on `R`, the stamp's hold, the `auto`
+- [x] **Auto-reload** — `--auto-reload`, `toggle-auto-reload` on `R`, the stamp's hold, the `auto`
   mark, the `reloaded` message, the waits; for a file's pages and for a list; usage's options and
   keys, architecture's `toggle-` rule, a CHANGELOG line. *Files:* `src/view/mod.rs`,
   `src/view/pager.rs`, `src/view/commands.rs`, `tests/it/view_pager.rs`, `tests/it/view.rs`,

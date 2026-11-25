@@ -624,6 +624,144 @@ fn going_into_a_tile_changed_on_disk_opens_it_again() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `R` turns auto-reload on and off, which the status line says, then shows as `auto` on its right
+/// side while it is on, dropped first in a narrow window.
+#[test]
+fn capital_r_turns_auto_reload_on_and_off() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("auto-toggle", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty"], 100, 60);
+    view.wait_until("page 1", |t| drawn(t, "page 1/3"));
+    assert!(!last_bar(&view.text()).contains(" auto "), "{}", last_bar(&view.text()));
+    view.press("R");
+    view.wait_until("on", |t| last_bar(t).contains(" auto-reload on ") && last_bar(t).contains(" · auto · ? help "));
+    view.press("R");
+    view.wait_until("off", |t| last_bar(t).contains(" auto-reload off ") && !last_bar(t).contains(" · auto · "));
+    view.press("q");
+    assert!(view.finish().success());
+    // Narrow, `auto` goes before the zoom does.
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--auto-reload"], 40, 60);
+    view.wait_until("the first pages", |t| last_bar(t).contains("1–2/3 · 1 per row · ? help "));
+    assert!(!last_bar(&view.text()).contains(" auto "), "{}", last_bar(&view.text()));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// With auto-reload on, a file written again over a while is reloaded once its writes pause, with
+/// no warning: the last version, at the page the reader was on, the status line saying `reloaded`
+/// for a moment.
+#[test]
+fn auto_reload_reloads_a_file_once_its_writes_pause() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("auto-file", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--auto-reload"], 100, 60);
+    view.wait_until("page 1", |t| drawn(t, "page 1/3"));
+    view.press("n");
+    view.wait_until("page 2", |t| drawn(t, "page 2/3"));
+    let before = view.text().len();
+    // Written every 300 ms for 2 s: never still for the 500 ms auto-reload waits.
+    for pages in 4..=10 {
+        std::fs::write(&pdf, crate::fixtures::letter("Pager test", pages)).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let written = view.text().len();
+    assert!(!view.text().get(before..).unwrap_or_default().contains("page 2/"), "reloaded while it was written: {}", last_bar(&view.text()));
+    view.wait_until("reloaded, the last version", |t| {
+        let t = t.get(written..).unwrap_or_default();
+        drawn(t, "page 2/10") && t.contains(" reloaded ")
+    });
+    let since = Instant::now();
+    view.wait_until("reloaded gone", |t| !last_bar(t).contains(" reloaded ") && last_bar(t).contains(" page 2/10 "));
+    let took = since.elapsed();
+    assert!(took > Duration::from_millis(800) && took < Duration::from_secs(4), "reloaded went after {took:?}");
+    assert!(!view.text().get(before..).unwrap_or_default().contains("changed on disk"), "warned");
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// With auto-reload on, a list whose directory changes is made again by itself.
+#[test]
+fn auto_reload_reloads_a_list() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("auto-list", &["b.pdf", "c.pdf"]);
+    let mut view = Session::start(&dir, &["--protocol", "kitty", "--auto-reload"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    view.press("l");
+    view.wait_until("c chosen", |t| last_bar(t).contains(" c.pdf ") && last_bar(t).contains(" 2/2 "));
+    let before = view.text().len();
+    std::fs::write(dir.join("a.pdf"), crate::fixtures::letter("A", 1)).unwrap();
+    view.wait_until("made again, c still chosen", |t| {
+        let bar = last_bar(t.get(before..).unwrap_or_default());
+        bar.contains(" c.pdf ") && bar.contains(" reloaded ") && bar.contains(" 3/3 ")
+    });
+    assert!(!view.text().get(before..).unwrap_or_default().contains("changed on disk"), "warned");
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Auto-reload waits while a search is typed, and reloads once it is put away.
+#[test]
+fn auto_reload_waits_while_a_search_is_typed() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("auto-search", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--auto-reload"], 100, 60);
+    view.wait_until("page 1", |t| drawn(t, "page 1/3"));
+    view.press("/Pag");
+    view.wait_until("typing", |t| last_bar(t).contains(" /Pag"));
+    std::fs::write(&pdf, crate::fixtures::letter("Pager test", 5)).unwrap();
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(last_bar(&view.text()).contains(" /Pag") && last_bar(&view.text()).contains("/3 "), "{}", last_bar(&view.text()));
+    view.press("\x1b");
+    view.wait_until("reloaded", |t| last_bar(t).contains(" reloaded ") && last_bar(t).contains(" page 1/5 "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// An auto-reload that fails says why, and the change, and isn't tried again by itself until the
+/// file changes again.
+#[test]
+fn auto_reload_tries_a_reload_that_failed_again_only_once_the_file_changes() {
+    if !pty_works() {
+        return;
+    }
+    let pdf = fixture("auto-failed", 3);
+    let mut view = Session::start(&pdf, &["--protocol", "kitty", "--auto-reload"], 100, 60);
+    view.wait_until("page 1", |t| drawn(t, "page 1/3"));
+    std::fs::write(&pdf, "not a PDF any more\n").unwrap();
+    view.wait_until("the failure said", |t| last_bar(t).contains(" not reloaded: "));
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let failed = view.text().len();
+    std::thread::sleep(Duration::from_millis(2500));
+    let since = view.text().get(failed..).unwrap_or_default().to_owned();
+    assert!(!since.contains("reloading") && !since.contains("not reloaded"), "tried again: {since:?}");
+    std::fs::write(&pdf, crate::fixtures::letter("Pager test", 5)).unwrap();
+    view.wait_until("reloaded", |t| last_bar(t.get(failed..).unwrap_or_default()).contains(" reloaded ") && last_bar(t).contains(" page 1/5 "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
+/// A config's `auto-reload = true` starts the pager with auto-reload on.
+#[test]
+fn config_auto_reload_starts_it_on() {
+    if !pty_works() {
+        return;
+    }
+    let config = keys_config("config-auto-reload", "auto-reload = true\n");
+    let mut view = Session::start(&fixture("config-auto-reload", 3), &["--protocol", "kitty", "--config", &config], 100, 60);
+    view.wait_until("page 1, auto on", |t| drawn(t, "page 1/3") && last_bar(t).contains(" · auto · ? help "));
+    view.press("q");
+    assert!(view.finish().success());
+}
+
 /// With `--pages`, a file reloaded keeps the pages picked that it still has, in their order.
 #[test]
 fn r_reloads_the_pages_picked_that_the_file_still_has() {

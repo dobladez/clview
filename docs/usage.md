@@ -37,6 +37,7 @@ clv --password PW secret.pdf
 | `--per-row width` | one page as wide as the window; a tall page runs past the bottom |
 | `--per-row 3` | that many pages to a row, 1 to 8, in as many rows as fit the window: each page a third of the width, even when there is only one. In a list, that many tiles to a row. A Markdown or HTML file is laid out in that many columns ([Documents](#a-page-the-windows-size)); a `--width` of a number wins over it there, with a warning ([The config file](#the-config-file) says what happens when the config sets one of the two) |
 | `--zoom` | `--per-row`'s old name, with the same values: still taken, with a warning, and to go in a later release. Not with `--per-row` |
+| `--auto-reload` | reload a file or a list by itself when it changes on disk, once the writes pause ([The status line](#the-status-line)); `R` turns it on and off |
 | `--pager` | always page, even through a single page |
 | `--no-pager` | never page: print the pages and exit |
 | `--theme auto` | [Markdown and HTML](#documents), a [book](#books), an [Org document](#org-documents), and a [Mermaid diagram](#mermaid-diagrams) shown by itself, light on dark on a terminal with a dark background, dark on light otherwise (the default); taken whatever the files, and doing nothing to the rest. With documents or Mermaid diagrams, which `--help` lists it under, each in its words |
@@ -243,6 +244,7 @@ of a file, or for both.
 | `copy` | both | copy the page or the tile to the clipboard |
 | `open-in-app` | both | open the file in the app that the desktop opens it with |
 | `rerender` | both | render the pages again; reload the file, or make the list again, if it changed on disk |
+| `toggle-auto-reload` | both | auto-reload on or off: reload by itself what changes on disk |
 | `back` | both | clear the search or the filter; then back through the links followed; then out of the file or the folder |
 | `leave` | both | clear the search or the filter; then out of the file or the folder, or quit |
 | `quit` | both | quit |
@@ -314,6 +316,7 @@ In a file's pages:
 | `F` | label them, and copy the address of the link whose label you type |
 | `T` | to the contents, in a file that has a place for them: a [book](#books). Backspace comes back |
 | `r`, `ctrl-l` | render the pages again; reload the file if it changed on disk ([The status line](#the-status-line)) |
+| `R` | auto-reload on or off: reload the file by itself when it changes on disk |
 | `c` | copy the page you are on to the clipboard ([Copying a page](#copying-a-page)) |
 | `o` | open the file in the app the desktop opens it with ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML, [books](#books), [Org documents](#org-documents) and Mermaid diagrams light on dark, or dark on light ([Documents](#documents), [Mermaid diagrams](#mermaid-diagrams)); on any other file it says that this format doesn't, and two that do ([The status line](#the-status-line)); with documents or Mermaid diagrams |
@@ -341,6 +344,7 @@ In a list:
 | `+`, `-` | bigger tiles, fewer to a row; or smaller, more to a row |
 | `,`, `.` | one more tile to a row, or one fewer, down to one; a number, then `,` or `.`, sets that many, and `0.` goes back to `auto` |
 | `r`, `ctrl-l` | render the tiles again; make the list again if it changed on disk ([The status line](#the-status-line)) |
+| `R` | auto-reload on or off: make the list again by itself when it changes on disk |
 | `c` | copy the tile's picture to the clipboard: a file's first page (a folder has none) |
 | `o` | open the tile's file in the app the desktop opens it with, or its folder in the file manager ([Opening in another app](#opening-in-another-app)) |
 | `D` | Markdown, HTML and Mermaid diagrams light on dark, or dark on light; the rest of the list stays as it is |
@@ -430,6 +434,16 @@ made, the old tiles stay, the status line says `reloading…`, and `esc` stops i
 command line stays in the list when it is gone. A list with nothing left in it stays as it was, and
 the status line says `nothing left in … that clv shows`. When you go into a tile whose file changed,
 `clv` reads the file again first.
+
+With auto-reload on, `clv` reloads a file or makes a list again by itself, with no warning. `R`
+turns it on and off, and `--auto-reload` (`auto-reload = true` in the config) starts it on. When
+`clv` sees a change, it looks again 500 ms later, and waits until the file or the directory holds
+still for that long. Then it reloads, and the status line says `reloaded` for about 1.5 s. While
+auto-reload is on, the right side of the status line says `auto`, which a narrow window drops
+first. `clv` waits while the keys (`?`), the links' labels, a number, a search or a filter that you
+type are on screen. A file or a directory that is gone is never reloaded: the status line says
+`gone from disk`. A reload that fails says why, and `clv` doesn't try it again by itself until the
+file changes again. `r` still tries it.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
 says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,
