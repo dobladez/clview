@@ -1313,6 +1313,8 @@ enum Piece {
     List(Rc<dyn Container>, String, bool),
     /// A folder among other paths, or a file kept from the list made before.
     Item(Item),
+    /// A file given kept from the list made before, as it can't be opened again now, and why.
+    Kept(Item, String),
 }
 
 /// A list being made again ([`Opener::make`]): from its recipe, the next path given, the container
@@ -1421,6 +1423,10 @@ impl<'o, 'a> Opener<'o, 'a> {
                 Piece::File(opened, name) => found.file(opened, name),
                 Piece::List(container, prefix, recurse) => self.list(&mut found, container, &prefix, recurse),
                 Piece::Item(item) => found.items.push(item),
+                Piece::Kept(item, why) => {
+                    found.items.push(item);
+                    found.unreopened.push(why);
+                }
             }
         }
         let Found { items, used, left_out, warnings, directories, .. } = found;
@@ -1457,7 +1463,7 @@ impl<'o, 'a> Opener<'o, 'a> {
             match crate::source::choose(path, self.backends).and_then(|chosen| self.file(Some(chosen), &name, count > 1)) {
                 Ok(Some((_, Item::Container { container, .. }))) => container,
                 Err(why) => match real.and_then(|real| old.get(real)) {
-                    Some(item) => return Piece::Item(item.clone().named(&name)),
+                    Some(item) => return Piece::Kept(item.clone().named(&name), why),
                     None => return Piece::File(Err(why), name),
                 },
                 opened => return Piece::File(opened, name),
@@ -1523,6 +1529,10 @@ impl<'o, 'a> Opener<'o, 'a> {
                 Piece::File(opened, name) => making.found.file(opened, name),
                 Piece::List(container, prefix, recurse) => making.waiting = Some((container, prefix, recurse)),
                 Piece::Item(item) => making.found.items.push(item),
+                Piece::Kept(item, why) => {
+                    making.found.items.push(item);
+                    making.found.unreopened.push(why);
+                }
             }
         }
     }
@@ -1776,6 +1786,9 @@ pub(super) struct Found {
     pub(super) left_out: Vec<(String, String)>,
     pub(super) warnings: Vec<String>,
     pub(super) directories: Watched,
+    /// Why each file given that couldn't be opened again, and kept its old item, couldn't: a list
+    /// made again with one has not reloaded.
+    pub(super) unreopened: Vec<String>,
     /// Whether more directories were read than are looked at, which is said once.
     unwatched: bool,
 }

@@ -24,8 +24,8 @@
 //! inside tmux, the pager asks tmux after writing whether everything reached the terminal.
 //! `docs/architecture.md` has the details.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -2257,13 +2257,33 @@ struct Pager<'a> {
     unreloaded: Option<Option<Stamp>>,
     /// Auto-reload: a change seen, held until its writes pause ([`Pager::settle_on`]).
     settle: Option<Settle>,
-    /// Auto-reload: the stamps of what is on screen when its reload failed, which it doesn't try
-    /// again until they move.
-    auto_failed: Option<Vec<Option<Stamp>>>,
+    /// Auto-reload: what had changed on disk when its reload failed, by path, with its stamp then.
+    /// It doesn't try again while every change is one of these ([`Pager::failed_before`]).
+    auto_failed: Option<Vec<(PathBuf, Option<Stamp>)>>,
     /// Whether the reload under way is auto-reload's: once done, the status line says `reloaded`.
     auto_reloading: bool,
     /// When `reloaded` goes from the status line.
     reloaded_until: Option<Instant>,
+}
+
+/// Each tile of the `old` list, by its place, to its tile among the `new` items, if it is still
+/// there: by the real path of its file where it has one, else by its name, the second of two files
+/// named alike to the second. Each new tile is taken once.
+fn retiled(old: &[Item], new: &[Item]) -> Vec<Option<usize>> {
+    let mut by_path: HashMap<&Path, VecDeque<usize>> = HashMap::new();
+    let mut by_name: HashMap<&str, VecDeque<usize>> = HashMap::new();
+    for (tile, item) in new.iter().enumerate() {
+        match item.on_disk() {
+            Some(on_disk) => by_path.entry(on_disk.path.as_path()).or_default().push_back(tile),
+            None => by_name.entry(item.name()).or_default().push_back(tile),
+        }
+    }
+    old.iter()
+        .map(|item| match item.on_disk() {
+            Some(on_disk) => by_path.get_mut(on_disk.path.as_path())?.pop_front(),
+            None => by_name.get_mut(item.name())?.pop_front(),
+        })
+        .collect()
 }
 
 /// Where in the file a link leads into the reader arrives: at the place its `#fragment` names, or
@@ -3026,7 +3046,7 @@ impl Pager<'_> {
         if self.level.nav.message.as_deref() == Some(RELOADING) {
             self.level.nav.message = None;
         }
-        let Found { items, left_out, warnings, directories, .. } = found;
+        let Found { items, left_out, warnings, directories, unreopened, .. } = found;
         self.later.extend(warnings.into_iter().chain(left_out.iter().map(|(_, why)| why.clone())));
         if items.is_empty() {
             self.level.nav.message = Some(format!("nothing left in {} that {} shows", recipe.name(), crate::NAME));
@@ -3034,21 +3054,12 @@ impl Pager<'_> {
             return Ok(true);
         }
         let old = &self.level;
-        // Each name of the new list, to its tiles, the last first: two files named alike are told
-        // apart by their order.
-        let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (tile, item) in items.iter().enumerate().rev() {
-            by_name.entry(item.name()).or_default().push(tile);
-        }
-        let mut taken = by_name.clone();
-        let mut new_of = |tile: usize| old.items.get(tile).and_then(|item| taken.get_mut(item.name())?.pop());
-        let place = |tile: Option<usize>| {
-            let item = tile.and_then(|tile| old.items.get(tile))?;
-            by_name.get(item.name())?.last().copied()
-        };
+        // Each old tile's tile in the new list, once: by its file's path, or by its name.
+        let retiled = retiled(&old.items, &items);
+        let place = |tile: Option<usize>| retiled.get(tile?).copied().flatten();
         let picked: Option<Vec<usize>> = old.nav.picked.then(|| {
             let given = old.nav.filter.as_ref().map_or(&old.nav.pages, |filter| &filter.given);
-            given.iter().filter_map(|tile| new_of(*tile)).collect::<Vec<_>>()
+            given.iter().filter_map(|tile| place(Some(*tile))).collect::<Vec<_>>()
         });
         let picked = picked.filter(|picked| !picked.is_empty());
         let last = items.len().saturating_sub(1);
@@ -3088,7 +3099,14 @@ impl Pager<'_> {
         let id = gone.id;
         drop(gone);
         self.let_go(id)?;
-        self.auto_reloaded(true);
+        // A file given that couldn't be opened again kept its tile: the reload failed, and says why.
+        match unreopened.first() {
+            Some(why) => {
+                self.level.nav.message = Some(format!("not reloaded: {}", printable(why)));
+                self.auto_reloaded(false);
+            }
+            None => self.auto_reloaded(true),
+        }
         Ok(true)
     }
 
@@ -3400,7 +3418,7 @@ impl Pager<'_> {
         // Auto-reload says nothing of a change: it holds it until its writes pause, then reloads. One
         // whose reload failed is said, until its stamps move.
         let disk = match disk {
-            Disk::Changed if self.settings.auto_reload.get() && self.auto_failed.as_ref() != Some(&self.stamps_now()) => {
+            Disk::Changed if self.settings.auto_reload.get() && !self.failed_before() => {
                 if self.settle.is_none() && self.reloading.is_none() && self.reading.is_none() {
                     self.settle = Some(Settle { due: now + SETTLE, stamps: self.stamps_now() });
                 }
@@ -3429,6 +3447,34 @@ impl Pager<'_> {
         }
         let tiles = level.nav.on_screen().into_iter().flatten().filter_map(|tile| level.items.get(tile)?.on_disk());
         level.directories.iter().map(|(path, _)| Stamp::of(path)).chain(tiles.map(|on_disk| Stamp::of(&on_disk.path))).collect()
+    }
+
+    /// What changed on disk since it was read, by path, with its stamp now: the file of a file's
+    /// pages, or a list's directories and the files of its tiles, those on screen or, with `all`,
+    /// every one.
+    fn changes(&self, all: bool) -> Vec<(PathBuf, Option<Stamp>)> {
+        let level = &self.level;
+        let changed = |path: &Path, stamp: Option<Stamp>| {
+            let now = Stamp::of(path);
+            (now != stamp).then(|| (path.to_path_buf(), now))
+        };
+        if !level.nav.list {
+            return level.on_disk.as_ref().ok().and_then(|on_disk| changed(&on_disk.path, on_disk.stamp)).into_iter().collect();
+        }
+        let tiles: Vec<usize> = match all {
+            true => (0..level.items.len()).collect(),
+            false => level.nav.on_screen().into_iter().flatten().collect(),
+        };
+        let files = tiles.into_iter().filter_map(|tile| level.items.get(tile)?.on_disk()).map(|on_disk| (on_disk.path.as_path(), on_disk.stamp));
+        level.directories.iter().map(|(path, stamp)| (path.as_path(), *stamp)).chain(files).filter_map(|(path, stamp)| changed(path, stamp)).collect()
+    }
+
+    /// Whether every change on screen now is one that auto-reload failed to reload, as it is
+    /// still: it isn't tried again by itself until one of them moves, or another changes.
+    fn failed_before(&self) -> bool {
+        let Some(failed) = &self.auto_failed else { return false };
+        let now = self.changes(false);
+        !now.is_empty() && now.iter().all(|change| failed.contains(change))
     }
 
     /// Whether the reader is in the middle of something that a reload would get in the way of: the
@@ -3481,7 +3527,7 @@ impl Pager<'_> {
                 self.reloaded_until = Some(Instant::now() + RELOADED_FOR);
                 self.auto_failed = None;
             }
-            false => self.auto_failed = Some(self.stamps_now()),
+            false => self.auto_failed = Some(self.changes(true)),
         }
     }
 

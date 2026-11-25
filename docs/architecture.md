@@ -1106,9 +1106,12 @@ source or its `Later` with it (`Slot::Kept`). A path given that can't be opened 
 item, found by the real path it led to before (`GivenPath::real`).
 
 `Pager::relist` builds the new level in place of the old one, as `Pager::replace_with` does for a
-file. It keeps the tile chosen, the filter (`Filter::given`, `last` and `chosen_before`) and the
-tiles that `--pages` picked by their names, two items with one name told apart by their order. A
-result for a level no longer on screen is dropped. An empty result keeps the old level and says so.
+file. `retiled` maps each old tile to its new tile once: by the real path of its file, else by its
+name, the second of two items named alike to the second. That map keeps the tile chosen, the filter
+(`Filter::given`, `last` and `chosen_before`) and the tiles that `--pages` picked. A result for a
+level no longer on screen is dropped. An empty result keeps the old level and says so. A path given
+that couldn't be opened again keeps its old item, and its reason goes in `Found::unreopened`: the
+list shows, but has not reloaded, and says why.
 Esc stops the relist (`Pager::stop_reading`), and `back` stops it and goes back. `Pager::open` asks
 `Opener::again` for a tile whose file changed since it was opened, and goes into the file opened
 again.
@@ -1121,8 +1124,10 @@ stats them again at that time. When they moved, or the reader is busy (`Pager::b
 links' labels, a number, a search or a filter being typed, or a file or a list being opened), the
 wait starts over. When they held still, it calls `Pager::reload`, as `r` does. The run loop wakes at
 the time. `Pager::auto_reloaded` ends it: `reloaded` as the level's message, which
-`Pager::reloaded_on` takes back after `RELOADED_FOR` (1.5 s); or, for a reload that failed or a list
-left empty, the stamps in `Pager::auto_failed`, which auto-reload leaves alone until they move.
+`Pager::reloaded_on` takes back after `RELOADED_FOR` (1.5 s). A reload that failed, a list left
+empty, or a list with a path given that couldn't be opened again keeps in `Pager::auto_failed` what
+had changed, by path, with its stamp (`Pager::changes`, over every tile). Auto-reload leaves a change
+alone while every change on screen is one of those (`Pager::failed_before`), and the warning shows.
 `Nav::status_warned` puts `auto` on the right side, in the longest variant only, so it goes first.
 
 Some backends read their file again for a relayout (Markdown and HTML), and some lay out the bytes

@@ -443,7 +443,8 @@ auto-reload is on, the right side of the status line says `auto`, which a narrow
 first. `clv` waits while the keys (`?`), the links' labels, a number, a search or a filter that you
 type are on screen. A file or a directory that is gone is never reloaded: the status line says
 `gone from disk`. A reload that fails says why, and `clv` doesn't try it again by itself until the
-file changes again. `r` still tries it.
+file changes again. `r` still tries it. In a list, a file named on the command line that can't be
+read again keeps its tile, and that counts as a reload that failed.
 
 A key that changes how a file looks (`D`, `[`, `{`, `s`), pressed on a file that has no such thing,
 says so on the whole status line: `this format doesn't reflow (Markdown, HTML and others do)`,

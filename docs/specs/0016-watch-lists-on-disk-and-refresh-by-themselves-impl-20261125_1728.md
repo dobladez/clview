@@ -106,3 +106,24 @@ decisions, changes from its plan, surprises, and what a later reader would want.
 - The gates, the tests each seen failing, and the docs: checked (2026-11-25).
 - The three manual checks, in kitty and in a private tmux, wait for the owner: the tests play a
   terminal on a pseudo-terminal, and can't show what kitty draws.
+
+## Codex review fixes
+
+- Two files named alike lost their places in a list made again: `relist` found an old tile's new
+  tile by its name alone, always the first of that name, against the spec's "known by its path
+  and its stamp". `retiled` now maps each old tile to its new tile once, by the real path of its
+  file, else by its name's occurrence (the second `report.pdf` to the second). The tile chosen, the
+  filter's tiles and the tiles `--pages` picked all go through that map. Test:
+  `r_keeps_the_tile_of_two_files_named_alike`, seen failing with `pager.rs` as it was (the reader
+  moved to the first), and its `--pages 2` half alone failing too.
+- A file named on the command line that couldn't be opened again kept its old item silently, so a
+  list made again reported success, cleared `auto_failed`, and auto-reload reloaded it every
+  second. `Opener::piece` now gives `Piece::Kept` with the reason, which goes to
+  `Found::unreopened`; `relist` then says `not reloaded: …` and counts it as a failed reload.
+  Test: `auto_reload_holds_a_file_given_that_cant_be_opened_again`, seen failing with the reason
+  dropped.
+- That test showed that `auto_failed` as the stamps of the tiles on screen didn't hold: it was taken
+  as the new level replaced the old one, before its first draw, when fewer tiles counted as on
+  screen. It now holds what had changed, by path, with its stamp, over every tile
+  (`Pager::changes`), and auto-reload leaves a change alone while every change on screen is one of
+  those (`Pager::failed_before`).

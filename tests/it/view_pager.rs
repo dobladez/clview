@@ -589,6 +589,76 @@ fn r_keeps_a_file_named_on_the_command_line_that_is_gone() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Two files named alike, named on the command line, keep their places when the list is made again:
+/// each tile is known by its file's path, not by its name. The reader on the second stays on it, and
+/// with `--pages` picking the second, the second is still the one shown.
+#[test]
+fn r_keeps_the_tile_of_two_files_named_alike() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-alike", &["one/report.pdf", "two/report.pdf"]);
+    let (one, two) = (dir.join("one/report.pdf"), dir.join("two/report.pdf"));
+    let mut view = Session::start(&one, &[two.to_str().unwrap(), "--protocol", "kitty"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    view.press("l");
+    view.wait_until("the second chosen", |t| last_bar(t).contains(" report.pdf 2/2 "));
+    std::fs::write(&two, crate::fixtures::letter("Two again", 3)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) > 0));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(last_bar(&view.text()).contains(" report.pdf 2/2 "), "the reader moved: {}", last_bar(&view.text()));
+    view.press("\r");
+    view.wait_until("the second opened", |t| drawn(t, "page 1/3"));
+    view.press("q");
+    assert!(view.finish().success());
+    // `--pages 2`: the second alone, before and after.
+    std::fs::write(&two, crate::fixtures::letter("Two", 1)).unwrap();
+    let mut view = Session::start(&one, &[two.to_str().unwrap(), "--protocol", "kitty", "--pages", "2", "--pager"], 100, 60);
+    view.wait_until("the second alone", |t| drawn(t, "2/2 · 1 of 1"));
+    std::fs::write(&two, crate::fixtures::letter("Two again", 3)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) > 0));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(drawn(view.text().get(before..).unwrap_or_default(), "2/2 · 1 of 1"), "{}", last_bar(&view.text()));
+    view.press("\r");
+    view.wait_until("the second opened", |t| drawn(t, "page 1/3"));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A file named on the command line that can't be opened again keeps its tile, but the list made
+/// again has not reloaded: it says why once, and auto-reload leaves it until the file changes again.
+#[test]
+fn auto_reload_holds_a_file_given_that_cant_be_opened_again() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("auto-given", &["a.pdf", "b.pdf"]);
+    let (a, b) = (dir.join("a.pdf"), dir.join("b.pdf"));
+    let mut view = Session::start(&a, &[b.to_str().unwrap(), "--protocol", "kitty", "--auto-reload"], 100, 60);
+    view.wait_until("the list", |t| drawn(t, "1/2"));
+    std::fs::write(&b, "not a PDF any more\n").unwrap();
+    view.wait_until("the failure said", |t| last_bar(t).contains(" not reloaded: "));
+    // The list made then is sent; after it, nothing.
+    std::thread::sleep(Duration::from_millis(800));
+    let failed = view.text().len();
+    std::thread::sleep(Duration::from_millis(3000));
+    let since = view.text().get(failed..).unwrap_or_default().to_owned();
+    assert!(!since.contains("reloading") && !since.contains("reloaded") && transmitted(&since) == 0, "tried again: {}", last_bar(&since));
+    assert!(last_bar(&view.text()).contains("changed on disk"), "{}", last_bar(&view.text()));
+    std::fs::write(&b, crate::fixtures::letter("B again", 2)).unwrap();
+    view.wait_until("reloaded", |t| last_bar(t.get(failed..).unwrap_or_default()).contains(" reloaded "));
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Going into a tile whose file changed since the list opened it opens the file again first: its
 /// page is the file as it is now, with nothing to warn of. A picture is laid out once, so nothing
 /// else would read it again.
