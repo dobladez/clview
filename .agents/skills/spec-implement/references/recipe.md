@@ -31,7 +31,6 @@ Read the spec. Refuse, saying why, if it is:
 - `Done` or `Superseded by …`: never.
 - `Shelved`: set aside on purpose. It can be lifted back to `Ready` (`/spec-update`), with why
   it is being picked up again.
-- without a `- [ ]` under `## Tasks`: its tasks are to write first.
 
 If it's `Implementing`, `AskUserQuestion`: `Continue it` / `Cancel`. To continue, skip step 3's
 status change and use its latest `{spec}-impl-*.md`, opening one only if it has none.
@@ -52,7 +51,12 @@ without `.md`.
    surprises, and what a later reader would want.
    ```
 4. Add to `## Changelog`: `- {today} — Implementing ([notes]({spec}-impl-{stamp}.md)).`
-5. Commit those: `Spec-NNNN: Implementing`.
+5. **Tasks and Done, if the spec left them.** When `## Tasks` has no task but the template's
+   (`**Noun phrase**`), or none, write them now, by the conventions (Tasks, Verify, Size): each a
+   session's work and a commit, with the tests that show it. Do the same for `## Done`'s items
+   that are still the template's (`Manual: …`, the tests to name). Show them to the user before
+   going on, and write in the notes that they were written here.
+6. Commit those: `Spec-NNNN: Implementing`.
 
 ### 4. The tasks
 

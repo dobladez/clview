@@ -59,9 +59,9 @@ fails while it disagrees with them.
 `Superseded by Spec-NNNN` out of the queue.
 
 - **Ready**: written and committed, for anyone to pick up. A reader can tell the slice
-  (Summary), what's left out (Out of scope), the first task (Tasks), the evidence it's done
-  (Done), and what blocks it (🔴 in Open questions). If any of those is missing or vague, it's a
-  `Draft`.
+  (Summary), what it delivers (Requirements), what's left out (Out of scope), and what blocks it
+  (🔴 in Open questions). If any of those is missing or vague, it's a `Draft`. Its Tasks and Done
+  may stay as the template has them: the implementer writes them first.
 - **Implementing**: `spec-implement` has claimed it, so no one else picks it up.
 - **Done**: shipped, its `Done` checklist passed. `spec-implement` makes it so.
 - **Draft**: committed before its scope was settled. Lifted to `Ready` before it is implemented.
