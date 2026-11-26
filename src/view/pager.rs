@@ -2271,13 +2271,15 @@ struct Pager<'a> {
 }
 
 /// Each tile of the `old` list, by its place, to its tile among the `new` items, if it is still
-/// there: by the real path of its file, where it has one, and its name, the second of two tiles
-/// alike in both to the second. Each new tile is taken once.
+/// there: by the real path of its file and the path it was opened by, where it has one, and its
+/// name, the second of two tiles alike in all of them to the second. Each new tile is taken once.
 fn retiled(old: &[Item], new: &[Item]) -> Vec<Option<usize>> {
-    fn key(item: &Item) -> (Option<&Path>, &str) {
-        (item.on_disk().map(|on_disk| on_disk.path.as_path()), item.name())
+    /// A tile's file, by its real path and the path it was opened by, and its name.
+    type Key<'a> = (Option<(&'a Path, &'a Path)>, &'a str);
+    fn key(item: &Item) -> Key<'_> {
+        (item.on_disk().map(|on_disk| (on_disk.path.as_path(), on_disk.opened.as_path())), item.name())
     }
-    let mut tiles: HashMap<(Option<&Path>, &str), VecDeque<usize>> = HashMap::new();
+    let mut tiles: HashMap<Key<'_>, VecDeque<usize>> = HashMap::new();
     for (tile, item) in new.iter().enumerate() {
         tiles.entry(key(item)).or_default().push_back(tile);
     }

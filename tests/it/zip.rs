@@ -16,7 +16,7 @@ use crate::view_pager::{PLACED, ids_after, next_image};
 use crate::view_pager::{Session, bar, chosen, pty_works};
 
 /// A `width` × `height` PNG.
-fn png(width: u32, height: u32) -> Vec<u8> {
+pub(crate) fn png(width: u32, height: u32) -> Vec<u8> {
     let picture = image::RgbaImage::from_fn(width, height, |x, y| image::Rgba([(x % 251) as u8, (y % 251) as u8, 64, 255]));
     let mut bytes = Cursor::new(Vec::new());
     picture.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
@@ -25,7 +25,7 @@ fn png(width: u32, height: u32) -> Vec<u8> {
 
 /// An archive at `path` of `files`, by name and contents, deflated: a name ending in `/` is a
 /// directory.
-fn archive(path: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
+pub(crate) fn archive(path: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     for (name, contents) in files {

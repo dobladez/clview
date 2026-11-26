@@ -1099,19 +1099,21 @@ the list again, and for a changed one starts `Opener::make` through `Reading`, t
 gone into takes, with `Reading::relist` naming the level. `Opener::make_on` goes through the paths
 given a step at a time (`Opener::piece`, which `Opener::open` uses too), waits for a container that
 reads itself, and opens a container's files with `Opener::begin` and `Opener::step`. The old list's
-items go in as `Old`, by the real paths of their files and the names they were opened under: two
-names for one file (`notes.md` and `notes.org`) are two items, which their backends read
-differently. `Opener::step` asks the container where an
+items go in as `Old`, by the real paths of their files and the paths they were opened by
+(`OnDisk::opened`, as given or as the container listed them): two paths to one file (`notes.md`
+and `notes.org`, or `one/notes.md` and `two/notes.md`) are two items, which their backends read
+differently, by name or by what is beside each path. `Opener::step` asks the container where an
 entry is on disk (`Container::file_on_disk`, a directory's path joined to the name; none for an
 archive) and stats it before it opens it. An item whose path and stamp are the same is kept, its
 source or its `Later` with it (`Slot::Kept`). A path given that can't be opened now keeps its old
-item, found by the real path it led to before (`GivenPath::real`). A path given whose item has no
-file of its own to stamp (`/dev/stdin`, a pipe) can't be read twice: its item stays in the recipe
-(`GivenPath::unstamped`), and the path isn't read again.
+item, found by the real path it led to before (`GivenPath::real`). A path given that can be read
+only once (`read_once`: a pipe, a device, `/dev/stdin`) keeps in the recipe what it added to the
+list, whatever it opened as: a file, a folder, or an archive's files (`GivenPath::once`). The path
+isn't read again.
 
 `Pager::relist` builds the new level in place of the old one, as `Pager::replace_with` does for a
-file. `retiled` maps each old tile to its new tile once: by the real path of its file, where it has
-one, and its name, the second of two tiles alike in both to the second. That map keeps the tile chosen, the filter
+file. `retiled` maps each old tile to its new tile once: by the real path of its file and the path it
+was opened by, where it has them, and its name, the second of two tiles alike in all to the second. That map keeps the tile chosen, the filter
 (`Filter::given`, `last` and `chosen_before`) and the tiles that `--pages` picked. A result for a
 level no longer on screen is dropped. An empty result keeps the old level and says so. A path given
 that couldn't be opened again keeps its old item, and its reason goes in `Found::unreopened`: the

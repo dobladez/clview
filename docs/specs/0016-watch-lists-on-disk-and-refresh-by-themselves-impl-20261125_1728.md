@@ -152,3 +152,28 @@ decisions, changes from its plan, surprises, and what a later reader would want.
   `past_its_cpu_time_or_its_heap_the_labels_worker_is_killed_and_they_are_left_out` (its worker not
   killed for its memory) while the tar was read twice in parallel; it passed alone. 3 GiB is enough
   for the test, and the full run passes with it.
+
+## Codex review fixes (3)
+
+- Round 2 kept a piped file's item, but not a piped archive: a folder, or with `-r` the archive's
+  files, came from `Piece::Item` of a container or `Piece::List`, which it passed over, so a list
+  made again read the spent pipe. A path given that `read_once` says can be read only once (there,
+  not a directory, and no regular file of its own) now keeps everything it added to the list in
+  `GivenPath::once`, whatever it opened as, and is never read again. `Opener::open` takes it after
+  each path; `make_on` takes it once the path's container is all listed (`Making::once`). Test:
+  `r_keeps_an_archive_given_through_a_pipe`, a zip through `/dev/stdin` beside a PDF, as a folder
+  and with `-r`. Seen failing with round 2's rule put back (a single file that isn't a container).
+- Round 2 keyed reuse by the real path and the base name, so `one/notes.md` and `two/notes.md`
+  linked to one file shared a key, though each draws the picture beside its own path. `OnDisk`
+  keeps the path the file was opened by (`OnDisk::opened`, the `Input`'s path); `Old`, `kept` and
+  `retiled` key by the real path and that. Test: `r_keeps_each_path_to_one_file_as_its_own_tile`,
+  a red and a blue `pic.png` beside the two paths: three distinct tiles before and after `r`. Seen
+  failing (two distinct) with the map and its lookup keyed by the name again.
+- `tests/it/zip.rs`'s `archive` and `png` are `pub(crate)` now, for the pager's test of a piped zip.
+- A full run on a busy machine (the unit tests took 79 s, not 4) failed four of the new tests, each
+  passing alone. They assumed timings: the tiles sent first after `r` were the ones to compare; the
+  tiles of the list made at a failure were sent within 800 ms; and a 300 ms window after
+  `reloading…` was enough for `a.pdf` to be read. The two tile tests now wait for three distinct
+  tiles, the held-reload test looks for `reloading` and ` reloaded ` alone (`not reloaded:` stays
+  said, and a redraw repeats it), and the tar test waits
+  1 s with a 4 GiB tar. Each still fails with its fix reverted, checked again.

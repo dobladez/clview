@@ -227,11 +227,11 @@ fn auto_reload_tries_again_a_file_changed_while_a_reload_that_failed_ran() {
     let archive = write(dir.join("photos.tar.gz"), &gzip(&tar(&[("b.png", png(80, 60))])));
     let mut view = Session::start(&pdf, &[archive.to_str().unwrap(), "-r", "--auto-reload", "--protocol", "kitty"], 80, 48);
     view.wait_until("the list", |t| bar(t).contains(" 1/2 "));
-    write(dir.join("photos.tar.gz"), &slow(3));
+    write(dir.join("photos.tar.gz"), &slow(4));
     write(dir.join("a.pdf"), b"not a PDF any more\n");
     // a.pdf is read, broken, first, as the list is made again; then the tar, for seconds.
     view.wait_until("reloading", |t| bar(t).contains(" reloading… "));
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(1000));
     write(dir.join("a.pdf"), &crate::fixtures::letter("A again", 2));
     view.wait_until("the failure said", |t| bar(t).contains(" not reloaded: "));
     let failed = view.text().len();

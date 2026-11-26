@@ -650,7 +650,8 @@ fn auto_reload_holds_a_file_given_that_cant_be_opened_again() {
     let failed = view.text().len();
     std::thread::sleep(Duration::from_millis(3000));
     let since = view.text().get(failed..).unwrap_or_default().to_owned();
-    assert!(!since.contains("reloading") && !since.contains("reloaded") && transmitted(&since) == 0, "tried again: {}", last_bar(&since));
+    // `not reloaded: …` stays said; `reloaded` alone, or `reloading…`, would be another try.
+    assert!(!since.contains("reloading") && !since.contains(" reloaded "), "tried again: {}", last_bar(&since));
     assert!(last_bar(&view.text()).contains("changed on disk"), "{}", last_bar(&view.text()));
     std::fs::write(&b, crate::fixtures::letter("B again", 2)).unwrap();
     view.wait_until("reloaded", |t| last_bar(t.get(failed..).unwrap_or_default()).contains(" reloaded "));
@@ -685,6 +686,71 @@ fn r_keeps_a_file_given_through_a_pipe() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// An archive given through a pipe, `/dev/stdin` beside another file, keeps what it added to the
+/// list when the list is made again: as a folder, or with `-r` as its files. It is never read again.
+#[cfg(all(feature = "zip", feature = "image"))]
+#[test]
+fn r_keeps_an_archive_given_through_a_pipe() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-stdin-zip", &["b.pdf"]);
+    let photos = crate::zip::archive(&dir.join("photos.zip"), &[("x.png", crate::zip::png(80, 60)), ("y.png", crate::zip::png(60, 80))]);
+    let b = dir.join("b.pdf");
+    for (args, tiles, pages) in [("", 2, 2), (" -r", 3, 3)] {
+        let command = format!("cat '{}' | exec '{BIN}' /dev/stdin '{}'{args} --protocol kitty --pager", photos.display(), b.display());
+        let mut view = Session::start_command(PLAIN, &command, 100, 60);
+        view.wait_until("the list", |t| drawn(t, &format!("1/{tiles}")));
+        std::fs::write(&b, crate::fixtures::letter("B again", pages)).unwrap();
+        view.wait_until("the change said", |t| t.contains(CHANGED));
+        let before = view.text().len();
+        view.press("r");
+        view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) > 0));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(last_bar(&view.text()).contains(&format!("1/{tiles} ")), "the pipe's tiles went{args}: {}", last_bar(&view.text()));
+        view.press("q");
+        assert!(view.finish().success());
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Two paths given that link to one document, in two directories, each draw the picture beside the
+/// path they were opened by, and keep their own tiles when the list is made again.
+#[cfg(all(feature = "word", feature = "image"))]
+#[test]
+fn r_keeps_each_path_to_one_file_as_its_own_tile() {
+    if !pty_works() {
+        return;
+    }
+    let dir = pdfs("relist-paths", &["c.pdf", "one/", "two/"]);
+    std::fs::write(dir.join("text.md"), "# Notes\n\n![a picture](pic.png)\n").unwrap();
+    for (name, colour) in [("one", [200, 0, 0]), ("two", [0, 0, 200])] {
+        ::image::RgbImage::from_pixel(240, 160, ::image::Rgb(colour)).save(dir.join(name).join("pic.png")).unwrap();
+        std::os::unix::fs::symlink(dir.join("text.md"), dir.join(name).join("notes.md")).unwrap();
+    }
+    let (one, two, c) = (dir.join("one/notes.md"), dir.join("two/notes.md"), dir.join("c.pdf"));
+    let mut view = Session::start(&one, &[two.to_str().unwrap(), c.to_str().unwrap(), "--protocol", "kitty"], 120, 60);
+    let distinct = |text: &str| {
+        let mut seen: Vec<Vec<u8>> = Vec::new();
+        for (_, image) in pngs(text) {
+            if !seen.contains(image.as_raw()) {
+                seen.push(image.into_raw());
+            }
+        }
+        seen.len()
+    };
+    view.wait_until("the list, the two paths drawn apart", |t| drawn(t, "1/3") && distinct(t) == 3);
+    std::fs::write(&c, crate::fixtures::letter("C again", 1)).unwrap();
+    view.wait_until("the change said", |t| t.contains(CHANGED));
+    let before = view.text().len();
+    view.press("r");
+    // Each tile sent again, as itself: three tiles that differ.
+    view.wait_until("made again, each path its own tile", |t| distinct(t.get(before..).unwrap_or_default()) == 3);
+    view.press("q");
+    assert!(view.finish().success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Two names for one file, each read by the backend its name says (`notes.md` as Markdown,
 /// `notes.org` as Org), keep their own tiles when the list is made again.
 #[cfg(all(feature = "word", feature = "org"))]
@@ -699,7 +765,6 @@ fn r_keeps_each_name_of_one_file_as_its_own_tile() {
     std::os::unix::fs::symlink(dir.join("text"), dir.join("notes.org")).unwrap();
     let (md, org, c) = (dir.join("notes.md"), dir.join("notes.org"), dir.join("c.pdf"));
     let mut view = Session::start(&md, &[org.to_str().unwrap(), c.to_str().unwrap(), "--protocol", "kitty"], 120, 60);
-    view.wait_until("the list", |t| drawn(t, "1/3") && transmitted(t) >= 3);
     let distinct = |text: &str| {
         let mut seen: Vec<Vec<u8>> = Vec::new();
         for (_, image) in pngs(text) {
@@ -709,13 +774,13 @@ fn r_keeps_each_name_of_one_file_as_its_own_tile() {
         }
         seen.len()
     };
-    assert_eq!(distinct(&view.text()), 3, "the two names drew alike before");
+    view.wait_until("the list, the two names drawn apart", |t| drawn(t, "1/3") && distinct(t) == 3);
     std::fs::write(&c, crate::fixtures::letter("C again", 1)).unwrap();
     view.wait_until("the change said", |t| t.contains(CHANGED));
     let before = view.text().len();
     view.press("r");
-    view.wait_until("made again", |t| t.get(before..).is_some_and(|t| transmitted(t) >= 3));
-    assert_eq!(distinct(view.text().get(before..).unwrap_or_default()), 3, "one name took the other's tile");
+    // Each tile sent again, as itself: three tiles that differ.
+    view.wait_until("made again, each name its own tile", |t| distinct(t.get(before..).unwrap_or_default()) == 3);
     view.press("q");
     assert!(view.finish().success());
     std::fs::remove_dir_all(&dir).unwrap();
