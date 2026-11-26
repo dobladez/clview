@@ -106,6 +106,9 @@ decisions, changes from its plan, surprises, and what a later reader would want.
 - The gates, the tests each seen failing, and the docs: checked (2026-11-25).
 - The three manual checks, in kitty and in a private tmux, wait for the owner: the tests play a
   terminal on a pseudo-terminal, and can't show what kitty draws.
+- 2026-11-26: the owner did the three manual checks, and all passed: in kitty, a list's warning
+  and `r`; in kitty, `R` and auto-reload on a Markdown file; in a private tmux, a list's warning
+  and `r`.
 
 ## Codex review fixes
 

@@ -1,6 +1,6 @@
 # Spec-0016: Warn when a list's directory changes, and let pages and lists refresh by themselves
 
-- **Status:** Implementing
+- **Status:** Done
 - **Date:** 2026-11-25
 - **Related:** commit `abe33f3`, which this builds on (a file's pages warn when the file changes,
   and `r` reloads it); [Files and lists changed on disk](../architecture.md#files-and-lists-changed-on-disk),
@@ -253,12 +253,12 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
 
 - [x] The quality gates in [`CONTRIBUTING.md`](../../CONTRIBUTING.md#quality-gates) pass.
 - [x] Tests added, each seen failing without the change: the ones the Tasks name.
-- [ ] Manual: in kitty, run `clv -r <dir>` on a directory with a subdirectory of pictures. Copy a
+- [x] Manual: in kitty, run `clv -r <dir>` on a directory with a subdirectory of pictures. Copy a
   picture into the subdirectory: the warning shows within a second. Press `r`: the new tile shows,
   and the tile you were on is still chosen.
-- [ ] Manual: in kitty, open a Markdown file, press `R` (`auto` shows), and save the file from an
+- [x] Manual: in kitty, open a Markdown file, press `R` (`auto` shows), and save the file from an
   editor: the pages reload, `reloaded` shows, and the paragraph at the top stays.
-- [ ] Manual: in a private tmux (`tmux -L`), the warning and `r` in a list work as in kitty.
+- [x] Manual: in a private tmux (`tmux -L`), the warning and `r` in a list work as in kitty.
 - [x] The docs say what shipped ([When a spec is Done](README.md#when-a-spec-is-done)).
 
 ## Changelog
@@ -270,3 +270,4 @@ One checkbox each: a session's work, and a commit that builds and passes on its 
   of 1,024 directories, a relist tied to its level. The promise to keep unchanged tiles in the
   terminal is dropped, since `r` sends every page again. Tasks and Done written (spec-update).
 - 2026-11-25 — Implementing ([notes](0016-watch-lists-on-disk-and-refresh-by-themselves-impl-20261125_1728.md)).
+- 2026-11-26 — Done.
